@@ -1,0 +1,16 @@
+[package]
+name = "aegis-monitor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-types = { workspace = true }
+aegis-ledger = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }

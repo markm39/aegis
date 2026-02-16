@@ -1,0 +1,26 @@
+#[derive(Debug, thiserror::Error)]
+pub enum AegisError {
+    #[error("policy evaluation failed: {0}")]
+    PolicyError(String),
+
+    #[error("audit ledger error: {0}")]
+    LedgerError(String),
+
+    #[error("sandbox error: {0}")]
+    SandboxError(String),
+
+    #[error("filesystem interception error: {0}")]
+    FsError(String),
+
+    #[error("network proxy error: {0}")]
+    NetError(String),
+
+    #[error("configuration error: {0}")]
+    ConfigError(String),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}

@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aegis-types",
+    "crates/aegis-policy",
+    "crates/aegis-ledger",
+    "crates/aegis-sandbox",
+    "crates/aegis-sidecar",
+    "crates/aegis-monitor",
+    "crates/aegis-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["markm39 <markmiller0470@gmail.com>"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+cedar-policy = "4"
+rusqlite = { version = "0.33", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ratatui = "0.29"
+crossterm = "0.28"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+toml = "0.8"
+hex = "0.4"
+tempfile = "3"
+
+# Types crate (used by all)
+aegis-types = { path = "crates/aegis-types" }
+aegis-policy = { path = "crates/aegis-policy" }
+aegis-ledger = { path = "crates/aegis-ledger" }
+aegis-sandbox = { path = "crates/aegis-sandbox" }
+aegis-sidecar = { path = "crates/aegis-sidecar" }
+aegis-monitor = { path = "crates/aegis-monitor" }

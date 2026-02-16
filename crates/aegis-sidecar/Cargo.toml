@@ -1,0 +1,22 @@
+[package]
+name = "aegis-sidecar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-types = { workspace = true }
+aegis-policy = { workspace = true }
+aegis-ledger = { workspace = true }
+fuser = "0.15"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
