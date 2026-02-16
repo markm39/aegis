@@ -8,9 +8,14 @@ license.workspace = true
 [dependencies]
 aegis-types = { workspace = true }
 aegis-ledger = { workspace = true }
+rusqlite = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
