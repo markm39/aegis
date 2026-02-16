@@ -85,11 +85,9 @@ pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Str
         profile.push_str("(deny network*)\n");
     }
 
-    // Temp file access for the profile itself and other temp operations
+    // Allow reading from temp directories (some processes need this for operation)
     profile.push_str("(allow file-read* (subpath \"/private/tmp\"))\n");
     profile.push_str("(allow file-read* (subpath \"/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-    profile.push_str("(allow file-write* (subpath \"/tmp\"))\n");
 
     profile
 }

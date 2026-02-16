@@ -7,6 +7,7 @@
 pub const DEFAULT_DENY: &str = r#"forbid(principal, action, resource);"#;
 
 /// Read-only allow policy: permits FileRead and DirList actions for any agent.
+/// Also permits ProcessSpawn and ProcessExit for accurate audit logging.
 pub const ALLOW_READ_ONLY: &str = r#"
 permit(
     principal,
@@ -17,6 +18,18 @@ permit(
 permit(
     principal,
     action == Aegis::Action::"DirList",
+    resource
+);
+
+permit(
+    principal,
+    action == Aegis::Action::"ProcessSpawn",
+    resource
+);
+
+permit(
+    principal,
+    action == Aegis::Action::"ProcessExit",
     resource
 );
 "#;
