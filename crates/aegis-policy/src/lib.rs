@@ -1,3 +1,6 @@
+pub mod builtin;
 pub mod engine;
 pub mod schema;
-pub mod builtin;
+
+pub use engine::PolicyEngine;
+pub use schema::{default_schema, AEGIS_SCHEMA};
