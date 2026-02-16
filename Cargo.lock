@@ -49,8 +49,11 @@ dependencies = [
  "chrono",
  "crossterm",
  "ratatui",
+ "rusqlite",
+ "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
