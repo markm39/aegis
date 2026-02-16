@@ -69,6 +69,62 @@ impl PolicyEngine {
         }
     }
 
+    /// Get a reference to the underlying Cedar `PolicySet`.
+    ///
+    /// Useful for inspecting loaded policies, e.g. when compiling Cedar
+    /// policies to another format like Seatbelt SBPL profiles.
+    pub fn policy_set(&self) -> &PolicySet {
+        &self.policy_set
+    }
+
+    /// Probe whether the loaded policies permit a given action type.
+    ///
+    /// Constructs a synthetic action and evaluates it. Returns `true` if
+    /// the policy set would allow any agent to perform this action on any
+    /// resource. Useful for compile-time policy inspection (e.g. deciding
+    /// which Seatbelt SBPL rules to generate).
+    pub fn permits_action(&self, action_name: &str) -> bool {
+        let action = Action::new(
+            "__probe__",
+            match action_name {
+                "FileRead" => ActionKind::FileRead {
+                    path: std::path::PathBuf::from("/__probe__"),
+                },
+                "FileWrite" => ActionKind::FileWrite {
+                    path: std::path::PathBuf::from("/__probe__"),
+                },
+                "FileDelete" => ActionKind::FileDelete {
+                    path: std::path::PathBuf::from("/__probe__"),
+                },
+                "DirCreate" => ActionKind::DirCreate {
+                    path: std::path::PathBuf::from("/__probe__"),
+                },
+                "DirList" => ActionKind::DirList {
+                    path: std::path::PathBuf::from("/__probe__"),
+                },
+                "NetConnect" => ActionKind::NetConnect {
+                    host: "__probe__".into(),
+                    port: 0,
+                },
+                "ToolCall" => ActionKind::ToolCall {
+                    tool: "__probe__".into(),
+                    args: serde_json::Value::Null,
+                },
+                "ProcessSpawn" => ActionKind::ProcessSpawn {
+                    command: "__probe__".into(),
+                    args: vec![],
+                },
+                "ProcessExit" => ActionKind::ProcessExit {
+                    command: "__probe__".into(),
+                    exit_code: 0,
+                },
+                _ => return false,
+            },
+        );
+        let verdict = self.evaluate(&action);
+        verdict.decision == aegis_types::Decision::Allow
+    }
+
     /// Reload policies from the given directory, replacing the current policy set.
     pub fn reload(&mut self, policy_dir: &Path) -> Result<(), AegisError> {
         let new_policy_set = load_policies_from_dir(policy_dir)?;
@@ -170,6 +226,7 @@ fn extract_action_info(kind: &ActionKind) -> (&str, &str) {
         ActionKind::NetRequest { url, .. } => ("NetConnect", url.as_str()),
         ActionKind::ToolCall { tool, .. } => ("ToolCall", tool.as_str()),
         ActionKind::ProcessSpawn { command, .. } => ("ProcessSpawn", command.as_str()),
+        ActionKind::ProcessExit { command, .. } => ("ProcessExit", command.as_str()),
     }
 }
 
@@ -480,6 +537,89 @@ mod tests {
         let action = file_read_action("agent-1", "/tmp/file.txt");
         let verdict = engine.evaluate(&action);
         assert_eq!(verdict.decision, Decision::Deny);
+    }
+
+    // Test: ProcessExit action evaluates correctly
+    #[test]
+    fn process_exit_action_evaluates() {
+        let policies = r#"
+            permit(principal, action, resource);
+        "#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = Action::new(
+            "a",
+            ActionKind::ProcessExit {
+                command: "echo".into(),
+                exit_code: 0,
+            },
+        );
+        let verdict = engine.evaluate(&action);
+        assert_eq!(verdict.decision, Decision::Allow);
+    }
+
+    // Test: permits_action returns true for permitted actions
+    #[test]
+    fn permits_action_returns_true_for_permitted() {
+        let policies = r#"
+            permit(principal, action == Aegis::Action::"FileRead", resource);
+            permit(principal, action == Aegis::Action::"DirList", resource);
+        "#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        assert!(engine.permits_action("FileRead"));
+        assert!(engine.permits_action("DirList"));
+        assert!(!engine.permits_action("FileWrite"));
+        assert!(!engine.permits_action("NetConnect"));
+        assert!(!engine.permits_action("ProcessSpawn"));
+    }
+
+    // Test: permits_action returns false for default-deny
+    #[test]
+    fn permits_action_default_deny() {
+        let engine =
+            PolicyEngine::from_policies(DEFAULT_DENY, None).expect("should create engine");
+
+        assert!(!engine.permits_action("FileRead"));
+        assert!(!engine.permits_action("FileWrite"));
+        assert!(!engine.permits_action("NetConnect"));
+    }
+
+    // Test: permits_action returns true for permit-all
+    #[test]
+    fn permits_action_permit_all() {
+        let policies = r#"
+            permit(principal, action, resource);
+        "#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        assert!(engine.permits_action("FileRead"));
+        assert!(engine.permits_action("FileWrite"));
+        assert!(engine.permits_action("NetConnect"));
+        assert!(engine.permits_action("ProcessSpawn"));
+        assert!(engine.permits_action("ProcessExit"));
+    }
+
+    // Test: permits_action returns false for unknown action name
+    #[test]
+    fn permits_action_unknown_action() {
+        let policies = r#"
+            permit(principal, action, resource);
+        "#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+        assert!(!engine.permits_action("NonexistentAction"));
+    }
+
+    // Test: policy_set() exposes the underlying PolicySet
+    #[test]
+    fn policy_set_accessor() {
+        let policies = r#"
+            permit(principal, action == Aegis::Action::"FileRead", resource);
+        "#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+        let ps = engine.policy_set();
+        // PolicySet should have exactly one policy
+        assert_eq!(ps.policies().count(), 1);
     }
 
     // Test: NetRequest maps to NetConnect action

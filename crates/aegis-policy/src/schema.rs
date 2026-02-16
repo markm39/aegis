@@ -51,6 +51,10 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "ProcessExit" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
