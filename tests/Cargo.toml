@@ -1,0 +1,36 @@
+[package]
+name = "aegis-integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+# This crate exists only to hold integration tests.
+# It has no library; each [[test]] binary is an integration test.
+
+[dependencies]
+aegis-types = { workspace = true }
+aegis-policy = { workspace = true }
+aegis-ledger = { workspace = true }
+aegis-sandbox = { workspace = true }
+tempfile = { workspace = true }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[[test]]
+name = "test_policy_engine"
+path = "test_policy_engine.rs"
+
+[[test]]
+name = "test_audit_ledger"
+path = "test_audit_ledger.rs"
+
+[[test]]
+name = "test_policy_ledger"
+path = "test_policy_ledger.rs"
+
+[[test]]
+name = "test_e2e"
+path = "test_e2e.rs"

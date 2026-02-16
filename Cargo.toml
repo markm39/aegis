@@ -8,6 +8,7 @@ members = [
     "crates/aegis-sidecar",
     "crates/aegis-monitor",
     "crates/aegis-cli",
+    "tests",
 ]
 
 [workspace.package]

@@ -1,0 +1,8 @@
+name = "test-agent"
+sandbox_dir = "/tmp/aegis-test/sandbox"
+policy_paths = ["/tmp/aegis-test/policies"]
+ledger_path = "/tmp/aegis-test/audit.db"
+allowed_network = []
+
+[isolation]
+Seatbelt = { profile_overrides = "/tmp/aegis-test/seatbelt.sb" }

@@ -26,6 +26,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "aegis-ledger",
+ "aegis-policy",
+ "aegis-sandbox",
+ "aegis-types",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "aegis-ledger"
 version = "0.1.0"
 dependencies = [
