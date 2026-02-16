@@ -1,8 +1,8 @@
 # Aegis -- Zero-Trust Runtime for AI Agents
 
-Aegis wraps AI agents in sandboxed, policy-enforced, audited environments. Default-deny stance. Written in Rust. Single binary.
+Aegis wraps AI agents in sandboxed, policy-enforced, audited environments. Default-deny stance. Written in Rust. Single binary. Zero external dependencies on macOS.
 
-Every file access, network connection, and tool invocation is intercepted, evaluated against Cedar policies, and logged to a tamper-evident audit ledger -- before the operation reaches the real system.
+Every action -- file access, network connection, tool invocation -- is governed by Cedar policies compiled into kernel-level Seatbelt profiles, with all decisions logged to a tamper-evident audit ledger.
 
 ## Why
 
@@ -11,28 +11,37 @@ AI agents are powerful but uncontrolled. They read files they shouldn't, make ne
 ## Architecture
 
 ```
-Agent --> Sidecar (FUSE + Net Proxy) --> Policy Engine (Cedar) --> Allow/Deny
-                    |                                                  |
-                    +--------------------------------------------------+
-                                         |
-                                   Audit Ledger (SQLite, hash-chained)
-                                         |
-                                   Sandbox (macOS Seatbelt)
+Cedar Policies (.cedar files)
+        |
+        v
+Cedar-to-SBPL Compiler -----> Seatbelt Profile (kernel-level)
+        |
+        v
+aegis run --config NAME -- CMD
+        |
+        +---> sandbox-exec (macOS kernel sandbox)
+        |         |
+        |         +--> Process spawn/exit audit logging
+        |         +--> Seatbelt violation harvesting (log show)
+        |
+        v
+Audit Ledger (SQLite, SHA-256 hash-chained)
 ```
 
-Five layers:
-1. **Isolation Boundary** -- macOS Seatbelt (`sandbox-exec`) enforces OS-level deny-by-default
-2. **Sidecar** -- FUSE filesystem intercepts file ops; TCP proxy intercepts network calls
-3. **Policy Engine** -- Cedar 4.x evaluates every action against declarative policies
+Four layers:
+1. **Policy Engine** -- Cedar 4.x policies define what agents can do (default-deny)
+2. **Cedar-to-SBPL Compiler** -- Translates Cedar policies into macOS Seatbelt profiles at launch time
+3. **Isolation Boundary** -- macOS Seatbelt (`sandbox-exec`) enforces permissions at the kernel level
 4. **Audit Ledger** -- Append-only, SHA-256 hash-chained SQLite log for tamper detection
-5. **CLI** -- `aegis init | run | monitor | policy | audit | status`
 
 ## Install
 
 ### Prerequisites
 
+- macOS 12+ (Monterey or later)
 - Rust 1.75+ (install via [rustup](https://rustup.rs))
-- macFUSE (macOS): `brew install --cask macfuse`
+
+No kernel extensions. No system extension approvals. No reboots.
 
 ### Build
 
@@ -47,6 +56,9 @@ The binary is at `./target/release/aegis`.
 ## Quickstart
 
 ```bash
+# Verify system requirements
+aegis setup
+
 # Initialize a sandbox with default-deny policy
 aegis init --name my-agent --policy default-deny
 
@@ -73,6 +85,7 @@ aegis status --config my-agent
 
 | Command | Description |
 |---------|-------------|
+| `aegis setup` | Check system requirements and prepare environment |
 | `aegis init --name NAME [--policy TEMPLATE]` | Create sandbox at `~/.aegis/NAME/` |
 | `aegis run --config NAME -- CMD [ARGS]` | Run command in sandboxed environment |
 | `aegis monitor --config NAME` | Launch terminal dashboard |
@@ -105,16 +118,16 @@ permit(
 // Deny everything else (implicit -- Aegis is default-deny)
 ```
 
-Available actions: `FileRead`, `FileWrite`, `FileDelete`, `DirCreate`, `DirList`, `NetConnect`, `ToolCall`, `ProcessSpawn`.
+Available actions: `FileRead`, `FileWrite`, `FileDelete`, `DirCreate`, `DirList`, `NetConnect`, `ToolCall`, `ProcessSpawn`, `ProcessExit`.
 
 ## Crate Structure
 
 ```
 aegis-types     Shared types, errors, config (foundation)
-aegis-policy    Cedar policy engine wrapper
+aegis-policy    Cedar policy engine + policy inspection
 aegis-ledger    Append-only hash-chained audit log
-aegis-sandbox   macOS Seatbelt isolation backend
-aegis-sidecar   FUSE filesystem + network proxy interception
+aegis-sandbox   Seatbelt backend + Cedar-to-SBPL compiler
+aegis-proxy     Process audit logging + Seatbelt violation harvesting
 aegis-monitor   ratatui terminal dashboard
 aegis-cli       Binary entry point
 ```
@@ -122,7 +135,7 @@ aegis-cli       Binary entry point
 ## Testing
 
 ```bash
-# Run all 127 tests
+# Run all tests
 cargo test --workspace
 
 # Run with lint checks
