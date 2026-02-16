@@ -84,7 +84,7 @@ fn select_backend(isolation: &IsolationConfig) -> Box<dyn SandboxBackend> {
         #[cfg(target_os = "macos")]
         IsolationConfig::Seatbelt { .. } => {
             info!("using Seatbelt sandbox backend");
-            Box::new(aegis_sandbox::SeatbeltBackend)
+            Box::new(aegis_sandbox::SeatbeltBackend::new())
         }
         #[cfg(not(target_os = "macos"))]
         IsolationConfig::Seatbelt { .. } => {
