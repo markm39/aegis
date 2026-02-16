@@ -14,6 +14,7 @@ pub enum ActionKind {
     NetRequest { method: String, url: String },
     ToolCall { tool: String, args: serde_json::Value },
     ProcessSpawn { command: String, args: Vec<String> },
+    ProcessExit { command: String, exit_code: i32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,10 @@ mod tests {
             ActionKind::ProcessSpawn {
                 command: "echo".into(),
                 args: vec!["hello".into()],
+            },
+            ActionKind::ProcessExit {
+                command: "echo".into(),
+                exit_code: 0,
             },
         ];
         for v in variants {
