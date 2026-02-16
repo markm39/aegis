@@ -3,4 +3,5 @@ pub mod init;
 pub mod monitor;
 pub mod policy;
 pub mod run;
+pub mod setup;
 pub mod status;

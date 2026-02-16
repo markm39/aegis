@@ -12,8 +12,15 @@ use crate::commands::init::load_config;
 
 /// Run the `aegis run` command.
 ///
-/// Loads config, initializes the policy engine, audit store, and sandbox backend,
-/// then executes the given command inside the sandbox.
+/// Pipeline:
+/// 1. Load config, init policy engine and audit store
+/// 2. Compile Cedar policies into a Seatbelt SBPL profile
+/// 3. Create SeatbeltBackend with the compiled profile
+/// 4. Log ProcessSpawn to the audit ledger
+/// 5. Spawn the command in the sandbox, capturing PID and timestamps
+/// 6. Log ProcessExit to the audit ledger
+/// 7. Harvest Seatbelt violation logs from macOS system logs
+/// 8. Print summary
 pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let config = load_config(config_name)?;
 
@@ -30,8 +37,8 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
     info!(ledger_path = %config.ledger_path.display(), "audit store opened");
 
-    // Select sandbox backend based on isolation config
-    let backend: Box<dyn SandboxBackend> = select_backend(&config.isolation);
+    // Create sandbox backend with compiled Cedar-to-SBPL profile
+    let backend: Box<dyn SandboxBackend> = create_backend(&config.isolation, &config, &policy_engine);
 
     // Prepare the sandbox
     backend
@@ -46,17 +53,41 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     aegis_proxy::log_process_spawn(&store_arc, &policy_arc, &config.name, command, args)
         .context("failed to log process spawn")?;
 
-    // Execute the command in the sandbox
+    // Record start time and execute the command
+    let start_time = chrono::Utc::now();
     info!(command, ?args, "executing command in sandbox");
-    let status = backend
-        .exec(command, args, &config)
+
+    let (pid, status) = backend
+        .spawn_and_wait(command, args, &config, &[])
         .context("failed to execute command in sandbox")?;
 
+    let end_time = chrono::Utc::now();
     let exit_code = status.code().unwrap_or(-1);
 
     // Log process exit
     aegis_proxy::log_process_exit(&store_arc, &policy_arc, &config.name, command, exit_code)
         .context("failed to log process exit")?;
+
+    // Harvest Seatbelt violations from macOS system logs
+    #[cfg(target_os = "macos")]
+    let violation_count = if pid > 0 {
+        aegis_proxy::harvest_seatbelt_violations(
+            &store_arc,
+            &config.name,
+            pid,
+            &start_time,
+            &end_time,
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to harvest seatbelt violations");
+            0
+        })
+    } else {
+        0
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let violation_count = 0usize;
 
     // Print summary
     let store_lock = store_arc
@@ -66,6 +97,9 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
 
     println!("Command exited with code: {exit_code}");
     println!("Audit entries logged: {entry_count}");
+    if violation_count > 0 {
+        println!("Seatbelt violations detected: {violation_count}");
+    }
 
     if !status.success() {
         std::process::exit(exit_code);
@@ -74,17 +108,22 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Select the appropriate sandbox backend based on the isolation config.
-fn select_backend(isolation: &IsolationConfig) -> Box<dyn SandboxBackend> {
+/// Create the sandbox backend, compiling Cedar policies to SBPL on macOS.
+fn create_backend(
+    isolation: &IsolationConfig,
+    config: &aegis_types::AegisConfig,
+    engine: &PolicyEngine,
+) -> Box<dyn SandboxBackend> {
     match isolation {
         #[cfg(target_os = "macos")]
         IsolationConfig::Seatbelt { .. } => {
-            info!("using Seatbelt sandbox backend");
-            Box::new(aegis_sandbox::SeatbeltBackend::new())
+            let sbpl = aegis_sandbox::compile_cedar_to_sbpl(config, engine);
+            info!("compiled Cedar policies to SBPL profile");
+            Box::new(aegis_sandbox::SeatbeltBackend::with_profile(sbpl))
         }
         #[cfg(not(target_os = "macos"))]
         IsolationConfig::Seatbelt { .. } => {
-            warn!("Seatbelt is only available on macOS; falling back to ProcessBackend");
+            tracing::warn!("Seatbelt is only available on macOS; falling back to ProcessBackend");
             Box::new(aegis_sandbox::ProcessBackend)
         }
         IsolationConfig::Process | IsolationConfig::None => {

@@ -15,6 +15,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Check system requirements and prepare the environment
+    Setup,
+
     /// Initialize a new aegis configuration
     Init {
         /// Name for this agent configuration
@@ -130,6 +133,9 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Setup => {
+            commands::setup::run()
+        }
         Commands::Init { name, policy } => {
             commands::init::run(&name, &policy)
         }
@@ -314,6 +320,17 @@ mod tests {
             "default-deny",
         ]);
         assert!(cli.is_ok(), "should parse policy generate: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_setup() {
+        let cli = Cli::try_parse_from(["aegis", "setup"]);
+        assert!(cli.is_ok(), "should parse setup: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Setup => {}
+            _ => panic!("expected Setup command"),
+        }
     }
 
     #[test]

@@ -40,8 +40,11 @@ pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Str
     profile.push_str("(version 1)\n");
     profile.push_str("(deny default)\n");
 
-    // System-level reads: always needed for dyld, path resolution, symlinks
+    // System-level reads: always needed for dyld, path resolution, symlinks.
+    // file-read-data is required globally because macOS's dynamic linker (dyld)
+    // needs to read the shared cache from various locations during process startup.
     profile.push_str("(allow file-read-metadata)\n");
+    profile.push_str("(allow file-read-data)\n");
 
     // System paths: always readable (binaries, libraries, etc.)
     for path in SYSTEM_READ_PATHS {
