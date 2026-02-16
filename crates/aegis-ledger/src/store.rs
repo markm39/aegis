@@ -1,2 +1,333 @@
-// AuditStore: SQLite-backed append-only ledger
-// Implemented in Step 3b
+/// AuditStore: SQLite-backed append-only hash-chained audit ledger.
+use std::path::Path;
+
+use chrono::DateTime;
+use rusqlite::{params, Connection};
+use tracing::info;
+use uuid::Uuid;
+
+use aegis_types::{Action, AegisError, Verdict};
+
+use crate::entry::{compute_hash, AuditEntry};
+use crate::integrity::IntegrityReport;
+
+/// The sentinel value used as prev_hash for the very first entry.
+const GENESIS_HASH: &str = "genesis";
+
+/// An append-only, hash-chained audit store backed by SQLite.
+pub struct AuditStore {
+    conn: Connection,
+    latest_hash: String,
+}
+
+impl AuditStore {
+    /// Open (or create) the audit ledger at the given path.
+    ///
+    /// Enables WAL mode, creates the `audit_log` table and indices if they
+    /// do not exist, and reads the latest entry hash (or uses "genesis").
+    pub fn open(path: &Path) -> Result<Self, AegisError> {
+        let conn = Connection::open(path)
+            .map_err(|e| AegisError::LedgerError(format!("failed to open database: {e}")))?;
+
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| AegisError::LedgerError(format!("failed to set WAL mode: {e}")))?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id TEXT NOT NULL UNIQUE,
+                timestamp TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                action_kind TEXT NOT NULL,
+                principal TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                policy_id TEXT,
+                prev_hash TEXT NOT NULL,
+                entry_hash TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_timestamp ON audit_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_principal ON audit_log(principal);
+            CREATE INDEX IF NOT EXISTS idx_decision ON audit_log(decision);",
+        )
+        .map_err(|e| AegisError::LedgerError(format!("failed to create schema: {e}")))?;
+
+        let latest_hash: String = conn
+            .query_row(
+                "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| GENESIS_HASH.to_string());
+
+        info!(latest_hash = %latest_hash, "audit store opened");
+
+        Ok(Self { conn, latest_hash })
+    }
+
+    /// Append a new entry to the ledger recording the given action and verdict.
+    ///
+    /// The new entry's `prev_hash` is set to the current chain tip. After
+    /// insertion, `self.latest_hash` is updated to the new entry's hash.
+    pub fn append(
+        &mut self,
+        action: &Action,
+        verdict: &Verdict,
+    ) -> Result<AuditEntry, AegisError> {
+        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone());
+
+        self.conn
+            .execute(
+                "INSERT INTO audit_log (entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    entry.entry_id.to_string(),
+                    entry.timestamp.to_rfc3339(),
+                    entry.action_id.to_string(),
+                    entry.action_kind,
+                    entry.principal,
+                    entry.decision,
+                    entry.reason,
+                    entry.policy_id,
+                    entry.prev_hash,
+                    entry.entry_hash,
+                ],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to insert entry: {e}")))?;
+
+        self.latest_hash = entry.entry_hash.clone();
+        Ok(entry)
+    }
+
+    /// Verify the integrity of the entire hash chain.
+    ///
+    /// Reads all entries in insertion order and checks:
+    /// 1. Each entry's hash matches its recomputed value.
+    /// 2. Each entry's `prev_hash` equals the preceding entry's `entry_hash`
+    ///    (or "genesis" for the first entry).
+    pub fn verify_integrity(&self) -> Result<IntegrityReport, AegisError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
+                 FROM audit_log ORDER BY id ASC",
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to prepare query: {e}")))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(AuditEntry {
+                    entry_id: row
+                        .get::<_, String>(0)
+                        .map(|s| Uuid::parse_str(&s).unwrap())?,
+                    timestamp: row
+                        .get::<_, String>(1)
+                        .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
+                    action_id: row
+                        .get::<_, String>(2)
+                        .map(|s| Uuid::parse_str(&s).unwrap())?,
+                    action_kind: row.get(3)?,
+                    principal: row.get(4)?,
+                    decision: row.get(5)?,
+                    reason: row.get(6)?,
+                    policy_id: row.get(7)?,
+                    prev_hash: row.get(8)?,
+                    entry_hash: row.get(9)?,
+                })
+            })
+            .map_err(|e| AegisError::LedgerError(format!("failed to query entries: {e}")))?;
+
+        let entries: Vec<AuditEntry> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("failed to read entry: {e}")))?;
+
+        let total_entries = entries.len();
+        if total_entries == 0 {
+            return Ok(IntegrityReport {
+                total_entries: 0,
+                valid: true,
+                first_invalid_entry: None,
+                message: "ledger is empty".to_string(),
+            });
+        }
+
+        let mut expected_prev_hash = GENESIS_HASH.to_string();
+
+        for (i, entry) in entries.iter().enumerate() {
+            // Check chain linkage
+            if entry.prev_hash != expected_prev_hash {
+                return Ok(IntegrityReport {
+                    total_entries,
+                    valid: false,
+                    first_invalid_entry: Some(i),
+                    message: format!(
+                        "chain broken at entry {i}: expected prev_hash '{expected_prev_hash}', found '{}'",
+                        entry.prev_hash
+                    ),
+                });
+            }
+
+            // Recompute and verify entry hash
+            let recomputed = compute_hash(
+                &entry.entry_id,
+                &entry.timestamp,
+                &entry.action_id,
+                &entry.action_kind,
+                &entry.principal,
+                &entry.decision,
+                &entry.reason,
+                &entry.prev_hash,
+            );
+            if entry.entry_hash != recomputed {
+                return Ok(IntegrityReport {
+                    total_entries,
+                    valid: false,
+                    first_invalid_entry: Some(i),
+                    message: format!(
+                        "hash mismatch at entry {i}: stored '{}', computed '{recomputed}'",
+                        entry.entry_hash
+                    ),
+                });
+            }
+
+            expected_prev_hash = entry.entry_hash.clone();
+        }
+
+        Ok(IntegrityReport {
+            total_entries,
+            valid: true,
+            first_invalid_entry: None,
+            message: format!("all {total_entries} entries verified successfully"),
+        })
+    }
+
+    /// Provide read access to the underlying connection (for query extensions).
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aegis_types::ActionKind;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+
+    fn test_db_path() -> NamedTempFile {
+        NamedTempFile::new().expect("failed to create temp file")
+    }
+
+    fn sample_action(principal: &str) -> Action {
+        Action::new(
+            principal,
+            ActionKind::FileRead {
+                path: PathBuf::from("/tmp/test.txt"),
+            },
+        )
+    }
+
+    #[test]
+    fn open_creates_db_and_table() {
+        let tmp = test_db_path();
+        let store = AuditStore::open(tmp.path()).expect("open should succeed");
+        assert_eq!(store.latest_hash, GENESIS_HASH);
+    }
+
+    #[test]
+    fn append_and_readback() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        let action = sample_action("agent-1");
+        let verdict = Verdict::allow(action.id, "ok", None);
+        let entry = store.append(&action, &verdict).unwrap();
+
+        assert_eq!(entry.prev_hash, GENESIS_HASH);
+        assert_eq!(entry.principal, "agent-1");
+        assert_eq!(entry.decision, "Allow");
+
+        let results = store.query_last(1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entry_id, entry.entry_id);
+    }
+
+    #[test]
+    fn hash_chain_continuity_100_entries() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        for i in 0..100 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, format!("reason-{i}"), None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        let report = store.verify_integrity().unwrap();
+        assert!(report.valid, "integrity check failed: {}", report.message);
+        assert_eq!(report.total_entries, 100);
+        assert!(report.first_invalid_entry.is_none());
+    }
+
+    #[test]
+    fn tamper_detection() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        for i in 0..5 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, "ok", None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        // Tamper with the third entry's action_kind
+        store
+            .connection()
+            .execute(
+                "UPDATE audit_log SET action_kind = 'TAMPERED' WHERE id = 3",
+                [],
+            )
+            .unwrap();
+
+        let report = store.verify_integrity().unwrap();
+        assert!(!report.valid);
+        assert_eq!(report.first_invalid_entry, Some(2)); // 0-indexed: row id=3 is index 2
+    }
+
+    #[test]
+    fn genesis_first_entry() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        let action = sample_action("agent");
+        let verdict = Verdict::allow(action.id, "first entry", None);
+        let entry = store.append(&action, &verdict).unwrap();
+
+        assert_eq!(entry.prev_hash, "genesis");
+    }
+
+    #[test]
+    fn empty_ledger_integrity() {
+        let tmp = test_db_path();
+        let store = AuditStore::open(tmp.path()).unwrap();
+        let report = store.verify_integrity().unwrap();
+        assert!(report.valid);
+        assert_eq!(report.total_entries, 0);
+    }
+
+    #[test]
+    fn second_entry_links_to_first() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        let a1 = sample_action("agent");
+        let v1 = Verdict::allow(a1.id, "first", None);
+        let e1 = store.append(&a1, &v1).unwrap();
+
+        let a2 = sample_action("agent");
+        let v2 = Verdict::deny(a2.id, "second", Some("pol-1".into()));
+        let e2 = store.append(&a2, &v2).unwrap();
+
+        assert_eq!(e2.prev_hash, e1.entry_hash);
+    }
+}
