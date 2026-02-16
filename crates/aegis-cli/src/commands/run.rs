@@ -1,12 +1,11 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::info;
 
 use aegis_ledger::AuditStore;
 use aegis_policy::PolicyEngine;
 use aegis_sandbox::SandboxBackend;
-use aegis_sidecar::Sidecar;
 use aegis_types::IsolationConfig;
 
 use crate::commands::init::load_config;
@@ -14,8 +13,7 @@ use crate::commands::init::load_config;
 /// Run the `aegis run` command.
 ///
 /// Loads config, initializes the policy engine, audit store, and sandbox backend,
-/// optionally starts the FUSE sidecar, then executes the given command inside
-/// the sandbox.
+/// then executes the given command inside the sandbox.
 pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let config = load_config(config_name)?;
 
@@ -41,10 +39,12 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
         .context("failed to prepare sandbox")?;
     info!("sandbox prepared");
 
-    // Try to start the FUSE sidecar
     let policy_arc = Arc::new(Mutex::new(policy_engine));
     let store_arc = Arc::new(Mutex::new(store));
-    let mut sidecar = try_start_sidecar(&config, Arc::clone(&policy_arc), Arc::clone(&store_arc));
+
+    // Log process spawn
+    aegis_proxy::log_process_spawn(&store_arc, &policy_arc, &config.name, command, args)
+        .context("failed to log process spawn")?;
 
     // Execute the command in the sandbox
     info!(command, ?args, "executing command in sandbox");
@@ -52,22 +52,18 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
         .exec(command, args, &config)
         .context("failed to execute command in sandbox")?;
 
-    // Stop sidecar if started
-    if let Some(ref mut sc) = sidecar {
-        if sc.is_mounted() {
-            if let Err(e) = sc.stop() {
-                warn!("failed to stop sidecar: {e}");
-            }
-        }
-    }
+    let exit_code = status.code().unwrap_or(-1);
 
-    // Retrieve the audit store back from the Arc for the summary
+    // Log process exit
+    aegis_proxy::log_process_exit(&store_arc, &policy_arc, &config.name, command, exit_code)
+        .context("failed to log process exit")?;
+
+    // Print summary
     let store_lock = store_arc
         .lock()
         .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
     let entry_count = store_lock.count().unwrap_or(0);
 
-    let exit_code = status.code().unwrap_or(-1);
     println!("Command exited with code: {exit_code}");
     println!("Audit entries logged: {entry_count}");
 
@@ -94,43 +90,6 @@ fn select_backend(isolation: &IsolationConfig) -> Box<dyn SandboxBackend> {
         IsolationConfig::Process | IsolationConfig::None => {
             info!("using Process sandbox backend (no OS-level isolation)");
             Box::new(aegis_sandbox::ProcessBackend)
-        }
-    }
-}
-
-/// Attempt to start the FUSE sidecar. Returns None if it fails (logs a warning).
-fn try_start_sidecar(
-    config: &aegis_types::AegisConfig,
-    policy: Arc<Mutex<PolicyEngine>>,
-    store: Arc<Mutex<AuditStore>>,
-) -> Option<Sidecar> {
-    let mount_point = config.sandbox_dir.join("mnt");
-    let passthrough_dir = config.sandbox_dir.clone();
-
-    if let Err(e) = std::fs::create_dir_all(&mount_point) {
-        warn!("failed to create FUSE mount point: {e}");
-        return None;
-    }
-
-    let mut sidecar = Sidecar::new(
-        policy,
-        store,
-        config.name.clone(),
-        mount_point,
-        passthrough_dir,
-    );
-
-    match sidecar.start() {
-        Ok(()) => {
-            info!(
-                mount_point = %sidecar.mount_point().display(),
-                "FUSE sidecar started"
-            );
-            Some(sidecar)
-        }
-        Err(e) => {
-            warn!("FUSE sidecar not available (continuing without it): {e}");
-            None
         }
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "aegis-sidecar"
+name = "aegis-proxy"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,14 +9,13 @@ license.workspace = true
 aegis-types = { workspace = true }
 aegis-policy = { workspace = true }
 aegis-ledger = { workspace = true }
-fuser = "0.15"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-libc = "0.2"
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

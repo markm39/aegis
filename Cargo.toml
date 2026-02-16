@@ -5,7 +5,7 @@ members = [
     "crates/aegis-policy",
     "crates/aegis-ledger",
     "crates/aegis-sandbox",
-    "crates/aegis-sidecar",
+    "crates/aegis-proxy",
     "crates/aegis-monitor",
     "crates/aegis-cli",
     "tests",
@@ -42,5 +42,5 @@ aegis-types = { path = "crates/aegis-types" }
 aegis-policy = { path = "crates/aegis-policy" }
 aegis-ledger = { path = "crates/aegis-ledger" }
 aegis-sandbox = { path = "crates/aegis-sandbox" }
-aegis-sidecar = { path = "crates/aegis-sidecar" }
+aegis-proxy = { path = "crates/aegis-proxy" }
 aegis-monitor = { path = "crates/aegis-monitor" }
