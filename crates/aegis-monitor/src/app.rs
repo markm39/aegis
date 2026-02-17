@@ -265,7 +265,14 @@ impl App {
             }
         };
 
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!(error = %e, "failed to deserialize session row");
+                None
+            }
+        })
+        .collect()
     }
 
     /// Load action kind distribution from the DB.
@@ -291,7 +298,14 @@ impl App {
             }
         };
 
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!(error = %e, "failed to deserialize action distribution row");
+                None
+            }
+        })
+        .collect()
     }
 
     /// Refresh home view data by scanning all config ledgers.
@@ -370,7 +384,14 @@ impl App {
             }
         };
 
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!(error = %e, "failed to deserialize session entry row");
+                None
+            }
+        })
+        .collect()
     }
 
     /// Handle a key event based on the current mode.
