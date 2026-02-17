@@ -51,6 +51,21 @@ impl Default for ObserverConfig {
     }
 }
 
+impl std::fmt::Display for ObserverConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObserverConfig::None => write!(f, "None"),
+            ObserverConfig::FsEvents { enable_snapshots: true } => {
+                write!(f, "FsEvents (snapshots: enabled)")
+            }
+            ObserverConfig::FsEvents { enable_snapshots: false } => {
+                write!(f, "FsEvents (snapshots: disabled)")
+            }
+            ObserverConfig::EndpointSecurity => write!(f, "Endpoint Security"),
+        }
+    }
+}
+
 /// OS-level isolation mechanism for the sandboxed process.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum IsolationConfig {
@@ -212,5 +227,22 @@ mod tests {
             let back: IsolationConfig = serde_json::from_str(&json).unwrap();
             assert_eq!(back, v);
         }
+    }
+
+    #[test]
+    fn observer_config_display() {
+        assert_eq!(ObserverConfig::None.to_string(), "None");
+        assert_eq!(
+            ObserverConfig::FsEvents { enable_snapshots: true }.to_string(),
+            "FsEvents (snapshots: enabled)"
+        );
+        assert_eq!(
+            ObserverConfig::FsEvents { enable_snapshots: false }.to_string(),
+            "FsEvents (snapshots: disabled)"
+        );
+        assert_eq!(
+            ObserverConfig::EndpointSecurity.to_string(),
+            "Endpoint Security"
+        );
     }
 }

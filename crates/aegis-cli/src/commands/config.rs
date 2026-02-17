@@ -154,17 +154,7 @@ fn describe_isolation(config: &AegisConfig) -> String {
 }
 
 fn describe_observer(config: &AegisConfig) -> String {
-    match &config.observer {
-        aegis_types::ObserverConfig::None => "None".to_string(),
-        aegis_types::ObserverConfig::FsEvents { enable_snapshots } => {
-            if *enable_snapshots {
-                "FsEvents (snapshots: enabled)".to_string()
-            } else {
-                "FsEvents (snapshots: disabled)".to_string()
-            }
-        }
-        aegis_types::ObserverConfig::EndpointSecurity => "Endpoint Security".to_string(),
-    }
+    config.observer.to_string()
 }
 
 #[cfg(test)]
