@@ -60,6 +60,7 @@ impl PolicyEngine {
     ///
     /// Converts the action into Cedar entities and a request, runs the
     /// authorizer, and returns a `Verdict`.
+    #[must_use = "verdict must be checked to enforce policy decisions"]
     pub fn evaluate(&self, action: &Action) -> Verdict {
         match self.evaluate_inner(action) {
             Ok(verdict) => verdict,
@@ -84,6 +85,7 @@ impl PolicyEngine {
     /// the policy set would allow any agent to perform this action on any
     /// resource. Useful for compile-time policy inspection (e.g. deciding
     /// which Seatbelt SBPL rules to generate).
+    #[must_use = "policy probe result must be checked"]
     pub fn permits_action(&self, action_name: &str) -> bool {
         let probe_path = || std::path::PathBuf::from("/__probe__");
         let action = Action::new(
