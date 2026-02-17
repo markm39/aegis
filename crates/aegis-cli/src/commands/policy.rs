@@ -119,6 +119,66 @@ pub fn generate(template_name: &str) -> Result<()> {
     }
 }
 
+/// Run `aegis policy import NAME --path FILE`.
+///
+/// Copies a .cedar policy file into the configuration's policy directory.
+/// Validates the policy against the Aegis schema before importing.
+pub fn import_policy(config_name: &str, path: &Path) -> Result<()> {
+    let config = load_config(config_name)?;
+
+    let policy_dir = config
+        .policy_paths
+        .first()
+        .context("no policy paths configured")?;
+
+    if !policy_dir.exists() {
+        fs::create_dir_all(policy_dir)
+            .with_context(|| format!("failed to create policy dir: {}", policy_dir.display()))?;
+    }
+
+    // Read and validate the policy
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read policy file: {}", path.display()))?;
+
+    let policy_set = cedar_policy::PolicySet::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("invalid policy: {e}"))?;
+
+    let schema = default_schema().context("failed to load Aegis schema")?;
+    let validation =
+        cedar_policy::Validator::new(schema).validate(&policy_set, cedar_policy::ValidationMode::Strict);
+
+    if !validation.validation_passed() {
+        println!("Policy validation failed:");
+        for error in validation.validation_errors() {
+            println!("  - {error}");
+        }
+        bail!("cannot import invalid policy");
+    }
+
+    // Copy to the policy directory
+    let filename = path
+        .file_name()
+        .context("policy file has no filename")?;
+    let dest = policy_dir.join(filename);
+
+    if dest.exists() {
+        println!("Overwriting existing policy: {}", dest.display());
+    }
+
+    fs::copy(path, &dest)
+        .with_context(|| format!("failed to copy policy to {}", dest.display()))?;
+
+    let policy_count = policy_set.policies().count();
+    println!(
+        "Imported {} policies from {} to {}",
+        policy_count,
+        path.display(),
+        dest.display()
+    );
+
+    Ok(())
+}
+
 /// Run `aegis policy test NAME --action ACTION --resource RESOURCE`.
 ///
 /// Evaluates a Cedar policy against a hypothetical request without running

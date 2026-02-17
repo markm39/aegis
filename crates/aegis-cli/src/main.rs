@@ -172,6 +172,16 @@ enum PolicyCommands {
         template: String,
     },
 
+    /// Import a Cedar policy file into a configuration
+    Import {
+        /// Name of the aegis configuration
+        config: String,
+
+        /// Path to the .cedar policy file to import
+        #[arg(long)]
+        path: PathBuf,
+    },
+
     /// Test a policy against a hypothetical action (dry run)
     Test {
         /// Name of the aegis configuration
@@ -358,6 +368,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Policy { action } => match action {
             PolicyCommands::Validate { path } => commands::policy::validate(&path),
+            PolicyCommands::Import { config, path } => {
+                commands::policy::import_policy(&config, &path)
+            }
             PolicyCommands::List { config } => commands::policy::list(&config),
             PolicyCommands::Generate { template } => commands::policy::generate(&template),
             PolicyCommands::Test {
@@ -861,6 +874,29 @@ mod tests {
         let cli =
             Cli::try_parse_from(["aegis", "policy", "list", "myagent"]);
         assert!(cli.is_ok(), "should parse policy list: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_policy_import() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "policy",
+            "import",
+            "myagent",
+            "--path",
+            "/tmp/custom.cedar",
+        ]);
+        assert!(cli.is_ok(), "should parse policy import: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Policy {
+                action: PolicyCommands::Import { config, path },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(path, PathBuf::from("/tmp/custom.cedar"));
+            }
+            _ => panic!("expected Policy Import command"),
+        }
     }
 
     #[test]
