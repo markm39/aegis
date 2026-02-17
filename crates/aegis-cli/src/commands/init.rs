@@ -11,14 +11,25 @@ use aegis_types::AegisConfig;
 /// Creates the directory structure at `~/.aegis/NAME/` with a config file,
 /// policies directory containing the selected builtin policy, and a sandbox
 /// directory.
-pub fn run(name: &str, policy_template: &str) -> Result<()> {
+///
+/// If `project_dir` is provided, the sandbox directory is set to it instead
+/// of the default `~/.aegis/NAME/sandbox/`.
+pub fn run(name: &str, policy_template: &str, project_dir: Option<&Path>) -> Result<()> {
     let base_dir = aegis_base_dir(name)?;
-    run_in_dir(name, policy_template, &base_dir)
+    run_in_dir(name, policy_template, &base_dir, project_dir)
 }
 
 /// Inner init logic that operates on an explicit base directory.
 /// This allows tests to provide a custom directory without modifying HOME.
-pub fn run_in_dir(name: &str, policy_template: &str, base_dir: &Path) -> Result<()> {
+///
+/// If `project_dir` is `Some`, the sandbox directory is set to that path
+/// instead of the default `base_dir/sandbox/`.
+pub fn run_in_dir(
+    name: &str,
+    policy_template: &str,
+    base_dir: &Path,
+    project_dir: Option<&Path>,
+) -> Result<()> {
     if base_dir.exists() {
         bail!(
             "configuration directory already exists: {}",
@@ -29,13 +40,26 @@ pub fn run_in_dir(name: &str, policy_template: &str, base_dir: &Path) -> Result<
     // Look up the builtin policy text
     let policy_text = get_builtin_policy(policy_template).with_context(|| {
         format!(
-            "unknown policy template '{policy_template}'; valid options: default-deny, allow-read-only"
+            "unknown policy template '{policy_template}'; valid options: default-deny, allow-read-only, permit-all"
         )
     })?;
 
+    // Resolve sandbox directory
+    let sandbox_dir = match project_dir {
+        Some(dir) => {
+            let canonical = dir
+                .canonicalize()
+                .with_context(|| format!("--dir path does not exist: {}", dir.display()))?;
+            if !canonical.is_dir() {
+                bail!("--dir path is not a directory: {}", canonical.display());
+            }
+            canonical
+        }
+        None => base_dir.join("sandbox"),
+    };
+
     // Create directory structure
     let policies_dir = base_dir.join("policies");
-    let sandbox_dir = base_dir.join("sandbox");
 
     fs::create_dir_all(&policies_dir)
         .with_context(|| format!("failed to create policies dir: {}", policies_dir.display()))?;
@@ -48,7 +72,7 @@ pub fn run_in_dir(name: &str, policy_template: &str, base_dir: &Path) -> Result<
         .with_context(|| format!("failed to write policy file: {}", policy_file.display()))?;
 
     // Generate and write the config
-    let config = AegisConfig::default_for(name, base_dir);
+    let config = AegisConfig::default_for_with_sandbox(name, base_dir, sandbox_dir.clone());
     let toml_content = config
         .to_toml()
         .context("failed to serialize config to TOML")?;

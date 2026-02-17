@@ -73,6 +73,18 @@ impl AegisConfig {
 
     pub fn default_for(name: &str, base_dir: &std::path::Path) -> Self {
         let sandbox_dir = base_dir.join("sandbox");
+        Self::default_for_with_sandbox(name, base_dir, sandbox_dir)
+    }
+
+    /// Like [`default_for`](Self::default_for), but with an explicit sandbox directory.
+    ///
+    /// Used by `aegis init --dir` to point the sandbox at an existing project
+    /// directory instead of creating a dedicated one.
+    pub fn default_for_with_sandbox(
+        name: &str,
+        base_dir: &std::path::Path,
+        sandbox_dir: PathBuf,
+    ) -> Self {
         let policies_dir = base_dir.join("policies");
         let ledger_path = base_dir.join("audit.db");
 
@@ -127,6 +139,16 @@ mod tests {
         let config = AegisConfig::default_for("myagent", &base);
         assert_eq!(config.name, "myagent");
         assert_eq!(config.sandbox_dir, base.join("sandbox"));
+        assert_eq!(config.ledger_path, base.join("audit.db"));
+    }
+
+    #[test]
+    fn config_default_for_with_sandbox() {
+        let base = PathBuf::from("/home/user/.aegis/myagent");
+        let project = PathBuf::from("/home/user/my-project");
+        let config = AegisConfig::default_for_with_sandbox("myagent", &base, project.clone());
+        assert_eq!(config.name, "myagent");
+        assert_eq!(config.sandbox_dir, project);
         assert_eq!(config.ledger_path, base.join("audit.db"));
     }
 

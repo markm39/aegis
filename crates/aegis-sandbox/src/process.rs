@@ -48,6 +48,38 @@ impl SandboxBackend for ProcessBackend {
 
         Ok(status)
     }
+
+    fn spawn_and_wait(
+        &self,
+        command: &str,
+        args: &[String],
+        config: &AegisConfig,
+        env: &[(&str, &str)],
+    ) -> Result<(u32, std::process::ExitStatus), AegisError> {
+        tracing::info!(
+            command,
+            sandbox_dir = %config.sandbox_dir.display(),
+            "spawning command without OS-level sandboxing"
+        );
+
+        let mut cmd = std::process::Command::new(command);
+        cmd.args(args).current_dir(&config.sandbox_dir);
+        for (key, val) in env {
+            cmd.env(key, val);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            AegisError::SandboxError(format!("failed to spawn command '{command}': {e}"))
+        })?;
+
+        let pid = child.id();
+
+        let status = child.wait().map_err(|e| {
+            AegisError::SandboxError(format!("failed to wait for command '{command}': {e}"))
+        })?;
+
+        Ok((pid, status))
+    }
 }
 
 #[cfg(test)]
@@ -82,6 +114,50 @@ mod tests {
             .expect("failed to run echo");
 
         assert!(status.success());
+    }
+
+    #[test]
+    fn process_backend_spawn_and_wait_returns_real_pid() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config = test_config(dir.path().to_path_buf());
+
+        let backend = ProcessBackend;
+        backend.prepare(&config).expect("prepare failed");
+
+        let (pid, status) = backend
+            .spawn_and_wait("echo", &["hello".to_string()], &config, &[])
+            .expect("spawn_and_wait failed");
+
+        assert!(pid > 0, "should return a real PID, got {pid}");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn process_backend_spawn_and_wait_passes_env() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config = test_config(dir.path().to_path_buf());
+        let output_path = dir.path().join("env_output.txt");
+
+        let backend = ProcessBackend;
+        backend.prepare(&config).expect("prepare failed");
+
+        let output_str = output_path.display().to_string();
+        let script = format!("printenv AEGIS_TEST_VAR > {output_str}");
+
+        let (pid, status) = backend
+            .spawn_and_wait(
+                "sh",
+                &["-c".to_string(), script],
+                &config,
+                &[("AEGIS_TEST_VAR", "test_value_42")],
+            )
+            .expect("spawn_and_wait failed");
+
+        assert!(pid > 0);
+        assert!(status.success());
+
+        let content = std::fs::read_to_string(&output_path).expect("failed to read output");
+        assert_eq!(content.trim(), "test_value_42");
     }
 
     #[test]

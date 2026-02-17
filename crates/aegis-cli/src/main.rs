@@ -27,6 +27,11 @@ enum Commands {
         /// Policy template to use
         #[arg(long, default_value = "default-deny")]
         policy: String,
+
+        /// Use an existing project directory as the sandbox root instead of
+        /// creating a dedicated sandbox/ subdirectory
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
 
     /// Run a command inside the aegis sandbox
@@ -216,8 +221,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Setup => {
             commands::setup::run()
         }
-        Commands::Init { name, policy } => {
-            commands::init::run(&name, &policy)
+        Commands::Init { name, policy, dir } => {
+            commands::init::run(&name, &policy, dir.as_deref())
         }
         Commands::Run { config, command } => {
             let (cmd, args) = command
@@ -282,9 +287,10 @@ mod tests {
         assert!(cli.is_ok(), "should parse init with defaults: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
-            Commands::Init { name, policy } => {
+            Commands::Init { name, policy, dir } => {
                 assert_eq!(name, "myagent");
                 assert_eq!(policy, "default-deny");
+                assert!(dir.is_none());
             }
             _ => panic!("expected Init command"),
         }
@@ -297,9 +303,26 @@ mod tests {
         assert!(cli.is_ok(), "should parse init with policy: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
-            Commands::Init { name, policy } => {
+            Commands::Init { name, policy, dir } => {
                 assert_eq!(name, "agent2");
                 assert_eq!(policy, "allow-read-only");
+                assert!(dir.is_none());
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_init_with_dir() {
+        let cli = Cli::try_parse_from([
+            "aegis", "init", "--name", "agent3", "--dir", "/tmp/my-project",
+        ]);
+        assert!(cli.is_ok(), "should parse init with dir: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Init { name, dir, .. } => {
+                assert_eq!(name, "agent3");
+                assert_eq!(dir, Some(PathBuf::from("/tmp/my-project")));
             }
             _ => panic!("expected Init command"),
         }
@@ -566,7 +589,7 @@ mod tests {
         let tmpdir = tempfile::tempdir().expect("failed to create temp dir");
         let base = tmpdir.path().join("test-agent");
 
-        let result = commands::init::run_in_dir("test-agent", "default-deny", &base);
+        let result = commands::init::run_in_dir("test-agent", "default-deny", &base, None);
         assert!(result.is_ok(), "init should succeed: {result:?}");
 
         assert!(base.exists(), "base dir should exist");
@@ -589,10 +612,35 @@ mod tests {
         let tmpdir = tempfile::tempdir().expect("failed to create temp dir");
         let base = tmpdir.path().join("duplicate-agent");
 
-        let result = commands::init::run_in_dir("duplicate-agent", "default-deny", &base);
+        let result = commands::init::run_in_dir("duplicate-agent", "default-deny", &base, None);
         assert!(result.is_ok(), "first init should succeed");
 
-        let result = commands::init::run_in_dir("duplicate-agent", "default-deny", &base);
+        let result = commands::init::run_in_dir("duplicate-agent", "default-deny", &base, None);
         assert!(result.is_err(), "second init with same name should fail");
+    }
+
+    #[test]
+    fn init_with_dir_sets_sandbox_dir() {
+        let tmpdir = tempfile::tempdir().expect("failed to create temp dir");
+        let base = tmpdir.path().join("dir-agent");
+        let project_dir = tmpdir.path().join("my-project");
+        std::fs::create_dir_all(&project_dir).expect("failed to create project dir");
+
+        let result = commands::init::run_in_dir(
+            "dir-agent",
+            "default-deny",
+            &base,
+            Some(&project_dir),
+        );
+        assert!(result.is_ok(), "init with --dir should succeed: {result:?}");
+
+        let config = commands::init::load_config_from_dir(&base).expect("config should load");
+        // sandbox_dir should point to the project dir, not base/sandbox
+        assert_eq!(
+            config.sandbox_dir,
+            project_dir.canonicalize().unwrap(),
+        );
+        // The dedicated sandbox/ subdir should NOT have been created
+        assert!(!base.join("sandbox").exists());
     }
 }
