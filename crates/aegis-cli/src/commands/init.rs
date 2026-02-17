@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Input, MultiSelect, Select};
 
 use aegis_policy::builtin::get_builtin_policy;
 use aegis_types::{AegisConfig, IsolationConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME};
@@ -99,17 +99,29 @@ fn run_wizard() -> Result<()> {
         .interact_text()
         .context("failed to read configuration name")?;
 
-    // Security mode selection
-    let mode_labels: Vec<&str> = SECURITY_MODES.iter().map(|m| m.label()).collect();
+    // Security mode selection (presets + custom option)
+    let mut choices: Vec<String> = SECURITY_MODES
+        .iter()
+        .map(|m| m.label().to_string())
+        .collect();
+    choices.push("Custom             -- Pick specific capabilities".to_string());
+    let choice_refs: Vec<&str> = choices.iter().map(|s| s.as_str()).collect();
+
     let mode_index = Select::new()
         .with_prompt("Security mode")
-        .items(&mode_labels)
+        .items(&choice_refs)
         .default(0)
         .interact()
         .context("failed to read security mode")?;
 
-    let mode = SECURITY_MODES[mode_index];
-    let (policy, isolation) = mode.to_config();
+    let (policy_text, isolation) = if mode_index < SECURITY_MODES.len() {
+        let mode = SECURITY_MODES[mode_index];
+        let (template, isolation) = mode.to_config();
+        let text = get_builtin_policy(template).unwrap().to_string();
+        (text, isolation)
+    } else {
+        build_custom_policy()?
+    };
 
     // Project directory selection
     let home_dir = dirs_from_env()?;
@@ -144,10 +156,20 @@ fn run_wizard() -> Result<()> {
         IsolationConfig::None => "None",
     };
 
+    let mode_desc = if mode_index < SECURITY_MODES.len() {
+        SECURITY_MODES[mode_index]
+            .label()
+            .split("  --")
+            .next()
+            .unwrap_or("")
+            .to_string()
+    } else {
+        "Custom".to_string()
+    };
+
     println!("\nSummary:");
     println!("  Name:      {name}");
-    println!("  Mode:      {}", SECURITY_MODES[mode_index].label().split("  --").next().unwrap_or(""));
-    println!("  Policy:    {policy}");
+    println!("  Mode:      {mode_desc}");
     println!("  Isolation: {isolation_desc}");
     println!("  Directory: {dir_str}");
     println!("  Config at: ~/.aegis/{name}/");
@@ -166,9 +188,7 @@ fn run_wizard() -> Result<()> {
     // Create the config
     ensure_aegis_dir()?;
     let base_dir = aegis_base_dir(&name)?;
-
-    // Use run_in_dir_with_isolation to create with the chosen isolation mode
-    run_in_dir_with_isolation(&name, policy, &base_dir, Some(&project_dir), isolation)?;
+    create_config(&name, &policy_text, &base_dir, Some(&project_dir), isolation)?;
 
     // Auto-set as current config
     crate::commands::use_config::set_current(&name)?;
@@ -180,6 +200,95 @@ fn run_wizard() -> Result<()> {
     println!("  aegis log            # view audit trail");
 
     Ok(())
+}
+
+/// Capability labels shown in the interactive MultiSelect.
+const CAPABILITY_LABELS: &[&str] = &[
+    "Read files in the project directory",
+    "Write/modify files",
+    "Delete files",
+    "Create new directories",
+    "Access the network",
+];
+
+/// Cedar action names corresponding to each capability.
+const CAPABILITY_ACTIONS: &[&[&str]] = &[
+    &["FileRead"],
+    &["FileWrite"],
+    &["FileDelete"],
+    &["DirCreate"],
+    &["NetConnect"],
+];
+
+/// Build a Cedar policy from user-selected capabilities.
+///
+/// Shows a MultiSelect checklist of capabilities. Selected items become
+/// Cedar `permit` statements. DirList, ProcessSpawn, and ProcessExit are
+/// always included (required for basic Aegis operation).
+///
+/// Returns `(policy_text, isolation_config)`. Uses Seatbelt when any
+/// capability is denied; Process when everything is permitted.
+fn build_custom_policy() -> Result<(String, IsolationConfig)> {
+    let defaults = vec![true, false, false, false, false];
+    let selected = MultiSelect::new()
+        .with_prompt("What should this agent be allowed to do?")
+        .items(CAPABILITY_LABELS)
+        .defaults(&defaults)
+        .interact()
+        .context("failed to read capability selection")?;
+
+    // Collect all permitted actions (always include infrastructure actions)
+    let mut actions: Vec<&str> = vec!["DirList", "ProcessSpawn", "ProcessExit"];
+    let mut allowed_display: Vec<&str> = Vec::new();
+    let mut denied_display: Vec<&str> = Vec::new();
+
+    for (i, &label) in CAPABILITY_LABELS.iter().enumerate() {
+        if selected.contains(&i) {
+            for &action in CAPABILITY_ACTIONS[i] {
+                actions.push(action);
+            }
+            allowed_display.push(label);
+        } else {
+            denied_display.push(label);
+        }
+    }
+
+    actions.sort();
+    actions.dedup();
+
+    // Generate Cedar policy text
+    let policy_text = generate_cedar_policy(&actions);
+
+    // Show summary
+    if !allowed_display.is_empty() {
+        println!("\n  ALLOW: {}", allowed_display.join(", "));
+    }
+    if !denied_display.is_empty() {
+        println!("  DENY:  {}", denied_display.join(", "));
+    }
+
+    // If everything is allowed, no need for kernel enforcement
+    let all_allowed = selected.len() == CAPABILITY_LABELS.len();
+    let isolation = if all_allowed {
+        IsolationConfig::Process
+    } else {
+        IsolationConfig::Seatbelt {
+            profile_overrides: None,
+        }
+    };
+
+    Ok((policy_text, isolation))
+}
+
+/// Generate Cedar policy text from a list of action names.
+pub fn generate_cedar_policy(actions: &[&str]) -> String {
+    let mut policy = String::new();
+    for action in actions {
+        policy.push_str(&format!(
+            "permit(\n    principal,\n    action == Aegis::Action::\"{action}\",\n    resource\n);\n\n"
+        ));
+    }
+    policy
 }
 
 /// Inner init logic that operates on an explicit base directory.
@@ -206,19 +315,32 @@ pub fn run_in_dir_with_isolation(
     project_dir: Option<&Path>,
     isolation: IsolationConfig,
 ) -> Result<()> {
+    let policy_text = get_builtin_policy(policy_template).with_context(|| {
+        format!(
+            "unknown policy template '{policy_template}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
+        )
+    })?;
+
+    create_config(name, policy_text, base_dir, project_dir, isolation)
+}
+
+/// Create a config directory with explicit policy text and isolation config.
+///
+/// Core init logic shared by `run_in_dir_with_isolation` (builtin templates)
+/// and the wizard's custom capability builder (generated Cedar text).
+fn create_config(
+    name: &str,
+    policy_text: &str,
+    base_dir: &Path,
+    project_dir: Option<&Path>,
+    isolation: IsolationConfig,
+) -> Result<()> {
     if base_dir.exists() {
         bail!(
             "configuration directory already exists: {}",
             base_dir.display()
         );
     }
-
-    // Look up the builtin policy text
-    let policy_text = get_builtin_policy(policy_template).with_context(|| {
-        format!(
-            "unknown policy template '{policy_template}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
-        )
-    })?;
 
     // Resolve sandbox directory
     let sandbox_dir = match project_dir {
@@ -242,7 +364,7 @@ pub fn run_in_dir_with_isolation(
     fs::create_dir_all(&sandbox_dir)
         .with_context(|| format!("failed to create sandbox dir: {}", sandbox_dir.display()))?;
 
-    // Write the builtin policy as default.cedar
+    // Write the policy as default.cedar
     let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
     fs::write(&policy_file, policy_text)
         .with_context(|| format!("failed to write policy file: {}", policy_file.display()))?;
@@ -260,7 +382,7 @@ pub fn run_in_dir_with_isolation(
 
     println!("Initialized aegis configuration at {}", base_dir.display());
     println!("  Config:  {}", config_path.display());
-    println!("  Policy:  {} ({})", policy_file.display(), policy_template);
+    println!("  Policy:  {}", policy_file.display());
     println!("  Sandbox: {}", sandbox_dir.display());
 
     Ok(())
@@ -434,5 +556,60 @@ mod tests {
 
         let config = load_config_from_dir(&base_dir).unwrap();
         assert_eq!(config.name, "roundtrip");
+    }
+
+    #[test]
+    fn generate_cedar_policy_produces_valid_cedar() {
+        let actions = ["FileRead", "DirList", "ProcessSpawn", "ProcessExit"];
+        let policy_text = generate_cedar_policy(&actions);
+
+        // Should parse as valid Cedar
+        let pset: Result<cedar_policy::PolicySet, _> = policy_text.parse();
+        assert!(pset.is_ok(), "generated policy should parse: {pset:?}");
+        assert_eq!(pset.unwrap().policies().count(), 4);
+    }
+
+    #[test]
+    fn generate_cedar_policy_empty_actions() {
+        let policy_text = generate_cedar_policy(&[]);
+        assert!(policy_text.is_empty());
+    }
+
+    #[test]
+    fn create_config_with_custom_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join("custom-cfg");
+
+        let actions = ["FileRead", "DirList", "ProcessSpawn", "ProcessExit"];
+        let policy_text = generate_cedar_policy(&actions);
+
+        create_config(
+            "custom-cfg",
+            &policy_text,
+            &base_dir,
+            None,
+            IsolationConfig::Seatbelt { profile_overrides: None },
+        )
+        .unwrap();
+
+        assert!(base_dir.join(CONFIG_FILENAME).exists());
+        assert!(base_dir.join("policies").join(DEFAULT_POLICY_FILENAME).exists());
+
+        // Verify the policy file contains our generated Cedar
+        let saved_policy = fs::read_to_string(
+            base_dir.join("policies").join(DEFAULT_POLICY_FILENAME),
+        )
+        .unwrap();
+        assert!(saved_policy.contains("FileRead"));
+        assert!(saved_policy.contains("DirList"));
+    }
+
+    #[test]
+    fn capability_arrays_match_length() {
+        assert_eq!(
+            CAPABILITY_LABELS.len(),
+            CAPABILITY_ACTIONS.len(),
+            "labels and actions arrays must have same length"
+        );
     }
 }
