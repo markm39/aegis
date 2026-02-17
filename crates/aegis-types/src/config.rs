@@ -40,6 +40,15 @@ pub struct NetworkRule {
     pub protocol: Protocol,
 }
 
+impl std::fmt::Display for NetworkRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.port {
+            Some(port) => write!(f, "{} {}:{}", self.protocol, self.host, port),
+            None => write!(f, "{} {}", self.protocol, self.host),
+        }
+    }
+}
+
 /// Observer configuration controlling how Aegis monitors filesystem activity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ObserverConfig {
@@ -254,6 +263,48 @@ mod tests {
         assert_eq!(
             ObserverConfig::EndpointSecurity.to_string(),
             "Endpoint Security"
+        );
+    }
+
+    #[test]
+    fn network_rule_display() {
+        let rule_with_port = NetworkRule {
+            host: "api.openai.com".into(),
+            port: Some(443),
+            protocol: Protocol::Https,
+        };
+        assert_eq!(rule_with_port.to_string(), "HTTPS api.openai.com:443");
+
+        let rule_no_port = NetworkRule {
+            host: "example.com".into(),
+            port: None,
+            protocol: Protocol::Tcp,
+        };
+        assert_eq!(rule_no_port.to_string(), "TCP example.com");
+    }
+
+    #[test]
+    fn protocol_display() {
+        assert_eq!(Protocol::Tcp.to_string(), "TCP");
+        assert_eq!(Protocol::Udp.to_string(), "UDP");
+        assert_eq!(Protocol::Http.to_string(), "HTTP");
+        assert_eq!(Protocol::Https.to_string(), "HTTPS");
+    }
+
+    #[test]
+    fn isolation_config_display() {
+        assert_eq!(IsolationConfig::Process.to_string(), "Process");
+        assert_eq!(IsolationConfig::None.to_string(), "None");
+        assert_eq!(
+            IsolationConfig::Seatbelt { profile_overrides: None }.to_string(),
+            "Seatbelt"
+        );
+        assert_eq!(
+            IsolationConfig::Seatbelt {
+                profile_overrides: Some(PathBuf::from("/tmp/custom.sb"))
+            }
+            .to_string(),
+            "Seatbelt (overrides: /tmp/custom.sb)"
         );
     }
 }

@@ -25,37 +25,11 @@ pub fn log_process_spawn(
     args: &[String],
     session_id: Option<&uuid::Uuid>,
 ) -> Result<(), AegisError> {
-    let action = Action::new(
-        principal,
-        ActionKind::ProcessSpawn {
-            command: command.to_string(),
-            args: args.to_vec(),
-        },
-    );
-
-    let verdict = engine
-        .lock()
-        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
-        .evaluate(&action);
-
-    let mut guard = store
-        .lock()
-        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?;
-
-    if let Some(sid) = session_id {
-        guard.append_with_session(&action, &verdict, sid)?;
-    } else {
-        guard.append(&action, &verdict)?;
-    }
-
-    tracing::info!(
-        command,
-        session_id = session_id.map(|s| s.to_string()),
-        decision = %verdict.decision,
-        "logged ProcessSpawn"
-    );
-
-    Ok(())
+    let kind = ActionKind::ProcessSpawn {
+        command: command.to_string(),
+        args: args.to_vec(),
+    };
+    evaluate_and_log(store, engine, principal, kind, session_id)
 }
 
 /// Log a process exit event to the audit ledger.
@@ -73,13 +47,25 @@ pub fn log_process_exit(
     exit_code: i32,
     session_id: Option<&uuid::Uuid>,
 ) -> Result<(), AegisError> {
-    let action = Action::new(
-        principal,
-        ActionKind::ProcessExit {
-            command: command.to_string(),
-            exit_code,
-        },
-    );
+    let kind = ActionKind::ProcessExit {
+        command: command.to_string(),
+        exit_code,
+    };
+    evaluate_and_log(store, engine, principal, kind, session_id)
+}
+
+/// Evaluate an action against the policy engine and log the result to the audit store.
+///
+/// This is the shared implementation for `log_process_spawn` and `log_process_exit`.
+/// Acquires the policy lock, evaluates, acquires the store lock, and appends.
+fn evaluate_and_log(
+    store: &Arc<Mutex<AuditStore>>,
+    engine: &Arc<Mutex<PolicyEngine>>,
+    principal: &str,
+    kind: ActionKind,
+    session_id: Option<&uuid::Uuid>,
+) -> Result<(), AegisError> {
+    let action = Action::new(principal, kind);
 
     let verdict = engine
         .lock()
@@ -97,11 +83,10 @@ pub fn log_process_exit(
     }
 
     tracing::info!(
-        command,
-        exit_code,
+        action_kind = %action.kind,
         session_id = session_id.map(|s| s.to_string()),
         decision = %verdict.decision,
-        "logged ProcessExit"
+        "logged action"
     );
 
     Ok(())

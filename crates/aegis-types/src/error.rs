@@ -1,3 +1,5 @@
+//! Error types shared across all Aegis crates.
+
 /// Errors that can occur across the Aegis runtime.
 ///
 /// Each variant corresponds to a different subsystem: policy engine,

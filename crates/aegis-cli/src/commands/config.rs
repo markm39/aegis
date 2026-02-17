@@ -55,18 +55,14 @@ pub fn show(config_name: &str) -> Result<()> {
 
     println!("  Ledger:     {}", config.ledger_path.display());
     println!("  Isolation:  {}", describe_isolation(&config));
-    println!("  Observer:   {}", describe_observer(&config));
+    println!("  Observer:   {}", config.observer);
 
     if config.allowed_network.is_empty() {
         println!("  Network:    (no rules)");
     } else {
         println!("  Network:");
         for rule in &config.allowed_network {
-            let port = rule
-                .port
-                .map(|p| format!(":{p}"))
-                .unwrap_or_default();
-            println!("    - {} {}{}", rule.protocol, rule.host, port);
+            println!("    - {rule}");
         }
     }
 
@@ -153,10 +149,6 @@ fn describe_isolation(config: &AegisConfig) -> String {
     }
 }
 
-fn describe_observer(config: &AegisConfig) -> String {
-    config.observer.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,35 +179,21 @@ mod tests {
             isolation: aegis_types::IsolationConfig::None,
             ..seatbelt
         };
-        assert_eq!(describe_observer(&none), "FsEvents (snapshots: enabled)");
+        assert_eq!(none.observer.to_string(), "FsEvents (snapshots: enabled)");
     }
 
     #[test]
     fn describe_observer_variants() {
-        let config = aegis_types::AegisConfig {
-            name: "test".into(),
-            sandbox_dir: "/tmp".into(),
-            policy_paths: vec![],
-            schema_path: None,
-            ledger_path: "/tmp/audit.db".into(),
-            allowed_network: vec![],
-            isolation: aegis_types::IsolationConfig::Process,
-            observer: aegis_types::ObserverConfig::None,
-        };
-        assert_eq!(describe_observer(&config), "None");
-
-        let fsevents = aegis_types::AegisConfig {
-            observer: aegis_types::ObserverConfig::FsEvents {
-                enable_snapshots: false,
-            },
-            ..config.clone()
-        };
-        assert!(describe_observer(&fsevents).contains("disabled"));
-
-        let es = aegis_types::AegisConfig {
-            observer: aegis_types::ObserverConfig::EndpointSecurity,
-            ..config
-        };
-        assert!(describe_observer(&es).contains("Endpoint"));
+        assert_eq!(aegis_types::ObserverConfig::None.to_string(), "None");
+        assert!(
+            aegis_types::ObserverConfig::FsEvents { enable_snapshots: false }
+                .to_string()
+                .contains("disabled")
+        );
+        assert!(
+            aegis_types::ObserverConfig::EndpointSecurity
+                .to_string()
+                .contains("Endpoint")
+        );
     }
 }

@@ -55,6 +55,25 @@ impl Action {
     }
 }
 
+impl std::fmt::Display for ActionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActionKind::FileRead { path } => write!(f, "FileRead {}", path.display()),
+            ActionKind::FileWrite { path } => write!(f, "FileWrite {}", path.display()),
+            ActionKind::FileDelete { path } => write!(f, "FileDelete {}", path.display()),
+            ActionKind::DirCreate { path } => write!(f, "DirCreate {}", path.display()),
+            ActionKind::DirList { path } => write!(f, "DirList {}", path.display()),
+            ActionKind::NetConnect { host, port } => write!(f, "NetConnect {host}:{port}"),
+            ActionKind::NetRequest { method, url } => write!(f, "NetRequest {method} {url}"),
+            ActionKind::ToolCall { tool, .. } => write!(f, "ToolCall {tool}"),
+            ActionKind::ProcessSpawn { command, .. } => write!(f, "ProcessSpawn {command}"),
+            ActionKind::ProcessExit { command, exit_code } => {
+                write!(f, "ProcessExit {command} (code {exit_code})")
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +136,49 @@ mod tests {
             let back: ActionKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, v);
         }
+    }
+
+    #[test]
+    fn action_kind_display() {
+        assert_eq!(
+            ActionKind::FileRead { path: PathBuf::from("/tmp/f.txt") }.to_string(),
+            "FileRead /tmp/f.txt"
+        );
+        assert_eq!(
+            ActionKind::FileWrite { path: PathBuf::from("/a/b") }.to_string(),
+            "FileWrite /a/b"
+        );
+        assert_eq!(
+            ActionKind::FileDelete { path: PathBuf::from("/x") }.to_string(),
+            "FileDelete /x"
+        );
+        assert_eq!(
+            ActionKind::DirCreate { path: PathBuf::from("/d") }.to_string(),
+            "DirCreate /d"
+        );
+        assert_eq!(
+            ActionKind::DirList { path: PathBuf::from("/e") }.to_string(),
+            "DirList /e"
+        );
+        assert_eq!(
+            ActionKind::NetConnect { host: "h".into(), port: 80 }.to_string(),
+            "NetConnect h:80"
+        );
+        assert_eq!(
+            ActionKind::NetRequest { method: "POST".into(), url: "https://x".into() }.to_string(),
+            "NetRequest POST https://x"
+        );
+        assert_eq!(
+            ActionKind::ToolCall { tool: "sh".into(), args: serde_json::json!({}) }.to_string(),
+            "ToolCall sh"
+        );
+        assert_eq!(
+            ActionKind::ProcessSpawn { command: "ls".into(), args: vec!["-l".into()] }.to_string(),
+            "ProcessSpawn ls"
+        );
+        assert_eq!(
+            ActionKind::ProcessExit { command: "ls".into(), exit_code: 1 }.to_string(),
+            "ProcessExit ls (code 1)"
+        );
     }
 }
