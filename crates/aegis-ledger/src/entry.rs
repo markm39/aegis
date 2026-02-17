@@ -13,15 +13,25 @@ use aegis_types::{Action, AegisError, Verdict};
 /// A single entry in the append-only audit ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditEntry {
+    /// Unique identifier for this audit entry.
     pub entry_id: Uuid,
+    /// When this entry was created.
     pub timestamp: DateTime<Utc>,
+    /// The action ID this entry records a verdict for.
     pub action_id: Uuid,
+    /// JSON-serialized `ActionKind` describing the action.
     pub action_kind: String,
+    /// The agent principal that performed the action.
     pub principal: String,
+    /// The authorization decision: "Allow" or "Deny".
     pub decision: String,
+    /// Human-readable reason for the decision.
     pub reason: String,
+    /// The Cedar policy ID that produced the decision, if identifiable.
     pub policy_id: Option<String>,
+    /// SHA-256 hash of the previous entry in the chain (empty for genesis).
     pub prev_hash: String,
+    /// SHA-256 hash of this entry's contents, linking it into the chain.
     pub entry_hash: String,
 }
 

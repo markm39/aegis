@@ -13,14 +13,23 @@ use crate::store::AuditStore;
 /// Summary statistics for a set of audit entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditStats {
+    /// Total number of audit entries.
     pub total_entries: usize,
+    /// Total number of sessions.
     pub total_sessions: usize,
+    /// Number of entries with an Allow decision.
     pub allow_count: usize,
+    /// Number of entries with a Deny decision.
     pub deny_count: usize,
+    /// Ratio of denied entries to total (0.0 to 1.0).
     pub deny_rate: f64,
+    /// Entry counts grouped by action kind, sorted by count descending.
     pub entries_by_action: Vec<(String, usize)>,
+    /// Entry counts grouped by principal, sorted by count descending.
     pub entries_by_principal: Vec<(String, usize)>,
+    /// Whether the hash chain integrity is valid.
     pub integrity_valid: bool,
+    /// Number of policy snapshot changes detected.
     pub policy_changes: usize,
     /// Top accessed resources (extracted from action_kind JSON), sorted by count descending.
     pub top_resources: Vec<(String, usize)>,

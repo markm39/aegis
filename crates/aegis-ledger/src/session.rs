@@ -22,15 +22,25 @@ const SESSION_COLUMNS: &str = "session_id, config_name, command, args, start_tim
 /// A session represents one `aegis run` invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    /// Unique identifier for this session.
     pub session_id: Uuid,
+    /// Configuration name used for this session.
     pub config_name: String,
+    /// The command that was executed.
     pub command: String,
+    /// Command-line arguments passed to the command.
     pub args: Vec<String>,
+    /// When the session began.
     pub start_time: DateTime<Utc>,
+    /// When the session ended (None if still running).
     pub end_time: Option<DateTime<Utc>>,
+    /// Exit code of the process (None if still running or signal-terminated).
     pub exit_code: Option<i32>,
+    /// SHA-256 hash of the policy configuration at session start.
     pub policy_hash: Option<String>,
+    /// Total number of actions recorded during this session.
     pub total_actions: usize,
+    /// Number of actions that were denied during this session.
     pub denied_actions: usize,
     /// Optional human-readable tag (e.g., "deploy-v2.1").
     pub tag: Option<String>,

@@ -23,11 +23,17 @@ use crate::store::AuditStore;
 /// A point-in-time snapshot of the policy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicySnapshot {
+    /// Unique identifier for this snapshot.
     pub snapshot_id: Uuid,
+    /// When this snapshot was recorded.
     pub timestamp: DateTime<Utc>,
+    /// SHA-256 hash of the combined policy file contents.
     pub policy_hash: String,
+    /// Map of filename to policy text at the time of the snapshot.
     pub policy_files: BTreeMap<String, String>,
+    /// Session ID this snapshot is associated with, if any.
     pub session_id: Option<Uuid>,
+    /// Configuration name this snapshot belongs to.
     pub config_name: String,
 }
 
