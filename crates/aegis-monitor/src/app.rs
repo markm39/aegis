@@ -30,6 +30,7 @@ pub enum AppMode {
 ///
 /// We avoid depending on `aegis_ledger::Session` directly because the
 /// monitor opens its own read-only connection and maps rows itself.
+#[derive(Clone)]
 pub struct MonitorSession {
     pub session_id: String,
     pub config_name: String,
@@ -317,7 +318,8 @@ impl App {
                 }
                 KeyCode::Enter => {
                     if let Some(session) = self.sessions.get(self.session_selected) {
-                        self.drill_into_session(&session.session_id.clone());
+                        let sid = session.session_id.clone();
+                        self.drill_into_session(&sid);
                     }
                 }
                 _ => {}
@@ -365,16 +367,7 @@ impl App {
             .sessions
             .iter()
             .find(|s| s.session_id == session_id)
-            .map(|s| MonitorSession {
-                session_id: s.session_id.clone(),
-                config_name: s.config_name.clone(),
-                command: s.command.clone(),
-                start_time: s.start_time.clone(),
-                end_time: s.end_time.clone(),
-                exit_code: s.exit_code,
-                total_actions: s.total_actions,
-                denied_actions: s.denied_actions,
-            });
+            .cloned();
 
         self.mode = AppMode::SessionDetail;
     }

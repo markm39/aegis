@@ -161,12 +161,10 @@ fn build_resource_map(
 
 /// Extract a display-friendly key from the action_kind JSON string.
 ///
-/// Deserializes the JSON back to `ActionKind` and uses its `Display` impl,
-/// which keeps this in sync with any new variants automatically.
+/// Delegates to `ActionKind::display_from_json` which deserializes the JSON
+/// and uses the `Display` impl.
 pub fn extract_resource_key(action_kind: &str) -> String {
-    serde_json::from_str::<aegis_types::ActionKind>(action_kind)
-        .map(|kind| kind.to_string())
-        .unwrap_or_else(|_| action_kind.to_string())
+    aegis_types::ActionKind::display_from_json(action_kind)
 }
 
 #[cfg(test)]

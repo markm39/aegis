@@ -1,5 +1,5 @@
 /// The result of verifying the audit ledger's hash chain integrity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrityReport {
     /// Total number of entries inspected.
     pub total_entries: usize,

@@ -3,6 +3,7 @@
 //! Computes summary metrics from audit entries: total counts, deny rates,
 //! breakdowns by action kind and principal, and integrity status.
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use aegis_types::{ActionKind, AegisError};
@@ -136,7 +137,8 @@ impl AuditStore {
                 [],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(|e| AegisError::LedgerError(format!("time_range earliest query failed: {e}")))?;
 
         let latest: Option<String> = self
             .connection()
@@ -145,7 +147,8 @@ impl AuditStore {
                 [],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(|e| AegisError::LedgerError(format!("time_range latest query failed: {e}")))?;
 
         Ok((earliest, latest))
     }
@@ -165,12 +168,10 @@ impl AuditStore {
 
 /// Extract a human-readable resource display name from the action_kind JSON.
 ///
-/// Deserializes the JSON back to `ActionKind` and uses its `Display` impl,
-/// which keeps this in sync with any new variants automatically.
+/// Delegates to `ActionKind::display_from_json` which deserializes the JSON
+/// and uses the `Display` impl.
 fn extract_resource_display(action_kind: &str) -> String {
-    serde_json::from_str::<ActionKind>(action_kind)
-        .map(|kind| kind.to_string())
-        .unwrap_or_else(|_| action_kind.to_string())
+    ActionKind::display_from_json(action_kind)
 }
 
 #[cfg(test)]

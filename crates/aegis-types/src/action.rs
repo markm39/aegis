@@ -55,6 +55,19 @@ impl Action {
     }
 }
 
+impl ActionKind {
+    /// Parse a JSON-serialized `ActionKind` and return its human-readable display string.
+    ///
+    /// Falls back to the raw JSON string if deserialization fails (e.g., for
+    /// unknown variants or malformed JSON). This keeps display logic in sync
+    /// with the `Display` impl and avoids duplicating the conversion elsewhere.
+    pub fn display_from_json(json: &str) -> String {
+        serde_json::from_str::<ActionKind>(json)
+            .map(|kind| kind.to_string())
+            .unwrap_or_else(|_| json.to_string())
+    }
+}
+
 impl std::fmt::Display for ActionKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -136,6 +149,24 @@ mod tests {
             let back: ActionKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, v);
         }
+    }
+
+    #[test]
+    fn display_from_json_valid() {
+        let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
+        assert_eq!(ActionKind::display_from_json(json), "FileRead /tmp/test.txt");
+
+        let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
+        assert_eq!(ActionKind::display_from_json(json), "NetConnect example.com:443");
+    }
+
+    #[test]
+    fn display_from_json_invalid_falls_back() {
+        assert_eq!(ActionKind::display_from_json("not json"), "not json");
+        assert_eq!(ActionKind::display_from_json("{}"), "{}");
+
+        let unknown = r#"{"CustomAction":{}}"#;
+        assert_eq!(ActionKind::display_from_json(unknown), unknown);
     }
 
     #[test]
