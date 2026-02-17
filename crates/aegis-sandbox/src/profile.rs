@@ -98,6 +98,7 @@ mod tests {
             isolation: IsolationConfig::Seatbelt {
                 profile_overrides: None,
             },
+            observer: aegis_types::ObserverConfig::default(),
         }
     }
 

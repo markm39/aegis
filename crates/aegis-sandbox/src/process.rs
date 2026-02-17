@@ -65,6 +65,7 @@ mod tests {
             ledger_path: PathBuf::from("/tmp/audit.db"),
             allowed_network: vec![],
             isolation: IsolationConfig::Process,
+            observer: aegis_types::ObserverConfig::default(),
         }
     }
 
