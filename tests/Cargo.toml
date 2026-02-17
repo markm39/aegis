@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
+chrono = { workspace = true }
 
 [[test]]
 name = "test_policy_engine"
@@ -40,3 +41,7 @@ path = "test_e2e.rs"
 [[test]]
 name = "test_smoke"
 path = "test_smoke.rs"
+
+[[test]]
+name = "test_sessions"
+path = "test_sessions.rs"
