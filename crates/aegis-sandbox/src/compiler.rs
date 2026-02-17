@@ -7,18 +7,7 @@
 use aegis_policy::PolicyEngine;
 use aegis_types::AegisConfig;
 
-/// System paths that sandboxed processes need read access to for basic operation.
-const SYSTEM_READ_PATHS: &[&str] = &[
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/Library",
-    "/System",
-    "/private/var/db",
-    "/private/etc",
-    "/private/var/folders",
-    "/dev",
-];
+use crate::SYSTEM_READ_PATHS;
 
 /// Compile Cedar policies into a Seatbelt SBPL profile string.
 ///

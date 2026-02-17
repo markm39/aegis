@@ -1,20 +1,6 @@
 use aegis_types::{AegisConfig, IsolationConfig};
 
-/// System paths that sandboxed processes need read access to for basic operation.
-///
-/// On macOS, even simple commands require access to the dyld shared cache,
-/// system libraries, and various configuration paths.
-const SYSTEM_READ_PATHS: &[&str] = &[
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/Library",
-    "/System",
-    "/private/var/db",
-    "/private/etc",
-    "/private/var/folders",
-    "/dev",
-];
+use crate::SYSTEM_READ_PATHS;
 
 /// Generate a macOS Seatbelt profile in SBPL format from the given config.
 ///
@@ -63,17 +49,24 @@ pub fn generate_seatbelt_profile(config: &AegisConfig) -> String {
         profile.push_str("(allow network-outbound)\n");
     }
 
-    // Append profile overrides if specified and the file exists
+    // Append profile overrides if specified
     if let IsolationConfig::Seatbelt {
         profile_overrides: Some(ref overrides_path),
     } = config.isolation
     {
-        if overrides_path.exists() {
-            if let Ok(contents) = std::fs::read_to_string(overrides_path) {
+        match std::fs::read_to_string(overrides_path) {
+            Ok(contents) => {
                 profile.push_str(&contents);
                 if !contents.ends_with('\n') {
                     profile.push('\n');
                 }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %overrides_path.display(),
+                    error = %e,
+                    "failed to read profile overrides file; continuing without overrides"
+                );
             }
         }
     }

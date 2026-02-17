@@ -15,3 +15,21 @@ pub use compiler::compile_cedar_to_sbpl;
 pub use profile::generate_seatbelt_profile;
 #[cfg(target_os = "macos")]
 pub use seatbelt::SeatbeltBackend;
+
+/// System paths that sandboxed processes need read access to for basic operation.
+///
+/// On macOS, even simple commands require access to the dyld shared cache,
+/// system libraries, and various configuration paths. This constant is shared
+/// between the Cedar-to-SBPL compiler and the Seatbelt profile generator.
+#[cfg(target_os = "macos")]
+pub(crate) const SYSTEM_READ_PATHS: &[&str] = &[
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/Library",
+    "/System",
+    "/private/var/db",
+    "/private/etc",
+    "/private/var/folders",
+    "/dev",
+];
