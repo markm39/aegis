@@ -255,6 +255,26 @@ pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
     Ok(())
 }
 
+/// Run `aegis audit tag NAME --id UUID --tag TAG`.
+///
+/// Tags an existing session with a human-readable label.
+pub fn tag_session(config_name: &str, session_id_str: &str, tag: &str) -> Result<()> {
+    let config = load_config(config_name)?;
+    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    let session_id: uuid::Uuid = session_id_str
+        .parse()
+        .context("invalid session UUID")?;
+
+    store
+        .update_session_tag(&session_id, tag)
+        .context("failed to tag session")?;
+
+    println!("Session {} tagged: {tag}", &session_id_str[..8.min(session_id_str.len())]);
+
+    Ok(())
+}
+
 /// Run `aegis audit purge NAME --older-than DURATION --confirm`.
 ///
 /// Deletes audit entries older than the specified duration and rebuilds

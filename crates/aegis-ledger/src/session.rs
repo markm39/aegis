@@ -146,6 +146,29 @@ impl AuditStore {
         Ok(result)
     }
 
+    /// Update the tag for a session.
+    pub fn update_session_tag(
+        &self,
+        session_id: &Uuid,
+        tag: &str,
+    ) -> Result<(), AegisError> {
+        let rows_affected = self
+            .connection()
+            .execute(
+                "UPDATE sessions SET tag = ?1 WHERE session_id = ?2",
+                params![tag, session_id.to_string()],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("update_session_tag failed: {e}")))?;
+
+        if rows_affected == 0 {
+            return Err(AegisError::LedgerError(format!(
+                "session {session_id} not found"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Get all audit entries for a specific session, ordered by id ASC.
     pub fn query_by_session(
         &self,
@@ -325,6 +348,32 @@ mod tests {
 
         let session = store.get_session(&session_id).unwrap().unwrap();
         assert_eq!(session.tag, Some("deploy-v2.1".to_string()));
+    }
+
+    #[test]
+    fn update_session_tag() {
+        let (_tmp, mut store) = test_db();
+
+        let session_id = store
+            .begin_session("test", "cmd", &[], None)
+            .unwrap();
+
+        // Initially no tag
+        let session = store.get_session(&session_id).unwrap().unwrap();
+        assert!(session.tag.is_none());
+
+        // Update tag
+        store.update_session_tag(&session_id, "deploy-v2").unwrap();
+
+        let session = store.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(session.tag, Some("deploy-v2".to_string()));
+    }
+
+    #[test]
+    fn update_session_tag_nonexistent_fails() {
+        let (_tmp, store) = test_db();
+        let result = store.update_session_tag(&Uuid::new_v4(), "test");
+        assert!(result.is_err());
     }
 
     #[test]

@@ -267,6 +267,20 @@ enum AuditCommands {
         last: usize,
     },
 
+    /// Tag a session with a human-readable label
+    Tag {
+        /// Name of the aegis configuration
+        config: String,
+
+        /// Session UUID
+        #[arg(long)]
+        id: String,
+
+        /// Tag to apply
+        #[arg(long)]
+        tag: String,
+    },
+
     /// Purge old audit entries (destructive, requires --confirm)
     Purge {
         /// Name of the aegis configuration
@@ -364,6 +378,9 @@ fn main() -> anyhow::Result<()> {
             AuditCommands::Session { config, id } => commands::audit::show_session(&config, &id),
             AuditCommands::PolicyHistory { config, last } => {
                 commands::audit::policy_history(&config, last)
+            }
+            AuditCommands::Tag { config, id, tag } => {
+                commands::audit::tag_session(&config, &id, &tag)
             }
             AuditCommands::Purge {
                 config,
@@ -658,6 +675,32 @@ mod tests {
                 assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
             }
             _ => panic!("expected Audit Session command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_tag() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "tag",
+            "myagent",
+            "--id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--tag",
+            "deploy-v2",
+        ]);
+        assert!(cli.is_ok(), "should parse audit tag: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Tag { config, id, tag },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(tag, "deploy-v2");
+            }
+            _ => panic!("expected Audit Tag command"),
         }
     }
 
