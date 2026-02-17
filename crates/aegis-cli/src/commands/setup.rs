@@ -17,34 +17,18 @@ pub fn run() -> Result<()> {
     println!("Aegis Setup");
     println!("===========\n");
 
-    // Step 1: Check macOS version
-    print!("Checking macOS version... ");
-    check_macos_version()?;
-
-    // Step 2: Check sandbox-exec exists
-    print!("Checking sandbox-exec... ");
-    check_sandbox_exec()?;
-
-    // Step 3: Create ~/.aegis/ base directory
+    // Create ~/.aegis/ base directory (works on all platforms)
     print!("Creating ~/.aegis/ directory... ");
     let aegis_dir = create_aegis_dir()?;
 
-    // Step 4: Self-test (non-fatal -- sandbox-exec may not work in all environments)
-    print!("Running sandbox self-test... ");
-    match self_test() {
-        Ok(()) => {}
-        Err(e) => {
-            println!("SKIPPED");
-            println!(
-                "  Warning: sandbox self-test failed: {e:#}"
-            );
-            println!(
-                "  Seatbelt enforcement may not work in this environment."
-            );
-            println!(
-                "  Aegis will still function in observe-only (Process) mode."
-            );
-        }
+    // macOS-specific checks
+    #[cfg(target_os = "macos")]
+    run_macos_checks()?;
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        println!("Platform: non-macOS (Seatbelt sandbox unavailable)");
+        println!("  Aegis will run in Process isolation mode (observation + policy evaluation).");
     }
 
     println!("\nSetup complete.");
@@ -58,6 +42,30 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Run macOS-specific environment checks: version, sandbox-exec, self-test.
+#[cfg(target_os = "macos")]
+fn run_macos_checks() -> Result<()> {
+    print!("Checking macOS version... ");
+    check_macos_version()?;
+
+    print!("Checking sandbox-exec... ");
+    check_sandbox_exec()?;
+
+    print!("Running sandbox self-test... ");
+    match self_test() {
+        Ok(()) => {}
+        Err(e) => {
+            println!("SKIPPED");
+            println!("  Warning: sandbox self-test failed: {e:#}");
+            println!("  Seatbelt enforcement may not work in this environment.");
+            println!("  Aegis will still function in observe-only (Process) mode.");
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn check_macos_version() -> Result<()> {
     let output = std::process::Command::new("sw_vers")
         .arg("-productVersion")
@@ -86,6 +94,7 @@ fn check_macos_version() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn check_sandbox_exec() -> Result<()> {
     let output = std::process::Command::new("which")
         .arg("sandbox-exec")
@@ -113,6 +122,7 @@ fn create_aegis_dir() -> Result<PathBuf> {
     Ok(aegis_dir)
 }
 
+#[cfg(target_os = "macos")]
 fn self_test() -> Result<()> {
     let profile = "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow sysctl-read)\n(allow mach-lookup)\n(allow file-read-metadata)\n(allow file-read-data)\n(allow file-read* (subpath \"/usr\"))\n(allow file-read* (subpath \"/bin\"))\n(allow file-read* (subpath \"/sbin\"))\n(allow file-read* (subpath \"/Library\"))\n(allow file-read* (subpath \"/System\"))\n(allow file-read* (subpath \"/private\"))\n(allow file-read* (subpath \"/dev\"))\n";
 
@@ -148,31 +158,26 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn check_macos_version_succeeds_on_macos() {
-        // This test will only pass on macOS >= 12
-        if cfg!(target_os = "macos") {
-            assert!(check_macos_version().is_ok());
-        }
+        assert!(check_macos_version().is_ok());
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn check_sandbox_exec_succeeds_on_macos() {
-        if cfg!(target_os = "macos") {
-            assert!(check_sandbox_exec().is_ok());
-        }
+        assert!(check_sandbox_exec().is_ok());
     }
 
     #[test]
     fn create_aegis_dir_succeeds() {
-        // Should work as long as HOME is set
         assert!(create_aegis_dir().is_ok());
     }
 
     #[test]
     #[ignore] // Requires sandbox-exec which fails inside another sandbox (e.g. Claude Code)
+    #[cfg(target_os = "macos")]
     fn self_test_succeeds_on_macos() {
-        if cfg!(target_os = "macos") {
-            assert!(self_test().is_ok());
-        }
+        assert!(self_test().is_ok());
     }
 }
