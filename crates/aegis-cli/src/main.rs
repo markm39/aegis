@@ -1,4 +1,5 @@
 mod commands;
+mod fleet_tui;
 mod pilot_tui;
 mod wizard;
 
@@ -210,6 +211,9 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
+
+    /// Open the fleet dashboard (live agent management TUI)
+    Fleet,
 
     /// Manage the multi-agent daemon (fleet orchestration)
     Daemon {
@@ -815,6 +819,9 @@ fn main() -> anyhow::Result<()> {
                 cmd,
                 args,
             )
+        }
+        Commands::Fleet => {
+            fleet_tui::run_fleet_tui()
         }
         Commands::Daemon { action } => match action {
             DaemonCommands::Init => commands::daemon::init(),
@@ -1974,5 +1981,13 @@ mod tests {
             }
             _ => panic!("expected Watch command"),
         }
+    }
+
+    #[test]
+    fn cli_parse_fleet() {
+        let cli = Cli::try_parse_from(["aegis", "fleet"]);
+        assert!(cli.is_ok(), "should parse fleet: {cli:?}");
+        let cli = cli.unwrap();
+        assert!(matches!(cli.command, Some(Commands::Fleet)));
     }
 }
