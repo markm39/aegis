@@ -28,11 +28,19 @@ impl AuditStore {
     /// Enables WAL mode, creates the `audit_log` table and indices if they
     /// do not exist, and reads the latest entry hash (or uses "genesis").
     pub fn open(path: &Path) -> Result<Self, AegisError> {
-        let conn = Connection::open(path)
-            .map_err(|e| AegisError::LedgerError(format!("failed to open database: {e}")))?;
+        let conn = Connection::open(path).map_err(|e| {
+            AegisError::LedgerError(format!(
+                "failed to open database '{}': {e}",
+                path.display()
+            ))
+        })?;
 
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| AegisError::LedgerError(format!("failed to set WAL mode: {e}")))?;
+        conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| {
+            AegisError::LedgerError(format!(
+                "failed to set WAL mode on '{}': {e}",
+                path.display()
+            ))
+        })?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS audit_log (
@@ -81,7 +89,12 @@ impl AuditStore {
             );
             CREATE INDEX IF NOT EXISTS idx_policy_config ON policy_snapshots(config_name);",
         )
-        .map_err(|e| AegisError::LedgerError(format!("failed to create schema: {e}")))?;
+        .map_err(|e| {
+            AegisError::LedgerError(format!(
+                "failed to create schema in '{}': {e}",
+                path.display()
+            ))
+        })?;
 
         // Add session_id column if it does not already exist (migration).
         // This is a nullable column for backward compatibility with existing ledgers.

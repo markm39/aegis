@@ -140,7 +140,7 @@ fn walk_dir(
 
     for entry in read_dir {
         let entry = entry.map_err(|e| {
-            AegisError::LedgerError(format!("failed to read dir entry: {e}"))
+            AegisError::FsError(format!("failed to read dir entry: {e}"))
         })?;
 
         let path = entry.path();

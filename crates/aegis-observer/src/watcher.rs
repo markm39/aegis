@@ -40,8 +40,9 @@ impl FsWatcher {
         session_id: Option<uuid::Uuid>,
     ) -> Result<Self, AegisError> {
         let sandbox_dir = sandbox_dir.canonicalize().map_err(|e| {
-            AegisError::LedgerError(format!(
-                "failed to canonicalize sandbox dir: {e}"
+            AegisError::FsError(format!(
+                "failed to canonicalize sandbox dir '{}': {e}",
+                sandbox_dir.display()
             ))
         })?;
 
@@ -60,13 +61,16 @@ impl FsWatcher {
             Config::default(),
         )
         .map_err(|e| {
-            AegisError::LedgerError(format!("failed to create watcher: {e}"))
+            AegisError::FsError(format!("failed to create watcher: {e}"))
         })?;
 
         watcher
             .watch(&sandbox_dir, RecursiveMode::Recursive)
             .map_err(|e| {
-                AegisError::LedgerError(format!("failed to watch directory: {e}"))
+                AegisError::FsError(format!(
+                    "failed to watch directory '{}': {e}",
+                    sandbox_dir.display()
+                ))
             })?;
 
         tracing::info!(

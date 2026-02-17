@@ -33,7 +33,8 @@ pub fn run(config_name: &str) -> Result<()> {
     println!("  Config file:  OK");
 
     // Load and display config details
-    let config = load_config(config_name).context("failed to load config")?;
+    let config = load_config(config_name)
+        .with_context(|| format!("failed to load config '{config_name}'"))?;
 
     // Check policy directory
     if let Some(policy_dir) = config.policy_paths.first() {

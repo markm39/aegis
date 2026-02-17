@@ -54,7 +54,10 @@ pub fn read_policy_files(dir: &Path) -> Result<BTreeMap<String, String>, AegisEr
 
     for entry in entries {
         let entry = entry.map_err(|e| {
-            AegisError::PolicyError(format!("failed to read dir entry: {e}"))
+            AegisError::PolicyError(format!(
+                "failed to read dir entry in {}: {e}",
+                dir.display()
+            ))
         })?;
 
         let path = entry.path();
