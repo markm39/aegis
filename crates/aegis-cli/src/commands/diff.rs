@@ -179,6 +179,9 @@ pub fn extract_resource_key(action_kind: &str) -> String {
                 if let Some(tool) = inner.get("tool").and_then(|t| t.as_str()) {
                     return format!("{variant}  {tool}");
                 }
+                if let Some(url) = inner.get("url").and_then(|u| u.as_str()) {
+                    return format!("{variant}  {url}");
+                }
                 return variant.clone();
             }
         }
@@ -277,9 +280,7 @@ mod tests {
     fn extract_resource_key_net_request() {
         let json = r#"{"NetRequest":{"method":"GET","url":"https://example.com"}}"#;
         let key = extract_resource_key(json);
-        // NetRequest has no "path", "host", "command", or "tool" field;
-        // falls through to just the variant name
-        assert_eq!(key, "NetRequest");
+        assert_eq!(key, "NetRequest  https://example.com");
     }
 
     #[test]
