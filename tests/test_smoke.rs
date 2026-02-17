@@ -274,6 +274,55 @@ fn smoke_test_run_auto_init() {
 }
 
 #[test]
+fn smoke_test_list_and_use() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    // Setup and create a config via run (auto-init)
+    aegis_cmd(home).args(["setup"]).assert().success();
+    aegis_cmd(home)
+        .args(["run", "--", "echo", "hello"])
+        .assert()
+        .success();
+
+    // List should show the auto-created config
+    aegis_cmd(home)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("echo"));
+
+    // Use should set the current config
+    aegis_cmd(home)
+        .args(["use", "echo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Active configuration: echo"));
+
+    // Use with no args should show the current config
+    aegis_cmd(home)
+        .args(["use"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("echo"));
+}
+
+#[test]
+fn smoke_test_config_name_validation() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    // Path traversal in config name should be rejected
+    aegis_cmd(home)
+        .args(["run", "--config", "../etc/passwd", "--", "echo", "bad"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separator"));
+}
+
+#[test]
 fn smoke_test_wrap_then_query() {
     let tmpdir = tempfile::tempdir().expect("temp dir");
     let home = tmpdir.path();
