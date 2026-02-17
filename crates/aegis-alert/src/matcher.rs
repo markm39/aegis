@@ -86,6 +86,7 @@ mod tests {
             reason: "forbidden by policy".into(),
             policy_id: Some("deny-secrets".into()),
             session_id: Some(Uuid::new_v4()),
+            pilot_context: None,
         }
     }
 
