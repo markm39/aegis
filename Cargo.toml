@@ -38,6 +38,8 @@ toml = "0.8"
 hex = "0.4"
 notify = { version = "7", features = ["macos_fsevent"] }
 tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
 
 # Types crate (used by all)
 aegis-types = { path = "crates/aegis-types" }

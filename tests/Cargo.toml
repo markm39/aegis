@@ -18,6 +18,8 @@ tempfile = { workspace = true }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
 
 [[test]]
 name = "test_policy_engine"
@@ -34,3 +36,7 @@ path = "test_policy_ledger.rs"
 [[test]]
 name = "test_e2e"
 path = "test_e2e.rs"
+
+[[test]]
+name = "test_smoke"
+path = "test_smoke.rs"
