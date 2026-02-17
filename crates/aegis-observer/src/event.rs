@@ -36,16 +36,19 @@ pub enum ObserverSource {
     FsEvents,
     /// Pre/post directory snapshot diffing.
     Snapshot,
-    /// macOS Endpoint Security logger.
+    /// macOS Endpoint Security logger (Tier 2, not yet implemented).
+    #[allow(dead_code)]
     EsLogger,
 }
 
 /// A single observed filesystem event.
 #[derive(Debug, Clone)]
 pub struct FsEvent {
+    #[allow(dead_code)] // set on every event; will be used for event ordering/display
     pub timestamp: DateTime<Utc>,
     pub path: PathBuf,
     pub kind: FsEventKind,
+    #[allow(dead_code)] // set on every event; will be used for filtering by source
     pub source: ObserverSource,
 }
 

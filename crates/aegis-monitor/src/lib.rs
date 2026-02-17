@@ -2,11 +2,11 @@
 ///
 /// Provides a live-updating view of the Aegis audit ledger with filtering,
 /// navigation, and aggregate statistics. Launch via `run_monitor()`.
-pub mod app;
-pub mod event;
-pub mod ui;
+mod app;
+mod event;
+mod ui;
 
-pub use app::App;
+use app::App;
 
 /// Run the monitor TUI. This is the main entry point.
 ///

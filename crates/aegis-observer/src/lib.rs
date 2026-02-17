@@ -18,9 +18,9 @@
 /// **Tier 2 (requires root, optional):**
 /// - eslogger: macOS Endpoint Security logger subprocess. Provides per-process
 ///   file access events including reads. (Not yet implemented.)
-pub mod event;
-pub mod snapshot;
-pub mod watcher;
+pub(crate) mod event;
+pub(crate) mod snapshot;
+pub(crate) mod watcher;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};

@@ -32,9 +32,11 @@ pub enum AppMode {
 #[derive(Clone)]
 pub struct MonitorSession {
     pub session_id: String,
+    #[allow(dead_code)] // populated from DB; will be rendered in session detail view
     pub config_name: String,
     pub command: String,
     pub start_time: String,
+    #[allow(dead_code)] // populated from DB; will be rendered in session detail view
     pub end_time: Option<String>,
     pub exit_code: Option<i32>,
     pub total_actions: usize,

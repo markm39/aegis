@@ -119,6 +119,7 @@ impl DirSnapshot {
     }
 
     /// Whether the snapshot is empty.
+    #[allow(dead_code)] // conventional companion to len(); used in tests
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
