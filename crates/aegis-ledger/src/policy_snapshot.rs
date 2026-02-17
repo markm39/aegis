@@ -202,10 +202,10 @@ fn row_to_policy_snapshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<PolicySna
     let policy_files: BTreeMap<String, String> =
         serde_json::from_str(&files_json).unwrap_or_default();
 
-    let session_id = match row.get::<_, Option<String>>(4)? {
-        Some(s) => Some(parse_uuid(&s, 4)?),
-        None => None,
-    };
+    let session_id = row
+        .get::<_, Option<String>>(4)?
+        .map(|s| parse_uuid(&s, 4))
+        .transpose()?;
 
     Ok(PolicySnapshot {
         snapshot_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
