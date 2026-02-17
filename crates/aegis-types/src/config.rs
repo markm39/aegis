@@ -198,6 +198,14 @@ impl AegisConfig {
         let policies_dir = base_dir.join("policies");
         let ledger_path = base_dir.join(LEDGER_FILENAME);
 
+        let isolation = if cfg!(target_os = "macos") {
+            IsolationConfig::Seatbelt {
+                profile_overrides: None,
+            }
+        } else {
+            IsolationConfig::Process
+        };
+
         Self {
             name: name.to_string(),
             sandbox_dir,
@@ -205,9 +213,7 @@ impl AegisConfig {
             schema_path: None,
             ledger_path,
             allowed_network: Vec::new(),
-            isolation: IsolationConfig::Seatbelt {
-                profile_overrides: None,
-            },
+            isolation,
             observer: ObserverConfig::default(),
         }
     }

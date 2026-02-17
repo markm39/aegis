@@ -39,6 +39,20 @@ pub fn run(name: Option<&str>, policy_template: &str, project_dir: Option<&Path>
     Ok(())
 }
 
+/// Return the strongest available isolation for this platform.
+///
+/// On macOS, this returns Seatbelt (kernel sandbox). On other platforms,
+/// Seatbelt is unavailable so we fall back to Process isolation.
+fn platform_isolation() -> IsolationConfig {
+    if cfg!(target_os = "macos") {
+        IsolationConfig::Seatbelt {
+            profile_overrides: None,
+        }
+    } else {
+        IsolationConfig::Process
+    }
+}
+
 /// Security mode options for the interactive wizard.
 #[derive(Debug, Clone, Copy)]
 pub enum SecurityMode {
@@ -55,26 +69,24 @@ impl SecurityMode {
     pub fn to_config(self) -> (&'static str, IsolationConfig) {
         match self {
             SecurityMode::ObserveOnly => ("permit-all", IsolationConfig::Process),
-            SecurityMode::ReadOnlySandbox => (
-                "allow-read-only",
-                IsolationConfig::Seatbelt {
-                    profile_overrides: None,
-                },
-            ),
-            SecurityMode::FullLockdown => (
-                "default-deny",
-                IsolationConfig::Seatbelt {
-                    profile_overrides: None,
-                },
-            ),
+            SecurityMode::ReadOnlySandbox => ("allow-read-only", platform_isolation()),
+            SecurityMode::FullLockdown => ("default-deny", platform_isolation()),
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             SecurityMode::ObserveOnly => "Observe only       -- Log all file activity, enforce nothing",
-            SecurityMode::ReadOnlySandbox => "Read-only sandbox  -- Allow reads, block writes (Seatbelt)",
-            SecurityMode::FullLockdown => "Full lockdown      -- Block everything by default (Seatbelt)",
+            SecurityMode::ReadOnlySandbox => if cfg!(target_os = "macos") {
+                "Read-only sandbox  -- Allow reads, block writes (Seatbelt)"
+            } else {
+                "Read-only policy   -- Allow reads, deny writes (policy only)"
+            },
+            SecurityMode::FullLockdown => if cfg!(target_os = "macos") {
+                "Full lockdown      -- Block everything by default (Seatbelt)"
+            } else {
+                "Full lockdown      -- Block everything by default (policy only)"
+            },
         }
     }
 }
@@ -281,9 +293,7 @@ fn build_custom_policy() -> Result<(String, IsolationConfig)> {
     let isolation = if all_allowed {
         IsolationConfig::Process
     } else {
-        IsolationConfig::Seatbelt {
-            profile_overrides: None,
-        }
+        platform_isolation()
     };
 
     Ok((policy_text, isolation))
@@ -376,7 +386,7 @@ pub fn run_in_dir(
     base_dir: &Path,
     project_dir: Option<&Path>,
 ) -> Result<()> {
-    run_in_dir_with_isolation(name, policy_template, base_dir, project_dir, IsolationConfig::Seatbelt { profile_overrides: None })
+    run_in_dir_with_isolation(name, policy_template, base_dir, project_dir, platform_isolation())
 }
 
 /// Inner init logic with explicit isolation config.
@@ -557,14 +567,22 @@ mod tests {
     fn security_mode_read_only_config() {
         let (policy, isolation) = SecurityMode::ReadOnlySandbox.to_config();
         assert_eq!(policy, "allow-read-only");
-        assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
+        if cfg!(target_os = "macos") {
+            assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
+        } else {
+            assert!(matches!(isolation, IsolationConfig::Process));
+        }
     }
 
     #[test]
     fn security_mode_full_lockdown_config() {
         let (policy, isolation) = SecurityMode::FullLockdown.to_config();
         assert_eq!(policy, "default-deny");
-        assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
+        if cfg!(target_os = "macos") {
+            assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
+        } else {
+            assert!(matches!(isolation, IsolationConfig::Process));
+        }
     }
 
     #[test]
