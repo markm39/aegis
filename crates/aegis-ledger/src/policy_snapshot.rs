@@ -41,6 +41,7 @@ pub struct PolicySnapshot {
 ///
 /// Sorts files by name and hashes `filename + "\n" + content` for each,
 /// ensuring the result is independent of filesystem ordering.
+#[must_use = "discarding a policy hash likely indicates a missing comparison"]
 pub fn compute_policy_hash(files: &BTreeMap<String, String>) -> String {
     let mut hasher = Sha256::new();
     for (name, content) in files {

@@ -75,6 +75,7 @@ impl AuditEntry {
     ///
     /// Useful for integrity verification -- compare the result against
     /// `self.entry_hash` to detect tampering.
+    #[must_use = "integrity hash must be compared against entry_hash to detect tampering"]
     pub fn recompute_hash(&self) -> String {
         compute_hash(
             &self.entry_id,

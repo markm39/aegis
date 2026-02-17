@@ -148,6 +148,7 @@ impl AuditStore {
     /// 1. Each entry's hash matches its recomputed value.
     /// 2. Each entry's `prev_hash` equals the preceding entry's `entry_hash`
     ///    (or "genesis" for the first entry).
+    #[must_use = "integrity report must be checked to detect ledger tampering"]
     pub fn verify_integrity(&self) -> Result<IntegrityReport, AegisError> {
         let mut stmt = self
             .conn
