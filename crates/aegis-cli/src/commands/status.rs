@@ -7,6 +7,7 @@ use aegis_ledger::{AuditFilter, AuditStore};
 use aegis_types::CONFIG_FILENAME;
 
 use crate::commands::init::{load_config, resolve_config_dir};
+use crate::commands::DATETIME_SHORT_FMT;
 
 /// Run the `aegis status` command.
 ///
@@ -122,7 +123,7 @@ fn print_ledger_status(config: &aegis_types::AegisConfig) -> Result<()> {
     if let Ok(Some(last)) = store.latest_session() {
         println!(
             "  Last session: {} ({})",
-            last.start_time.format("%Y-%m-%d %H:%M"),
+            last.start_time.format(DATETIME_SHORT_FMT),
             last.command
         );
         if let Some(tag) = &last.tag {

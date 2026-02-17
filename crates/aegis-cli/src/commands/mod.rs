@@ -1,5 +1,11 @@
 //! CLI command implementations for the `aegis` binary.
 
+/// Short datetime format for listings and summaries (e.g., "2024-01-15 10:30").
+pub const DATETIME_SHORT_FMT: &str = "%Y-%m-%d %H:%M";
+
+/// Full datetime format with seconds for detailed views (e.g., "2024-01-15 10:30:45").
+pub const DATETIME_FULL_FMT: &str = "%Y-%m-%d %H:%M:%S";
+
 pub mod audit;
 pub mod config;
 pub mod diff;

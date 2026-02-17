@@ -10,6 +10,7 @@ use chrono::{DateTime, Duration, Utc};
 use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
 use crate::commands::init::open_store;
+use crate::commands::DATETIME_FULL_FMT;
 
 /// CSV header for audit entry export (must match `print_csv_entry` field order).
 const CSV_HEADER: &str = "entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash";
@@ -166,7 +167,7 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
 
     for s in &sessions {
         let status = if s.end_time.is_some() { "ended" } else { "active" };
-        let start = s.start_time.format("%Y-%m-%d %H:%M:%S");
+        let start = s.start_time.format(DATETIME_FULL_FMT);
         let cmd_display = if s.args.is_empty() {
             s.command.clone()
         } else {
@@ -257,7 +258,7 @@ pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
         } else {
             &s.policy_hash
         };
-        let timestamp = s.timestamp.format("%Y-%m-%d %H:%M:%S");
+        let timestamp = s.timestamp.format(DATETIME_FULL_FMT);
 
         println!(
             "{:<36}  {:<20}  {:<8}  {}",
@@ -489,7 +490,7 @@ fn print_table(entries: &[AuditEntry]) {
     println!("{separator}");
 
     for entry in entries {
-        let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
+        let timestamp = entry.timestamp.format(DATETIME_FULL_FMT);
         let action_display =
             aegis_types::ActionKind::display_from_json(&entry.action_kind);
 

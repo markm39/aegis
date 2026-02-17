@@ -12,6 +12,7 @@ use aegis_ledger::AuditStore;
 use aegis_types::{AegisConfig, CONFIG_FILENAME};
 
 use crate::commands::init::{dirs_from_env, load_config_from_dir};
+use crate::commands::DATETIME_SHORT_FMT;
 
 /// A discovered configuration entry for display.
 struct ConfigEntry {
@@ -63,7 +64,7 @@ pub fn run() -> Result<()> {
     for e in &entries {
         let last_used = e
             .last_used
-            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .map(|dt| dt.format(DATETIME_SHORT_FMT).to_string())
             .unwrap_or_else(|| "(never)".to_string());
 
         println!(
