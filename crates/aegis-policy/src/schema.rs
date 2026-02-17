@@ -98,4 +98,30 @@ mod tests {
             "schema should contain Aegis::Resource as a resource type, got: {resources:?}"
         );
     }
+
+    #[test]
+    fn schema_contains_all_action_types() {
+        // Every ActionKind variant must have a corresponding action in the Cedar schema.
+        // If you add a new ActionKind, add it here too -- otherwise policy evaluation
+        // will silently fail for that action type.
+        let expected_actions = [
+            "FileRead",
+            "FileWrite",
+            "FileDelete",
+            "DirCreate",
+            "DirList",
+            "NetConnect",
+            "ToolCall",
+            "ProcessSpawn",
+            "ProcessExit",
+        ];
+
+        let schema_text = AEGIS_SCHEMA;
+        for action in &expected_actions {
+            assert!(
+                schema_text.contains(&format!("action \"{action}\"")),
+                "schema should contain action '{action}'"
+            );
+        }
+    }
 }

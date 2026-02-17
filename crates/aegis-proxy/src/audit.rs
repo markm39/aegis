@@ -231,8 +231,13 @@ mod tests {
         log_process_spawn(&store, &engine, "test-agent", "echo", &["hello".into()], None)
             .expect("should log spawn");
 
-        let count = store.lock().unwrap().count().unwrap();
-        assert_eq!(count, 1, "should have 1 audit entry");
+        let guard = store.lock().unwrap();
+        let entries = guard.query_last(1).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].principal, "test-agent");
+        assert_eq!(entries[0].decision, "Allow");
+        assert!(entries[0].action_kind.contains("ProcessSpawn"));
+        assert!(entries[0].action_kind.contains("echo"));
     }
 
     #[test]
@@ -243,8 +248,13 @@ mod tests {
         log_process_exit(&store, &engine, "test-agent", "echo", 0, None)
             .expect("should log exit");
 
-        let count = store.lock().unwrap().count().unwrap();
-        assert_eq!(count, 1, "should have 1 audit entry");
+        let guard = store.lock().unwrap();
+        let entries = guard.query_last(1).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].principal, "test-agent");
+        assert_eq!(entries[0].decision, "Allow");
+        assert!(entries[0].action_kind.contains("ProcessExit"));
+        assert!(entries[0].action_kind.contains("echo"));
     }
 
     #[test]
@@ -269,8 +279,13 @@ mod tests {
         log_process_spawn(&store, &engine, "test-agent", "rm", &["-rf".into(), "/".into()], None)
             .expect("should log even when denied");
 
-        let count = store.lock().unwrap().count().unwrap();
-        assert_eq!(count, 1, "should still have 1 audit entry for denied action");
+        let guard = store.lock().unwrap();
+        let entries = guard.query_last(1).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].decision, "Deny", "forbid-all should produce Deny");
+        assert_eq!(entries[0].principal, "test-agent");
+        assert!(entries[0].action_kind.contains("ProcessSpawn"));
+        assert!(entries[0].action_kind.contains("rm"));
     }
 
     #[test]
