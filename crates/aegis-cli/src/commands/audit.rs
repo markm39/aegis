@@ -531,7 +531,7 @@ fn export_jsonl(entries: &[AuditEntry]) {
 fn print_jsonl_entry(e: &AuditEntry) {
     match serde_json::to_string(e) {
         Ok(json) => println!("{json}"),
-        Err(err) => eprintln!("warning: failed to serialize entry {}: {err}", e.entry_id),
+        Err(err) => tracing::warn!(entry_id = %e.entry_id, error = %err, "failed to serialize audit entry"),
     }
 }
 
