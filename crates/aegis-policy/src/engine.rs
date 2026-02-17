@@ -85,24 +85,15 @@ impl PolicyEngine {
     /// resource. Useful for compile-time policy inspection (e.g. deciding
     /// which Seatbelt SBPL rules to generate).
     pub fn permits_action(&self, action_name: &str) -> bool {
+        let probe_path = || std::path::PathBuf::from("/__probe__");
         let action = Action::new(
             "__probe__",
             match action_name {
-                "FileRead" => ActionKind::FileRead {
-                    path: std::path::PathBuf::from("/__probe__"),
-                },
-                "FileWrite" => ActionKind::FileWrite {
-                    path: std::path::PathBuf::from("/__probe__"),
-                },
-                "FileDelete" => ActionKind::FileDelete {
-                    path: std::path::PathBuf::from("/__probe__"),
-                },
-                "DirCreate" => ActionKind::DirCreate {
-                    path: std::path::PathBuf::from("/__probe__"),
-                },
-                "DirList" => ActionKind::DirList {
-                    path: std::path::PathBuf::from("/__probe__"),
-                },
+                "FileRead" => ActionKind::FileRead { path: probe_path() },
+                "FileWrite" => ActionKind::FileWrite { path: probe_path() },
+                "FileDelete" => ActionKind::FileDelete { path: probe_path() },
+                "DirCreate" => ActionKind::DirCreate { path: probe_path() },
+                "DirList" => ActionKind::DirList { path: probe_path() },
                 "NetConnect" => ActionKind::NetConnect {
                     host: "__probe__".into(),
                     port: 0,
