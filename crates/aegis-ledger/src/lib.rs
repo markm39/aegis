@@ -7,7 +7,7 @@
 pub mod entry;
 pub mod filter;
 pub mod integrity;
-pub(crate) mod parse_helpers;
+pub mod parse_helpers;
 pub mod policy_snapshot;
 pub mod query;
 pub mod session;

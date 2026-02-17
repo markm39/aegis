@@ -6,11 +6,10 @@
 
 use std::path::PathBuf;
 
-use chrono::DateTime;
 use rusqlite::{params, Connection};
 use tracing::warn;
-use uuid::Uuid;
 
+use aegis_ledger::parse_helpers::{parse_datetime, parse_uuid};
 use aegis_ledger::AuditEntry;
 
 /// The active view mode of the dashboard.
@@ -150,17 +149,9 @@ impl App {
 
         let rows = stmt.query_map([], |row| {
             Ok(AuditEntry {
-                entry_id: row
-                    .get::<_, String>(0)
-                    .map(|s| Uuid::parse_str(&s).expect("invalid uuid in ledger"))?,
-                timestamp: row.get::<_, String>(1).map(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .expect("invalid timestamp in ledger")
-                        .into()
-                })?,
-                action_id: row
-                    .get::<_, String>(2)
-                    .map(|s| Uuid::parse_str(&s).expect("invalid uuid in ledger"))?,
+                entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
+                timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
+                action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
                 action_kind: row.get(3)?,
                 principal: row.get(4)?,
                 decision: row.get(5)?,
@@ -254,17 +245,9 @@ impl App {
 
         let rows = match stmt.query_map(params![session_id], |row| {
             Ok(AuditEntry {
-                entry_id: row
-                    .get::<_, String>(0)
-                    .map(|s| Uuid::parse_str(&s).expect("invalid uuid"))?,
-                timestamp: row.get::<_, String>(1).map(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .expect("invalid timestamp")
-                        .into()
-                })?,
-                action_id: row
-                    .get::<_, String>(2)
-                    .map(|s| Uuid::parse_str(&s).expect("invalid uuid"))?,
+                entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
+                timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
+                action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
                 action_kind: row.get(3)?,
                 principal: row.get(4)?,
                 decision: row.get(5)?,
