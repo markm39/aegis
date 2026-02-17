@@ -1,3 +1,5 @@
+//! Fallback `ProcessBackend` with no OS-level sandboxing.
+
 use aegis_types::{AegisConfig, AegisError};
 
 use crate::backend::SandboxBackend;

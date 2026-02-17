@@ -1,3 +1,5 @@
+//! The `SandboxBackend` trait for pluggable OS-level sandboxing.
+
 use aegis_types::{AegisConfig, AegisError};
 
 /// Trait for OS-level sandbox backends.

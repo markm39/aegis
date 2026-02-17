@@ -1,3 +1,5 @@
+//! Seatbelt SBPL profile generation from `AegisConfig`.
+
 use aegis_types::{AegisConfig, IsolationConfig};
 
 use crate::write_sbpl_base;

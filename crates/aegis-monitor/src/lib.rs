@@ -1,7 +1,7 @@
-/// Aegis Monitor -- a ratatui terminal dashboard for real-time audit log monitoring.
-///
-/// Provides a live-updating view of the Aegis audit ledger with filtering,
-/// navigation, and aggregate statistics. Launch via `run_monitor()`.
+//! Aegis Monitor -- a ratatui terminal dashboard for real-time audit log monitoring.
+//!
+//! Provides a live-updating view of the Aegis audit ledger with filtering,
+//! navigation, and aggregate statistics. Launch via `run_monitor()`.
 mod app;
 mod event;
 mod ui;

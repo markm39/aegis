@@ -1,23 +1,23 @@
-/// Filesystem observer for per-file audit trails.
-///
-/// Provides zero-privilege observability by monitoring a sandbox directory
-/// using macOS FSEvents (via the `notify` crate) and pre/post directory
-/// snapshot diffing. Since Aegis controls the sandbox boundary, process
-/// attribution is implicit: any file change within `sandbox_dir` must come
-/// from the sandboxed process.
-///
-/// # Architecture
-///
-/// **Tier 1 (no privileges):**
-/// - FSEvents watcher: real-time notification of file creates, modifies,
-///   deletes, renames within the sandbox directory.
-/// - Snapshot diffing: captures pre/post state of the sandbox directory tree.
-///   Detects writes missed by FSEvents (rapid create/delete) and reads via
-///   atime changes.
-///
-/// **Tier 2 (requires root, optional):**
-/// - eslogger: macOS Endpoint Security logger subprocess. Provides per-process
-///   file access events including reads. (Not yet implemented.)
+//! Filesystem observer for per-file audit trails.
+//!
+//! Provides zero-privilege observability by monitoring a sandbox directory
+//! using macOS FSEvents (via the `notify` crate) and pre/post directory
+//! snapshot diffing. Since Aegis controls the sandbox boundary, process
+//! attribution is implicit: any file change within `sandbox_dir` must come
+//! from the sandboxed process.
+//!
+//! # Architecture
+//!
+//! **Tier 1 (no privileges):**
+//! - FSEvents watcher: real-time notification of file creates, modifies,
+//!   deletes, renames within the sandbox directory.
+//! - Snapshot diffing: captures pre/post state of the sandbox directory tree.
+//!   Detects writes missed by FSEvents (rapid create/delete) and reads via
+//!   atime changes.
+//!
+//! **Tier 2 (requires root, optional):**
+//! - eslogger: macOS Endpoint Security logger subprocess. Provides per-process
+//!   file access events including reads. (Not yet implemented.)
 pub(crate) mod event;
 pub(crate) mod snapshot;
 pub(crate) mod watcher;

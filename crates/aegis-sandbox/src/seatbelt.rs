@@ -1,3 +1,5 @@
+//! macOS Seatbelt backend using `sandbox-exec`.
+
 use aegis_types::{AegisConfig, AegisError};
 use std::io::Write;
 
