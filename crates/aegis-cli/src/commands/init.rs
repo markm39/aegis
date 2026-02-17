@@ -11,7 +11,11 @@ use anyhow::{bail, Context, Result};
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 
 use aegis_policy::builtin::get_builtin_policy;
-use aegis_types::{AegisConfig, IsolationConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME};
+use aegis_policy::PolicyEngine;
+use aegis_types::{
+    Action, ActionKind, AegisConfig, Decision, IsolationConfig, CONFIG_FILENAME,
+    DEFAULT_POLICY_FILENAME,
+};
 
 /// Run the `aegis init` command.
 ///
@@ -193,6 +197,9 @@ fn run_wizard() -> Result<()> {
     // Auto-set as current config
     crate::commands::use_config::set_current(&name)?;
 
+    // Offer policy demo
+    run_policy_demo(&name, &policy_text, &project_dir)?;
+
     println!("\nYou're all set. Active config: {name}");
     println!("\nNext steps:");
     println!("  aegis wrap claude    # observe an AI agent");
@@ -289,6 +296,71 @@ pub fn generate_cedar_policy(actions: &[&str]) -> String {
         ));
     }
     policy
+}
+
+/// Run a policy demo showing what actions would be allowed or denied.
+///
+/// Creates a temporary PolicyEngine from the policy text and tests
+/// representative actions against it. Only runs if the user opts in.
+fn run_policy_demo(agent_name: &str, policy_text: &str, project_dir: &Path) -> Result<()> {
+    let demo = Confirm::new()
+        .with_prompt("Test this policy? (shows what would be allowed/denied)")
+        .default(true)
+        .interact()
+        .context("failed to read demo preference")?;
+
+    if !demo {
+        return Ok(());
+    }
+
+    let engine = match PolicyEngine::from_policies(policy_text, None) {
+        Ok(e) => e,
+        Err(e) => {
+            println!("  (skipping demo: {e})");
+            return Ok(());
+        }
+    };
+
+    let sample_file = project_dir.join("README.md");
+    let sample_path = sample_file.display().to_string();
+
+    let test_actions: Vec<(&str, ActionKind)> = vec![
+        ("FileRead", ActionKind::FileRead { path: sample_file.clone() }),
+        ("FileWrite", ActionKind::FileWrite { path: sample_file.clone() }),
+        ("FileDelete", ActionKind::FileDelete { path: sample_file }),
+        ("DirCreate", ActionKind::DirCreate { path: project_dir.join("new-dir") }),
+        ("NetConnect", ActionKind::NetConnect { host: "api.openai.com".to_string(), port: 443 }),
+        ("ProcessSpawn", ActionKind::ProcessSpawn { command: "/usr/bin/python3".to_string(), args: vec![] }),
+    ];
+
+    println!("\nPolicy demo:");
+    for (label, kind) in &test_actions {
+        let action = Action::new(agent_name, kind.clone());
+        let verdict = engine.evaluate(&action);
+        let symbol = if verdict.decision == Decision::Allow {
+            "ALLOW"
+        } else {
+            "DENY "
+        };
+
+        let resource = match kind {
+            ActionKind::FileRead { path }
+            | ActionKind::FileWrite { path }
+            | ActionKind::FileDelete { path }
+            | ActionKind::DirCreate { path } => path.display().to_string(),
+            ActionKind::NetConnect { host, port } => format!("{host}:{port}"),
+            ActionKind::ProcessSpawn { command, .. } => command.clone(),
+            _ => String::new(),
+        };
+
+        println!("  [{symbol}] {label:<14} {resource}", resource = if resource.len() > 40 {
+            format!("...{}", &sample_path[sample_path.len().saturating_sub(37)..])
+        } else {
+            resource
+        });
+    }
+
+    Ok(())
 }
 
 /// Inner init logic that operates on an explicit base directory.
