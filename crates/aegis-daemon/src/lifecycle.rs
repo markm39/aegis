@@ -1,0 +1,291 @@
+//! Per-agent lifecycle thread body.
+//!
+//! Each agent slot spawns a thread that runs `run_agent_slot()`. This function
+//! composes the full Aegis pipeline for one agent:
+//!
+//! 1. Load/create the Cedar policy engine from the agent's config
+//! 2. Open (or share) the audit store and begin a session
+//! 3. Start the filesystem observer on the agent's working directory
+//! 4. Create the agent driver and spawn the process (PTY or external)
+//! 5. Run the supervisor loop (blocks until the agent exits)
+//! 6. Stop the observer, end the audit session
+//! 7. Return the result to the fleet manager
+
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+
+use tracing::{error, info, warn};
+
+use aegis_ledger::AuditStore;
+use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
+use aegis_pilot::drivers::create_driver;
+use aegis_pilot::pty::PtySession;
+use aegis_pilot::supervisor::{self, PilotStats, SupervisorConfig};
+use aegis_policy::PolicyEngine;
+use aegis_types::daemon::AgentSlotConfig;
+use aegis_types::AegisConfig;
+
+/// Result returned by a completed agent lifecycle thread.
+pub struct SlotResult {
+    /// Agent name.
+    pub name: String,
+    /// Exit code of the agent process (None if never spawned).
+    pub exit_code: Option<i32>,
+    /// Supervisor statistics.
+    pub stats: PilotStats,
+    /// The audit session ID for this run.
+    pub session_id: Option<uuid::Uuid>,
+}
+
+/// Run the full lifecycle for one agent slot. Intended to be called from a
+/// spawned thread.
+///
+/// # Arguments
+/// - `slot_config`: configuration for this agent slot
+/// - `aegis_config`: base Aegis configuration (for policy paths, ledger, etc.)
+/// - `output_tx`: channel for sending output lines to the fleet manager
+///
+/// Returns a `SlotResult` when the agent exits.
+pub fn run_agent_slot(
+    slot_config: &AgentSlotConfig,
+    aegis_config: &AegisConfig,
+    output_tx: mpsc::Sender<String>,
+) -> SlotResult {
+    let name = slot_config.name.clone();
+
+    match run_agent_slot_inner(slot_config, aegis_config, &output_tx) {
+        Ok(result) => result,
+        Err(e) => {
+            error!(agent = name, error = %e, "agent lifecycle failed");
+            SlotResult {
+                name,
+                exit_code: None,
+                stats: PilotStats::default(),
+                session_id: None,
+            }
+        }
+    }
+}
+
+/// Inner implementation that returns Result for cleaner error handling.
+fn run_agent_slot_inner(
+    slot_config: &AgentSlotConfig,
+    aegis_config: &AegisConfig,
+    output_tx: &mpsc::Sender<String>,
+) -> Result<SlotResult, String> {
+    let name = &slot_config.name;
+    info!(agent = name, "agent lifecycle starting");
+
+    // 1. Create policy engine from config's policy paths
+    let policy_dir = aegis_config
+        .policy_paths
+        .first()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("/nonexistent"));
+
+    let engine = PolicyEngine::new(&policy_dir, None)
+        .map_err(|e| format!("failed to create policy engine for {name}: {e}"))?;
+
+    // 2. Open audit store and begin session
+    let store = AuditStore::open(&aegis_config.ledger_path)
+        .map_err(|e| format!("failed to open audit store for {name}: {e}"))?;
+
+    let store = Arc::new(Mutex::new(store));
+    let engine_arc = Arc::new(Mutex::new(engine));
+
+    // Begin audit session
+    let session_id = {
+        let mut store_guard = store
+            .lock()
+            .map_err(|e| format!("store lock poisoned: {e}"))?;
+        store_guard
+            .begin_session(
+                &aegis_config.name,
+                &format!("daemon:{name}"),
+                &[],
+                Some(&format!("daemon-agent-{name}")),
+            )
+            .map_err(|e| format!("failed to begin session for {name}: {e}"))?
+    };
+
+    info!(agent = name, session_id = %session_id, "audit session started");
+
+    // 3. Start filesystem observer
+    let observer_session = aegis_observer::start_observer(
+        &slot_config.working_dir,
+        Arc::clone(&store),
+        Arc::clone(&engine_arc),
+        name,
+        Some(session_id),
+        matches!(
+            aegis_config.observer,
+            aegis_types::ObserverConfig::FsEvents { enable_snapshots: true }
+        ),
+    )
+    .map_err(|e| format!("failed to start observer for {name}: {e}"))?;
+
+    // 4. Create driver and determine spawn strategy
+    let driver = create_driver(&slot_config.tool);
+    let strategy = driver.spawn_strategy(&slot_config.working_dir);
+
+    let pty = match strategy {
+        SpawnStrategy::Pty { command, args, env } => {
+            info!(
+                agent = name,
+                command = command,
+                "spawning agent in PTY"
+            );
+            PtySession::spawn(&command, &args, &slot_config.working_dir, &env)
+                .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?
+        }
+        SpawnStrategy::Process { command, args, env } => {
+            // For non-PTY processes, still use PTY for uniformity
+            info!(
+                agent = name,
+                command = command,
+                "spawning agent process (via PTY)"
+            );
+            PtySession::spawn(&command, &args, &slot_config.working_dir, &env)
+                .map_err(|e| format!("failed to spawn process for {name}: {e}"))?
+        }
+        SpawnStrategy::External => {
+            // External process (e.g. Cursor already running) -- nothing to spawn
+            info!(agent = name, "external agent, skipping spawn");
+
+            // Stop observer, end session
+            if let Err(e) = aegis_observer::stop_observer(observer_session) {
+                warn!(agent = name, error = %e, "failed to stop observer");
+            }
+            end_session(&store, &session_id, 0);
+
+            return Ok(SlotResult {
+                name: name.clone(),
+                exit_code: Some(0),
+                stats: PilotStats::default(),
+                session_id: Some(session_id),
+            });
+        }
+    };
+
+    // 5. Inject initial task if configured
+    if let Some(ref task) = slot_config.task {
+        let injection = driver.task_injection(task);
+        match injection {
+            TaskInjection::Stdin { text } => {
+                // Wait a moment for the agent to be ready
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                if let Err(e) = pty.send_line(&text) {
+                    warn!(agent = name, error = %e, "failed to inject task via stdin");
+                } else {
+                    info!(agent = name, "task injected via stdin");
+                }
+            }
+            TaskInjection::CliArg { .. } => {
+                // CLI args are already included in the spawn strategy
+                info!(agent = name, "task provided via CLI arg");
+            }
+            TaskInjection::None => {}
+        }
+    }
+
+    // 6. Create adapter and run supervisor
+    let mut adapter: Box<dyn aegis_pilot::adapter::AgentAdapter> =
+        match driver.create_adapter() {
+            Some(a) => a,
+            None => Box::new(aegis_pilot::adapters::passthrough::PassthroughAdapter),
+        };
+
+    let pilot_config = slot_config
+        .pilot
+        .clone()
+        .unwrap_or_else(|| {
+            aegis_config.pilot.clone().unwrap_or_default()
+        });
+
+    let engine_for_supervisor = PolicyEngine::new(&policy_dir, None)
+        .map_err(|e| format!("failed to create supervisor policy engine: {e}"))?;
+
+    let sup_config = SupervisorConfig {
+        pilot_config,
+        principal: name.clone(),
+        interactive: false, // daemon agents are non-interactive
+    };
+
+    info!(agent = name, pid = pty.pid(), "running supervisor loop");
+
+    let result = supervisor::run(
+        &pty,
+        adapter.as_mut(),
+        &engine_for_supervisor,
+        &sup_config,
+        None,       // no event_tx (could be added for alerting)
+        Some(output_tx),
+        None,       // no update_tx (no TUI)
+        None,       // no command_rx (could be added for control)
+    );
+
+    let (exit_code, stats) = match result {
+        Ok((code, stats)) => (code, stats),
+        Err(e) => {
+            error!(agent = name, error = %e, "supervisor failed");
+            (-1, PilotStats::default())
+        }
+    };
+
+    info!(
+        agent = name,
+        exit_code,
+        approved = stats.approved,
+        denied = stats.denied,
+        lines = stats.lines_processed,
+        "agent exited"
+    );
+
+    // 7. Stop observer and end session
+    if let Err(e) = aegis_observer::stop_observer(observer_session) {
+        warn!(agent = name, error = %e, "failed to stop observer");
+    }
+
+    end_session(&store, &session_id, exit_code);
+
+    Ok(SlotResult {
+        name: name.clone(),
+        exit_code: Some(exit_code),
+        stats,
+        session_id: Some(session_id),
+    })
+}
+
+/// End an audit session in the store.
+fn end_session(store: &Arc<Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_code: i32) {
+    match store.lock() {
+        Ok(mut guard) => {
+            if let Err(e) = guard.end_session(session_id, exit_code) {
+                warn!(session_id = %session_id, error = %e, "failed to end audit session");
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "store lock poisoned, cannot end session");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slot_result_default_on_error() {
+        let result = SlotResult {
+            name: "test".into(),
+            exit_code: None,
+            stats: PilotStats::default(),
+            session_id: None,
+        };
+
+        assert_eq!(result.name, "test");
+        assert!(result.exit_code.is_none());
+        assert_eq!(result.stats.approved, 0);
+    }
+}
