@@ -291,6 +291,41 @@ mod tests {
     }
 
     #[test]
+    fn validate_valid_policy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.cedar");
+        fs::write(&path, "permit(principal, action, resource);").unwrap();
+        // Should succeed without error
+        validate(&path).unwrap();
+    }
+
+    #[test]
+    fn validate_invalid_policy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.cedar");
+        fs::write(&path, "this is not valid cedar {{{").unwrap();
+        // Should succeed (prints INVALID but returns Ok)
+        validate(&path).unwrap();
+    }
+
+    #[test]
+    fn validate_nonexistent_file_returns_error() {
+        let result = validate(Path::new("/nonexistent/policy.cedar"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn generate_known_template_succeeds() {
+        generate("default-deny").unwrap();
+    }
+
+    #[test]
+    fn generate_unknown_template_fails() {
+        let result = generate("nonexistent-template");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn parse_all_valid_actions() {
         let actions = [
             "FileRead",
