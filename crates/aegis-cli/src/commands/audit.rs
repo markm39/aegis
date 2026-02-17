@@ -123,6 +123,91 @@ pub fn verify(config_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Run `aegis audit sessions --config NAME --last N`.
+///
+/// Lists recent sessions in a formatted table.
+pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
+    let config = load_config(config_name)?;
+    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    let sessions = store
+        .list_sessions(last, 0)
+        .context("failed to list sessions")?;
+
+    if sessions.is_empty() {
+        println!("No sessions found.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  COMMAND",
+        "SESSION ID", "STATUS", "START TIME", "TOTAL", "DENIED"
+    );
+    let separator = "-".repeat(110);
+    println!("{separator}");
+
+    for s in &sessions {
+        let status = if s.end_time.is_some() { "ended" } else { "active" };
+        let start = s.start_time.format("%Y-%m-%d %H:%M:%S");
+        let cmd_display = if s.args.is_empty() {
+            s.command.clone()
+        } else {
+            format!("{} {}", s.command, s.args.join(" "))
+        };
+
+        println!(
+            "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  {}",
+            s.session_id, status, start, s.total_actions, s.denied_actions, cmd_display
+        );
+    }
+
+    Ok(())
+}
+
+/// Run `aegis audit session --config NAME --id UUID`.
+///
+/// Shows details of a single session and its audit entries.
+pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
+    let config = load_config(config_name)?;
+    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    let session_id: uuid::Uuid = session_id_str
+        .parse()
+        .context("invalid session UUID")?;
+
+    let session = store
+        .get_session(&session_id)
+        .context("failed to get session")?
+        .context("session not found")?;
+
+    println!("Session:       {}", session.session_id);
+    println!("Config:        {}", session.config_name);
+    println!("Command:       {} {}", session.command, session.args.join(" "));
+    println!("Start time:    {}", session.start_time.format("%Y-%m-%d %H:%M:%S UTC"));
+    if let Some(end) = session.end_time {
+        println!("End time:      {}", end.format("%Y-%m-%d %H:%M:%S UTC"));
+    } else {
+        println!("End time:      (still running)");
+    }
+    if let Some(code) = session.exit_code {
+        println!("Exit code:     {code}");
+    }
+    println!("Total actions: {}", session.total_actions);
+    println!("Denied:        {}", session.denied_actions);
+
+    let entries = store
+        .query_by_session(&session_id)
+        .context("failed to query session entries")?;
+
+    if !entries.is_empty() {
+        println!();
+        println!("Entries:");
+        print_table(&entries);
+    }
+
+    Ok(())
+}
+
 /// Run `aegis audit export --config NAME --format json|csv`.
 ///
 /// Exports all audit entries in the specified format.

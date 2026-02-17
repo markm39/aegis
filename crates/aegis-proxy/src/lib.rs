@@ -7,7 +7,10 @@
 pub mod audit;
 pub mod net;
 
-pub use audit::{log_process_exit, log_process_spawn};
+pub use audit::{
+    log_process_exit, log_process_exit_with_session, log_process_spawn,
+    log_process_spawn_with_session,
+};
 #[cfg(target_os = "macos")]
 pub use audit::harvest_seatbelt_violations;
 pub use net::NetworkProxy;

@@ -50,9 +50,31 @@ impl AuditStore {
             CREATE INDEX IF NOT EXISTS idx_principal ON audit_log(principal);
             CREATE INDEX IF NOT EXISTS idx_decision ON audit_log(decision);
             CREATE INDEX IF NOT EXISTS idx_action_kind ON audit_log(action_kind);
-            CREATE INDEX IF NOT EXISTS idx_policy_id ON audit_log(policy_id);",
+            CREATE INDEX IF NOT EXISTS idx_policy_id ON audit_log(policy_id);
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL UNIQUE,
+                config_name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                args TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT,
+                exit_code INTEGER,
+                policy_hash TEXT,
+                total_actions INTEGER DEFAULT 0,
+                denied_actions INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_start ON sessions(start_time);",
         )
         .map_err(|e| AegisError::LedgerError(format!("failed to create schema: {e}")))?;
+
+        // Add session_id column if it does not already exist (migration).
+        // This is a nullable column for backward compatibility with existing ledgers.
+        let _ = conn.execute_batch(
+            "ALTER TABLE audit_log ADD COLUMN session_id TEXT;
+             CREATE INDEX IF NOT EXISTS idx_session_id ON audit_log(session_id);",
+        );
 
         let latest_hash: String = conn
             .query_row(
@@ -201,6 +223,61 @@ impl AuditStore {
             first_invalid_entry: None,
             message: format!("all {total_entries} entries verified successfully"),
         })
+    }
+
+    /// Append a new entry to the ledger with a session ID attached.
+    ///
+    /// Like `append()`, but also sets the `session_id` column and increments
+    /// the session's action/denied counters.
+    pub fn append_with_session(
+        &mut self,
+        action: &Action,
+        verdict: &Verdict,
+        session_id: &Uuid,
+    ) -> Result<AuditEntry, AegisError> {
+        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone());
+
+        self.conn
+            .execute(
+                "INSERT INTO audit_log (entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    entry.entry_id.to_string(),
+                    entry.timestamp.to_rfc3339(),
+                    entry.action_id.to_string(),
+                    entry.action_kind,
+                    entry.principal,
+                    entry.decision,
+                    entry.reason,
+                    entry.policy_id,
+                    entry.prev_hash,
+                    entry.entry_hash,
+                    session_id.to_string(),
+                ],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to insert entry: {e}")))?;
+
+        // Update session counters
+        self.conn
+            .execute(
+                "UPDATE sessions SET total_actions = total_actions + 1 WHERE session_id = ?1",
+                params![session_id.to_string()],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to update session total: {e}")))?;
+
+        if entry.decision == "Deny" {
+            self.conn
+                .execute(
+                    "UPDATE sessions SET denied_actions = denied_actions + 1 WHERE session_id = ?1",
+                    params![session_id.to_string()],
+                )
+                .map_err(|e| {
+                    AegisError::LedgerError(format!("failed to update session denied: {e}"))
+                })?;
+        }
+
+        self.latest_hash = entry.entry_hash.clone();
+        Ok(entry)
     }
 
     /// Provide read access to the underlying connection (for query extensions).

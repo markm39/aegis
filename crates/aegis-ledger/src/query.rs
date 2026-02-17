@@ -271,7 +271,7 @@ impl AuditStore {
 }
 
 /// Map a SQLite row to an AuditEntry.
-fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
+pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
     Ok(AuditEntry {
         entry_id: row
             .get::<_, String>(0)

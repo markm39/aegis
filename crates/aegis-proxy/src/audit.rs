@@ -47,6 +47,46 @@ pub fn log_process_spawn(
     Ok(())
 }
 
+/// Log a process spawn event to the audit ledger, associated with a session.
+///
+/// Like `log_process_spawn`, but uses `append_with_session` to link the
+/// entry to the given session and increment its counters.
+pub fn log_process_spawn_with_session(
+    store: &Arc<Mutex<AuditStore>>,
+    engine: &Arc<Mutex<PolicyEngine>>,
+    principal: &str,
+    command: &str,
+    args: &[String],
+    session_id: &uuid::Uuid,
+) -> Result<(), AegisError> {
+    let action = Action::new(
+        principal,
+        ActionKind::ProcessSpawn {
+            command: command.to_string(),
+            args: args.to_vec(),
+        },
+    );
+
+    let verdict = engine
+        .lock()
+        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
+        .evaluate(&action);
+
+    store
+        .lock()
+        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
+        .append_with_session(&action, &verdict, session_id)?;
+
+    tracing::info!(
+        command,
+        %session_id,
+        decision = %verdict.decision,
+        "logged ProcessSpawn (session)"
+    );
+
+    Ok(())
+}
+
 /// Log a process exit event to the audit ledger.
 ///
 /// Creates a `ProcessExit` action, evaluates it against the policy engine,
@@ -81,6 +121,47 @@ pub fn log_process_exit(
         exit_code,
         decision = %verdict.decision,
         "logged ProcessExit"
+    );
+
+    Ok(())
+}
+
+/// Log a process exit event to the audit ledger, associated with a session.
+///
+/// Like `log_process_exit`, but uses `append_with_session` to link the
+/// entry to the given session and increment its counters.
+pub fn log_process_exit_with_session(
+    store: &Arc<Mutex<AuditStore>>,
+    engine: &Arc<Mutex<PolicyEngine>>,
+    principal: &str,
+    command: &str,
+    exit_code: i32,
+    session_id: &uuid::Uuid,
+) -> Result<(), AegisError> {
+    let action = Action::new(
+        principal,
+        ActionKind::ProcessExit {
+            command: command.to_string(),
+            exit_code,
+        },
+    );
+
+    let verdict = engine
+        .lock()
+        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
+        .evaluate(&action);
+
+    store
+        .lock()
+        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
+        .append_with_session(&action, &verdict, session_id)?;
+
+    tracing::info!(
+        command,
+        exit_code,
+        %session_id,
+        decision = %verdict.decision,
+        "logged ProcessExit (session)"
     );
 
     Ok(())

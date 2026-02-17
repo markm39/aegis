@@ -14,13 +14,15 @@ use crate::commands::init::load_config;
 ///
 /// Pipeline:
 /// 1. Load config, init policy engine and audit store
-/// 2. Compile Cedar policies into a Seatbelt SBPL profile
-/// 3. Create SeatbeltBackend with the compiled profile
-/// 4. Log ProcessSpawn to the audit ledger
-/// 5. Spawn the command in the sandbox, capturing PID and timestamps
-/// 6. Log ProcessExit to the audit ledger
-/// 7. Harvest Seatbelt violation logs from macOS system logs
-/// 8. Print summary
+/// 2. Begin a session in the audit ledger
+/// 3. Compile Cedar policies into a Seatbelt SBPL profile
+/// 4. Create SeatbeltBackend with the compiled profile
+/// 5. Log ProcessSpawn to the audit ledger (linked to session)
+/// 6. Spawn the command in the sandbox, capturing PID and timestamps
+/// 7. Log ProcessExit to the audit ledger (linked to session)
+/// 8. End the session with the exit code
+/// 9. Harvest Seatbelt violation logs from macOS system logs
+/// 10. Print summary including session info
 pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let config = load_config(config_name)?;
 
@@ -34,8 +36,14 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     info!(policy_dir = %policy_dir.display(), "policy engine loaded");
 
     // Initialize the audit store
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let mut store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
     info!(ledger_path = %config.ledger_path.display(), "audit store opened");
+
+    // Begin a session for this run invocation
+    let session_id = store
+        .begin_session(&config.name, command, args)
+        .context("failed to begin audit session")?;
+    info!(%session_id, "audit session started");
 
     // Create sandbox backend with compiled Cedar-to-SBPL profile
     let backend: Box<dyn SandboxBackend> = create_backend(&config.isolation, &config, &policy_engine);
@@ -49,9 +57,11 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let policy_arc = Arc::new(Mutex::new(policy_engine));
     let store_arc = Arc::new(Mutex::new(store));
 
-    // Log process spawn
-    aegis_proxy::log_process_spawn(&store_arc, &policy_arc, &config.name, command, args)
-        .context("failed to log process spawn")?;
+    // Log process spawn (linked to session)
+    aegis_proxy::log_process_spawn_with_session(
+        &store_arc, &policy_arc, &config.name, command, args, &session_id,
+    )
+    .context("failed to log process spawn")?;
 
     // Record start time and execute the command
     let start_time = chrono::Utc::now();
@@ -64,9 +74,19 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let end_time = chrono::Utc::now();
     let exit_code = status.code().unwrap_or(-1);
 
-    // Log process exit
-    aegis_proxy::log_process_exit(&store_arc, &policy_arc, &config.name, command, exit_code)
-        .context("failed to log process exit")?;
+    // Log process exit (linked to session)
+    aegis_proxy::log_process_exit_with_session(
+        &store_arc, &policy_arc, &config.name, command, exit_code, &session_id,
+    )
+    .context("failed to log process exit")?;
+
+    // End the session
+    store_arc
+        .lock()
+        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?
+        .end_session(&session_id, exit_code)
+        .context("failed to end audit session")?;
+    info!(%session_id, exit_code, "audit session ended");
 
     // Harvest Seatbelt violations from macOS system logs
     #[cfg(target_os = "macos")]
@@ -93,10 +113,15 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let store_lock = store_arc
         .lock()
         .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+    let session = store_lock.get_session(&session_id).ok().flatten();
     let entry_count = store_lock.count().unwrap_or(0);
 
+    println!("Session:  {session_id}");
     println!("Command exited with code: {exit_code}");
     println!("Audit entries logged: {entry_count}");
+    if let Some(s) = &session {
+        println!("Session actions: {} total, {} denied", s.total_actions, s.denied_actions);
+    }
     if violation_count > 0 {
         println!("Seatbelt violations detected: {violation_count}");
     }

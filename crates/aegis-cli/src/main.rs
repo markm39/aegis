@@ -143,6 +143,28 @@ enum AuditCommands {
         config: String,
     },
 
+    /// List recent sessions
+    Sessions {
+        /// Name of the aegis configuration
+        #[arg(long)]
+        config: String,
+
+        /// Number of sessions to show (default 10)
+        #[arg(long, default_value = "10")]
+        last: usize,
+    },
+
+    /// Show details for a specific session
+    Session {
+        /// Name of the aegis configuration
+        #[arg(long)]
+        config: String,
+
+        /// Session UUID
+        #[arg(long)]
+        id: String,
+    },
+
     /// Export audit entries in a structured format
     Export {
         /// Name of the aegis configuration
@@ -201,6 +223,10 @@ fn main() -> anyhow::Result<()> {
                 &config, last, from, to, action, decision, principal, search, page, page_size,
             ),
             AuditCommands::Verify { config } => commands::audit::verify(&config),
+            AuditCommands::Sessions { config, last } => {
+                commands::audit::list_sessions(&config, last)
+            }
+            AuditCommands::Session { config, id } => commands::audit::show_session(&config, &id),
             AuditCommands::Export { config, format } => commands::audit::export(&config, &format),
         },
         Commands::Status { config } => {
@@ -336,6 +362,48 @@ mod tests {
                 assert_eq!(page, 2);
             }
             _ => panic!("expected Audit Query command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_sessions() {
+        let cli = Cli::try_parse_from([
+            "aegis", "audit", "sessions", "--config", "myagent", "--last", "5",
+        ]);
+        assert!(cli.is_ok(), "should parse audit sessions: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Sessions { config, last },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(last, 5);
+            }
+            _ => panic!("expected Audit Sessions command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_session_detail() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "session",
+            "--config",
+            "myagent",
+            "--id",
+            "550e8400-e29b-41d4-a716-446655440000",
+        ]);
+        assert!(cli.is_ok(), "should parse audit session: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Session { config, id },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+            }
+            _ => panic!("expected Audit Session command"),
         }
     }
 
