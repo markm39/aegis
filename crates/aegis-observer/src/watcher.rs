@@ -109,7 +109,19 @@ impl FsWatcher {
 
         // Wait for consumer to finish
         if let Some(handle) = self.consumer_handle.take() {
-            let _ = handle.join();
+            if let Err(panic_payload) = handle.join() {
+                // Extract a message from the panic payload if possible
+                let msg = panic_payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| {
+                        panic_payload
+                            .downcast_ref::<String>()
+                            .map(|s| s.as_str())
+                    })
+                    .unwrap_or("(unknown)");
+                tracing::error!(message = msg, "observer consumer thread panicked");
+            }
         }
 
         let count = self.event_count.load(Ordering::SeqCst);

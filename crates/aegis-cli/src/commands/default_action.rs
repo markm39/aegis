@@ -43,7 +43,7 @@ fn has_configs(aegis_dir: &std::path::Path) -> bool {
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().unwrap_or_default();
-                if name != "wraps" && path.join(aegis_types::CONFIG_FILENAME).exists() {
+                if name != "wraps" && name != "current" && path.join(aegis_types::CONFIG_FILENAME).exists() {
                     return true;
                 }
             }
@@ -128,7 +128,9 @@ pub fn most_recent_config() -> Result<String> {
     let mut best: Option<(String, DateTime<Utc>)> = None;
 
     // Scan init configs
-    scan_for_recent(&aegis_dir, &mut best, |name| name != "wraps");
+    scan_for_recent(&aegis_dir, &mut best, |name| {
+        name != "wraps" && name != "current"
+    });
 
     // Scan wrap configs
     let wraps_dir = aegis_dir.join("wraps");

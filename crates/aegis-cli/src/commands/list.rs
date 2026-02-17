@@ -37,8 +37,10 @@ pub fn run() -> Result<()> {
 
     let mut entries: Vec<ConfigEntry> = Vec::new();
 
-    // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" directory)
-    scan_configs(&aegis_dir, "init", &mut entries, |name| name != "wraps");
+    // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" and "current")
+    scan_configs(&aegis_dir, "init", &mut entries, |name| {
+        name != "wraps" && name != "current"
+    });
 
     // Scan wrap configs: ~/.aegis/wraps/*/aegis.toml
     let wraps_dir = aegis_dir.join("wraps");
