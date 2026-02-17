@@ -409,7 +409,7 @@ pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
             };
 
             // Parse action_kind for display
-            let action_display = crate::commands::diff::extract_resource_key(&entry.action_kind);
+            let action_display = aegis_types::ActionKind::display_from_json(&entry.action_kind);
 
             println!(
                 "[{timestamp}] {decision_marker}  {:<15}  {action_display}",
@@ -498,7 +498,7 @@ fn print_table(entries: &[AuditEntry]) {
     for entry in entries {
         let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
         let action_display =
-            crate::commands::diff::extract_resource_key(&entry.action_kind);
+            aegis_types::ActionKind::display_from_json(&entry.action_kind);
 
         println!(
             "{:<36}  {:<8}  {:<15}  {:<20}  {}",

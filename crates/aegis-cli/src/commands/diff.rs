@@ -153,50 +153,15 @@ fn build_resource_map(
     let mut map = BTreeMap::new();
     for entry in entries {
         // Try to extract a human-readable key from the action_kind JSON
-        let key = extract_resource_key(&entry.action_kind);
+        let key = aegis_types::ActionKind::display_from_json(&entry.action_kind);
         *map.entry(key).or_insert(0) += 1;
     }
     map
 }
 
-/// Extract a display-friendly key from the action_kind JSON string.
-///
-/// Delegates to `ActionKind::display_from_json` which deserializes the JSON
-/// and uses the `Display` impl.
-pub fn extract_resource_key(action_kind: &str) -> String {
-    aegis_types::ActionKind::display_from_json(action_kind)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn extract_resource_key_file_read() {
-        let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
-        let key = extract_resource_key(json);
-        assert_eq!(key, "FileRead /tmp/test.txt");
-    }
-
-    #[test]
-    fn extract_resource_key_net_connect() {
-        let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
-        let key = extract_resource_key(json);
-        assert_eq!(key, "NetConnect example.com:443");
-    }
-
-    #[test]
-    fn extract_resource_key_process_spawn() {
-        let json = r#"{"ProcessSpawn":{"command":"echo","args":["hello"]}}"#;
-        let key = extract_resource_key(json);
-        assert_eq!(key, "ProcessSpawn echo");
-    }
-
-    #[test]
-    fn extract_resource_key_invalid_json() {
-        let key = extract_resource_key("not json");
-        assert_eq!(key, "not json");
-    }
 
     #[test]
     fn build_resource_map_counts() {
@@ -229,36 +194,6 @@ mod tests {
 
         let map = build_resource_map(&entries);
         assert_eq!(map.get("FileRead /a"), Some(&2));
-    }
-
-    #[test]
-    fn extract_resource_key_tool_call() {
-        let json = r#"{"ToolCall":{"tool":"write_file","args":null}}"#;
-        let key = extract_resource_key(json);
-        assert_eq!(key, "ToolCall write_file");
-    }
-
-    #[test]
-    fn extract_resource_key_empty_object() {
-        let json = r#"{}"#;
-        let key = extract_resource_key(json);
-        // Empty JSON object can't deserialize to ActionKind -> raw string
-        assert_eq!(key, "{}");
-    }
-
-    #[test]
-    fn extract_resource_key_unknown_variant_no_fields() {
-        let json = r#"{"CustomAction":{"unknown":"data"}}"#;
-        let key = extract_resource_key(json);
-        // Unknown variant can't deserialize to ActionKind -> raw string
-        assert_eq!(key, json);
-    }
-
-    #[test]
-    fn extract_resource_key_net_request() {
-        let json = r#"{"NetRequest":{"method":"GET","url":"https://example.com"}}"#;
-        let key = extract_resource_key(json);
-        assert_eq!(key, "NetRequest GET https://example.com");
     }
 
     #[test]
