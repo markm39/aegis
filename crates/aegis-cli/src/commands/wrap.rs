@@ -8,16 +8,14 @@
 /// and reused on subsequent invocations (same ledger, accumulating sessions).
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use tracing::info;
 
-use aegis_ledger::AuditStore;
 use aegis_policy::builtin::get_builtin_policy;
-use aegis_policy::PolicyEngine;
-use aegis_sandbox::SandboxBackend;
 use aegis_types::{AegisConfig, IsolationConfig, ObserverConfig};
+
+use crate::commands::pipeline::{self, PipelineOptions};
 
 /// Run the `aegis wrap` command.
 pub fn run(
@@ -48,7 +46,21 @@ pub fn run(
 
     let config = ensure_wrap_config(&wrap_dir, &derived_name, policy, &project_dir)?;
 
-    run_pipeline(&config, command, args, tag)
+    // Wrap always uses ProcessBackend (no Seatbelt) and skips violation harvesting
+    let backend = Box::new(aegis_sandbox::ProcessBackend);
+
+    pipeline::execute(
+        &config,
+        command,
+        args,
+        PipelineOptions {
+            backend,
+            harvest_violations: false,
+            tag,
+        },
+    )?;
+
+    Ok(())
 }
 
 /// Derive a config name from a command path.
@@ -138,190 +150,6 @@ pub fn ensure_wrap_config(
         info!(name, wrap_dir = %wrap_dir.display(), "created new wrap config");
         Ok(config)
     }
-}
-
-/// Execute the wrap pipeline: observe + audit without Seatbelt enforcement.
-///
-/// Mirrors the pipeline in `run.rs` but:
-/// - Always uses ProcessBackend (no Seatbelt)
-/// - Skips Seatbelt violation harvesting
-fn run_pipeline(config: &AegisConfig, command: &str, args: &[String], tag: Option<&str>) -> Result<()> {
-    // Initialize the policy engine
-    let policy_dir = config
-        .policy_paths
-        .first()
-        .context("no policy paths configured")?;
-    let policy_engine =
-        PolicyEngine::new(policy_dir, None).context("failed to initialize policy engine")?;
-    info!(policy_dir = %policy_dir.display(), "policy engine loaded");
-
-    // Initialize the audit store
-    let mut store =
-        AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
-    info!(ledger_path = %config.ledger_path.display(), "audit store opened");
-
-    // Begin session
-    let session_id = store
-        .begin_session(&config.name, command, args, tag)
-        .context("failed to begin audit session")?;
-    info!(%session_id, "audit session started");
-
-    // Record policy snapshot
-    if let Some(policy_dir) = config.policy_paths.first() {
-        match aegis_ledger::policy_snapshot::read_policy_files(policy_dir) {
-            Ok(policy_files) => {
-                match store.record_policy_snapshot(&config.name, &policy_files, Some(&session_id)) {
-                    Ok(Some(snap)) => {
-                        info!(hash = %snap.policy_hash, "new policy snapshot recorded");
-                    }
-                    Ok(None) => {
-                        info!("policy unchanged since last snapshot");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to record policy snapshot");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to read policy files for snapshot");
-            }
-        }
-    }
-
-    // Always use ProcessBackend for wrap (no Seatbelt)
-    let backend = aegis_sandbox::ProcessBackend;
-    backend
-        .prepare(config)
-        .context("failed to prepare sandbox")?;
-    info!("process backend prepared");
-
-    let policy_arc = Arc::new(Mutex::new(policy_engine));
-    let store_arc = Arc::new(Mutex::new(store));
-
-    // Start filesystem observer
-    let observer_session = match &config.observer {
-        ObserverConfig::FsEvents { .. } => {
-            match aegis_observer::start_observer(
-                &config.sandbox_dir,
-                Arc::clone(&store_arc),
-                Arc::clone(&policy_arc),
-                &config.name,
-                Some(session_id),
-            ) {
-                Ok(session) => {
-                    info!("filesystem observer started");
-                    Some(session)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to start observer, continuing without it");
-                    None
-                }
-            }
-        }
-        ObserverConfig::EndpointSecurity => {
-            tracing::warn!("EndpointSecurity observer not yet implemented");
-            None
-        }
-        ObserverConfig::None => None,
-    };
-
-    // Log process spawn
-    aegis_proxy::log_process_spawn_with_session(
-        &store_arc,
-        &policy_arc,
-        &config.name,
-        command,
-        args,
-        &session_id,
-    )
-    .context("failed to log process spawn")?;
-
-    // Execute the command
-    info!(command, ?args, "executing wrapped command");
-
-    let (_pid, status) = backend
-        .spawn_and_wait(command, args, config, &[])
-        .context("failed to execute command")?;
-
-    let exit_code = status.code().unwrap_or(-1);
-
-    // Log process exit
-    aegis_proxy::log_process_exit_with_session(
-        &store_arc,
-        &policy_arc,
-        &config.name,
-        command,
-        exit_code,
-        &session_id,
-    )
-    .context("failed to log process exit")?;
-
-    // Stop observer
-    let observer_summary = if let Some(obs) = observer_session {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        match aegis_observer::stop_observer(obs) {
-            Ok(summary) => {
-                info!(
-                    fsevents = summary.fsevents_count,
-                    snapshot_reads = summary.snapshot_read_count,
-                    total = summary.total_logged,
-                    "observer stopped"
-                );
-                Some(summary)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to stop observer cleanly");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // End session
-    store_arc
-        .lock()
-        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?
-        .end_session(&session_id, exit_code)
-        .context("failed to end audit session")?;
-    info!(%session_id, exit_code, "audit session ended");
-
-    // Print summary (no Seatbelt violation harvesting)
-    let store_lock = store_arc
-        .lock()
-        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
-    let session = store_lock.get_session(&session_id).ok().flatten();
-    let entry_count = store_lock.count().unwrap_or(0);
-
-    println!("Session:  {session_id}");
-    if let Some(s) = &session {
-        if let Some(t) = &s.tag {
-            println!("Tag:      {t}");
-        }
-    }
-    println!("Command exited with code: {exit_code}");
-    println!("Audit entries logged: {entry_count}");
-    if let Some(s) = &session {
-        println!(
-            "Session actions: {} total, {} denied",
-            s.total_actions, s.denied_actions
-        );
-    }
-    if let Some(obs) = &observer_summary {
-        if obs.total_logged > 0 {
-            println!(
-                "Observer: {} file events ({} realtime, {} snapshot reads)",
-                obs.total_logged, obs.fsevents_count, obs.snapshot_read_count
-            );
-        }
-    }
-
-    if !status.success() {
-        std::process::exit(exit_code);
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
