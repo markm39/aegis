@@ -1,13 +1,17 @@
-//! PTY-based autonomous agent supervision.
+//! PTY-based autonomous agent supervision with interactive TUI.
 //!
 //! `aegis pilot [--dir PATH] [--policy POLICY] -- command [args...]`
 //!
 //! Spawns an AI agent in a pseudo-terminal, monitors its output for
 //! permission prompts, and auto-approves or denies them based on Cedar
 //! policy. Detects stalls and nudges the agent to keep working.
-//! Optionally starts a control plane for remote monitoring.
+//!
+//! The pilot runs an interactive TUI dashboard showing live agent output,
+//! stats, and pending permission requests. Users can approve, deny, send
+//! input, or nudge the agent directly from the TUI.
 
 use std::path::Path;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -15,9 +19,9 @@ use tracing::info;
 
 use aegis_pilot::adapters;
 use aegis_pilot::pty::PtySession;
-use aegis_pilot::supervisor::{self, PilotEvent, SupervisorConfig};
+use aegis_pilot::supervisor::{self, PilotEvent, PilotUpdate, SupervisorCommand, SupervisorConfig};
 use aegis_policy::PolicyEngine;
-use aegis_types::{AdapterConfig, AegisConfig, PilotConfig};
+use aegis_types::{Action, ActionKind, AdapterConfig, AegisConfig, PilotConfig, Verdict};
 
 use crate::commands::pipeline;
 use crate::commands::wrap;
@@ -120,55 +124,95 @@ pub fn run(
     let env: Vec<(String, String)> = std::env::vars().collect();
 
     // Spawn the agent in a PTY
-    println!("Pilot: spawning {} in PTY...", command);
     let pty = PtySession::spawn(command, args, &project_dir, &env)
         .context("failed to spawn agent in PTY")?;
     info!(pid = pty.pid(), command, "agent spawned in PTY");
 
     // Create the adapter
     let mut adapter = adapters::create_adapter(&pilot_config.adapter, command);
-    println!(
-        "Pilot: using {} adapter, stall timeout {}s, uncertain action: {}",
-        adapter.name(),
-        pilot_config.stall.timeout_secs,
-        pilot_config.uncertain_action,
-    );
+    let adapter_name_str = adapter.name().to_string();
 
-    // Set up event channel for logging pilot events
-    let (event_tx, event_rx) = std::sync::mpsc::channel::<PilotEvent>();
+    // Create channels for supervisor <-> TUI communication
+    let (event_tx, event_rx) = mpsc::channel::<PilotEvent>();
+    let (update_tx, update_rx) = mpsc::channel::<PilotUpdate>();
+    let (command_tx, command_rx) = mpsc::channel::<SupervisorCommand>();
 
-    // Spawn a thread to log pilot events
+    // Spawn a thread to log pilot events to the audit store
     let event_logger = {
         let store = Arc::clone(&store_arc);
         let config_name = config.name.clone();
+        let sid = session_id;
         std::thread::Builder::new()
             .name("pilot-event-logger".into())
             .spawn(move || {
                 while let Ok(event) = event_rx.recv() {
-                    log_pilot_event(&event, &store, &config_name);
+                    log_pilot_event(&event, &store, &config_name, &sid);
                 }
             })
             .ok()
     };
 
-    // Build supervisor config
+    // Build supervisor config -- interactive is false because the TUI handles display
     let sup_config = SupervisorConfig {
         pilot_config: pilot_config.clone(),
         principal: config.name.clone(),
-        interactive: true,
+        interactive: false,
     };
 
-    // Grab a snapshot of the engine for the supervisor (not behind the mutex)
+    // Create a separate policy engine for the supervisor thread
     let policy_dir_for_eval = config.policy_paths.first().cloned().unwrap();
     let eval_engine = PolicyEngine::new(&policy_dir_for_eval, None)
         .context("failed to create evaluation policy engine")?;
 
-    // Run the supervisor loop (blocks until child exits)
-    let (exit_code, stats) =
-        supervisor::run(&pty, adapter.as_mut(), &eval_engine, &sup_config, Some(&event_tx), None)?;
+    // Spawn the supervisor in a background thread
+    let supervisor_handle = std::thread::Builder::new()
+        .name("pilot-supervisor".into())
+        .spawn(move || {
+            supervisor::run(
+                &pty,
+                adapter.as_mut(),
+                &eval_engine,
+                &sup_config,
+                Some(&event_tx),
+                None,
+                Some(&update_tx),
+                Some(&command_rx),
+            )
+        })
+        .context("failed to spawn supervisor thread")?;
+
+    // Run the TUI on the main thread
+    let tui_result = crate::pilot_tui::run_pilot_tui(
+        update_rx,
+        command_tx,
+        session_id.to_string(),
+        derived_name.clone(),
+        command.to_string(),
+    );
+
+    // Wait for the supervisor thread to finish
+    let supervisor_result = supervisor_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("supervisor thread panicked"))?;
+
+    let (exit_code, stats) = match supervisor_result {
+        Ok(result) => result,
+        Err(e) => {
+            // If TUI also had an error, report both
+            if let Err(tui_err) = tui_result {
+                tracing::error!("TUI error: {tui_err:#}");
+            }
+            return Err(e).context("supervisor error");
+        }
+    };
+
+    // Report any TUI error (non-fatal since supervisor already completed)
+    if let Err(tui_err) = tui_result {
+        tracing::warn!("TUI exited with error: {tui_err:#}");
+    }
 
     // Drop the event sender to signal the logger thread to exit
-    drop(event_tx);
+    // (event_tx was moved into the supervisor thread, which has exited)
     if let Some(handle) = event_logger {
         let _ = handle.join();
     }
@@ -183,9 +227,11 @@ pub fn run(
         .end_session(&session_id, exit_code)
         .context("failed to end audit session")?;
 
-    // Print summary
+    // Print summary (after TUI has restored terminal)
     println!();
     println!("--- Pilot Session Summary ---");
+    println!("  Command:      {command}");
+    println!("  Adapter:      {adapter_name_str}");
     println!("  Exit code:    {exit_code}");
     println!("  Approved:     {}", stats.approved);
     println!("  Denied:       {}", stats.denied);
@@ -244,14 +290,36 @@ fn build_pilot_config(
 }
 
 /// Log a pilot event to the audit store.
+///
+/// Writes policy decisions (approved/denied prompts) as audit log entries so they
+/// appear alongside filesystem events in `aegis log` and `aegis monitor`.
 fn log_pilot_event(
     event: &PilotEvent,
     store: &Arc<Mutex<aegis_ledger::AuditStore>>,
-    _config_name: &str,
+    config_name: &str,
+    session_id: &uuid::Uuid,
 ) {
     match event {
         PilotEvent::PromptDecided { action, decision, reason } => {
             info!(action, ?decision, reason, "pilot: prompt decided");
+
+            // Write to audit store
+            let action_obj = Action::new(
+                config_name,
+                ActionKind::ToolCall {
+                    tool: format!("pilot:{action}"),
+                    args: serde_json::Value::Null,
+                },
+            );
+            let verdict = match decision {
+                aegis_types::Decision::Allow => Verdict::allow(action_obj.id, reason, None),
+                aegis_types::Decision::Deny => Verdict::deny(action_obj.id, reason, None),
+            };
+            if let Ok(mut store) = store.lock() {
+                if let Err(e) = store.append_with_session(&action_obj, &verdict, session_id) {
+                    tracing::warn!(error = %e, "failed to write pilot decision to audit store");
+                }
+            }
         }
         PilotEvent::StallNudge { nudge_count, idle_secs } => {
             info!(nudge_count, idle_secs, "pilot: stall nudge sent");
@@ -266,8 +334,6 @@ fn log_pilot_event(
             info!(exit_code, "pilot: child process exited");
         }
     }
-    // Future: write events to audit store as well
-    let _ = store;
 }
 
 #[cfg(test)]

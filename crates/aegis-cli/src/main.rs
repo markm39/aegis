@@ -1,4 +1,5 @@
 mod commands;
+mod pilot_tui;
 mod wizard;
 
 use std::path::PathBuf;

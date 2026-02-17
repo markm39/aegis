@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AdapterConfig, AlertRule, PilotConfig};
+use crate::config::{AdapterConfig, AlertRule, ChannelConfig, PilotConfig};
 
 /// Top-level daemon configuration, loaded from `~/.aegis/daemon/daemon.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub struct DaemonConfig {
     /// The fleet: one entry per supervised agent slot.
     #[serde(default)]
     pub agents: Vec<AgentSlotConfig>,
+    /// Bidirectional messaging channel (Telegram, Slack, etc.).
+    #[serde(default)]
+    pub channel: Option<ChannelConfig>,
 }
 
 /// Configuration for a single agent slot in the fleet.
@@ -278,6 +281,7 @@ mod tests {
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
+            channel: None,
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {
