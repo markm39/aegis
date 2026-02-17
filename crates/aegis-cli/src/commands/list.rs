@@ -158,18 +158,7 @@ fn describe_config(config: &AegisConfig) -> (String, String) {
                     let path = e.ok()?.path();
                     if path.extension()?.to_str()? == "cedar" {
                         let content = fs::read_to_string(&path).ok()?;
-                        // Detect policy type from content
-                        if content.contains("forbid(principal, action, resource)") {
-                            Some("default-deny".to_string())
-                        } else if content.contains("permit(principal, action, resource)")
-                            && !content.contains("action ==")
-                        {
-                            Some("permit-all".to_string())
-                        } else if content.contains("FileRead") && !content.contains("FileWrite") {
-                            Some("allow-read-only".to_string())
-                        } else {
-                            Some("custom".to_string())
-                        }
+                        Some(identify_policy(&content))
                     } else {
                         None
                     }
@@ -181,6 +170,22 @@ fn describe_config(config: &AegisConfig) -> (String, String) {
     let isolation = config.isolation.to_string();
 
     (policy, isolation)
+}
+
+/// Identify a policy by comparing its content against known builtins.
+///
+/// Trims whitespace before comparison to handle trailing newlines or
+/// formatting differences. Falls back to "custom" if no builtin matches.
+fn identify_policy(content: &str) -> String {
+    let trimmed = content.trim();
+    for name in aegis_policy::builtin::list_builtin_policies() {
+        if let Some(builtin_text) = aegis_policy::builtin::get_builtin_policy(name) {
+            if trimmed == builtin_text.trim() {
+                return name.to_string();
+            }
+        }
+    }
+    "custom".to_string()
 }
 
 /// Truncate a string to fit a column width, using char boundaries.
@@ -254,5 +259,47 @@ mod tests {
 
         let (_, isolation) = describe_config(&config);
         assert_eq!(isolation, "Process");
+    }
+
+    #[test]
+    fn identify_policy_recognizes_all_builtins() {
+        // ci-runner is an alias for allow-read-write (identical content), so it
+        // will be identified as allow-read-write since that appears first in the
+        // list. We test the non-aliased builtins individually.
+        for name in ["default-deny", "allow-read-only", "allow-read-write", "data-science", "permit-all"] {
+            let text = aegis_policy::builtin::get_builtin_policy(name).unwrap();
+            assert_eq!(
+                identify_policy(text),
+                name.to_string(),
+                "should identify {name}"
+            );
+        }
+
+        // ci-runner has the same content as allow-read-write, so it identifies as allow-read-write
+        let ci_text = aegis_policy::builtin::get_builtin_policy("ci-runner").unwrap();
+        let result = identify_policy(ci_text);
+        assert!(
+            result == "allow-read-write" || result == "ci-runner",
+            "ci-runner should identify as allow-read-write or ci-runner: got {result}"
+        );
+    }
+
+    #[test]
+    fn identify_policy_handles_whitespace() {
+        let text = format!("  {}  \n", aegis_policy::builtin::PERMIT_ALL);
+        assert_eq!(identify_policy(&text), "permit-all");
+    }
+
+    #[test]
+    fn identify_policy_custom_returns_custom() {
+        assert_eq!(
+            identify_policy("permit(principal, action == Aegis::Action::\"FileRead\", resource);"),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn identify_policy_empty_returns_custom() {
+        assert_eq!(identify_policy(""), "custom");
     }
 }
