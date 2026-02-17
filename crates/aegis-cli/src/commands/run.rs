@@ -17,7 +17,7 @@ use crate::commands::init::{ensure_aegis_dir, load_config, resolve_config_dir};
 /// If no config exists for `config_name`, auto-creates one with Process
 /// isolation and the specified policy template. Seatbelt enforcement
 /// requires explicit opt-in via `aegis init` or the wizard.
-pub fn run(config_name: &str, policy: &str, command: &str, args: &[String]) -> Result<()> {
+pub fn run(config_name: &str, policy: &str, command: &str, args: &[String], tag: Option<&str>) -> Result<()> {
     let config = ensure_run_config(config_name, policy)?;
 
     // Log auto-init if applicable
@@ -38,7 +38,7 @@ pub fn run(config_name: &str, policy: &str, command: &str, args: &[String]) -> R
 
     // Begin a session for this run invocation
     let session_id = store
-        .begin_session(&config.name, command, args)
+        .begin_session(&config.name, command, args, tag)
         .context("failed to begin audit session")?;
     info!(%session_id, "audit session started");
 
@@ -187,6 +187,11 @@ pub fn run(config_name: &str, policy: &str, command: &str, args: &[String]) -> R
     let entry_count = store_lock.count().unwrap_or(0);
 
     println!("Session:  {session_id}");
+    if let Some(s) = &session {
+        if let Some(t) = &s.tag {
+            println!("Tag:      {t}");
+        }
+    }
     println!("Command exited with code: {exit_code}");
     println!("Audit entries logged: {entry_count}");
     if let Some(s) = &session {

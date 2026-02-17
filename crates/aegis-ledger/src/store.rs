@@ -88,6 +88,9 @@ impl AuditStore {
              CREATE INDEX IF NOT EXISTS idx_session_id ON audit_log(session_id);",
         );
 
+        // Add tag column to sessions table (migration for existing ledgers).
+        let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN tag TEXT;");
+
         let latest_hash: String = conn
             .query_row(
                 "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1",

@@ -26,6 +26,7 @@ pub fn run(
     name: Option<&str>,
     command: &str,
     args: &[String],
+    tag: Option<&str>,
 ) -> Result<()> {
     let project_dir = match dir {
         Some(d) => d
@@ -47,7 +48,7 @@ pub fn run(
 
     let config = ensure_wrap_config(&wrap_dir, &derived_name, policy, &project_dir)?;
 
-    run_pipeline(&config, command, args)
+    run_pipeline(&config, command, args, tag)
 }
 
 /// Derive a config name from a command path.
@@ -144,7 +145,7 @@ pub fn ensure_wrap_config(
 /// Mirrors the pipeline in `run.rs` but:
 /// - Always uses ProcessBackend (no Seatbelt)
 /// - Skips Seatbelt violation harvesting
-fn run_pipeline(config: &AegisConfig, command: &str, args: &[String]) -> Result<()> {
+fn run_pipeline(config: &AegisConfig, command: &str, args: &[String], tag: Option<&str>) -> Result<()> {
     // Initialize the policy engine
     let policy_dir = config
         .policy_paths
@@ -161,7 +162,7 @@ fn run_pipeline(config: &AegisConfig, command: &str, args: &[String]) -> Result<
 
     // Begin session
     let session_id = store
-        .begin_session(&config.name, command, args)
+        .begin_session(&config.name, command, args, tag)
         .context("failed to begin audit session")?;
     info!(%session_id, "audit session started");
 
@@ -294,6 +295,11 @@ fn run_pipeline(config: &AegisConfig, command: &str, args: &[String]) -> Result<
     let entry_count = store_lock.count().unwrap_or(0);
 
     println!("Session:  {session_id}");
+    if let Some(s) = &session {
+        if let Some(t) = &s.tag {
+            println!("Tag:      {t}");
+        }
+    }
     println!("Command exited with code: {exit_code}");
     println!("Audit entries logged: {entry_count}");
     if let Some(s) = &session {

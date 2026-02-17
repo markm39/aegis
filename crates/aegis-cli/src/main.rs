@@ -43,6 +43,10 @@ enum Commands {
         #[arg(long, default_value = "allow-read-only")]
         policy: String,
 
+        /// Human-readable session tag (e.g., "deploy-v2.1")
+        #[arg(long)]
+        tag: Option<String>,
+
         /// Command and arguments to execute
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
@@ -118,6 +122,10 @@ enum Commands {
         /// Config name (defaults to basename of command)
         #[arg(long)]
         name: Option<String>,
+
+        /// Human-readable session tag (e.g., "deploy-v2.1")
+        #[arg(long)]
+        tag: Option<String>,
 
         /// Command and arguments to execute
         #[arg(trailing_var_arg = true, required = true)]
@@ -296,13 +304,13 @@ fn main() -> anyhow::Result<()> {
         Commands::Init { name, policy, dir } => {
             commands::init::run(name.as_deref(), &policy, dir.as_deref())
         }
-        Commands::Run { config, policy, command } => {
+        Commands::Run { config, policy, tag, command } => {
             let (cmd, args) = command
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command provided after --"))?;
             let config_name = config
                 .unwrap_or_else(|| commands::wrap::derive_name(cmd));
-            commands::run::run(&config_name, &policy, cmd, args)
+            commands::run::run(&config_name, &policy, cmd, args, tag.as_deref())
         }
         Commands::Monitor { config } => {
             commands::monitor::run(&config)
@@ -374,12 +382,13 @@ fn main() -> anyhow::Result<()> {
             dir,
             policy,
             name,
+            tag,
             command,
         } => {
             let (cmd, args) = command
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command provided after --"))?;
-            commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args)
+            commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref())
         }
     }
 }
@@ -457,10 +466,26 @@ mod tests {
         assert!(cli.is_ok(), "should parse run with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
-            Commands::Run { config, policy, command } => {
+            Commands::Run { config, policy, tag, command } => {
                 assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(policy, "allow-read-only");
+                assert!(tag.is_none());
                 assert_eq!(command, vec!["echo", "hello"]);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_with_tag() {
+        let cli = Cli::try_parse_from([
+            "aegis", "run", "--tag", "deploy-v2.1", "--", "echo", "hello",
+        ]);
+        assert!(cli.is_ok(), "should parse run with --tag: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Run { tag, .. } => {
+                assert_eq!(tag, Some("deploy-v2.1".to_string()));
             }
             _ => panic!("expected Run command"),
         }
@@ -490,7 +515,7 @@ mod tests {
         assert!(cli.is_ok(), "should parse run with --policy: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
-            Commands::Run { config, policy, command } => {
+            Commands::Run { config, policy, command, .. } => {
                 assert!(config.is_none());
                 assert_eq!(policy, "permit-all");
                 assert_eq!(command, vec!["python3", "agent.py"]);
@@ -845,11 +870,13 @@ mod tests {
                 dir,
                 policy,
                 name,
+                tag,
                 command,
             } => {
                 assert!(dir.is_none());
                 assert_eq!(policy, "permit-all");
                 assert!(name.is_none());
+                assert!(tag.is_none());
                 assert_eq!(command, vec!["claude", "--help"]);
             }
             _ => panic!("expected Wrap command"),
@@ -879,6 +906,7 @@ mod tests {
                 policy,
                 name,
                 command,
+                ..
             } => {
                 assert_eq!(dir, Some(PathBuf::from("/tmp/project")));
                 assert_eq!(policy, "allow-read-only");

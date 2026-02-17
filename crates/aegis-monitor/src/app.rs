@@ -768,7 +768,7 @@ mod tests {
         let mut store = AuditStore::open(tmp.path()).expect("failed to open store");
 
         let session_id = store
-            .begin_session("test-config", "echo", &["hello".into()])
+            .begin_session("test-config", "echo", &["hello".into()], None)
             .expect("begin_session should succeed");
 
         let action = Action::new(

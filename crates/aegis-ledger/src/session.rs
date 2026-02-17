@@ -27,17 +27,21 @@ pub struct Session {
     pub policy_hash: Option<String>,
     pub total_actions: usize,
     pub denied_actions: usize,
+    /// Optional human-readable tag (e.g., "deploy-v2.1").
+    pub tag: Option<String>,
 }
 
 impl AuditStore {
     /// Begin a new session, inserting a row into the sessions table.
     ///
     /// Returns the session UUID. Call `end_session()` when the process exits.
+    /// The optional `tag` is a human-readable label for the session.
     pub fn begin_session(
         &mut self,
         config_name: &str,
         command: &str,
         args: &[String],
+        tag: Option<&str>,
     ) -> Result<Uuid, AegisError> {
         let session_id = Uuid::new_v4();
         let start_time = Utc::now();
@@ -46,14 +50,15 @@ impl AuditStore {
 
         self.connection()
             .execute(
-                "INSERT INTO sessions (session_id, config_name, command, args, start_time)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO sessions (session_id, config_name, command, args, start_time, tag)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     session_id.to_string(),
                     config_name,
                     command,
                     args_json,
                     start_time.to_rfc3339(),
+                    tag,
                 ],
             )
             .map_err(|e| AegisError::LedgerError(format!("failed to begin session: {e}")))?;
@@ -61,6 +66,7 @@ impl AuditStore {
         tracing::info!(
             session_id = %session_id,
             command,
+            ?tag,
             "session started"
         );
 
@@ -106,7 +112,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions
+                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag
                  FROM sessions ORDER BY id DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| AegisError::LedgerError(format!("list_sessions prepare: {e}")))?;
@@ -127,7 +133,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions
+                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag
                  FROM sessions WHERE session_id = ?1",
             )
             .map_err(|e| AegisError::LedgerError(format!("get_session prepare: {e}")))?;
@@ -184,6 +190,7 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         policy_hash: row.get(7)?,
         total_actions: row.get::<_, i64>(8).map(|v| v as usize)?,
         denied_actions: row.get::<_, i64>(9).map(|v| v as usize)?,
+        tag: row.get(10)?,
     })
 }
 
@@ -205,7 +212,7 @@ mod tests {
         let (_tmp, mut store) = test_db();
 
         let session_id = store
-            .begin_session("test-config", "echo", &["hello".into()])
+            .begin_session("test-config", "echo", &["hello".into()], None)
             .expect("begin_session should succeed");
 
         let session = store.get_session(&session_id).unwrap().unwrap();
@@ -214,6 +221,7 @@ mod tests {
         assert_eq!(session.args, vec!["hello"]);
         assert!(session.end_time.is_none());
         assert!(session.exit_code.is_none());
+        assert!(session.tag.is_none());
 
         store.end_session(&session_id, 0).expect("end_session should succeed");
 
@@ -227,7 +235,7 @@ mod tests {
         let (_tmp, mut store) = test_db();
 
         let session_id = store
-            .begin_session("test", "cat", &["/tmp/f".into()])
+            .begin_session("test", "cat", &["/tmp/f".into()], None)
             .unwrap();
 
         // Append an Allow entry
@@ -249,8 +257,8 @@ mod tests {
     fn query_by_session_returns_session_entries() {
         let (_tmp, mut store) = test_db();
 
-        let s1 = store.begin_session("test", "cmd1", &[]).unwrap();
-        let s2 = store.begin_session("test", "cmd2", &[]).unwrap();
+        let s1 = store.begin_session("test", "cmd1", &[], None).unwrap();
+        let s2 = store.begin_session("test", "cmd2", &[], None).unwrap();
 
         // Append to session 1
         let a1 = Action::new("agent", ActionKind::FileRead { path: PathBuf::from("/a") });
@@ -277,9 +285,9 @@ mod tests {
     fn list_sessions_returns_ordered() {
         let (_tmp, mut store) = test_db();
 
-        store.begin_session("test", "cmd1", &[]).unwrap();
-        store.begin_session("test", "cmd2", &[]).unwrap();
-        store.begin_session("test", "cmd3", &[]).unwrap();
+        store.begin_session("test", "cmd1", &[], None).unwrap();
+        store.begin_session("test", "cmd2", &[], None).unwrap();
+        store.begin_session("test", "cmd3", &[], None).unwrap();
 
         let sessions = store.list_sessions(10, 0).unwrap();
         assert_eq!(sessions.len(), 3);
@@ -294,7 +302,7 @@ mod tests {
         let (_tmp, mut store) = test_db();
 
         for i in 0..5 {
-            store.begin_session("test", &format!("cmd{i}"), &[]).unwrap();
+            store.begin_session("test", &format!("cmd{i}"), &[], None).unwrap();
         }
 
         let page1 = store.list_sessions(2, 0).unwrap();
@@ -308,6 +316,18 @@ mod tests {
     }
 
     #[test]
+    fn begin_session_with_tag() {
+        let (_tmp, mut store) = test_db();
+
+        let session_id = store
+            .begin_session("test", "deploy", &[], Some("deploy-v2.1"))
+            .unwrap();
+
+        let session = store.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(session.tag, Some("deploy-v2.1".to_string()));
+    }
+
+    #[test]
     fn get_nonexistent_session_returns_none() {
         let (_tmp, store) = test_db();
         let result = store.get_session(&Uuid::new_v4()).unwrap();
@@ -318,7 +338,7 @@ mod tests {
     fn session_hash_chain_unaffected() {
         let (_tmp, mut store) = test_db();
 
-        let session_id = store.begin_session("test", "cmd", &[]).unwrap();
+        let session_id = store.begin_session("test", "cmd", &[], None).unwrap();
 
         // Append entries with session
         for i in 0..10 {

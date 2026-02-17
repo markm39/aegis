@@ -140,10 +140,10 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
     }
 
     println!(
-        "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  COMMAND",
-        "SESSION ID", "STATUS", "START TIME", "TOTAL", "DENIED"
+        "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  {:<16}  COMMAND",
+        "SESSION ID", "STATUS", "START TIME", "TOTAL", "DENIED", "TAG"
     );
-    let separator = "-".repeat(110);
+    let separator = "-".repeat(130);
     println!("{separator}");
 
     for s in &sessions {
@@ -154,10 +154,11 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
         } else {
             format!("{} {}", s.command, s.args.join(" "))
         };
+        let tag_display = s.tag.as_deref().unwrap_or("");
 
         println!(
-            "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  {}",
-            s.session_id, status, start, s.total_actions, s.denied_actions, cmd_display
+            "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  {:<16}  {}",
+            s.session_id, status, start, s.total_actions, s.denied_actions, tag_display, cmd_display
         );
     }
 
@@ -182,6 +183,9 @@ pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
 
     println!("Session:       {}", session.session_id);
     println!("Config:        {}", session.config_name);
+    if let Some(tag) = &session.tag {
+        println!("Tag:           {tag}");
+    }
     println!("Command:       {} {}", session.command, session.args.join(" "));
     println!("Start time:    {}", session.start_time.format("%Y-%m-%d %H:%M:%S UTC"));
     if let Some(end) = session.end_time {
