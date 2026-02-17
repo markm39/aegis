@@ -10,9 +10,23 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use uuid::Uuid;
+
+use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus};
 
 use crate::lifecycle::SlotResult;
+
+/// Information about a pending permission prompt awaiting human decision.
+#[derive(Debug, Clone)]
+pub struct PendingPromptInfo {
+    /// Unique ID for this pending request (matches the supervisor's request_id).
+    pub request_id: Uuid,
+    /// The raw prompt text shown by the agent tool.
+    pub raw_prompt: String,
+    /// When this prompt was received.
+    pub received_at: Instant,
+}
 
 /// Runtime state for a single supervised agent in the fleet.
 pub struct AgentSlot {
@@ -32,6 +46,16 @@ pub struct AgentSlot {
     pub recent_output: Arc<Mutex<VecDeque<String>>>,
     /// Max output lines to retain.
     pub output_capacity: usize,
+    /// Sender for commands to the supervisor (approve, deny, input, nudge).
+    pub command_tx: Option<mpsc::Sender<SupervisorCommand>>,
+    /// Receiver for rich updates from the supervisor (pending prompts, stats, etc.).
+    pub update_rx: Option<mpsc::Receiver<PilotUpdate>>,
+    /// Currently pending permission prompts awaiting human decision.
+    pub pending_prompts: Vec<PendingPromptInfo>,
+    /// Latest pilot stats snapshot from the supervisor.
+    pub pilot_stats: Option<PilotStats>,
+    /// Whether this agent needs human attention (max nudges exceeded).
+    pub attention_needed: bool,
 }
 
 impl AgentSlot {
@@ -52,6 +76,11 @@ impl AgentSlot {
             output_rx: None,
             recent_output: Arc::new(Mutex::new(VecDeque::with_capacity(500))),
             output_capacity: 500,
+            command_tx: None,
+            update_rx: None,
+            pending_prompts: Vec::new(),
+            pilot_stats: None,
+            attention_needed: false,
         }
     }
 
@@ -92,6 +121,54 @@ impl AgentSlot {
         count
     }
 
+    /// Drain rich updates from the supervisor's update channel.
+    ///
+    /// Processes all pending `PilotUpdate` events:
+    /// - `PendingPrompt`: adds to the pending prompts list
+    /// - `PendingResolved`: removes from pending prompts
+    /// - `AttentionNeeded`: sets the attention flag
+    /// - `Stats`: updates the latest stats snapshot
+    /// - Other variants are ignored (output is handled by `drain_output`)
+    ///
+    /// Returns the number of updates processed.
+    pub fn drain_updates(&mut self) -> usize {
+        let rx = match &self.update_rx {
+            Some(rx) => rx,
+            None => return 0,
+        };
+
+        let mut count = 0;
+        while let Ok(update) = rx.try_recv() {
+            match update {
+                PilotUpdate::PendingPrompt { request_id, raw_prompt } => {
+                    self.pending_prompts.push(PendingPromptInfo {
+                        request_id,
+                        raw_prompt,
+                        received_at: Instant::now(),
+                    });
+                }
+                PilotUpdate::PendingResolved { request_id, .. } => {
+                    self.pending_prompts.retain(|p| p.request_id != request_id);
+                    // Clear attention if no more pending prompts
+                    if self.pending_prompts.is_empty() {
+                        self.attention_needed = false;
+                    }
+                }
+                PilotUpdate::AttentionNeeded { .. } => {
+                    self.attention_needed = true;
+                }
+                PilotUpdate::Stats(stats) => {
+                    self.pilot_stats = Some(stats);
+                }
+                // OutputLine, PromptDecided, StallNudge, ChildExited
+                // are handled elsewhere or not needed on the slot
+                _ => {}
+            }
+            count += 1;
+        }
+        count
+    }
+
     /// Get the most recent N output lines.
     pub fn get_recent_output(&self, n: usize) -> Vec<String> {
         let buf = match self.recent_output.lock() {
@@ -111,6 +188,7 @@ impl AgentSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aegis_pilot::supervisor::PilotStats;
     use aegis_types::daemon::{AgentToolConfig, RestartPolicy};
     use std::path::PathBuf;
 
@@ -190,5 +268,109 @@ mod tests {
     fn uptime_none_when_not_started() {
         let slot = AgentSlot::new(test_config("test"));
         assert!(slot.uptime_secs().is_none());
+    }
+
+    #[test]
+    fn drain_updates_pending_prompt() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        let id = Uuid::new_v4();
+        tx.send(PilotUpdate::PendingPrompt {
+            request_id: id,
+            raw_prompt: "Allow Bash(rm -rf)?".into(),
+        }).unwrap();
+
+        let count = slot.drain_updates();
+        assert_eq!(count, 1);
+        assert_eq!(slot.pending_prompts.len(), 1);
+        assert_eq!(slot.pending_prompts[0].request_id, id);
+        assert_eq!(slot.pending_prompts[0].raw_prompt, "Allow Bash(rm -rf)?");
+    }
+
+    #[test]
+    fn drain_updates_pending_resolved() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        let id = Uuid::new_v4();
+        tx.send(PilotUpdate::PendingPrompt {
+            request_id: id,
+            raw_prompt: "Allow write?".into(),
+        }).unwrap();
+        tx.send(PilotUpdate::PendingResolved {
+            request_id: id,
+            approved: true,
+        }).unwrap();
+
+        slot.drain_updates();
+        assert!(slot.pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn drain_updates_attention_needed() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        assert!(!slot.attention_needed);
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+
+        slot.drain_updates();
+        assert!(slot.attention_needed);
+    }
+
+    #[test]
+    fn drain_updates_stats() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        let stats = PilotStats {
+            approved: 5,
+            denied: 2,
+            uncertain: 1,
+            nudges: 0,
+            lines_processed: 100,
+        };
+        tx.send(PilotUpdate::Stats(stats)).unwrap();
+
+        slot.drain_updates();
+        let s = slot.pilot_stats.unwrap();
+        assert_eq!(s.approved, 5);
+        assert_eq!(s.denied, 2);
+        assert_eq!(s.lines_processed, 100);
+    }
+
+    #[test]
+    fn drain_updates_no_channel_returns_zero() {
+        let mut slot = AgentSlot::new(test_config("test"));
+        assert_eq!(slot.drain_updates(), 0);
+    }
+
+    #[test]
+    fn attention_clears_when_prompts_resolved() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        let id = Uuid::new_v4();
+        tx.send(PilotUpdate::PendingPrompt {
+            request_id: id,
+            raw_prompt: "prompt".into(),
+        }).unwrap();
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        slot.drain_updates();
+        assert!(slot.attention_needed);
+
+        tx.send(PilotUpdate::PendingResolved {
+            request_id: id,
+            approved: true,
+        }).unwrap();
+        slot.drain_updates();
+        assert!(!slot.attention_needed);
+        assert!(slot.pending_prompts.is_empty());
     }
 }

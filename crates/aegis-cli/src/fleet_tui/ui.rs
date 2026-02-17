@@ -658,6 +658,8 @@ mod tests {
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/test".into(),
                 restart_count: 0,
+                pending_count: 0,
+                attention_needed: false,
             },
         ];
         let backend = ratatui::backend::TestBackend::new(80, 24);

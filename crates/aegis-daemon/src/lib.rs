@@ -28,6 +28,7 @@ use tracing::info;
 
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
+    PendingPromptSummary,
 };
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
@@ -178,6 +179,8 @@ impl DaemonRuntime {
                                 .slot(name)
                                 .map(|s| s.restart_count)
                                 .unwrap_or(0),
+                            pending_count: self.fleet.agent_pending_count(name),
+                            attention_needed: self.fleet.agent_attention_needed(name),
                         })
                     })
                     .collect();
@@ -205,6 +208,8 @@ impl DaemonRuntime {
                     session_id: None,
                     task: slot.config.task.clone(),
                     enabled: slot.config.enabled,
+                    pending_count: slot.pending_prompts.len(),
+                    attention_needed: slot.attention_needed,
                 };
                 match serde_json::to_value(&detail) {
                     Ok(data) => DaemonResponse::ok_with_data("agent detail", data),
@@ -270,6 +275,55 @@ impl DaemonRuntime {
                     self.fleet.start_agent(&name);
                 }
                 DaemonResponse::ok(format!("agent '{name}' added"))
+            }
+
+            DaemonCommand::ApproveRequest { ref name, ref request_id } => {
+                let id = match uuid::Uuid::parse_str(request_id) {
+                    Ok(id) => id,
+                    Err(e) => return DaemonResponse::error(format!("invalid request_id: {e}")),
+                };
+                match self.fleet.approve_request(name, id) {
+                    Ok(()) => DaemonResponse::ok(format!("approved request {request_id} for '{name}'")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::DenyRequest { ref name, ref request_id } => {
+                let id = match uuid::Uuid::parse_str(request_id) {
+                    Ok(id) => id,
+                    Err(e) => return DaemonResponse::error(format!("invalid request_id: {e}")),
+                };
+                match self.fleet.deny_request(name, id) {
+                    Ok(()) => DaemonResponse::ok(format!("denied request {request_id} for '{name}'")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::NudgeAgent { ref name, ref message } => {
+                match self.fleet.nudge_agent(name, message.clone()) {
+                    Ok(()) => DaemonResponse::ok(format!("nudged '{name}'")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::ListPending { ref name } => {
+                match self.fleet.list_pending(name) {
+                    Ok(pending) => {
+                        let summaries: Vec<PendingPromptSummary> = pending
+                            .iter()
+                            .map(|p| PendingPromptSummary {
+                                request_id: p.request_id.to_string(),
+                                raw_prompt: p.raw_prompt.clone(),
+                                age_secs: p.received_at.elapsed().as_secs(),
+                            })
+                            .collect();
+                        match serde_json::to_value(&summaries) {
+                            Ok(data) => DaemonResponse::ok_with_data("pending prompts", data),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
             }
 
             DaemonCommand::Shutdown => {
@@ -473,5 +527,67 @@ mod tests {
         let data = resp.data.unwrap();
         let lines: Vec<String> = serde_json::from_value(data).unwrap();
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn handle_command_approve_unknown_agent() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::ApproveRequest {
+            name: "ghost".into(),
+            request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_approve_invalid_uuid() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::ApproveRequest {
+            name: "a1".into(),
+            request_id: "not-a-uuid".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("invalid request_id"));
+    }
+
+    #[test]
+    fn handle_command_deny_unknown_agent() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::DenyRequest {
+            name: "ghost".into(),
+            request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_nudge_unknown_agent() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::NudgeAgent {
+            name: "ghost".into(),
+            message: None,
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_list_pending_empty() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::ListPending {
+            name: "a1".into(),
+        });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let pending: Vec<PendingPromptSummary> = serde_json::from_value(data).unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn handle_command_list_pending_unknown() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::ListPending {
+            name: "ghost".into(),
+        });
+        assert!(!resp.ok);
     }
 }

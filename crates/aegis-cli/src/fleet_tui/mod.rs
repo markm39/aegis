@@ -468,6 +468,8 @@ mod tests {
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/alpha".into(),
                 restart_count: 0,
+                pending_count: 0,
+                attention_needed: false,
             },
             AgentSummary {
                 name: "beta".into(),
@@ -475,6 +477,8 @@ mod tests {
                 tool: "Codex".into(),
                 working_dir: "/tmp/beta".into(),
                 restart_count: 1,
+                pending_count: 0,
+                attention_needed: false,
             },
             AgentSummary {
                 name: "gamma".into(),
@@ -482,6 +486,8 @@ mod tests {
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/gamma".into(),
                 restart_count: 5,
+                pending_count: 0,
+                attention_needed: false,
             },
         ];
         app

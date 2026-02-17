@@ -9,12 +9,14 @@ use std::sync::mpsc;
 use std::thread;
 
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
+use aegis_pilot::supervisor::SupervisorCommand;
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy};
 use aegis_types::AegisConfig;
 
 use crate::lifecycle;
-use crate::slot::AgentSlot;
+use crate::slot::{AgentSlot, PendingPromptInfo};
 
 /// Fleet of managed agent slots.
 pub struct Fleet {
@@ -71,15 +73,24 @@ impl Fleet {
 
         let slot_config = slot.config.clone();
         let aegis_config = self.default_aegis_config.clone();
-        let (tx, rx) = mpsc::channel::<String>();
+        let (output_tx, output_rx) = mpsc::channel::<String>();
 
-        slot.output_rx = Some(rx);
+        // Create command channel: fleet sends commands, supervisor receives
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        // Create update channel: supervisor sends updates, fleet receives
+        let (upd_tx, upd_rx) = mpsc::channel();
+
+        slot.output_rx = Some(output_rx);
+        slot.command_tx = Some(cmd_tx);
+        slot.update_rx = Some(upd_rx);
+        slot.pending_prompts.clear();
+        slot.attention_needed = false;
         slot.started_at = Some(std::time::Instant::now());
 
         let handle = thread::Builder::new()
             .name(format!("agent-{name}"))
             .spawn(move || {
-                lifecycle::run_agent_slot(&slot_config, &aegis_config, tx)
+                lifecycle::run_agent_slot(&slot_config, &aegis_config, output_tx, Some(upd_tx), Some(cmd_rx))
             });
 
         match handle {
@@ -143,17 +154,73 @@ impl Fleet {
         slot.started_at = None;
     }
 
-    /// Send text to an agent's PTY stdin (via the lifecycle thread's channel).
-    ///
-    /// Note: This requires a dedicated command channel to the supervisor, which
-    /// is not yet implemented. For now, this is a placeholder.
-    pub fn send_to_agent(&self, name: &str, _text: &str) -> Result<(), String> {
-        if !self.slots.contains_key(name) {
-            return Err(format!("unknown agent: {name}"));
-        }
-        // TODO: Implement via SupervisorCommand channel
-        warn!(agent = name, "send_to_agent not yet implemented");
-        Ok(())
+    /// Send text to an agent's PTY stdin via the supervisor command channel.
+    pub fn send_to_agent(&self, name: &str, text: &str) -> Result<(), String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        let tx = slot.command_tx.as_ref()
+            .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
+
+        tx.send(SupervisorCommand::SendInput { text: text.to_string() })
+            .map_err(|_| format!("command channel closed for '{name}' (agent may have exited)"))
+    }
+
+    /// Approve a pending permission request for an agent.
+    pub fn approve_request(&self, name: &str, request_id: Uuid) -> Result<(), String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        let tx = slot.command_tx.as_ref()
+            .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
+
+        tx.send(SupervisorCommand::Approve { request_id })
+            .map_err(|_| format!("command channel closed for '{name}'"))
+    }
+
+    /// Deny a pending permission request for an agent.
+    pub fn deny_request(&self, name: &str, request_id: Uuid) -> Result<(), String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        let tx = slot.command_tx.as_ref()
+            .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
+
+        tx.send(SupervisorCommand::Deny { request_id })
+            .map_err(|_| format!("command channel closed for '{name}'"))
+    }
+
+    /// Nudge a stalled agent with an optional message.
+    pub fn nudge_agent(&self, name: &str, message: Option<String>) -> Result<(), String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        let tx = slot.command_tx.as_ref()
+            .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
+
+        tx.send(SupervisorCommand::Nudge { message })
+            .map_err(|_| format!("command channel closed for '{name}'"))
+    }
+
+    /// List pending permission prompts for an agent.
+    pub fn list_pending(&self, name: &str) -> Result<&[PendingPromptInfo], String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        Ok(&slot.pending_prompts)
+    }
+
+    /// Whether an agent needs human attention (max nudges exceeded).
+    pub fn agent_attention_needed(&self, name: &str) -> bool {
+        self.slots.get(name)
+            .is_some_and(|s| s.attention_needed)
+    }
+
+    /// Count of pending prompts for an agent.
+    pub fn agent_pending_count(&self, name: &str) -> usize {
+        self.slots.get(name)
+            .map(|s| s.pending_prompts.len())
+            .unwrap_or(0)
     }
 
     /// Get recent output lines from an agent.
@@ -169,14 +236,19 @@ impl Fleet {
     }
 
     /// Periodic tick: check for exited threads, apply restart policies,
-    /// and drain output channels.
+    /// drain output channels, and process supervisor updates.
     pub fn tick(&mut self) {
         let names: Vec<String> = self.slots.keys().cloned().collect();
 
         for name in names {
-            // Drain output for all agents
             if let Some(slot) = self.slots.get(&name) {
+                // Drain output for all agents
                 slot.drain_output();
+            }
+
+            // Drain rich updates (pending prompts, stats, attention flags)
+            if let Some(slot) = self.slots.get_mut(&name) {
+                slot.drain_updates();
             }
 
             // Check if the thread has finished
@@ -424,6 +496,130 @@ mod tests {
         let fleet = Fleet::new(&config, aegis);
 
         assert!(fleet.send_to_agent("no-such", "hello").is_err());
+    }
+
+    #[test]
+    fn send_to_agent_no_channel() {
+        // Agent exists but has no command channel (not started)
+        let config = test_daemon_config(vec![test_slot_config("idle")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let fleet = Fleet::new(&config, aegis);
+
+        let err = fleet.send_to_agent("idle", "hello").unwrap_err();
+        assert!(err.contains("no command channel"));
+    }
+
+    #[test]
+    fn send_to_agent_with_channel() {
+        let config = test_daemon_config(vec![test_slot_config("active")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        // Manually wire up a command channel
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        fleet.slots.get_mut("active").unwrap().command_tx = Some(cmd_tx);
+
+        fleet.send_to_agent("active", "hello world").unwrap();
+
+        // Verify the command was sent
+        let cmd = cmd_rx.try_recv().unwrap();
+        match cmd {
+            aegis_pilot::supervisor::SupervisorCommand::SendInput { text } => {
+                assert_eq!(text, "hello world");
+            }
+            _ => panic!("expected SendInput"),
+        }
+    }
+
+    #[test]
+    fn approve_request_dispatches_command() {
+        let config = test_daemon_config(vec![test_slot_config("agent")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        fleet.slots.get_mut("agent").unwrap().command_tx = Some(cmd_tx);
+
+        let id = uuid::Uuid::new_v4();
+        fleet.approve_request("agent", id).unwrap();
+
+        let cmd = cmd_rx.try_recv().unwrap();
+        match cmd {
+            aegis_pilot::supervisor::SupervisorCommand::Approve { request_id } => {
+                assert_eq!(request_id, id);
+            }
+            _ => panic!("expected Approve"),
+        }
+    }
+
+    #[test]
+    fn deny_request_dispatches_command() {
+        let config = test_daemon_config(vec![test_slot_config("agent")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        fleet.slots.get_mut("agent").unwrap().command_tx = Some(cmd_tx);
+
+        let id = uuid::Uuid::new_v4();
+        fleet.deny_request("agent", id).unwrap();
+
+        let cmd = cmd_rx.try_recv().unwrap();
+        match cmd {
+            aegis_pilot::supervisor::SupervisorCommand::Deny { request_id } => {
+                assert_eq!(request_id, id);
+            }
+            _ => panic!("expected Deny"),
+        }
+    }
+
+    #[test]
+    fn nudge_agent_dispatches_command() {
+        let config = test_daemon_config(vec![test_slot_config("agent")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        fleet.slots.get_mut("agent").unwrap().command_tx = Some(cmd_tx);
+
+        fleet.nudge_agent("agent", Some("wake up".into())).unwrap();
+
+        let cmd = cmd_rx.try_recv().unwrap();
+        match cmd {
+            aegis_pilot::supervisor::SupervisorCommand::Nudge { message } => {
+                assert_eq!(message, Some("wake up".into()));
+            }
+            _ => panic!("expected Nudge"),
+        }
+    }
+
+    #[test]
+    fn list_pending_empty() {
+        let config = test_daemon_config(vec![test_slot_config("agent")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let fleet = Fleet::new(&config, aegis);
+
+        let pending = fleet.list_pending("agent").unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn list_pending_unknown_agent() {
+        let config = test_daemon_config(vec![]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let fleet = Fleet::new(&config, aegis);
+
+        assert!(fleet.list_pending("ghost").is_err());
+    }
+
+    #[test]
+    fn agent_pending_count_and_attention() {
+        let config = test_daemon_config(vec![test_slot_config("agent")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let fleet = Fleet::new(&config, aegis);
+
+        assert_eq!(fleet.agent_pending_count("agent"), 0);
+        assert!(!fleet.agent_attention_needed("agent"));
     }
 
     #[test]

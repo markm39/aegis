@@ -37,6 +37,14 @@ pub enum DaemonCommand {
         #[serde(default = "default_true")]
         start: bool,
     },
+    /// Approve a pending permission request for an agent.
+    ApproveRequest { name: String, request_id: String },
+    /// Deny a pending permission request for an agent.
+    DenyRequest { name: String, request_id: String },
+    /// Nudge a stalled agent with an optional message.
+    NudgeAgent { name: String, message: Option<String> },
+    /// List pending permission prompts for an agent.
+    ListPending { name: String },
     /// Request graceful daemon shutdown (stops all agents first).
     Shutdown,
 }
@@ -99,6 +107,12 @@ pub struct AgentSummary {
     pub working_dir: String,
     /// Number of restarts so far.
     pub restart_count: u32,
+    /// Number of pending permission prompts.
+    #[serde(default)]
+    pub pending_count: usize,
+    /// Whether this agent needs human attention.
+    #[serde(default)]
+    pub attention_needed: bool,
 }
 
 /// Detailed status for a single agent, returned by AgentStatus.
@@ -124,6 +138,23 @@ pub struct AgentDetail {
     pub task: Option<String>,
     /// Whether the slot is enabled.
     pub enabled: bool,
+    /// Number of pending permission prompts.
+    #[serde(default)]
+    pub pending_count: usize,
+    /// Whether this agent needs human attention.
+    #[serde(default)]
+    pub attention_needed: bool,
+}
+
+/// Summary of a pending permission prompt, returned by ListPending.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPromptSummary {
+    /// Unique ID for this pending request.
+    pub request_id: String,
+    /// The raw prompt text.
+    pub raw_prompt: String,
+    /// Seconds since this prompt was received.
+    pub age_secs: u64,
 }
 
 /// Daemon health/ping response data.
@@ -223,6 +254,19 @@ mod tests {
                 }),
                 start: true,
             },
+            DaemonCommand::ApproveRequest {
+                name: "claude-1".into(),
+                request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            },
+            DaemonCommand::DenyRequest {
+                name: "claude-1".into(),
+                request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            },
+            DaemonCommand::NudgeAgent {
+                name: "claude-1".into(),
+                message: Some("wake up".into()),
+            },
+            DaemonCommand::ListPending { name: "claude-1".into() },
             DaemonCommand::Shutdown,
         ];
 
@@ -263,10 +307,27 @@ mod tests {
             tool: "ClaudeCode".into(),
             working_dir: "/home/user/project".into(),
             restart_count: 0,
+            pending_count: 2,
+            attention_needed: true,
         };
         let json = serde_json::to_string(&summary).unwrap();
         let back: AgentSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(back.name, "claude-1");
+        assert_eq!(back.pending_count, 2);
+        assert!(back.attention_needed);
+    }
+
+    #[test]
+    fn pending_prompt_summary_serialization() {
+        let summary = PendingPromptSummary {
+            request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            raw_prompt: "Allow Bash(rm -rf)?".into(),
+            age_secs: 30,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: PendingPromptSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.request_id, "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(back.age_secs, 30);
     }
 
     #[test]

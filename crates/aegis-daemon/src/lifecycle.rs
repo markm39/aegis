@@ -21,7 +21,7 @@ use aegis_ledger::AuditStore;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
 use aegis_pilot::pty::PtySession;
-use aegis_pilot::supervisor::{self, PilotStats, SupervisorConfig};
+use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, SupervisorConfig};
 use aegis_policy::PolicyEngine;
 use aegis_types::daemon::AgentSlotConfig;
 use aegis_types::AegisConfig;
@@ -45,16 +45,20 @@ pub struct SlotResult {
 /// - `slot_config`: configuration for this agent slot
 /// - `aegis_config`: base Aegis configuration (for policy paths, ledger, etc.)
 /// - `output_tx`: channel for sending output lines to the fleet manager
+/// - `update_tx`: optional channel for sending rich updates (pending prompts, stats)
+/// - `command_rx`: optional channel for receiving commands (approve, deny, input)
 ///
 /// Returns a `SlotResult` when the agent exits.
 pub fn run_agent_slot(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
     output_tx: mpsc::Sender<String>,
+    update_tx: Option<mpsc::Sender<PilotUpdate>>,
+    command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
-    match run_agent_slot_inner(slot_config, aegis_config, &output_tx) {
+    match run_agent_slot_inner(slot_config, aegis_config, &output_tx, update_tx.as_ref(), command_rx.as_ref()) {
         Ok(result) => result,
         Err(e) => {
             error!(agent = name, error = %e, "agent lifecycle failed");
@@ -73,6 +77,8 @@ fn run_agent_slot_inner(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
     output_tx: &mpsc::Sender<String>,
+    update_tx: Option<&mpsc::Sender<PilotUpdate>>,
+    command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
     info!(agent = name, "agent lifecycle starting");
@@ -221,8 +227,8 @@ fn run_agent_slot_inner(
         &sup_config,
         None,       // no event_tx (could be added for alerting)
         Some(output_tx),
-        None,       // no update_tx (no TUI)
-        None,       // no command_rx (could be added for control)
+        update_tx,
+        command_rx,
     );
 
     let (exit_code, stats) = match result {
