@@ -382,7 +382,6 @@ fn smoke_test_policy_validate_invalid_file() {
         .args([
             "policy",
             "validate",
-            "--path",
             &bad_policy.display().to_string(),
         ])
         .assert()

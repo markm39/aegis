@@ -271,7 +271,6 @@ fn log_pilot_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aegis_types::ControlConfig;
 
     #[test]
     fn build_pilot_config_defaults() {
