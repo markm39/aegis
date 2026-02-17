@@ -129,7 +129,7 @@ fn create_backend(
         }
         #[cfg(not(target_os = "macos"))]
         IsolationConfig::Seatbelt { .. } => {
-            tracing::warn!("Seatbelt is only available on macOS; falling back to ProcessBackend");
+            eprintln!("Warning: Seatbelt is only available on macOS; falling back to Process isolation (no OS-level sandbox)");
             Box::new(aegis_sandbox::ProcessBackend)
         }
         IsolationConfig::Process | IsolationConfig::None => {

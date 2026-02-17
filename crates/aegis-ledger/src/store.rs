@@ -234,7 +234,7 @@ impl AuditStore {
                 "UPDATE sessions SET total_actions = total_actions + 1, denied_actions = denied_actions + ?1 WHERE session_id = ?2",
                 params![denied_incr, session_id.to_string()],
             )
-            .map_err(|e| AegisError::LedgerError(format!("failed to update session counters: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("failed to update session counters for {session_id}: {e}")))?;
 
         Ok(entry)
     }
@@ -294,7 +294,7 @@ impl AuditStore {
                 params![before_str],
                 |row| row.get(0),
             )
-            .map_err(|e| AegisError::LedgerError(format!("purge count failed: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("purge count failed (before {before_str}): {e}")))?;
 
         if count == 0 {
             return Ok(0);
@@ -306,7 +306,7 @@ impl AuditStore {
                 "DELETE FROM audit_log WHERE timestamp < ?1",
                 params![before_str],
             )
-            .map_err(|e| AegisError::LedgerError(format!("purge delete failed: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("purge delete failed (before {before_str}): {e}")))?;
 
         // Rebuild hash chain for remaining entries
         self.rebuild_hash_chain()?;
