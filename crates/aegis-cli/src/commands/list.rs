@@ -127,12 +127,12 @@ fn load_entry(dir: &std::path::Path, name: &str, config_type: &'static str) -> O
 
     let (sessions, last_used) = match AuditStore::open(&config.ledger_path) {
         Ok(store) => {
-            let session_list = store.list_sessions(1, 0).unwrap_or_default();
-            let count = store
-                .list_sessions(10_000, 0)
-                .map(|s| s.len())
-                .unwrap_or(0);
-            let last = session_list.first().map(|s| s.start_time);
+            let count = store.count_all_sessions().unwrap_or(0);
+            let last = store
+                .latest_session()
+                .ok()
+                .flatten()
+                .map(|s| s.start_time);
             (count, last)
         }
         Err(_) => (0, None),
