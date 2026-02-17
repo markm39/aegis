@@ -134,7 +134,7 @@ pub fn run(config_name: &str) -> Result<()> {
     }
 
     // Isolation mode
-    println!("  Isolation:    {:?}", config.isolation);
+    println!("  Isolation:    {}", config.isolation);
 
     Ok(())
 }

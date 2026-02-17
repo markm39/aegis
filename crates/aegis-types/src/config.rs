@@ -65,6 +65,19 @@ pub enum IsolationConfig {
     None,
 }
 
+impl std::fmt::Display for IsolationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IsolationConfig::Seatbelt { profile_overrides: Some(path) } => {
+                write!(f, "Seatbelt (overrides: {})", path.display())
+            }
+            IsolationConfig::Seatbelt { profile_overrides: None } => write!(f, "Seatbelt"),
+            IsolationConfig::Process => write!(f, "Process"),
+            IsolationConfig::None => write!(f, "None"),
+        }
+    }
+}
+
 /// Top-level configuration for an Aegis agent instance.
 ///
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,

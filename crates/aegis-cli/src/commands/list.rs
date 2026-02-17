@@ -179,11 +179,7 @@ fn describe_config(config: &AegisConfig) -> (String, String) {
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    let isolation = match &config.isolation {
-        aegis_types::IsolationConfig::Seatbelt { .. } => "Seatbelt".to_string(),
-        aegis_types::IsolationConfig::Process => "Process".to_string(),
-        aegis_types::IsolationConfig::None => "None".to_string(),
-    };
+    let isolation = config.isolation.to_string();
 
     (policy, isolation)
 }
