@@ -133,7 +133,7 @@ pub fn harvest_seatbelt_violations(
         .arg("--style")
         .arg("json")
         .output()
-        .map_err(|e| AegisError::LedgerError(format!("failed to run `log show`: {e}")))?;
+        .map_err(|e| AegisError::SandboxError(format!("failed to run `log show`: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

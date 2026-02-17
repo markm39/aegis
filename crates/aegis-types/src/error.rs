@@ -23,10 +23,4 @@ pub enum AegisError {
 
     #[error("configuration error: {0}")]
     ConfigError(String),
-
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
 }
