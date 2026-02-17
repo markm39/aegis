@@ -199,7 +199,7 @@ enum PolicyCommands {
         /// Name of the aegis configuration
         config: String,
 
-        /// Action to test (FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, ToolCall, ProcessSpawn, ProcessExit)
+        /// Action to test (FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, NetRequest, ToolCall, ProcessSpawn, ProcessExit)
         #[arg(long)]
         action: String,
 

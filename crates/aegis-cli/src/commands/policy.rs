@@ -241,6 +241,10 @@ fn parse_action_kind(action_name: &str, resource: &str) -> Result<ActionKind> {
             host: resource.to_string(),
             port: 443,
         }),
+        "NetRequest" => Ok(ActionKind::NetRequest {
+            method: "GET".to_string(),
+            url: resource.to_string(),
+        }),
         "ToolCall" => Ok(ActionKind::ToolCall {
             tool: resource.to_string(),
             args: serde_json::Value::Null,
@@ -254,7 +258,7 @@ fn parse_action_kind(action_name: &str, resource: &str) -> Result<ActionKind> {
             exit_code: 0,
         }),
         _ => bail!(
-            "unknown action '{action_name}'; valid actions: FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, ToolCall, ProcessSpawn, ProcessExit"
+            "unknown action '{action_name}'; valid actions: FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, NetRequest, ToolCall, ProcessSpawn, ProcessExit"
         ),
     }
 }
@@ -290,6 +294,7 @@ mod tests {
             "DirCreate",
             "DirList",
             "NetConnect",
+            "NetRequest",
             "ToolCall",
             "ProcessSpawn",
             "ProcessExit",
