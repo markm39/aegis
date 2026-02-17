@@ -10,7 +10,54 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use aegis_ledger::AuditEntry;
+
 use crate::app::{App, AppMode};
+
+/// Render an audit entry as a styled ListItem.
+fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
+    let ts = entry.timestamp.format("%H:%M:%S");
+    let decision_color = if entry.decision == "Allow" {
+        Color::Green
+    } else {
+        Color::Red
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            format!("[{ts}] "),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            format!("[{}] ", entry.decision),
+            Style::default()
+                .fg(decision_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{} ", entry.principal),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled(
+            format!("{} ", entry.action_kind),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            entry.reason.clone(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    let style = if selected {
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    ListItem::new(line).style(style)
+}
 
 /// Draw the full dashboard to the terminal frame.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -66,49 +113,7 @@ fn draw_audit_feed(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let items: Vec<ListItem> = entries
         .iter()
         .enumerate()
-        .map(|(i, entry)| {
-            let ts = entry.timestamp.format("%H:%M:%S");
-            let decision_color = if entry.decision == "Allow" {
-                Color::Green
-            } else {
-                Color::Red
-            };
-
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("[{ts}] "),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("[{}] ", entry.decision),
-                    Style::default()
-                        .fg(decision_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{} ", entry.principal),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(
-                    format!("{} ", entry.action_kind),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    entry.reason.clone(),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]);
-
-            let style = if i == app.selected_index {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(line).style(style)
-        })
+        .map(|(i, entry)| entry_list_item(entry, i == app.selected_index))
         .collect();
 
     let list = List::new(items).block(block);
@@ -488,49 +493,7 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
         .session_entries
         .iter()
         .enumerate()
-        .map(|(i, entry)| {
-            let ts = entry.timestamp.format("%H:%M:%S%.3f");
-            let decision_color = if entry.decision == "Allow" {
-                Color::Green
-            } else {
-                Color::Red
-            };
-
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("[{ts}] "),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("[{}] ", entry.decision),
-                    Style::default()
-                        .fg(decision_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{} ", entry.principal),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(
-                    format!("{} ", entry.action_kind),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    entry.reason.clone(),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]);
-
-            let style = if i == app.session_detail_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(line).style(style)
-        })
+        .map(|(i, entry)| entry_list_item(entry, i == app.session_detail_selected))
         .collect();
 
     let list = List::new(items).block(entries_block);
