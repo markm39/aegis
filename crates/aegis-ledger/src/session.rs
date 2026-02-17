@@ -50,8 +50,8 @@ impl AuditStore {
     ) -> Result<Uuid, AegisError> {
         let session_id = Uuid::new_v4();
         let start_time = Utc::now();
-        let args_json =
-            serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string());
+        let args_json = serde_json::to_string(args)
+            .map_err(|e| AegisError::LedgerError(format!("failed to serialize session args: {e}")))?;
 
         self.connection()
             .execute(
