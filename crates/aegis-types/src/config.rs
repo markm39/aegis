@@ -29,6 +29,22 @@ impl std::fmt::Display for Protocol {
     }
 }
 
+impl std::str::FromStr for Protocol {
+    type Err = AegisError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "TCP" => Ok(Protocol::Tcp),
+            "UDP" => Ok(Protocol::Udp),
+            "HTTP" => Ok(Protocol::Http),
+            "HTTPS" => Ok(Protocol::Https),
+            _ => Err(AegisError::ConfigError(format!(
+                "unknown protocol: {s:?} (expected TCP, UDP, HTTP, or HTTPS)"
+            ))),
+        }
+    }
+}
+
 /// A network access rule specifying which host/port/protocol combinations are allowed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NetworkRule {
@@ -289,6 +305,27 @@ mod tests {
         assert_eq!(Protocol::Udp.to_string(), "UDP");
         assert_eq!(Protocol::Http.to_string(), "HTTP");
         assert_eq!(Protocol::Https.to_string(), "HTTPS");
+    }
+
+    #[test]
+    fn protocol_from_str() {
+        assert_eq!("TCP".parse::<Protocol>().unwrap(), Protocol::Tcp);
+        assert_eq!("tcp".parse::<Protocol>().unwrap(), Protocol::Tcp);
+        assert_eq!("Tcp".parse::<Protocol>().unwrap(), Protocol::Tcp);
+        assert_eq!("UDP".parse::<Protocol>().unwrap(), Protocol::Udp);
+        assert_eq!("HTTP".parse::<Protocol>().unwrap(), Protocol::Http);
+        assert_eq!("https".parse::<Protocol>().unwrap(), Protocol::Https);
+        assert!("FTP".parse::<Protocol>().is_err());
+        assert!("".parse::<Protocol>().is_err());
+    }
+
+    #[test]
+    fn protocol_display_fromstr_roundtrip() {
+        for proto in [Protocol::Tcp, Protocol::Udp, Protocol::Http, Protocol::Https] {
+            let s = proto.to_string();
+            let parsed: Protocol = s.parse().unwrap();
+            assert_eq!(parsed, proto);
+        }
     }
 
     #[test]
