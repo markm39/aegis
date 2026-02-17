@@ -1,8 +1,9 @@
-/// NetworkProxy: transparent TCP proxy with policy enforcement and audit logging.
-///
-/// Accepts inbound TCP connections, evaluates each against the Cedar policy engine,
-/// logs verdicts to the audit ledger, and either proxies bytes bidirectionally or
-/// closes the connection.
+//! NetworkProxy: transparent TCP proxy with policy enforcement and audit logging.
+//!
+//! Accepts inbound TCP connections, evaluates each against the Cedar policy engine,
+//! logs verdicts to the audit ledger, and either proxies bytes bidirectionally or
+//! closes the connection.
+
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 

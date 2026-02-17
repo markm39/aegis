@@ -1,4 +1,5 @@
-/// Query interface for audit records.
+//! Query interface for audit records.
+
 use rusqlite::params;
 
 use aegis_types::AegisError;

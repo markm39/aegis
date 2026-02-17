@@ -1,9 +1,10 @@
-/// Policy snapshot tracking for change auditing.
-///
-/// Records the content and hash of policy files at each session start.
-/// If the policy hash hasn't changed since the last snapshot for this config,
-/// the snapshot is a no-op. This gives a complete history of when policies
-/// changed, enabling compliance audits ("what policy was active at time T?").
+//! Policy snapshot tracking for change auditing.
+//!
+//! Records the content and hash of policy files at each session start.
+//! If the policy hash hasn't changed since the last snapshot for this config,
+//! the snapshot is a no-op. This gives a complete history of when policies
+//! changed, enabling compliance audits ("what policy was active at time T?").
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

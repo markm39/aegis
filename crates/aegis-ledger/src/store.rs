@@ -1,4 +1,5 @@
-/// AuditStore: SQLite-backed append-only hash-chained audit ledger.
+//! AuditStore: SQLite-backed append-only hash-chained audit ledger.
+
 use std::path::Path;
 
 use chrono::DateTime;

@@ -1,8 +1,9 @@
-/// Directory snapshot for pre/post diffing.
-///
-/// FSEvents cannot reliably detect reads. Snapshot diffing provides a safety
-/// net that catches any writes missed by the watcher (rapid create/delete
-/// within the FSEvents coalescing window) and detects reads via atime changes.
+//! Directory snapshot for pre/post diffing.
+//!
+//! FSEvents cannot reliably detect reads. Snapshot diffing provides a safety
+//! net that catches any writes missed by the watcher (rapid create/delete
+//! within the FSEvents coalescing window) and detects reads via atime changes.
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

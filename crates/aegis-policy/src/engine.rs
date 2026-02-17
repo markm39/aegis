@@ -1,8 +1,9 @@
-/// Cedar policy engine for Aegis authorization.
-///
-/// Wraps the Cedar `PolicySet`, `Schema`, and `Authorizer` to provide
-/// a single `evaluate()` method that maps Aegis `Action`s to Cedar
-/// authorization requests and returns `Verdict`s.
+//! Cedar policy engine for Aegis authorization.
+//!
+//! Wraps the Cedar `PolicySet`, `Schema`, and `Authorizer` to provide
+//! a single `evaluate()` method that maps Aegis `Action`s to Cedar
+//! authorization requests and returns `Verdict`s.
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;

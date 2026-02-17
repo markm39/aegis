@@ -1,9 +1,10 @@
-/// Aegis proxy: process audit logging, Seatbelt violation harvesting,
-/// and transparent network proxy.
-///
-/// This crate provides audit logging for process lifecycle events (spawn/exit),
-/// harvests macOS Seatbelt sandbox violation logs, and includes a network proxy
-/// for future TCP interception.
+//! Aegis proxy: process audit logging, Seatbelt violation harvesting,
+//! and transparent network proxy.
+//!
+//! This crate provides audit logging for process lifecycle events (spawn/exit),
+//! harvests macOS Seatbelt sandbox violation logs, and includes a network proxy
+//! for future TCP interception.
+
 pub mod audit;
 pub mod net;
 

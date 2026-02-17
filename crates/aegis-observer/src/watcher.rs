@@ -1,11 +1,12 @@
-/// FSEvents-based filesystem watcher (Tier 1, no privileges required).
-///
-/// Uses the `notify` crate to watch a directory recursively via macOS FSEvents.
-/// Since Aegis controls the sandbox boundary, process attribution is implicit:
-/// any file change within `sandbox_dir` must come from the sandboxed process.
-///
-/// Events are mapped to `FsEvent`s, evaluated against the Cedar policy engine,
-/// and appended to the audit store.
+//! FSEvents-based filesystem watcher (Tier 1, no privileges required).
+//!
+//! Uses the `notify` crate to watch a directory recursively via macOS FSEvents.
+//! Since Aegis controls the sandbox boundary, process attribution is implicit:
+//! any file change within `sandbox_dir` must come from the sandboxed process.
+//!
+//! Events are mapped to `FsEvent`s, evaluated against the Cedar policy engine,
+//! and appended to the audit store.
+
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};

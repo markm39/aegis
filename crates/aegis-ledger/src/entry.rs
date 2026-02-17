@@ -1,7 +1,8 @@
-/// AuditEntry: a single hash-chained audit log entry.
-///
-/// Each entry records an action and its verdict, linked to the previous
-/// entry via `prev_hash` to form a tamper-evident chain.
+//! AuditEntry: a single hash-chained audit log entry.
+//!
+//! Each entry records an action and its verdict, linked to the previous
+//! entry via `prev_hash` to form a tamper-evident chain.
+
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;

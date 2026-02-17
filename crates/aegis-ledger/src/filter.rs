@@ -1,8 +1,9 @@
-/// Composable filter for audit log queries.
-///
-/// Builds a parameterized SQL WHERE clause dynamically from optional
-/// filter criteria. All filters are AND-combined. Each `Some` field
-/// adds a condition; `None` fields are ignored.
+//! Composable filter for audit log queries.
+//!
+//! Builds a parameterized SQL WHERE clause dynamically from optional
+//! filter criteria. All filters are AND-combined. Each `Some` field
+//! adds a condition; `None` fields are ignored.
+
 use chrono::{DateTime, Utc};
 
 /// A composable filter for querying the audit log.

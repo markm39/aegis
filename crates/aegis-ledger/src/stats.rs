@@ -1,7 +1,8 @@
-/// Aggregate statistics for compliance reporting.
-///
-/// Computes summary metrics from audit entries: total counts, deny rates,
-/// breakdowns by action kind and principal, and integrity status.
+//! Aggregate statistics for compliance reporting.
+//!
+//! Computes summary metrics from audit entries: total counts, deny rates,
+//! breakdowns by action kind and principal, and integrity status.
+
 use serde::{Deserialize, Serialize};
 
 use aegis_types::AegisError;

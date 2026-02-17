@@ -1,8 +1,9 @@
-/// Filesystem event types and their mapping to Aegis actions.
-///
-/// `FsEvent` captures a single observed filesystem change. The `to_actions()`
-/// method maps it to one or more `ActionKind` values that can be evaluated
-/// against the Cedar policy engine and logged to the audit ledger.
+//! Filesystem event types and their mapping to Aegis actions.
+//!
+//! `FsEvent` captures a single observed filesystem change. The `to_actions()`
+//! method maps it to one or more `ActionKind` values that can be evaluated
+//! against the Cedar policy engine and logged to the audit ledger.
+
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};

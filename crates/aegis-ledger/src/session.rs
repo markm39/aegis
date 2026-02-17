@@ -1,8 +1,9 @@
-/// Session tracking for the audit ledger.
-///
-/// Each `aegis run` invocation is a session. Sessions group audit entries
-/// and provide lifecycle metadata (start/end time, command, exit code,
-/// action counts).
+//! Session tracking for the audit ledger.
+//!
+//! Each `aegis run` invocation is a session. Sessions group audit entries
+//! and provide lifecycle metadata (start/end time, command, exit code,
+//! action counts).
+
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use rusqlite::OptionalExtension;

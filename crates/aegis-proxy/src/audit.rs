@@ -1,8 +1,9 @@
-/// Process-level audit logging and Seatbelt violation harvesting.
-///
-/// Provides functions to log process lifecycle events (spawn/exit) to the
-/// audit ledger, and to harvest Seatbelt sandbox violation logs from macOS
-/// system logs for a given process.
+//! Process-level audit logging and Seatbelt violation harvesting.
+//!
+//! Provides functions to log process lifecycle events (spawn/exit) to the
+//! audit ledger, and to harvest Seatbelt sandbox violation logs from macOS
+//! system logs for a given process.
+
 use std::sync::{Arc, Mutex};
 
 use aegis_ledger::AuditStore;
