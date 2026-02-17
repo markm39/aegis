@@ -9,6 +9,15 @@ use std::path::PathBuf;
 
 use crate::AegisError;
 
+/// Filename for Aegis configuration files within a config directory.
+pub const CONFIG_FILENAME: &str = "aegis.toml";
+
+/// Default filename for Cedar policy files.
+pub const DEFAULT_POLICY_FILENAME: &str = "default.cedar";
+
+/// Filename for the SQLite audit ledger database.
+pub const LEDGER_FILENAME: &str = "audit.db";
+
 /// Network protocol for access control rules.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Protocol {
@@ -183,7 +192,7 @@ impl AegisConfig {
         sandbox_dir: PathBuf,
     ) -> Self {
         let policies_dir = base_dir.join("policies");
-        let ledger_path = base_dir.join("audit.db");
+        let ledger_path = base_dir.join(LEDGER_FILENAME);
 
         Self {
             name: name.to_string(),

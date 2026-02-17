@@ -14,7 +14,10 @@ use anyhow::{bail, Context, Result};
 use tracing::info;
 
 use aegis_policy::builtin::get_builtin_policy;
-use aegis_types::{AegisConfig, IsolationConfig, ObserverConfig};
+use aegis_types::{
+    AegisConfig, IsolationConfig, ObserverConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME,
+    LEDGER_FILENAME,
+};
 
 use crate::commands::pipeline::{self, PipelineOptions};
 
@@ -95,7 +98,7 @@ pub fn ensure_wrap_config(
 ) -> Result<AegisConfig> {
     if wrap_dir.exists() {
         // Reuse existing config, update sandbox_dir
-        let config_path = wrap_dir.join("aegis.toml");
+        let config_path = wrap_dir.join(CONFIG_FILENAME);
         let content = fs::read_to_string(&config_path).with_context(|| {
             format!("failed to read wrap config: {}", config_path.display())
         })?;
@@ -125,7 +128,7 @@ pub fn ensure_wrap_config(
             format!("failed to create wrap policies dir: {}", policies_dir.display())
         })?;
 
-        let policy_file = policies_dir.join("default.cedar");
+        let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
         fs::write(&policy_file, policy_text).with_context(|| {
             format!("failed to write policy file: {}", policy_file.display())
         })?;
@@ -135,7 +138,7 @@ pub fn ensure_wrap_config(
             sandbox_dir: project_dir.to_path_buf(),
             policy_paths: vec![policies_dir],
             schema_path: None,
-            ledger_path: wrap_dir.join("audit.db"),
+            ledger_path: wrap_dir.join(LEDGER_FILENAME),
             allowed_network: Vec::new(),
             isolation: IsolationConfig::Process,
             observer: ObserverConfig::default(),
@@ -144,7 +147,7 @@ pub fn ensure_wrap_config(
         let toml_content = config
             .to_toml()
             .context("failed to serialize wrap config")?;
-        let config_path = wrap_dir.join("aegis.toml");
+        let config_path = wrap_dir.join(CONFIG_FILENAME);
         fs::write(&config_path, &toml_content)
             .with_context(|| format!("failed to write wrap config: {}", config_path.display()))?;
 

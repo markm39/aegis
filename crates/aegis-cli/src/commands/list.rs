@@ -9,7 +9,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 use aegis_ledger::AuditStore;
-use aegis_types::AegisConfig;
+use aegis_types::{AegisConfig, CONFIG_FILENAME};
 
 use crate::commands::init::{dirs_from_env, load_config_from_dir};
 
@@ -110,7 +110,7 @@ fn scan_configs(
             continue;
         }
 
-        if path.join("aegis.toml").exists() {
+        if path.join(CONFIG_FILENAME).exists() {
             if let Some(ce) = load_entry(&path, &name, config_type) {
                 out.push(ce);
             }

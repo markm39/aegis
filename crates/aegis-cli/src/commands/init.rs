@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use dialoguer::{Confirm, Input, Select};
 
 use aegis_policy::builtin::get_builtin_policy;
-use aegis_types::{AegisConfig, IsolationConfig};
+use aegis_types::{AegisConfig, IsolationConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME};
 
 /// Run the `aegis init` command.
 ///
@@ -221,7 +221,7 @@ pub fn run_in_dir_with_isolation(
         .with_context(|| format!("failed to create sandbox dir: {}", sandbox_dir.display()))?;
 
     // Write the builtin policy as default.cedar
-    let policy_file = policies_dir.join("default.cedar");
+    let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
     fs::write(&policy_file, policy_text)
         .with_context(|| format!("failed to write policy file: {}", policy_file.display()))?;
 
@@ -232,7 +232,7 @@ pub fn run_in_dir_with_isolation(
         .to_toml()
         .context("failed to serialize config to TOML")?;
 
-    let config_path = base_dir.join("aegis.toml");
+    let config_path = base_dir.join(CONFIG_FILENAME);
     fs::write(&config_path, &toml_content)
         .with_context(|| format!("failed to write config: {}", config_path.display()))?;
 
@@ -268,11 +268,11 @@ pub fn ensure_aegis_dir() -> Result<PathBuf> {
 /// messages if neither exists.
 pub fn resolve_config_dir(name: &str) -> Result<PathBuf> {
     let init_dir = aegis_base_dir(name)?;
-    if init_dir.join("aegis.toml").exists() {
+    if init_dir.join(CONFIG_FILENAME).exists() {
         return Ok(init_dir);
     }
     let wrap_dir = super::wrap::wraps_base_dir()?.join(name);
-    if wrap_dir.join("aegis.toml").exists() {
+    if wrap_dir.join(CONFIG_FILENAME).exists() {
         return Ok(wrap_dir);
     }
     Ok(init_dir) // fall through for error messages
@@ -307,7 +307,7 @@ pub fn open_store(config_name: &str) -> Result<(AegisConfig, aegis_ledger::Audit
 
 /// Load an AegisConfig from an explicit base directory.
 pub fn load_config_from_dir(base_dir: &Path) -> Result<AegisConfig> {
-    let config_path = base_dir.join("aegis.toml");
+    let config_path = base_dir.join(CONFIG_FILENAME);
 
     let content = fs::read_to_string(&config_path).with_context(|| {
         format!(

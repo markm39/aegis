@@ -9,6 +9,9 @@ pub mod error;
 pub mod verdict;
 
 pub use action::{Action, ActionKind};
-pub use config::{AegisConfig, IsolationConfig, NetworkRule, ObserverConfig, Protocol};
+pub use config::{
+    AegisConfig, IsolationConfig, NetworkRule, ObserverConfig, Protocol, CONFIG_FILENAME,
+    DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
+};
 pub use error::AegisError;
 pub use verdict::{Decision, Verdict};

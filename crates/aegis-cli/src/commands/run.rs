@@ -12,7 +12,10 @@ use tracing::info;
 use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::PolicyEngine;
 use aegis_sandbox::SandboxBackend;
-use aegis_types::{AegisConfig, IsolationConfig, ObserverConfig};
+use aegis_types::{
+    AegisConfig, IsolationConfig, ObserverConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME,
+    LEDGER_FILENAME,
+};
 
 use crate::commands::init::{ensure_aegis_dir, load_config, resolve_config_dir};
 use crate::commands::pipeline::{self, PipelineOptions};
@@ -59,7 +62,7 @@ pub fn run(config_name: &str, policy: &str, command: &str, args: &[String], tag:
 fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
     // Try loading existing config first
     let config_dir = resolve_config_dir(name)?;
-    if config_dir.join("aegis.toml").exists() {
+    if config_dir.join(CONFIG_FILENAME).exists() {
         return load_config(name);
     }
 
@@ -79,7 +82,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
     fs::create_dir_all(&policies_dir)
         .with_context(|| format!("failed to create policies dir: {}", policies_dir.display()))?;
 
-    let policy_file = policies_dir.join("default.cedar");
+    let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
     fs::write(&policy_file, policy_text)
         .with_context(|| format!("failed to write policy file: {}", policy_file.display()))?;
 
@@ -88,7 +91,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
         sandbox_dir: cwd.clone(),
         policy_paths: vec![policies_dir],
         schema_path: None,
-        ledger_path: config_dir.join("audit.db"),
+        ledger_path: config_dir.join(LEDGER_FILENAME),
         allowed_network: Vec::new(),
         isolation: IsolationConfig::Process,
         observer: ObserverConfig::default(),
@@ -97,7 +100,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
     let toml_content = config
         .to_toml()
         .context("failed to serialize config to TOML")?;
-    let config_path = config_dir.join("aegis.toml");
+    let config_path = config_dir.join(CONFIG_FILENAME);
     fs::write(&config_path, &toml_content)
         .with_context(|| format!("failed to write config: {}", config_path.display()))?;
 

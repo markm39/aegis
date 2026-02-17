@@ -8,7 +8,7 @@ use std::fs;
 
 use anyhow::{bail, Context, Result};
 
-use aegis_types::AegisConfig;
+use aegis_types::{AegisConfig, CONFIG_FILENAME};
 
 use crate::commands::init::{load_config, resolve_config_dir};
 
@@ -70,7 +70,7 @@ pub fn show(config_name: &str) -> Result<()> {
         println!("  Schema:     {}", schema.display());
     }
 
-    println!("  Config at:  {}", config_dir.join("aegis.toml").display());
+    println!("  Config at:  {}", config_dir.join(CONFIG_FILENAME).display());
 
     Ok(())
 }
@@ -80,7 +80,7 @@ pub fn show(config_name: &str) -> Result<()> {
 /// Prints the path to the aegis.toml file for scripting/piping.
 pub fn path(config_name: &str) -> Result<()> {
     let config_dir = resolve_config_dir(config_name)?;
-    let config_path = config_dir.join("aegis.toml");
+    let config_path = config_dir.join(CONFIG_FILENAME);
 
     if !config_path.exists() {
         bail!(
@@ -99,7 +99,7 @@ pub fn path(config_name: &str) -> Result<()> {
 /// Opens the config file in the user's `$EDITOR` (falls back to `vi`).
 pub fn edit(config_name: &str) -> Result<()> {
     let config_dir = resolve_config_dir(config_name)?;
-    let config_path = config_dir.join("aegis.toml");
+    let config_path = config_dir.join(CONFIG_FILENAME);
 
     if !config_path.exists() {
         bail!(

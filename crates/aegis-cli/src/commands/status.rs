@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 
 use aegis_ledger::{AuditFilter, AuditStore};
 
+use aegis_types::CONFIG_FILENAME;
+
 use crate::commands::init::{load_config, resolve_config_dir};
 
 /// Run the `aegis status` command.
@@ -25,7 +27,7 @@ pub fn run(config_name: &str) -> Result<()> {
     println!("  Config dir:   OK ({})", base_dir.display());
 
     // Check config file
-    let config_path = base_dir.join("aegis.toml");
+    let config_path = base_dir.join(CONFIG_FILENAME);
     if !config_path.exists() {
         println!("  Config file:  MISSING ({})", config_path.display());
         return Ok(());
