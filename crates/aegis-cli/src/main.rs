@@ -408,7 +408,18 @@ fn main() -> anyhow::Result<()> {
                 page,
                 page_size,
             } => commands::audit::query(
-                &config, last, from, to, action, decision, principal, search, page, page_size,
+                &config,
+                commands::audit::QueryOptions {
+                    last,
+                    from,
+                    to,
+                    action,
+                    decision,
+                    principal,
+                    search,
+                    page,
+                    page_size,
+                },
             ),
             AuditCommands::Verify { config } => commands::audit::verify(&config),
             AuditCommands::Sessions { config, last } => {

@@ -11,23 +11,35 @@ use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
 use crate::commands::init::load_config;
 
+/// Filter options for `aegis audit query`, bundling all CLI filter arguments.
+pub struct QueryOptions {
+    pub last: Option<usize>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub action: Option<String>,
+    pub decision: Option<String>,
+    pub principal: Option<String>,
+    pub search: Option<String>,
+    pub page: usize,
+    pub page_size: usize,
+}
+
 /// Run `aegis audit query` with optional filters.
 ///
 /// If `--last N` is provided with no other filters, uses the fast-path `query_last`.
 /// Otherwise, builds an `AuditFilter` and uses `query_filtered`.
-#[allow(clippy::too_many_arguments)]
-pub fn query(
-    config_name: &str,
-    last: Option<usize>,
-    from: Option<String>,
-    to: Option<String>,
-    action: Option<String>,
-    decision: Option<String>,
-    principal: Option<String>,
-    search: Option<String>,
-    page: usize,
-    page_size: usize,
-) -> Result<()> {
+pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
+    let QueryOptions {
+        last,
+        from,
+        to,
+        action,
+        decision,
+        principal,
+        search,
+        page,
+        page_size,
+    } = opts;
     let config = load_config(config_name)?;
     let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
 
