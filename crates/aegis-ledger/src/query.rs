@@ -20,14 +20,14 @@ impl AuditStore {
             .prepare(
                 &format!("SELECT {ENTRY_COLUMNS} FROM audit_log ORDER BY id DESC LIMIT ?1"),
             )
-            .map_err(|e| AegisError::LedgerError(format!("query_last prepare failed: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("query_last({n}) prepare failed: {e}")))?;
 
         let rows = stmt
             .query_map(params![n as i64], row_to_entry)
-            .map_err(|e| AegisError::LedgerError(format!("query_last failed: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("query_last({n}) failed: {e}")))?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AegisError::LedgerError(format!("query_last read failed: {e}")))
+            .map_err(|e| AegisError::LedgerError(format!("query_last({n}) read failed: {e}")))
     }
 
     /// Return all entries for the given principal, ordered by timestamp ascending.
