@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p aegis-cli
+
+      - name: Strip binary
+        run: strip target/${{ matrix.target }}/release/aegis
+
+      - name: Package
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          tar czf "aegis-${VERSION}-${TARGET}.tar.gz" \
+            -C "target/${TARGET}/release" aegis
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-${{ matrix.target }}
+          path: aegis-*.tar.gz
+
+  universal:
+    name: Universal Binary
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-aarch64-apple-darwin
+          path: arm64
+
+      - name: Download x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-x86_64-apple-darwin
+          path: x86_64
+
+      - name: Extract binaries
+        run: |
+          mkdir -p extracted/arm64 extracted/x86_64
+          tar xzf arm64/aegis-*-aarch64-apple-darwin.tar.gz -C extracted/arm64
+          tar xzf x86_64/aegis-*-x86_64-apple-darwin.tar.gz -C extracted/x86_64
+
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            extracted/arm64/aegis \
+            extracted/x86_64/aegis \
+            -output aegis
+          strip aegis
+          lipo -info aegis
+
+      - name: Generate completions and man page
+        run: |
+          mkdir -p completions man
+          chmod +x aegis
+          ./aegis completions bash > completions/aegis.bash
+          ./aegis completions zsh > completions/_aegis
+          ./aegis completions fish > completions/aegis.fish
+          ./aegis manpage > man/aegis.1
+
+      - name: Package universal binary
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          tar czf "aegis-${VERSION}-universal-apple-darwin.tar.gz" aegis
+
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-universal
+          path: |
+            aegis-*-universal-apple-darwin.tar.gz
+            completions/
+            man/
+
+  release:
+    name: Create Release
+    needs: [build, universal]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          cp artifacts/aegis-aarch64-apple-darwin/aegis-*.tar.gz release/
+          cp artifacts/aegis-x86_64-apple-darwin/aegis-*.tar.gz release/
+          cp artifacts/aegis-universal/aegis-*.tar.gz release/
+          cp artifacts/aegis-universal/completions/* release/ || true
+          cp artifacts/aegis-universal/man/* release/ || true
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum aegis-*.tar.gz > checksums-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+          files: |
+            release/aegis-*.tar.gz
+            release/checksums-sha256.txt
+            release/aegis.bash
+            release/_aegis
+            release/aegis.fish
+            release/aegis.1
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: release
+    runs-on: ubuntu-latest
+    if: "!contains(github.ref, 'alpha') && !contains(github.ref, 'beta') && !contains(github.ref, 'rc')"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts for checksums
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compute SHA256 hashes
+        id: hashes
+        run: |
+          ARM64_SHA=$(sha256sum artifacts/aegis-aarch64-apple-darwin/aegis-*-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          X86_64_SHA=$(sha256sum artifacts/aegis-x86_64-apple-darwin/aegis-*-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          echo "arm64_sha=${ARM64_SHA}" >> "$GITHUB_OUTPUT"
+          echo "x86_64_sha=${X86_64_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Update formula
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          ARM64_SHA: ${{ steps.hashes.outputs.arm64_sha }}
+          X86_64_SHA: ${{ steps.hashes.outputs.x86_64_sha }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          sed -e "s/PLACEHOLDER_VERSION/${VERSION}/g" \
+              -e "s/PLACEHOLDER_ARM64_SHA256/${ARM64_SHA}/g" \
+              -e "s/PLACEHOLDER_X86_64_SHA256/${X86_64_SHA}/g" \
+              Formula/aegis.rb > /tmp/aegis.rb
+
+      - name: Push to homebrew-tap
+        uses: dmnemec/copy_file_to_another_repo_action@main
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.TAP_GITHUB_TOKEN }}
+        with:
+          source_file: /tmp/aegis.rb
+          destination_repo: markm39/homebrew-tap
+          destination_folder: Formula
+          destination_branch: main
+          user_email: markmiller0470@gmail.com
+          user_name: markm39
+          commit_message: Update aegis to ${{ github.ref_name }}

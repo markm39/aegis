@@ -25,15 +25,39 @@ Aegis adds the missing layers:
 | Compliance reporting | No | Yes |
 | Multi-agent fleet management | No | Yes (daemon) |
 
+## Install
+
+macOS 12+ (Monterey or later). No kernel extensions. No reboots.
+
+### One-line install (recommended)
+
+```bash
+curl -sSf https://raw.githubusercontent.com/markm39/aegis/main/install.sh | sh
+```
+
+### Homebrew
+
+```bash
+brew install markm39/tap/aegis
+```
+
+### Cargo (from crates.io)
+
+```bash
+cargo install aegis-cli
+```
+
+### Download binary
+
+Pre-built macOS binaries (universal, arm64, x86_64) are available on the [Releases](https://github.com/markm39/aegis/releases) page.
+
+### Build from source
+
+See [Building from Source](#building-from-source) below.
+
 ## Quick Start
 
 ```bash
-# Build from source
-git clone https://github.com/markm39/aegis.git
-cd aegis
-cargo build --release
-# Binary: ./target/release/aegis
-
 # Interactive setup wizard
 aegis init
 
@@ -388,38 +412,37 @@ webhook_url = "https://hooks.slack.com/services/..."
 
 ## Building from Source
 
+For contributors and those who prefer building locally.
+
 ### Prerequisites
 
 - macOS 12+ (Monterey or later)
 - Rust 1.75+ (install via [rustup](https://rustup.rs))
 
-No kernel extensions. No system extension approvals. No reboots.
-
-### Build
+### Build and install
 
 ```bash
 git clone https://github.com/markm39/aegis.git
 cd aegis
-cargo build --release
+make install
 ```
 
-### Install
+Or manually:
 
 ```bash
+cargo build --release
 cargo install --path crates/aegis-cli
 ```
 
 ### Test
 
 ```bash
-# Unit + integration tests
-cargo test --workspace
+# Lint + test
+make check
 
-# Lint
+# Or individually:
 cargo clippy --workspace -- -D warnings
-
-# E2E smoke test (builds binary, runs full lifecycle)
-cargo test --test test_smoke
+cargo test --workspace
 ```
 
 ## License

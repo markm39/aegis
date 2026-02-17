@@ -32,7 +32,7 @@ pub enum DaemonCommand {
     RestartAgent { name: String },
     /// Add a new agent slot at runtime and optionally start it.
     AddAgent {
-        config: AgentSlotConfig,
+        config: Box<AgentSlotConfig>,
         /// Whether to start the agent immediately after adding.
         #[serde(default = "default_true")]
         start: bool,
@@ -206,6 +206,23 @@ mod tests {
             DaemonCommand::StartAgent { name: "claude-1".into() },
             DaemonCommand::StopAgent { name: "claude-1".into() },
             DaemonCommand::RestartAgent { name: "claude-1".into() },
+            DaemonCommand::AddAgent {
+                config: Box::new(AgentSlotConfig {
+                    name: "new-agent".into(),
+                    tool: aegis_types::daemon::AgentToolConfig::ClaudeCode {
+                        skip_permissions: false,
+                        one_shot: false,
+                        extra_args: vec![],
+                    },
+                    working_dir: std::path::PathBuf::from("/tmp"),
+                    task: None,
+                    pilot: None,
+                    restart: aegis_types::daemon::RestartPolicy::OnFailure,
+                    max_restarts: 5,
+                    enabled: true,
+                }),
+                start: true,
+            },
             DaemonCommand::Shutdown,
         ];
 

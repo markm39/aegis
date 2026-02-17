@@ -29,7 +29,7 @@ use tracing::info;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
 };
-use aegis_types::daemon::{AgentStatus, DaemonConfig};
+use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
 
 use crate::control::DaemonCmdRx;
@@ -254,6 +254,24 @@ impl DaemonRuntime {
                 }
             }
 
+            DaemonCommand::AddAgent { ref config, start } => {
+                let name = config.name.clone();
+                if self.fleet.agent_status(&name).is_some() {
+                    return DaemonResponse::error(format!("agent '{name}' already exists"));
+                }
+                let slot_config: AgentSlotConfig = *config.clone();
+                self.fleet.add_agent(slot_config.clone());
+                // Also add to the runtime config so it persists
+                self.config.agents.push(slot_config);
+                if let Err(e) = self.persist_config() {
+                    return DaemonResponse::error(format!("agent added but failed to save config: {e}"));
+                }
+                if start {
+                    self.fleet.start_agent(&name);
+                }
+                DaemonResponse::ok(format!("agent '{name}' added"))
+            }
+
             DaemonCommand::Shutdown => {
                 self.request_shutdown();
                 DaemonResponse::ok("shutdown initiated")
@@ -274,6 +292,13 @@ impl DaemonRuntime {
     /// Daemon uptime in seconds.
     pub fn uptime_secs(&self) -> u64 {
         self.started_at.elapsed().as_secs()
+    }
+
+    /// Persist the current daemon config to daemon.toml.
+    fn persist_config(&self) -> Result<(), String> {
+        let toml_str = self.config.to_toml().map_err(|e| e.to_string())?;
+        let config_path = aegis_types::daemon::daemon_config_path();
+        std::fs::write(&config_path, toml_str).map_err(|e| e.to_string())
     }
 
     /// Save current state to disk.

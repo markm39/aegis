@@ -6,6 +6,7 @@
 
 pub mod event;
 pub mod ui;
+pub mod wizard;
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -17,6 +18,7 @@ use aegis_control::daemon::{AgentSummary, DaemonClient, DaemonCommand};
 use aegis_types::AgentStatus;
 
 use self::event::{AppEvent, EventHandler};
+use self::wizard::AddAgentWizard;
 
 /// How often to poll the daemon for updates (milliseconds).
 const TICK_RATE_MS: u64 = 200;
@@ -34,6 +36,8 @@ pub enum FleetView {
     Overview,
     /// Viewing a single agent's output.
     AgentDetail,
+    /// Add-agent wizard is open.
+    AddAgent,
 }
 
 /// Top-level application state for the fleet TUI.
@@ -67,6 +71,10 @@ pub struct FleetApp {
     /// Daemon PID (from last ping).
     pub daemon_pid: u32,
 
+    // -- Wizard --
+    /// Add-agent wizard (active when view == AddAgent).
+    pub wizard: Option<AddAgentWizard>,
+
     // -- Internal --
     /// Daemon client for sending commands.
     client: Option<DaemonClient>,
@@ -89,6 +97,7 @@ impl FleetApp {
             last_error: None,
             daemon_uptime_secs: 0,
             daemon_pid: 0,
+            wizard: None,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
         }
@@ -137,6 +146,7 @@ impl FleetApp {
         match self.view {
             FleetView::Overview => self.poll_agent_list(),
             FleetView::AgentDetail => self.poll_agent_output(),
+            FleetView::AddAgent => {} // Wizard doesn't need daemon polling
         }
     }
 
@@ -205,6 +215,7 @@ impl FleetApp {
         match self.view {
             FleetView::Overview => self.handle_overview_key(key),
             FleetView::AgentDetail => self.handle_detail_key(key),
+            FleetView::AddAgent => self.handle_wizard_key(key),
         }
     }
 
@@ -241,8 +252,37 @@ impl FleetApp {
             KeyCode::Char('r') => {
                 self.send_agent_command(|name| DaemonCommand::RestartAgent { name });
             }
+            KeyCode::Char('a') => {
+                self.wizard = Some(AddAgentWizard::new());
+                self.view = FleetView::AddAgent;
+            }
             _ => {}
         }
+    }
+
+    /// Handle keys when the wizard is active.
+    fn handle_wizard_key(&mut self, key: KeyEvent) {
+        if let Some(ref mut wiz) = self.wizard {
+            wiz.handle_key(key);
+            if !wiz.active {
+                if wiz.completed {
+                    let config = wiz.build_config();
+                    self.send_add_agent(config);
+                }
+                self.wizard = None;
+                self.view = FleetView::Overview;
+                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+            }
+        }
+    }
+
+    /// Send AddAgent command to the daemon.
+    fn send_add_agent(&mut self, config: aegis_types::daemon::AgentSlotConfig) {
+        let cmd = DaemonCommand::AddAgent {
+            config: Box::new(config),
+            start: true,
+        };
+        self.send_named_command(cmd);
     }
 
     /// Handle keys in the agent detail view.

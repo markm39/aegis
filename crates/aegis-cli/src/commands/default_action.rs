@@ -186,7 +186,7 @@ fn scan_for_recent(
             if let Ok(store) = AuditStore::open(&config.ledger_path) {
                 if let Ok(Some(session)) = store.latest_session() {
                     let ts = session.start_time;
-                    if best.as_ref().is_none_or(|(_, best_ts)| ts > *best_ts) {
+                    if best.as_ref().map_or(true, |(_, best_ts)| ts > *best_ts) {
                         *best = Some((name.clone(), ts));
                     }
                 }

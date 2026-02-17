@@ -36,6 +36,7 @@ use ratatui::Frame;
 
 use aegis_types::AgentStatus;
 
+use super::wizard::{AddAgentWizard, RestartChoice, ToolChoice, WizardStep};
 use super::{FleetApp, FleetView};
 
 /// Draw the fleet TUI to the terminal frame.
@@ -59,6 +60,11 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
             draw_detail_header(frame, app, chunks[0]);
             draw_agent_output(frame, app, chunks[1]);
             draw_detail_status(frame, app, chunks[2]);
+        }
+        FleetView::AddAgent => {
+            if let Some(ref wiz) = app.wizard {
+                draw_wizard(frame, wiz, frame.area());
+            }
         }
     }
 }
@@ -207,6 +213,8 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
         Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
         Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("a", Style::default().fg(Color::Cyan)),
+        Span::styled(": add  ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::DarkGray)),
         Span::styled(": quit (daemon stays running)", Style::default().fg(Color::DarkGray)),
     ];
@@ -328,6 +336,212 @@ fn draw_detail_status(frame: &mut Frame, _app: &FleetApp, area: ratatui::layout:
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(status, area);
+}
+
+/// Draw the add-agent wizard.
+fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(0),   // Content
+            Constraint::Length(3), // Footer
+        ])
+        .split(area);
+
+    // Header
+    let step_num = wiz.step.number();
+    let total = WizardStep::total();
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " Add Agent ",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  Step {step_num}/{total}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    // Content -- depends on current step
+    match wiz.step {
+        WizardStep::Tool => draw_wizard_tool(frame, wiz, chunks[1]),
+        WizardStep::Name => draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1]),
+        WizardStep::WorkingDir => draw_wizard_text(frame, "Working Directory", &wiz.working_dir, wiz.working_dir_cursor, chunks[1]),
+        WizardStep::Task => draw_wizard_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
+        WizardStep::RestartPolicy => draw_wizard_restart(frame, wiz, chunks[1]),
+        WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
+    }
+
+    // Footer
+    let footer_text = match wiz.step {
+        WizardStep::Tool | WizardStep::RestartPolicy => "j/k: select  Enter: confirm  Esc: cancel",
+        WizardStep::Confirm => "Enter/y: create agent  n/Esc: cancel",
+        _ => "Type to edit  Enter: next  Esc: cancel",
+    };
+    let footer = Paragraph::new(Span::styled(
+        format!(" {footer_text}"),
+        Style::default().fg(Color::DarkGray),
+    ))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(footer, chunks[2]);
+}
+
+/// Draw tool selection step.
+fn draw_wizard_tool(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::Rect) {
+    let items: Vec<ListItem> = ToolChoice::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, tool)| {
+            let marker = if i == wiz.tool_selected { "> " } else { "  " };
+            let style = if i == wiz.tool_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(tool.label(), style),
+                Span::styled(
+                    format!("  -- {}", tool.description()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Select Tool ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(list, area);
+}
+
+/// Draw a text input step with cursor.
+fn draw_wizard_text(
+    frame: &mut Frame,
+    label: &str,
+    text: &str,
+    cursor: usize,
+    area: ratatui::layout::Rect,
+) {
+    let cursor_pos = cursor.min(text.len());
+    let before = &text[..cursor_pos];
+    let cursor_char = text.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
+    let after = if cursor_pos < text.len() {
+        &text[cursor_pos + 1..]
+    } else {
+        ""
+    };
+
+    let input_line = Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(before, Style::default().fg(Color::White)),
+        Span::styled(
+            cursor_char,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White),
+        ),
+        Span::styled(after, Style::default().fg(Color::White)),
+    ]);
+
+    let content = Paragraph::new(vec![
+        Line::from(""),
+        input_line,
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {label} "))
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(content, area);
+}
+
+/// Draw restart policy selection.
+fn draw_wizard_restart(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::Rect) {
+    let items: Vec<ListItem> = RestartChoice::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, choice)| {
+            let marker = if i == wiz.restart_selected { "> " } else { "  " };
+            let style = if i == wiz.restart_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Span::styled(format!("{marker}{}", choice.label()), style))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Restart Policy ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(list, area);
+}
+
+/// Draw the confirmation summary.
+fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::Rect) {
+    let tool_label = wiz.tool_choice().label();
+    let restart_label = wiz.restart_choice().label();
+    let task_display = if wiz.task.trim().is_empty() {
+        "(none)".to_string()
+    } else {
+        truncate_str(&wiz.task, 60)
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Tool:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(tool_label, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Name:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&wiz.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Dir:       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&wiz.working_dir, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Task:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(task_display, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Restart:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(restart_label, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Press Enter or 'y' to create, 'n' or Esc to cancel",
+            Style::default().fg(Color::Yellow),
+        )),
+    ];
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Confirm ")
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(content, area);
 }
 
 /// Get display text and color for an agent status.
@@ -477,6 +691,30 @@ mod tests {
         let mut app = FleetApp::new(None);
         app.connected = false;
         app.last_error = Some("connection refused".into());
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_wizard_view() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AddAgent;
+        app.wizard = Some(crate::fleet_tui::wizard::AddAgentWizard::new());
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_wizard_confirm() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AddAgent;
+        let mut wiz = crate::fleet_tui::wizard::AddAgentWizard::new();
+        wiz.step = crate::fleet_tui::wizard::WizardStep::Confirm;
+        wiz.name = "test-agent".into();
+        wiz.working_dir = "/tmp/test".into();
+        app.wizard = Some(wiz);
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
