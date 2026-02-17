@@ -237,6 +237,20 @@ enum AuditCommands {
         last: usize,
     },
 
+    /// Purge old audit entries (destructive, requires --confirm)
+    Purge {
+        /// Name of the aegis configuration
+        config: String,
+
+        /// Delete entries older than this duration (e.g. 30d, 7d, 24h)
+        #[arg(long)]
+        older_than: String,
+
+        /// Confirm the destructive operation
+        #[arg(long)]
+        confirm: bool,
+    },
+
     /// Export audit entries in a structured format
     Export {
         /// Name of the aegis configuration
@@ -312,6 +326,11 @@ fn main() -> anyhow::Result<()> {
             AuditCommands::PolicyHistory { config, last } => {
                 commands::audit::policy_history(&config, last)
             }
+            AuditCommands::Purge {
+                config,
+                older_than,
+                confirm,
+            } => commands::audit::purge(&config, &older_than, confirm),
             AuditCommands::Export {
                 config,
                 format,
@@ -576,6 +595,36 @@ mod tests {
                 assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
             }
             _ => panic!("expected Audit Session command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_purge() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "purge",
+            "myagent",
+            "--older-than",
+            "30d",
+            "--confirm",
+        ]);
+        assert!(cli.is_ok(), "should parse audit purge: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action:
+                    AuditCommands::Purge {
+                        config,
+                        older_than,
+                        confirm,
+                    },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(older_than, "30d");
+                assert!(confirm);
+            }
+            _ => panic!("expected Audit Purge command"),
         }
     }
 

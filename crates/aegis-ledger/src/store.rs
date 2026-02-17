@@ -292,6 +292,121 @@ impl AuditStore {
         Ok(entry)
     }
 
+    /// Purge audit entries older than the given timestamp.
+    ///
+    /// Deletes all entries with a timestamp before `before`, then rebuilds
+    /// the hash chain for remaining entries so integrity verification still
+    /// passes. Returns the number of entries deleted.
+    ///
+    /// This is a destructive operation -- the old hash chain is intentionally
+    /// broken and rebuilt.
+    pub fn purge_before(
+        &mut self,
+        before: DateTime<chrono::Utc>,
+    ) -> Result<usize, AegisError> {
+        let before_str = before.to_rfc3339();
+
+        // Count entries to delete
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE timestamp < ?1",
+                params![before_str],
+                |row| row.get(0),
+            )
+            .map_err(|e| AegisError::LedgerError(format!("purge count failed: {e}")))?;
+
+        if count == 0 {
+            return Ok(0);
+        }
+
+        // Delete old entries
+        self.conn
+            .execute(
+                "DELETE FROM audit_log WHERE timestamp < ?1",
+                params![before_str],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("purge delete failed: {e}")))?;
+
+        // Rebuild hash chain for remaining entries
+        self.rebuild_hash_chain()?;
+
+        Ok(count as usize)
+    }
+
+    /// Rebuild the hash chain from scratch for all remaining entries.
+    ///
+    /// Reads all entries in order, recomputes prev_hash and entry_hash for
+    /// each one, and updates the database. The first remaining entry gets
+    /// "genesis" as its prev_hash.
+    #[allow(clippy::type_complexity)]
+    fn rebuild_hash_chain(&mut self) -> Result<(), AegisError> {
+        // Read all remaining entries in order
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, entry_id, timestamp, action_id, action_kind, principal, decision, reason
+                 FROM audit_log ORDER BY id ASC",
+            )
+            .map_err(|e| AegisError::LedgerError(format!("rebuild prepare failed: {e}")))?;
+
+        let rows: Vec<(i64, String, String, String, String, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            })
+            .map_err(|e| AegisError::LedgerError(format!("rebuild query failed: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("rebuild read failed: {e}")))?;
+
+        drop(stmt);
+
+        let mut prev_hash = GENESIS_HASH.to_string();
+
+        for (row_id, entry_id_str, timestamp_str, action_id_str, action_kind, principal, decision, reason) in &rows {
+            let entry_id: Uuid = entry_id_str
+                .parse()
+                .map_err(|e| AegisError::LedgerError(format!("invalid entry_id: {e}")))?;
+            let timestamp: DateTime<chrono::Utc> = DateTime::parse_from_rfc3339(timestamp_str)
+                .map_err(|e| AegisError::LedgerError(format!("invalid timestamp: {e}")))?
+                .into();
+            let action_id: Uuid = action_id_str
+                .parse()
+                .map_err(|e| AegisError::LedgerError(format!("invalid action_id: {e}")))?;
+
+            let new_hash = crate::entry::compute_hash(
+                &entry_id,
+                &timestamp,
+                &action_id,
+                action_kind,
+                principal,
+                decision,
+                reason,
+                &prev_hash,
+            );
+
+            self.conn
+                .execute(
+                    "UPDATE audit_log SET prev_hash = ?1, entry_hash = ?2 WHERE id = ?3",
+                    params![prev_hash, new_hash, row_id],
+                )
+                .map_err(|e| AegisError::LedgerError(format!("rebuild update failed: {e}")))?;
+
+            prev_hash = new_hash;
+        }
+
+        self.latest_hash = prev_hash;
+        Ok(())
+    }
+
     /// Provide read access to the underlying connection (for query extensions).
     pub(crate) fn connection(&self) -> &Connection {
         &self.conn
@@ -404,6 +519,50 @@ mod tests {
         let report = store.verify_integrity().unwrap();
         assert!(report.valid);
         assert_eq!(report.total_entries, 0);
+    }
+
+    #[test]
+    fn purge_before_removes_old_entries() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        // Add 5 entries
+        for i in 0..5 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, format!("reason-{i}"), None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        // Purge everything before "now + 1 second" (should delete all)
+        let future = chrono::Utc::now() + chrono::Duration::seconds(1);
+        let deleted = store.purge_before(future).unwrap();
+        assert_eq!(deleted, 5);
+
+        let entries = store.query_last(100).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn purge_before_rebuilds_hash_chain() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        // Add entries with a slight delay
+        for i in 0..5 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, format!("reason-{i}"), None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        // Purge entries in the far past (none deleted)
+        let past = chrono::Utc::now() - chrono::Duration::days(365);
+        let deleted = store.purge_before(past).unwrap();
+        assert_eq!(deleted, 0);
+
+        // Hash chain should still be valid
+        let report = store.verify_integrity().unwrap();
+        assert!(report.valid, "chain should be valid: {}", report.message);
+        assert_eq!(report.total_entries, 5);
     }
 
     #[test]

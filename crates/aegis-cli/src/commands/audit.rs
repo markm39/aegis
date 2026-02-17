@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use chrono::DateTime;
+use chrono::{DateTime, Duration, Utc};
 
 use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
@@ -251,6 +251,71 @@ pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
     Ok(())
 }
 
+/// Run `aegis audit purge NAME --older-than DURATION --confirm`.
+///
+/// Deletes audit entries older than the specified duration and rebuilds
+/// the hash chain for remaining entries.
+pub fn purge(config_name: &str, older_than: &str, confirm: bool) -> Result<()> {
+    if !confirm {
+        bail!(
+            "purge is destructive and cannot be undone. Add --confirm to proceed.\n\
+             This will delete entries and rebuild the hash chain."
+        );
+    }
+
+    let duration = parse_duration(older_than)?;
+    let cutoff = Utc::now() - duration;
+
+    let config = load_config(config_name)?;
+    let mut store =
+        AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    let deleted = store
+        .purge_before(cutoff)
+        .context("failed to purge audit entries")?;
+
+    if deleted == 0 {
+        println!("No entries older than {older_than} found.");
+    } else {
+        println!("Purged {deleted} entries older than {older_than}.");
+        println!("Hash chain has been rebuilt for remaining entries.");
+
+        // Verify the rebuilt chain
+        let report = store
+            .verify_integrity()
+            .context("failed to verify rebuilt chain")?;
+        println!(
+            "Integrity check: {} ({} entries remaining)",
+            if report.valid { "VALID" } else { "INVALID" },
+            report.total_entries
+        );
+    }
+
+    Ok(())
+}
+
+/// Parse a human-readable duration string like "30d", "7d", "24h", "1h".
+fn parse_duration(s: &str) -> Result<Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        bail!("duration string is empty");
+    }
+
+    let (num_str, unit) = s.split_at(s.len() - 1);
+    let num: i64 = num_str
+        .parse()
+        .with_context(|| format!("invalid duration number: '{num_str}'"))?;
+
+    match unit {
+        "d" => Ok(Duration::days(num)),
+        "h" => Ok(Duration::hours(num)),
+        "m" => Ok(Duration::minutes(num)),
+        _ => bail!(
+            "unknown duration unit '{unit}'; valid units: d (days), h (hours), m (minutes)"
+        ),
+    }
+}
+
 /// Run `aegis audit export --config NAME --format json|jsonl|csv|cef [--follow]`.
 ///
 /// Exports audit entries in the specified format. With `--follow`, polls for
@@ -467,6 +532,44 @@ fn cef_escape(s: &str) -> String {
         .replace('|', "\\|")
         .replace('=', "\\=")
         .replace('\n', "\\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_duration_days() {
+        let d = parse_duration("30d").unwrap();
+        assert_eq!(d.num_days(), 30);
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        let d = parse_duration("24h").unwrap();
+        assert_eq!(d.num_hours(), 24);
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        let d = parse_duration("60m").unwrap();
+        assert_eq!(d.num_minutes(), 60);
+    }
+
+    #[test]
+    fn parse_duration_invalid_unit() {
+        assert!(parse_duration("30x").is_err());
+    }
+
+    #[test]
+    fn parse_duration_empty() {
+        assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn parse_duration_no_number() {
+        assert!(parse_duration("d").is_err());
+    }
 }
 
 /// Escape a string for CSV output by quoting if it contains commas, quotes, or newlines.
