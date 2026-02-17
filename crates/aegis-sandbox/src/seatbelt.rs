@@ -202,7 +202,7 @@ mod tests {
         let status = backend
             .exec(
                 "/usr/bin/touch",
-                &[forbidden_path.clone()],
+                std::slice::from_ref(&forbidden_path),
                 &config,
             )
             .expect("sandbox-exec itself should launch successfully");
