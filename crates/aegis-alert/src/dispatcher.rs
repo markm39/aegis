@@ -199,6 +199,7 @@ pub async fn send_test_webhook(
         reason: "test alert -- verifying webhook connectivity".into(),
         policy_id: None,
         session_id: None,
+        pilot_context: None,
     };
 
     let payload = payload::build_payload(&rule.name, config_name, &test_event, true);

@@ -9,6 +9,8 @@ members = [
     "crates/aegis-proxy",
     "crates/aegis-observer",
     "crates/aegis-monitor",
+    "crates/aegis-pilot",
+    "crates/aegis-control",
     "crates/aegis-cli",
     "tests",
 ]
@@ -58,3 +60,10 @@ aegis-sandbox = { path = "crates/aegis-sandbox" }
 aegis-proxy = { path = "crates/aegis-proxy" }
 aegis-observer = { path = "crates/aegis-observer" }
 aegis-monitor = { path = "crates/aegis-monitor" }
+aegis-pilot = { path = "crates/aegis-pilot" }
+aegis-control = { path = "crates/aegis-control" }
+
+axum = { version = "0.8", features = ["json"] }
+nix = { version = "0.29", features = ["fs", "process", "term", "poll", "signal"] }
+libc = "0.2"
+regex = "1"

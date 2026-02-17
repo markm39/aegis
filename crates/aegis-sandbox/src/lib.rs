@@ -152,6 +152,7 @@ pub(crate) mod test_helpers {
             isolation,
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),
+            pilot: None,
         }
     }
 }

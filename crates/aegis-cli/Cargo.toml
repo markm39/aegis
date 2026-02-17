@@ -18,6 +18,8 @@ aegis-proxy = { workspace = true }
 aegis-observer = { workspace = true }
 aegis-monitor = { workspace = true }
 aegis-alert = { workspace = true }
+aegis-pilot = { workspace = true }
+aegis-control = { workspace = true }
 rusqlite = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

@@ -170,7 +170,7 @@ pub fn execute(
 }
 
 /// Record a policy snapshot (no-op if hash unchanged since last snapshot).
-fn record_policy_snapshot(store: &mut AuditStore, config: &AegisConfig, session_id: &Uuid) {
+pub fn record_policy_snapshot(store: &mut AuditStore, config: &AegisConfig, session_id: &Uuid) {
     if let Some(policy_dir) = config.policy_paths.first() {
         match aegis_ledger::policy_snapshot::read_policy_files(policy_dir) {
             Ok(policy_files) => {
@@ -194,7 +194,7 @@ fn record_policy_snapshot(store: &mut AuditStore, config: &AegisConfig, session_
 }
 
 /// Start the filesystem observer if configured.
-fn start_observer(
+pub fn start_observer(
     config: &AegisConfig,
     store_arc: &Arc<Mutex<AuditStore>>,
     policy_arc: &Arc<Mutex<PolicyEngine>>,
@@ -229,7 +229,7 @@ fn start_observer(
 }
 
 /// Stop the observer and return an optional summary.
-fn stop_observer(
+pub fn stop_observer(
     observer_session: Option<aegis_observer::ObserverSession>,
 ) -> Option<aegis_observer::ObserverSummary> {
     // macOS FSEvents are delivered asynchronously via a background thread;

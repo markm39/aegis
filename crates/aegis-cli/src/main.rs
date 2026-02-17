@@ -171,6 +171,45 @@ enum Commands {
         command: Vec<String>,
     },
 
+    /// Supervise an AI agent with auto-approval via Cedar policy
+    Pilot {
+        /// Project directory to observe (defaults to current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Policy template to use (default: permit-all)
+        #[arg(long, default_value = "permit-all")]
+        policy: String,
+
+        /// Config name (defaults to basename of command)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Human-readable session tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Stall detection timeout in seconds (overrides config)
+        #[arg(long)]
+        stall_timeout: Option<u64>,
+
+        /// Agent adapter (ClaudeCode, Auto, or Generic)
+        #[arg(long)]
+        adapter: Option<String>,
+
+        /// HTTP listen address for remote control (e.g., 0.0.0.0:8443)
+        #[arg(long)]
+        listen: Option<String>,
+
+        /// API key for HTTP control authentication
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Command and arguments to execute
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
+
     /// Watch a directory for filesystem changes (background daemon mode)
     Watch {
         /// Directory to watch (defaults to current directory)
@@ -663,6 +702,33 @@ fn main() -> anyhow::Result<()> {
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis wrap -- <command> [args...]"))?;
             commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref())
+        }
+        Commands::Pilot {
+            dir,
+            policy,
+            name,
+            tag,
+            stall_timeout,
+            adapter,
+            listen,
+            api_key,
+            command,
+        } => {
+            let (cmd, args) = command
+                .split_first()
+                .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis pilot -- <command> [args...]"))?;
+            commands::pilot::run(
+                dir.as_deref(),
+                &policy,
+                name.as_deref(),
+                tag.as_deref(),
+                stall_timeout,
+                adapter.as_deref(),
+                listen.as_deref(),
+                api_key.as_deref(),
+                cmd,
+                args,
+            )
         }
         Commands::Watch {
             dir,

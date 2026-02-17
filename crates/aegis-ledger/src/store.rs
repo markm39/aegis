@@ -316,6 +316,7 @@ impl AuditStore {
                 reason: entry.reason.clone(),
                 policy_id: entry.policy_id.clone(),
                 session_id: session_id.copied(),
+                pilot_context: None,
             };
             if tx.try_send(alert_event).is_err() {
                 debug!("alert channel full or disconnected, dropping alert event");

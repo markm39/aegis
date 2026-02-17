@@ -25,6 +25,10 @@ pub enum AegisError {
     /// Configuration loading or validation error.
     #[error("configuration error: {0}")]
     ConfigError(String),
+
+    /// PTY supervisor error.
+    #[error("pilot error: {0}")]
+    PilotError(String),
 }
 
 #[cfg(test)]
@@ -52,6 +56,10 @@ mod tests {
         assert_eq!(
             AegisError::ConfigError("missing field".into()).to_string(),
             "configuration error: missing field"
+        );
+        assert_eq!(
+            AegisError::PilotError("pty failed".into()).to_string(),
+            "pilot error: pty failed"
         );
     }
 }
