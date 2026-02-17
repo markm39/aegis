@@ -25,9 +25,11 @@ name = "aegis-cli"
 version = "0.1.0"
 dependencies = [
  "aegis-alert",
+ "aegis-control",
  "aegis-ledger",
  "aegis-monitor",
  "aegis-observer",
+ "aegis-pilot",
  "aegis-policy",
  "aegis-proxy",
  "aegis-sandbox",
