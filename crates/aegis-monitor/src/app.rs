@@ -122,7 +122,10 @@ impl App {
             .query_row("SELECT COUNT(*) FROM audit_log", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .unwrap_or(0) as usize;
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to query total count");
+                0
+            }) as usize;
 
         // Allow count
         self.allow_count = conn
@@ -131,7 +134,10 @@ impl App {
                 params!["Allow"],
                 |row| row.get::<_, i64>(0),
             )
-            .unwrap_or(0) as usize;
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to query allow count");
+                0
+            }) as usize;
 
         // Deny count
         self.deny_count = conn
@@ -140,7 +146,10 @@ impl App {
                 params!["Deny"],
                 |row| row.get::<_, i64>(0),
             )
-            .unwrap_or(0) as usize;
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to query deny count");
+                0
+            }) as usize;
 
         // Last 100 entries (most recent first)
         let mut stmt = conn.prepare(
