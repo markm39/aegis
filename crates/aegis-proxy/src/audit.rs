@@ -273,6 +273,54 @@ mod tests {
         assert_eq!(count, 1, "should still have 1 audit entry for denied action");
     }
 
+    #[test]
+    fn log_spawn_with_session_id() {
+        let (store, engine, _db) =
+            make_test_deps(r#"permit(principal, action, resource);"#);
+
+        let session_id = {
+            let mut s = store.lock().unwrap();
+            s.begin_session("test-config", "echo", &[], None).unwrap()
+        };
+
+        log_process_spawn(
+            &store,
+            &engine,
+            "test-agent",
+            "echo",
+            &["hello".into()],
+            Some(&session_id),
+        )
+        .expect("should log spawn with session");
+
+        let count = store.lock().unwrap().count().unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn log_exit_with_session_id() {
+        let (store, engine, _db) =
+            make_test_deps(r#"permit(principal, action, resource);"#);
+
+        let session_id = {
+            let mut s = store.lock().unwrap();
+            s.begin_session("test-config", "echo", &[], None).unwrap()
+        };
+
+        log_process_exit(
+            &store,
+            &engine,
+            "test-agent",
+            "echo",
+            0,
+            Some(&session_id),
+        )
+        .expect("should log exit with session");
+
+        let count = store.lock().unwrap().count().unwrap();
+        assert_eq!(count, 1);
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn harvest_violations_returns_zero_for_nonexistent_pid() {
