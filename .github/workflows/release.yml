@@ -172,27 +172,26 @@ jobs:
           echo "arm64_sha=${ARM64_SHA}" >> "$GITHUB_OUTPUT"
           echo "x86_64_sha=${X86_64_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Update formula
+      - name: Update formula and push to tap
         env:
           TAG_NAME: ${{ github.ref_name }}
           ARM64_SHA: ${{ steps.hashes.outputs.arm64_sha }}
           X86_64_SHA: ${{ steps.hashes.outputs.x86_64_sha }}
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           VERSION="${TAG_NAME#v}"
           sed -e "s/PLACEHOLDER_VERSION/${VERSION}/g" \
               -e "s/PLACEHOLDER_ARM64_SHA256/${ARM64_SHA}/g" \
               -e "s/PLACEHOLDER_X86_64_SHA256/${X86_64_SHA}/g" \
-              Formula/aegis.rb > /tmp/aegis.rb
-
-      - name: Push to homebrew-tap
-        uses: dmnemec/copy_file_to_another_repo_action@main
-        env:
-          API_TOKEN_GITHUB: ${{ secrets.TAP_GITHUB_TOKEN }}
-        with:
-          source_file: /tmp/aegis.rb
-          destination_repo: markm39/homebrew-tap
-          destination_folder: Formula
-          destination_branch: main
-          user_email: markmiller0470@gmail.com
-          user_name: markm39
-          commit_message: Update aegis to ${{ github.ref_name }}
+              Formula/aegis.rb > updated-aegis.rb
+          TMPDIR=$(mktemp -d)
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/markm39/homebrew-tap.git" "$TMPDIR/tap"
+          mkdir -p "$TMPDIR/tap/Formula"
+          cp updated-aegis.rb "$TMPDIR/tap/Formula/aegis.rb"
+          cd "$TMPDIR/tap"
+          git config user.email "markmiller0470@gmail.com"
+          git config user.name "markm39"
+          git add Formula/aegis.rb
+          git diff --cached --quiet && echo "No changes to formula" && exit 0
+          git commit -m "Update aegis to ${TAG_NAME}"
+          git push origin main
