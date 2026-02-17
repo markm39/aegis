@@ -139,29 +139,7 @@ impl AuditStore {
         action: &Action,
         verdict: &Verdict,
     ) -> Result<AuditEntry, AegisError> {
-        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
-
-        self.conn
-            .execute(
-                "INSERT INTO audit_log (entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    entry.entry_id.to_string(),
-                    entry.timestamp.to_rfc3339(),
-                    entry.action_id.to_string(),
-                    entry.action_kind,
-                    entry.principal,
-                    entry.decision,
-                    entry.reason,
-                    entry.policy_id,
-                    entry.prev_hash,
-                    entry.entry_hash,
-                ],
-            )
-            .map_err(|e| AegisError::LedgerError(format!("failed to insert entry: {e}")))?;
-
-        self.latest_hash = entry.entry_hash.clone();
-        Ok(entry)
+        self.insert_entry(action, verdict, None)
     }
 
     /// Verify the integrity of the entire hash chain.
@@ -248,27 +226,7 @@ impl AuditStore {
         verdict: &Verdict,
         session_id: &Uuid,
     ) -> Result<AuditEntry, AegisError> {
-        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
-
-        self.conn
-            .execute(
-                "INSERT INTO audit_log (entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash, session_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    entry.entry_id.to_string(),
-                    entry.timestamp.to_rfc3339(),
-                    entry.action_id.to_string(),
-                    entry.action_kind,
-                    entry.principal,
-                    entry.decision,
-                    entry.reason,
-                    entry.policy_id,
-                    entry.prev_hash,
-                    entry.entry_hash,
-                    session_id.to_string(),
-                ],
-            )
-            .map_err(|e| AegisError::LedgerError(format!("failed to insert entry: {e}")))?;
+        let entry = self.insert_entry(action, verdict, Some(session_id))?;
 
         // Update session counters
         self.conn
@@ -288,6 +246,38 @@ impl AuditStore {
                     AegisError::LedgerError(format!("failed to update session denied: {e}"))
                 })?;
         }
+
+        Ok(entry)
+    }
+
+    /// Internal helper: create an AuditEntry, insert it, and update the chain tip.
+    fn insert_entry(
+        &mut self,
+        action: &Action,
+        verdict: &Verdict,
+        session_id: Option<&Uuid>,
+    ) -> Result<AuditEntry, AegisError> {
+        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
+
+        self.conn
+            .execute(
+                "INSERT INTO audit_log (entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    entry.entry_id.to_string(),
+                    entry.timestamp.to_rfc3339(),
+                    entry.action_id.to_string(),
+                    entry.action_kind,
+                    entry.principal,
+                    entry.decision,
+                    entry.reason,
+                    entry.policy_id,
+                    entry.prev_hash,
+                    entry.entry_hash,
+                    session_id.map(|s| s.to_string()),
+                ],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to insert entry: {e}")))?;
 
         self.latest_hash = entry.entry_hash.clone();
         Ok(entry)
