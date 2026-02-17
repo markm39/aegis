@@ -33,7 +33,7 @@ use crate::snapshot::DirSnapshot;
 use crate::watcher::FsWatcher;
 
 /// Summary of observer activity during a session.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct ObserverSummary {
     /// Number of events captured by the FSEvents watcher.
     pub fsevents_count: usize,

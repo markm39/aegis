@@ -46,7 +46,7 @@ impl std::str::FromStr for Protocol {
 }
 
 /// A network access rule specifying which host/port/protocol combinations are allowed.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkRule {
     /// Hostname or IP address (e.g., `"api.openai.com"`).
     pub host: String,
@@ -103,7 +103,7 @@ impl std::fmt::Display for ObserverConfig {
 }
 
 /// OS-level isolation mechanism for the sandboxed process.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IsolationConfig {
     /// macOS Seatbelt (`sandbox-exec`) with an auto-generated SBPL profile.
     Seatbelt {
@@ -133,7 +133,7 @@ impl std::fmt::Display for IsolationConfig {
 ///
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,
 /// audit storage, network rules, isolation backend, and observer settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AegisConfig {
     /// Human-readable name for this configuration (also the Cedar principal).
     pub name: String,

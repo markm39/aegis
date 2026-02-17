@@ -11,7 +11,7 @@ use uuid::Uuid;
 use aegis_types::{Action, AegisError, Verdict};
 
 /// A single entry in the append-only audit ledger.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuditEntry {
     pub entry_id: Uuid,
     pub timestamp: DateTime<Utc>,
