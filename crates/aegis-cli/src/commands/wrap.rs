@@ -1,11 +1,12 @@
-/// Zero-friction agent wrapping with full observability.
-///
-/// `aegis wrap [--dir PATH] [--policy POLICY] [--name NAME] -- command [args...]`
-///
-/// Wraps any command with Aegis filesystem observation and audit logging.
-/// Uses Process isolation (no Seatbelt) to avoid conflicting with the
-/// agent's own sandboxing. Config is stored at `~/.aegis/wraps/<name>/`
-/// and reused on subsequent invocations (same ledger, accumulating sessions).
+//! Zero-friction agent wrapping with full observability.
+//!
+//! `aegis wrap [--dir PATH] [--policy POLICY] [--name NAME] -- command [args...]`
+//!
+//! Wraps any command with Aegis filesystem observation and audit logging.
+//! Uses Process isolation (no Seatbelt) to avoid conflicting with the
+//! agent's own sandboxing. Config is stored at `~/.aegis/wraps/<name>/`
+//! and reused on subsequent invocations (same ledger, accumulating sessions).
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

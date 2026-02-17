@@ -1,8 +1,9 @@
-/// Configuration management commands.
-///
-/// `aegis config show NAME`   -- display all settings
-/// `aegis config path NAME`   -- print the config file path
-/// `aegis config edit NAME`   -- open config in $EDITOR
+//! Configuration management commands.
+//!
+//! `aegis config show NAME`   -- display all settings
+//! `aegis config path NAME`   -- print the config file path
+//! `aegis config edit NAME`   -- open config in $EDITOR
+
 use std::fs;
 
 use anyhow::{bail, Context, Result};

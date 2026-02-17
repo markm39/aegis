@@ -1,7 +1,8 @@
-/// Compare two audit sessions for forensic analysis.
-///
-/// `aegis diff NAME --session1 UUID --session2 UUID` shows files accessed
-/// in each session, highlighting differences.
+//! Compare two audit sessions for forensic analysis.
+//!
+//! `aegis diff NAME --session1 UUID --session2 UUID` shows files accessed
+//! in each session, highlighting differences.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};

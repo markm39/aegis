@@ -1,3 +1,9 @@
+//! Execute a command inside an Aegis sandbox.
+//!
+//! `aegis run [NAME] [--policy POLICY] -- command [args...]` auto-creates a
+//! config if none exists (Process isolation) and runs the command with full
+//! policy evaluation and audit logging.
+
 use std::fs;
 
 use anyhow::{Context, Result};

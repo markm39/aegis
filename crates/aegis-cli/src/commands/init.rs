@@ -1,3 +1,9 @@
+//! Configuration initialization and interactive setup wizard.
+//!
+//! `aegis init [NAME]` creates a new configuration at `~/.aegis/NAME/` with
+//! a policy file, sandbox directory, and TOML config. Without arguments,
+//! launches an interactive wizard for guided setup.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

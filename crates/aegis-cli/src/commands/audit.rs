@@ -1,3 +1,9 @@
+//! Audit ledger commands: query, verify, sessions, purge, watch, export.
+//!
+//! The audit subsystem provides forensic access to the hash-chained ledger,
+//! including filtered queries, integrity verification, session management,
+//! real-time streaming, and multi-format export (JSON, JSONL, CSV, CEF).
+
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 

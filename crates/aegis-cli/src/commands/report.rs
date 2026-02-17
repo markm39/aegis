@@ -1,7 +1,8 @@
-/// Compliance reporting for the audit ledger.
-///
-/// Generates summary reports showing audit statistics, deny rates,
-/// action breakdowns, integrity status, and policy change history.
+//! Compliance reporting for the audit ledger.
+//!
+//! Generates summary reports showing audit statistics, deny rates,
+//! action breakdowns, integrity status, and policy change history.
+
 use anyhow::{bail, Context, Result};
 
 use aegis_ledger::{AuditFilter, AuditStore};

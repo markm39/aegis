@@ -1,7 +1,8 @@
-/// List all Aegis configurations.
-///
-/// Scans `~/.aegis/` for init configs and `~/.aegis/wraps/` for wrap configs,
-/// displaying name, type, policy, isolation mode, session count, and last used.
+//! List all Aegis configurations.
+//!
+//! Scans `~/.aegis/` for init configs and `~/.aegis/wraps/` for wrap configs,
+//! displaying name, type, policy, isolation mode, session count, and last used.
+
 use std::fs;
 
 use anyhow::Result;

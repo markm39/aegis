@@ -1,3 +1,5 @@
+//! Launch the ratatui terminal dashboard for real-time audit monitoring.
+
 use anyhow::{Context, Result};
 
 use crate::commands::init::load_config;

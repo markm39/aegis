@@ -1,3 +1,8 @@
+//! System environment verification and bootstrapping.
+//!
+//! `aegis setup` checks macOS version, verifies `sandbox-exec` availability,
+//! creates the `~/.aegis/` base directory, and runs a sandbox self-test.
+
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 

@@ -1,3 +1,8 @@
+//! Cedar policy management commands.
+//!
+//! Provides `validate`, `list`, `generate`, `import`, and `test` subcommands
+//! for working with Cedar policy files within an Aegis configuration.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
