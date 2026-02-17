@@ -1,32 +1,27 @@
+use std::fs;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use tracing::info;
 
 use aegis_ledger::AuditStore;
+use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::PolicyEngine;
 use aegis_sandbox::SandboxBackend;
-use aegis_types::{IsolationConfig, ObserverConfig};
+use aegis_types::{AegisConfig, IsolationConfig, ObserverConfig};
 
-use crate::commands::init::load_config;
+use crate::commands::init::{ensure_aegis_dir, load_config, resolve_config_dir};
 
 /// Run the `aegis run` command.
 ///
-/// Pipeline:
-/// 1. Load config, init policy engine and audit store
-/// 2. Begin a session in the audit ledger
-/// 3. Compile Cedar policies into a Seatbelt SBPL profile
-/// 4. Prepare the sandbox
-/// 5. Start the filesystem observer (FSEvents watcher + pre-snapshot)
-/// 6. Log ProcessSpawn to the audit ledger (linked to session)
-/// 7. Spawn the command in the sandbox, capturing PID and timestamps
-/// 8. Log ProcessExit to the audit ledger (linked to session)
-/// 9. Wait for FSEvents delivery, then stop the observer (post-snapshot diff)
-/// 10. End the session with the exit code
-/// 11. Harvest Seatbelt violation logs from macOS system logs
-/// 12. Print summary including session and observer stats
-pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
-    let config = load_config(config_name)?;
+/// If no config exists for `config_name`, auto-creates one with Process
+/// isolation and the specified policy template. Seatbelt enforcement
+/// requires explicit opt-in via `aegis init` or the wizard.
+pub fn run(config_name: &str, policy: &str, command: &str, args: &[String]) -> Result<()> {
+    let config = ensure_run_config(config_name, policy)?;
+
+    // Log auto-init if applicable
+    info!(config_name, "loaded config for run");
 
     // Initialize the policy engine from the first policy path
     let policy_dir = config
@@ -214,6 +209,66 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Ensure a run config exists, auto-creating one if needed.
+///
+/// If the config already exists (in either init or wrap namespace), loads it.
+/// Otherwise, creates a new config with Process isolation (no Seatbelt) and
+/// the specified policy template, using the current directory as the sandbox root.
+fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
+    // Try loading existing config first
+    let config_dir = resolve_config_dir(name)?;
+    if config_dir.join("aegis.toml").exists() {
+        return load_config(name);
+    }
+
+    // Auto-create a new config
+    ensure_aegis_dir()?;
+
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+
+    let policy_text = get_builtin_policy(policy).with_context(|| {
+        format!(
+            "unknown policy template '{policy}'; valid options: default-deny, allow-read-only, permit-all"
+        )
+    })?;
+
+    // Create directory structure
+    let policies_dir = config_dir.join("policies");
+    fs::create_dir_all(&policies_dir)
+        .with_context(|| format!("failed to create policies dir: {}", policies_dir.display()))?;
+
+    let policy_file = policies_dir.join("default.cedar");
+    fs::write(&policy_file, policy_text)
+        .with_context(|| format!("failed to write policy file: {}", policy_file.display()))?;
+
+    let config = AegisConfig {
+        name: name.to_string(),
+        sandbox_dir: cwd.clone(),
+        policy_paths: vec![policies_dir],
+        schema_path: None,
+        ledger_path: config_dir.join("audit.db"),
+        allowed_network: Vec::new(),
+        isolation: IsolationConfig::Process,
+        observer: ObserverConfig::default(),
+    };
+
+    let toml_content = config
+        .to_toml()
+        .context("failed to serialize config to TOML")?;
+    let config_path = config_dir.join("aegis.toml");
+    fs::write(&config_path, &toml_content)
+        .with_context(|| format!("failed to write config: {}", config_path.display()))?;
+
+    println!(
+        "Auto-initialized '{}' (policy: {}, dir: {})",
+        name,
+        policy,
+        cwd.display()
+    );
+
+    Ok(config)
 }
 
 /// Create the sandbox backend, compiling Cedar policies to SBPL on macOS.

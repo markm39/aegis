@@ -35,7 +35,7 @@ $AEGIS setup
 echo ""
 
 step "2. aegis init"
-$AEGIS init --name smoke-test --policy allow-read-only
+$AEGIS init smoke-test --policy allow-read-only
 echo ""
 
 step "3. Create test file"
@@ -50,31 +50,31 @@ $AEGIS run --config smoke-test -- cat "$HELLO_PATH"
 echo ""
 
 step "5. aegis audit query"
-$AEGIS audit query --config smoke-test --last 20
+$AEGIS audit query smoke-test --last 20
 echo ""
 
 step "6. aegis audit sessions"
-$AEGIS audit sessions --config smoke-test
+$AEGIS audit sessions smoke-test
 echo ""
 
 step "7. aegis audit export (jsonl)"
-$AEGIS audit export --config smoke-test --format jsonl | head -5
+$AEGIS audit export smoke-test --format jsonl | head -5
 echo ""
 
 step "8. aegis audit verify"
-$AEGIS audit verify --config smoke-test
+$AEGIS audit verify smoke-test
 echo ""
 
 step "9. aegis report (json)"
-$AEGIS report --config smoke-test --format json | head -20
+$AEGIS report smoke-test --format json | head -20
 echo ""
 
 step "10. aegis audit policy-history"
-$AEGIS audit policy-history --config smoke-test
+$AEGIS audit policy-history smoke-test
 echo ""
 
 step "11. aegis status"
-$AEGIS status --config smoke-test
+$AEGIS status smoke-test
 echo ""
 
 step "12. aegis policy validate"
@@ -90,6 +90,14 @@ else
     echo "ERROR: wrap output file not created"
     exit 1
 fi
+echo ""
+
+step "14. aegis run (auto-init)"
+$AEGIS run -- echo "auto-init-test"
+echo ""
+
+step "15. aegis status (auto-init config)"
+$AEGIS status echo
 echo ""
 
 echo "=== All smoke tests passed ==="

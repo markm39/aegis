@@ -54,9 +54,9 @@ fn smoke_test_full_lifecycle() {
         .success()
         .stdout(predicate::str::contains("Setup complete"));
 
-    // 2. aegis init --name smoke-test --policy allow-read-only
+    // 2. aegis init smoke-test --policy allow-read-only
     aegis_cmd(home)
-        .args(["init", "--name", "smoke-test", "--policy", "allow-read-only"])
+        .args(["init", "smoke-test", "--policy", "allow-read-only"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Initialized aegis configuration"));
@@ -69,14 +69,7 @@ fn smoke_test_full_lifecycle() {
     // 4. aegis run --config smoke-test -- cat <full-path>/hello.txt
     let hello_path = test_file.display().to_string();
     aegis_cmd(home)
-        .args([
-            "run",
-            "--config",
-            "smoke-test",
-            "--",
-            "cat",
-            &hello_path,
-        ])
+        .args(["run", "--config", "smoke-test", "--", "cat", &hello_path])
         .assert()
         .success()
         .stdout(
@@ -84,16 +77,9 @@ fn smoke_test_full_lifecycle() {
                 .and(predicate::str::contains("Session:")),
         );
 
-    // 5. aegis audit query --config smoke-test --last 20
+    // 5. aegis audit query smoke-test --last 20
     aegis_cmd(home)
-        .args([
-            "audit",
-            "query",
-            "--config",
-            "smoke-test",
-            "--last",
-            "20",
-        ])
+        .args(["audit", "query", "smoke-test", "--last", "20"])
         .assert()
         .success()
         .stdout(
@@ -101,9 +87,9 @@ fn smoke_test_full_lifecycle() {
                 .and(predicate::str::contains("Allow")),
         );
 
-    // 6. aegis audit sessions --config smoke-test
+    // 6. aegis audit sessions smoke-test
     aegis_cmd(home)
-        .args(["audit", "sessions", "--config", "smoke-test"])
+        .args(["audit", "sessions", "smoke-test"])
         .assert()
         .success()
         .stdout(
@@ -111,16 +97,9 @@ fn smoke_test_full_lifecycle() {
                 .and(predicate::str::contains("cat")),
         );
 
-    // 7. aegis audit export --config smoke-test --format jsonl
+    // 7. aegis audit export smoke-test --format jsonl
     let export_output = aegis_cmd(home)
-        .args([
-            "audit",
-            "export",
-            "--config",
-            "smoke-test",
-            "--format",
-            "jsonl",
-        ])
+        .args(["audit", "export", "smoke-test", "--format", "jsonl"])
         .assert()
         .success();
 
@@ -139,22 +118,16 @@ fn smoke_test_full_lifecycle() {
         }
     }
 
-    // 8. aegis audit verify --config smoke-test
+    // 8. aegis audit verify smoke-test
     aegis_cmd(home)
-        .args(["audit", "verify", "--config", "smoke-test"])
+        .args(["audit", "verify", "smoke-test"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Valid:         YES"));
 
-    // 9. aegis report --config smoke-test --format json
+    // 9. aegis report smoke-test --format json
     let report_output = aegis_cmd(home)
-        .args([
-            "report",
-            "--config",
-            "smoke-test",
-            "--format",
-            "json",
-        ])
+        .args(["report", "smoke-test", "--format", "json"])
         .assert()
         .success();
 
@@ -173,21 +146,16 @@ fn smoke_test_full_lifecycle() {
         "integrity should be valid"
     );
 
-    // 10. aegis audit policy-history --config smoke-test
+    // 10. aegis audit policy-history smoke-test
     aegis_cmd(home)
-        .args([
-            "audit",
-            "policy-history",
-            "--config",
-            "smoke-test",
-        ])
+        .args(["audit", "policy-history", "smoke-test"])
         .assert()
         .success()
         .stdout(predicate::str::contains("SNAPSHOT ID"));
 
-    // 11. aegis status --config smoke-test
+    // 11. aegis status smoke-test
     aegis_cmd(home)
-        .args(["status", "--config", "smoke-test"])
+        .args(["status", "smoke-test"])
         .assert()
         .success()
         .stdout(predicate::str::contains("OK"));
@@ -254,7 +222,6 @@ fn smoke_test_init_with_dir() {
     aegis_cmd(home)
         .args([
             "init",
-            "--name",
             "dir-test",
             "--policy",
             "permit-all",
@@ -271,15 +238,67 @@ fn smoke_test_init_with_dir() {
 
     let hello_path = test_file.display().to_string();
     aegis_cmd(home)
-        .args([
-            "run",
-            "--config",
-            "dir-test",
-            "--",
-            "cat",
-            &hello_path,
-        ])
+        .args(["run", "--config", "dir-test", "--", "cat", &hello_path])
         .assert()
         .success()
         .stdout(predicate::str::contains("hello from dir"));
+}
+
+#[test]
+fn smoke_test_run_auto_init() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    // Setup first
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    // Run without prior init -- should auto-create config
+    aegis_cmd(home)
+        .args(["run", "--", "echo", "auto-init-works"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Auto-initialized")
+                .and(predicate::str::contains("auto-init-works"))
+                .and(predicate::str::contains("Session:")),
+        );
+
+    // Status should find the auto-created config
+    aegis_cmd(home)
+        .args(["status", "echo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK"));
+}
+
+#[test]
+fn smoke_test_wrap_then_query() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    // Setup first
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    // Wrap a command
+    let project_dir = home.join("wrap-query-project");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    aegis_cmd(home)
+        .args([
+            "wrap",
+            "--dir",
+            &project_dir.display().to_string(),
+            "--",
+            "echo",
+            "wrap-test",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Session:"));
+
+    // Unified lookup: report should find the wrap config by name
+    aegis_cmd(home)
+        .args(["report", "echo", "--format", "json"])
+        .assert()
+        .success();
 }

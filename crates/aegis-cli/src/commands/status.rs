@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 
 use aegis_ledger::AuditStore;
 
-use crate::commands::init::{aegis_base_dir, load_config};
+use crate::commands::init::{load_config, resolve_config_dir};
 
-/// Run the `aegis status --config NAME` command.
+/// Run the `aegis status` command.
 ///
 /// Checks whether the configuration directory, config file, and ledger exist,
-/// and prints a health summary.
+/// and prints a health summary. Searches both init and wrap config namespaces.
 pub fn run(config_name: &str) -> Result<()> {
-    let base_dir = aegis_base_dir(config_name)?;
+    let base_dir = resolve_config_dir(config_name)?;
 
     println!("Aegis Status: {config_name}");
     println!("{}", "-".repeat(40));
@@ -17,7 +17,7 @@ pub fn run(config_name: &str) -> Result<()> {
     // Check config directory
     if !base_dir.exists() {
         println!("  Config dir:   MISSING ({})", base_dir.display());
-        println!("  Run 'aegis init --name {config_name}' to create it.");
+        println!("  Run 'aegis init {config_name}' to create it.");
         return Ok(());
     }
     println!("  Config dir:   OK ({})", base_dir.display());

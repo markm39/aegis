@@ -40,6 +40,7 @@ notify = { version = "7", features = ["macos_fsevent"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+dialoguer = "0.12"
 
 # Types crate (used by all)
 aegis-types = { path = "crates/aegis-types" }

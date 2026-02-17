@@ -31,8 +31,10 @@ pub fn run() -> Result<()> {
     println!("\nSetup complete.");
     println!("Aegis data directory: {}", aegis_dir.display());
     println!("\nNext steps:");
-    println!("  aegis init --name my-agent --policy allow-read-only");
-    println!("  aegis run --config my-agent -- <your-command>");
+    println!("  aegis init                        # interactive setup wizard");
+    println!("  aegis init my-agent               # quick init with defaults");
+    println!("  aegis wrap claude                  # observe any command");
+    println!("  aegis run echo hello               # sandbox a command");
 
     Ok(())
 }

@@ -30,14 +30,17 @@ cd aegis
 cargo build --release
 # Binary: ./target/release/aegis
 
-# Wrap any command with observability (zero config)
-aegis wrap -- claude --print "write a hello world"
+# Interactive setup wizard
+aegis init
 
-# View what the agent did
-aegis audit query --config claude --last 20
+# Or just go -- zero config needed
+aegis wrap -- claude
+aegis run -- echo hello
 
-# Generate a compliance report
-aegis report --config claude --format text
+# View what happened
+aegis audit query claude --last 20
+aegis report claude
+aegis status claude
 ```
 
 Three commands. Full audit trail.
@@ -67,29 +70,32 @@ Config is stored at `~/.aegis/wraps/<name>/` and reused across invocations, so s
 For maximum control, use `init` + `run` with Cedar policies and Seatbelt enforcement:
 
 ```bash
-# Check system requirements
-aegis setup
+# Interactive setup wizard (choose security mode, directory, etc.)
+aegis init
 
-# Initialize a sandboxed configuration
-aegis init --name my-agent --policy allow-read-only
+# Or quick init with a name
+aegis init my-agent --policy allow-read-only
 
-# Or point at an existing project directory
-aegis init --name my-agent --policy allow-read-only --dir ~/my-project
+# Point at an existing project directory
+aegis init my-agent --policy allow-read-only --dir ~/my-project
 
 # Run a command inside the sandbox
 aegis run --config my-agent -- python3 agent.py
 
+# Or just run -- config auto-created from command name
+aegis run -- python3 agent.py
+
 # Query the audit log
-aegis audit query --config my-agent --last 20
+aegis audit query my-agent --last 20
 
 # Verify audit log integrity
-aegis audit verify --config my-agent
+aegis audit verify my-agent
 
 # Launch the real-time TUI dashboard
-aegis monitor --config my-agent
+aegis monitor my-agent
 
 # Check health
-aegis status --config my-agent
+aegis status my-agent
 ```
 
 ## Architecture
@@ -135,21 +141,21 @@ Five layers:
 | Command | Description |
 |---|---|
 | `aegis setup` | Check system requirements, prepare environment |
-| `aegis init --name NAME [--policy TPL] [--dir PATH]` | Create config at `~/.aegis/NAME/` |
-| `aegis run --config NAME -- CMD [ARGS]` | Run command in sandboxed environment |
+| `aegis init [NAME] [--policy TPL] [--dir PATH]` | Create config (omit NAME for wizard) |
+| `aegis run [--config NAME] [--policy TPL] -- CMD [ARGS]` | Run command in sandboxed environment |
 | `aegis wrap [--dir PATH] [--policy TPL] [--name NAME] -- CMD [ARGS]` | Wrap command with observability |
-| `aegis monitor --config NAME` | Launch real-time TUI dashboard |
+| `aegis monitor NAME` | Launch real-time TUI dashboard |
 | `aegis policy validate --path FILE` | Validate a Cedar policy file |
-| `aegis policy list --config NAME` | List active policies |
+| `aegis policy list NAME` | List active policies |
 | `aegis policy generate --template NAME` | Print built-in policy template |
-| `aegis audit query --config NAME [--last N] [--action KIND] [--decision D]` | Query audit entries |
-| `aegis audit verify --config NAME` | Verify hash chain integrity |
-| `aegis audit sessions --config NAME` | List recent sessions |
-| `aegis audit session --config NAME --id UUID` | Show session details |
-| `aegis audit policy-history --config NAME` | Show policy change history |
-| `aegis audit export --config NAME --format FMT [--follow]` | Export (json/jsonl/csv/cef) |
-| `aegis report --config NAME [--format text\|json]` | Generate compliance report |
-| `aegis status --config NAME` | Show health status |
+| `aegis audit query NAME [--last N] [--action KIND] [--decision D]` | Query audit entries |
+| `aegis audit verify NAME` | Verify hash chain integrity |
+| `aegis audit sessions NAME` | List recent sessions |
+| `aegis audit session NAME --id UUID` | Show session details |
+| `aegis audit policy-history NAME` | Show policy change history |
+| `aegis audit export NAME --format FMT [--follow]` | Export (json/jsonl/csv/cef) |
+| `aegis report NAME [--format text\|json]` | Generate compliance report |
+| `aegis status NAME` | Show health status |
 
 ## Cedar Policy Reference
 

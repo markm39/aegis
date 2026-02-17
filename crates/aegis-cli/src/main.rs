@@ -18,11 +18,10 @@ enum Commands {
     /// Check system requirements and prepare the environment
     Setup,
 
-    /// Initialize a new aegis configuration
+    /// Initialize a new aegis configuration (omit name for interactive wizard)
     Init {
-        /// Name for this agent configuration
-        #[arg(long)]
-        name: String,
+        /// Configuration name (omit for interactive wizard)
+        name: Option<String>,
 
         /// Policy template to use
         #[arg(long, default_value = "default-deny")]
@@ -36,9 +35,13 @@ enum Commands {
 
     /// Run a command inside the aegis sandbox
     Run {
-        /// Name of the aegis configuration to use
+        /// Config name (defaults to command basename)
         #[arg(long)]
-        config: String,
+        config: Option<String>,
+
+        /// Policy template for auto-initialization
+        #[arg(long, default_value = "allow-read-only")]
+        policy: String,
 
         /// Command and arguments to execute
         #[arg(trailing_var_arg = true, required = true)]
@@ -48,7 +51,6 @@ enum Commands {
     /// Launch the real-time audit monitor TUI
     Monitor {
         /// Name of the aegis configuration to use
-        #[arg(long)]
         config: String,
     },
 
@@ -67,7 +69,6 @@ enum Commands {
     /// Generate a compliance report
     Report {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
 
         /// Output format (json or text)
@@ -78,7 +79,6 @@ enum Commands {
     /// Show the health status of an aegis configuration
     Status {
         /// Name of the aegis configuration to check
-        #[arg(long)]
         config: String,
     },
 
@@ -114,7 +114,6 @@ enum PolicyCommands {
     /// List all policies in a configuration
     List {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
     },
 
@@ -131,7 +130,6 @@ enum AuditCommands {
     /// Query audit entries with optional filters
     Query {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
 
         /// Number of most recent entries to display (shortcut, ignores other filters)
@@ -174,14 +172,12 @@ enum AuditCommands {
     /// Verify the integrity of the audit hash chain
     Verify {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
     },
 
     /// List recent sessions
     Sessions {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
 
         /// Number of sessions to show (default 10)
@@ -192,7 +188,6 @@ enum AuditCommands {
     /// Show details for a specific session
     Session {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
 
         /// Session UUID
@@ -203,7 +198,6 @@ enum AuditCommands {
     /// Show policy change history
     PolicyHistory {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
 
         /// Number of snapshots to show (default 10)
@@ -214,7 +208,6 @@ enum AuditCommands {
     /// Export audit entries in a structured format
     Export {
         /// Name of the aegis configuration
-        #[arg(long)]
         config: String,
 
         /// Output format (json, jsonl, csv, cef)
@@ -241,13 +234,15 @@ fn main() -> anyhow::Result<()> {
             commands::setup::run()
         }
         Commands::Init { name, policy, dir } => {
-            commands::init::run(&name, &policy, dir.as_deref())
+            commands::init::run(name.as_deref(), &policy, dir.as_deref())
         }
-        Commands::Run { config, command } => {
+        Commands::Run { config, policy, command } => {
             let (cmd, args) = command
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command provided after --"))?;
-            commands::run::run(&config, cmd, args)
+            let config_name = config
+                .unwrap_or_else(|| commands::wrap::derive_name(cmd));
+            commands::run::run(&config_name, &policy, cmd, args)
         }
         Commands::Monitor { config } => {
             commands::monitor::run(&config)
@@ -312,13 +307,13 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn cli_parse_init_defaults() {
-        let cli = Cli::try_parse_from(["aegis", "init", "--name", "myagent"]);
-        assert!(cli.is_ok(), "should parse init with defaults: {cli:?}");
+    fn cli_parse_init_positional() {
+        let cli = Cli::try_parse_from(["aegis", "init", "myagent"]);
+        assert!(cli.is_ok(), "should parse init with positional name: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
             Commands::Init { name, policy, dir } => {
-                assert_eq!(name, "myagent");
+                assert_eq!(name, Some("myagent".to_string()));
                 assert_eq!(policy, "default-deny");
                 assert!(dir.is_none());
             }
@@ -327,14 +322,27 @@ mod tests {
     }
 
     #[test]
+    fn cli_parse_init_no_name_for_wizard() {
+        let cli = Cli::try_parse_from(["aegis", "init"]);
+        assert!(cli.is_ok(), "should parse init with no name: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Init { name, .. } => {
+                assert!(name.is_none(), "name should be None for wizard mode");
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
     fn cli_parse_init_with_policy() {
         let cli =
-            Cli::try_parse_from(["aegis", "init", "--name", "agent2", "--policy", "allow-read-only"]);
+            Cli::try_parse_from(["aegis", "init", "agent2", "--policy", "allow-read-only"]);
         assert!(cli.is_ok(), "should parse init with policy: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
             Commands::Init { name, policy, dir } => {
-                assert_eq!(name, "agent2");
+                assert_eq!(name, Some("agent2".to_string()));
                 assert_eq!(policy, "allow-read-only");
                 assert!(dir.is_none());
             }
@@ -345,13 +353,13 @@ mod tests {
     #[test]
     fn cli_parse_init_with_dir() {
         let cli = Cli::try_parse_from([
-            "aegis", "init", "--name", "agent3", "--dir", "/tmp/my-project",
+            "aegis", "init", "agent3", "--dir", "/tmp/my-project",
         ]);
         assert!(cli.is_ok(), "should parse init with dir: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
             Commands::Init { name, dir, .. } => {
-                assert_eq!(name, "agent3");
+                assert_eq!(name, Some("agent3".to_string()));
                 assert_eq!(dir, Some(PathBuf::from("/tmp/my-project")));
             }
             _ => panic!("expected Init command"),
@@ -359,16 +367,50 @@ mod tests {
     }
 
     #[test]
-    fn cli_parse_run() {
+    fn cli_parse_run_with_config() {
         let cli = Cli::try_parse_from([
             "aegis", "run", "--config", "myagent", "--", "echo", "hello",
         ]);
-        assert!(cli.is_ok(), "should parse run: {cli:?}");
+        assert!(cli.is_ok(), "should parse run with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
-            Commands::Run { config, command } => {
-                assert_eq!(config, "myagent");
+            Commands::Run { config, policy, command } => {
+                assert_eq!(config, Some("myagent".to_string()));
+                assert_eq!(policy, "allow-read-only");
                 assert_eq!(command, vec!["echo", "hello"]);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_without_config() {
+        let cli = Cli::try_parse_from([
+            "aegis", "run", "--", "echo", "hello",
+        ]);
+        assert!(cli.is_ok(), "should parse run without --config: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Run { config, command, .. } => {
+                assert!(config.is_none(), "config should be None when not specified");
+                assert_eq!(command, vec!["echo", "hello"]);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_with_policy() {
+        let cli = Cli::try_parse_from([
+            "aegis", "run", "--policy", "permit-all", "--", "python3", "agent.py",
+        ]);
+        assert!(cli.is_ok(), "should parse run with --policy: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Run { config, policy, command } => {
+                assert!(config.is_none());
+                assert_eq!(policy, "permit-all");
+                assert_eq!(command, vec!["python3", "agent.py"]);
             }
             _ => panic!("expected Run command"),
         }
@@ -398,7 +440,7 @@ mod tests {
     #[test]
     fn cli_parse_audit_query() {
         let cli = Cli::try_parse_from([
-            "aegis", "audit", "query", "--config", "myagent", "--last", "50",
+            "aegis", "audit", "query", "myagent", "--last", "50",
         ]);
         assert!(cli.is_ok(), "should parse audit query: {cli:?}");
         let cli = cli.unwrap();
@@ -419,7 +461,6 @@ mod tests {
             "aegis",
             "audit",
             "query",
-            "--config",
             "myagent",
             "--decision",
             "Deny",
@@ -457,7 +498,7 @@ mod tests {
     #[test]
     fn cli_parse_audit_sessions() {
         let cli = Cli::try_parse_from([
-            "aegis", "audit", "sessions", "--config", "myagent", "--last", "5",
+            "aegis", "audit", "sessions", "myagent", "--last", "5",
         ]);
         assert!(cli.is_ok(), "should parse audit sessions: {cli:?}");
         let cli = cli.unwrap();
@@ -478,7 +519,6 @@ mod tests {
             "aegis",
             "audit",
             "session",
-            "--config",
             "myagent",
             "--id",
             "550e8400-e29b-41d4-a716-446655440000",
@@ -502,7 +542,6 @@ mod tests {
             "aegis",
             "audit",
             "export",
-            "--config",
             "myagent",
             "--format",
             "csv",
@@ -527,7 +566,6 @@ mod tests {
             "aegis",
             "audit",
             "export",
-            "--config",
             "myagent",
             "--format",
             "jsonl",
@@ -549,7 +587,7 @@ mod tests {
 
     #[test]
     fn cli_parse_status() {
-        let cli = Cli::try_parse_from(["aegis", "status", "--config", "myagent"]);
+        let cli = Cli::try_parse_from(["aegis", "status", "myagent"]);
         assert!(cli.is_ok(), "should parse status: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
@@ -562,7 +600,7 @@ mod tests {
 
     #[test]
     fn cli_parse_monitor() {
-        let cli = Cli::try_parse_from(["aegis", "monitor", "--config", "myagent"]);
+        let cli = Cli::try_parse_from(["aegis", "monitor", "myagent"]);
         assert!(cli.is_ok(), "should parse monitor: {cli:?}");
         let cli = cli.unwrap();
         match cli.command {
@@ -576,7 +614,7 @@ mod tests {
     #[test]
     fn cli_parse_policy_list() {
         let cli =
-            Cli::try_parse_from(["aegis", "policy", "list", "--config", "myagent"]);
+            Cli::try_parse_from(["aegis", "policy", "list", "myagent"]);
         assert!(cli.is_ok(), "should parse policy list: {cli:?}");
     }
 
@@ -659,13 +697,13 @@ mod tests {
 
     #[test]
     fn cli_missing_required_args_fails() {
-        // init without --name should fail
-        let result = Cli::try_parse_from(["aegis", "init"]);
-        assert!(result.is_err(), "init without --name should fail");
-
-        // run without --config should fail
+        // run without any command should fail
         let result = Cli::try_parse_from(["aegis", "run"]);
-        assert!(result.is_err(), "run without --config should fail");
+        assert!(result.is_err(), "run without command should fail");
+
+        // status without config should fail
+        let result = Cli::try_parse_from(["aegis", "status"]);
+        assert!(result.is_err(), "status without config should fail");
     }
 
     #[test]
@@ -701,6 +739,23 @@ mod tests {
 
         let result = commands::init::run_in_dir("duplicate-agent", "default-deny", &base, None);
         assert!(result.is_err(), "second init with same name should fail");
+    }
+
+    #[test]
+    fn wizard_mode_mapping() {
+        use commands::init::SecurityMode;
+
+        let (policy, isolation) = SecurityMode::ObserveOnly.to_config();
+        assert_eq!(policy, "permit-all");
+        assert!(matches!(isolation, aegis_types::IsolationConfig::Process));
+
+        let (policy, isolation) = SecurityMode::ReadOnlySandbox.to_config();
+        assert_eq!(policy, "allow-read-only");
+        assert!(matches!(isolation, aegis_types::IsolationConfig::Seatbelt { .. }));
+
+        let (policy, isolation) = SecurityMode::FullLockdown.to_config();
+        assert_eq!(policy, "default-deny");
+        assert!(matches!(isolation, aegis_types::IsolationConfig::Seatbelt { .. }));
     }
 
     #[test]
