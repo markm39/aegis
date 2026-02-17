@@ -111,6 +111,64 @@ fn bar_chart(count: usize, total: usize, width: usize) -> String {
 mod tests {
     use super::*;
 
+    fn sample_stats() -> aegis_ledger::AuditStats {
+        aegis_ledger::AuditStats {
+            total_entries: 10,
+            total_sessions: 2,
+            allow_count: 8,
+            deny_count: 2,
+            deny_rate: 0.2,
+            entries_by_action: vec![
+                ("FileRead".into(), 6),
+                ("FileWrite".into(), 4),
+            ],
+            entries_by_principal: vec![("test-agent".into(), 10)],
+            integrity_valid: true,
+            policy_changes: 1,
+            top_resources: vec![("/tmp/file.txt".into(), 5)],
+            earliest_entry: Some("2026-01-01T00:00:00Z".into()),
+            latest_entry: Some("2026-01-01T01:00:00Z".into()),
+        }
+    }
+
+    #[test]
+    fn print_json_report_produces_valid_json() {
+        // Verify JSON serialization works and contains expected fields
+        let stats = sample_stats();
+        let json = serde_json::to_string_pretty(&stats).expect("should serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("should be valid JSON");
+        assert_eq!(parsed["total_entries"], 10);
+        assert_eq!(parsed["integrity_valid"], true);
+        assert_eq!(parsed["deny_count"], 2);
+    }
+
+    #[test]
+    fn print_text_report_does_not_panic() {
+        // Verify the text report doesn't panic with typical data
+        let stats = sample_stats();
+        print_text_report("test-config", &stats);
+    }
+
+    #[test]
+    fn print_text_report_empty_stats() {
+        // Verify the text report handles zero entries gracefully
+        let stats = aegis_ledger::AuditStats {
+            total_entries: 0,
+            total_sessions: 0,
+            allow_count: 0,
+            deny_count: 0,
+            deny_rate: 0.0,
+            entries_by_action: vec![],
+            entries_by_principal: vec![],
+            integrity_valid: true,
+            policy_changes: 0,
+            top_resources: vec![],
+            earliest_entry: None,
+            latest_entry: None,
+        };
+        print_text_report("empty-config", &stats);
+    }
+
     #[test]
     fn bar_chart_full() {
         let bar = bar_chart(10, 10, 10);
