@@ -1,0 +1,228 @@
+/// Aggregate statistics for compliance reporting.
+///
+/// Computes summary metrics from audit entries: total counts, deny rates,
+/// breakdowns by action kind and principal, and integrity status.
+use serde::{Deserialize, Serialize};
+
+use aegis_types::AegisError;
+
+use crate::filter::AuditFilter;
+use crate::store::AuditStore;
+
+/// Summary statistics for a set of audit entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditStats {
+    pub total_entries: usize,
+    pub total_sessions: usize,
+    pub allow_count: usize,
+    pub deny_count: usize,
+    pub deny_rate: f64,
+    pub entries_by_action: Vec<(String, usize)>,
+    pub entries_by_principal: Vec<(String, usize)>,
+    pub integrity_valid: bool,
+    pub policy_changes: usize,
+}
+
+impl AuditStore {
+    /// Compute aggregate statistics for entries matching the given filter.
+    pub fn compute_stats(
+        &self,
+        filter: &AuditFilter,
+        config_name: &str,
+    ) -> Result<AuditStats, AegisError> {
+        // Get decision counts
+        let decision_counts = self.count_by_decision(filter)?;
+        let allow_count = decision_counts
+            .iter()
+            .find(|(d, _)| d == "Allow")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        let deny_count = decision_counts
+            .iter()
+            .find(|(d, _)| d == "Deny")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        let total_entries = allow_count + deny_count;
+        let deny_rate = if total_entries > 0 {
+            deny_count as f64 / total_entries as f64
+        } else {
+            0.0
+        };
+
+        // Get action kind breakdown
+        let entries_by_action = self.count_by_action_kind(filter)?;
+
+        // Get principal breakdown
+        let entries_by_principal = self.count_by_principal(filter)?;
+
+        // Session count
+        let total_sessions = self.count_sessions(config_name)?;
+
+        // Integrity check
+        let integrity = self.verify_integrity()?;
+
+        // Policy change count
+        let policy_changes = self
+            .list_policy_snapshots(config_name, 10_000)?
+            .len();
+
+        Ok(AuditStats {
+            total_entries,
+            total_sessions,
+            allow_count,
+            deny_count,
+            deny_rate,
+            entries_by_action,
+            entries_by_principal,
+            integrity_valid: integrity.valid,
+            policy_changes,
+        })
+    }
+
+    /// Count entries grouped by principal for entries matching the filter.
+    fn count_by_principal(
+        &self,
+        filter: &AuditFilter,
+    ) -> Result<Vec<(String, usize)>, AegisError> {
+        let fragment = filter.to_sql();
+
+        let sql = if fragment.where_clause.is_empty() {
+            "SELECT principal, COUNT(*) FROM audit_log GROUP BY principal ORDER BY COUNT(*) DESC"
+                .to_string()
+        } else {
+            format!(
+                "SELECT principal, COUNT(*) FROM audit_log WHERE {} GROUP BY principal ORDER BY COUNT(*) DESC",
+                fragment.where_clause
+            )
+        };
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            fragment.params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self
+            .connection()
+            .prepare(&sql)
+            .map_err(|e| AegisError::LedgerError(format!("count_by_principal failed: {e}")))?;
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })
+            .map_err(|e| AegisError::LedgerError(format!("count_by_principal query: {e}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("count_by_principal read: {e}")))
+    }
+
+    /// Count the total number of sessions for a config.
+    fn count_sessions(&self, config_name: &str) -> Result<usize, AegisError> {
+        self.connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE config_name = ?1",
+                rusqlite::params![config_name],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as usize)
+            .map_err(|e| AegisError::LedgerError(format!("count_sessions failed: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aegis_types::{Action, ActionKind, Verdict};
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+
+    fn test_db() -> (NamedTempFile, AuditStore) {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = AuditStore::open(tmp.path()).unwrap();
+        (tmp, store)
+    }
+
+    fn populate(store: &mut AuditStore) {
+        let entries = vec![
+            ("alice", ActionKind::FileRead { path: PathBuf::from("/a") }, true),
+            ("alice", ActionKind::FileWrite { path: PathBuf::from("/b") }, false),
+            ("bob", ActionKind::FileRead { path: PathBuf::from("/c") }, true),
+            ("bob", ActionKind::NetConnect { host: "x.com".into(), port: 443 }, false),
+            ("alice", ActionKind::DirList { path: PathBuf::from("/d") }, true),
+        ];
+        for (principal, kind, allow) in entries {
+            let action = Action::new(principal, kind);
+            let verdict = if allow {
+                Verdict::allow(action.id, "ok", None)
+            } else {
+                Verdict::deny(action.id, "nope", None)
+            };
+            store.append(&action, &verdict).unwrap();
+        }
+    }
+
+    #[test]
+    fn compute_stats_returns_correct_totals() {
+        let (_tmp, mut store) = test_db();
+        populate(&mut store);
+
+        let stats = store
+            .compute_stats(&AuditFilter::default(), "test")
+            .unwrap();
+
+        assert_eq!(stats.total_entries, 5);
+        assert_eq!(stats.allow_count, 3);
+        assert_eq!(stats.deny_count, 2);
+        assert!((stats.deny_rate - 0.4).abs() < 0.01);
+        assert!(stats.integrity_valid);
+    }
+
+    #[test]
+    fn compute_stats_action_breakdown() {
+        let (_tmp, mut store) = test_db();
+        populate(&mut store);
+
+        let stats = store
+            .compute_stats(&AuditFilter::default(), "test")
+            .unwrap();
+
+        let total_by_action: usize = stats.entries_by_action.iter().map(|(_, c)| c).sum();
+        assert_eq!(total_by_action, 5);
+    }
+
+    #[test]
+    fn compute_stats_principal_breakdown() {
+        let (_tmp, mut store) = test_db();
+        populate(&mut store);
+
+        let stats = store
+            .compute_stats(&AuditFilter::default(), "test")
+            .unwrap();
+
+        let alice = stats
+            .entries_by_principal
+            .iter()
+            .find(|(p, _)| p == "alice")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        let bob = stats
+            .entries_by_principal
+            .iter()
+            .find(|(p, _)| p == "bob")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        assert_eq!(alice, 3);
+        assert_eq!(bob, 2);
+    }
+
+    #[test]
+    fn compute_stats_empty_ledger() {
+        let (_tmp, store) = test_db();
+
+        let stats = store
+            .compute_stats(&AuditFilter::default(), "test")
+            .unwrap();
+
+        assert_eq!(stats.total_entries, 0);
+        assert_eq!(stats.deny_rate, 0.0);
+        assert!(stats.integrity_valid);
+    }
+}

@@ -59,6 +59,17 @@ enum Commands {
         action: AuditCommands,
     },
 
+    /// Generate a compliance report
+    Report {
+        /// Name of the aegis configuration
+        #[arg(long)]
+        config: String,
+
+        /// Output format (json or text)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
     /// Show the health status of an aegis configuration
     Status {
         /// Name of the aegis configuration to check
@@ -251,6 +262,9 @@ fn main() -> anyhow::Result<()> {
                 follow,
             } => commands::audit::export(&config, &format, follow),
         },
+        Commands::Report { config, format } => {
+            commands::report::run(&config, &format)
+        }
         Commands::Status { config } => {
             commands::status::run(&config)
         }
