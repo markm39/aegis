@@ -11,6 +11,15 @@ use tracing::warn;
 
 use aegis_ledger::AuditEntry;
 
+/// Move a list selection index up or down, clamping to valid range.
+fn navigate(selected: &mut usize, list_len: usize, up: bool) {
+    if up {
+        *selected = selected.saturating_sub(1);
+    } else if *selected < list_len.saturating_sub(1) {
+        *selected += 1;
+    }
+}
+
 /// Maximum number of audit entries to load in the main feed.
 const AUDIT_FEED_LIMIT: usize = 100;
 
@@ -419,14 +428,10 @@ impl App {
             AppMode::Home => match key.code {
                 KeyCode::Char('q') => self.running = false,
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if self.home_selected > 0 {
-                        self.home_selected -= 1;
-                    }
+                    navigate(&mut self.home_selected, self.dashboard_configs.len(), true);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if self.home_selected < self.dashboard_configs.len().saturating_sub(1) {
-                        self.home_selected += 1;
-                    }
+                    navigate(&mut self.home_selected, self.dashboard_configs.len(), false);
                 }
                 KeyCode::Enter => {
                     if let Some(config) = self.dashboard_configs.get(self.home_selected) {
@@ -452,14 +457,10 @@ impl App {
                     self.filter_text.clear();
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if self.selected_index > 0 {
-                        self.selected_index -= 1;
-                    }
+                    navigate(&mut self.selected_index, self.entries.len(), true);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if self.selected_index < self.entries.len().saturating_sub(1) {
-                        self.selected_index += 1;
-                    }
+                    navigate(&mut self.selected_index, self.entries.len(), false);
                 }
                 _ => {}
             },
@@ -481,14 +482,10 @@ impl App {
                 KeyCode::Char('q') => self.running = false,
                 KeyCode::Esc | KeyCode::Char('a') => self.mode = AppMode::AuditFeed,
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if self.session_selected > 0 {
-                        self.session_selected -= 1;
-                    }
+                    navigate(&mut self.session_selected, self.sessions.len(), true);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if self.session_selected < self.sessions.len().saturating_sub(1) {
-                        self.session_selected += 1;
-                    }
+                    navigate(&mut self.session_selected, self.sessions.len(), false);
                 }
                 KeyCode::Enter => {
                     if let Some(session) = self.sessions.get(self.session_selected) {
@@ -503,16 +500,10 @@ impl App {
                 KeyCode::Esc => self.mode = AppMode::SessionList,
                 KeyCode::Char('a') => self.mode = AppMode::AuditFeed,
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if self.session_detail_selected > 0 {
-                        self.session_detail_selected -= 1;
-                    }
+                    navigate(&mut self.session_detail_selected, self.session_entries.len(), true);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if self.session_detail_selected
-                        < self.session_entries.len().saturating_sub(1)
-                    {
-                        self.session_detail_selected += 1;
-                    }
+                    navigate(&mut self.session_detail_selected, self.session_entries.len(), false);
                 }
                 _ => {}
             },
