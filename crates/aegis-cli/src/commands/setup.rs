@@ -73,7 +73,7 @@ fn check_macos_version() -> Result<()> {
         .split('.')
         .next()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+        .with_context(|| format!("could not parse macOS version from sw_vers output: '{version_str}'"))?;
 
     if major < 12 {
         bail!(
