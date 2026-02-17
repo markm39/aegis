@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 /// Parse a UUID string from a SQLite column, returning a `rusqlite::Error` on failure.
-pub fn parse_uuid(s: &str, col: usize) -> rusqlite::Result<Uuid> {
+pub(crate) fn parse_uuid(s: &str, col: usize) -> rusqlite::Result<Uuid> {
     Uuid::parse_str(s).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             col,
@@ -18,7 +18,7 @@ pub fn parse_uuid(s: &str, col: usize) -> rusqlite::Result<Uuid> {
 }
 
 /// Parse an RFC 3339 datetime string from a SQLite column, returning a `rusqlite::Error` on failure.
-pub fn parse_datetime(s: &str, col: usize) -> rusqlite::Result<DateTime<Utc>> {
+pub(crate) fn parse_datetime(s: &str, col: usize) -> rusqlite::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.into())
         .map_err(|e| {

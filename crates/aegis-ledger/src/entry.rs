@@ -81,7 +81,7 @@ impl AuditEntry {
 
 /// Compute the SHA-256 hash for an audit entry by concatenating all fields.
 #[allow(clippy::too_many_arguments)]
-pub fn compute_hash(
+pub(crate) fn compute_hash(
     entry_id: &Uuid,
     timestamp: &DateTime<Utc>,
     action_id: &Uuid,
