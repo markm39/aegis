@@ -62,6 +62,10 @@ fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
 /// Draw the full dashboard to the terminal frame.
 pub fn draw(frame: &mut Frame, app: &App) {
     match app.mode {
+        AppMode::Home => {
+            draw_home_view(frame, app);
+            return;
+        }
         AppMode::SessionList => {
             draw_session_list_view(frame, app);
             return;
@@ -91,6 +95,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 /// Render the audit feed panel (top section).
 fn draw_audit_feed(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let mode_label = match app.mode {
+        AppMode::Home => "HOME",
         AppMode::AuditFeed => "AUDIT",
         AppMode::PolicyView => "POLICY",
         AppMode::FilterMode => "FILTER",
@@ -292,6 +297,120 @@ fn draw_info(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+}
+
+/// Render the dashboard home view with config list and recent activity.
+fn draw_home_view(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(50),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    // Config list
+    let config_block = Block::default()
+        .title(" Aegis Dashboard [Enter=select, q=quit] ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let config_items: Vec<ListItem> = app
+        .dashboard_configs
+        .iter()
+        .enumerate()
+        .map(|(i, config)| {
+            let (total, last) = app
+                .home_stats
+                .get(i)
+                .cloned()
+                .unwrap_or((0, None));
+
+            let last_str = last.unwrap_or_else(|| "(never)".to_string());
+            // Truncate the timestamp to just the time portion if it's long
+            let last_display = if last_str.len() > 11 {
+                &last_str[11..19.min(last_str.len())]
+            } else {
+                &last_str
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{:<20} ", config.name),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(if i == app.home_selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                Span::styled(
+                    format!("{:<16} ", config.policy_desc),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(
+                    format!("{:<10} ", config.isolation),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("{:<8} ", total),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(
+                    last_display.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+
+            let style = if i == app.home_selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(line).style(style)
+        })
+        .collect();
+
+    let config_list = List::new(config_items).block(config_block);
+    frame.render_widget(config_list, chunks[0]);
+
+    // Recent activity (merged from all configs)
+    let activity_block = Block::default()
+        .title(format!(" Recent Activity ({}) ", app.home_recent.len()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let activity_items: Vec<ListItem> = app
+        .home_recent
+        .iter()
+        .map(|entry| entry_list_item(entry, false))
+        .collect();
+
+    let activity_list = List::new(activity_items).block(activity_block);
+    frame.render_widget(activity_list, chunks[1]);
+
+    // Status bar
+    let status = Paragraph::new(Line::from(vec![
+        Span::styled(
+            format!(" {} configs ", app.dashboard_configs.len()),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(
+            "| j/k: navigate | Enter: view config | q: quit",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(status, chunks[2]);
 }
 
 /// Render the full-screen session list view.
@@ -669,6 +788,51 @@ mod tests {
         terminal
             .draw(|f| draw(f, &app))
             .expect("draw should not panic in session detail without session");
+    }
+
+    #[test]
+    fn draw_does_not_panic_in_home_view_empty() {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+        let app = App::new_dashboard(vec![]);
+
+        terminal
+            .draw(|f| draw(f, &app))
+            .expect("draw should not panic in empty home view");
+    }
+
+    #[test]
+    fn draw_does_not_panic_in_home_view_with_configs() {
+        use crate::app::DashboardConfig;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+        let mut app = App::new_dashboard(vec![
+            DashboardConfig {
+                name: "claude".into(),
+                policy_desc: "permit-all".into(),
+                isolation: "Process".into(),
+                ledger_path: PathBuf::from("/tmp/a.db"),
+            },
+            DashboardConfig {
+                name: "myproject".into(),
+                policy_desc: "read-only".into(),
+                isolation: "Seatbelt".into(),
+                ledger_path: PathBuf::from("/tmp/b.db"),
+            },
+        ]);
+        app.home_stats = vec![
+            (12, Some("2026-01-01T10:32:15Z".into())),
+            (0, None),
+        ];
+        app.home_recent = vec![
+            sample_entry("claude", "Allow", "FileRead"),
+            sample_entry("claude", "Deny", "NetConnect"),
+        ];
+
+        terminal
+            .draw(|f| draw(f, &app))
+            .expect("draw should not panic in home view with configs");
     }
 
     #[test]

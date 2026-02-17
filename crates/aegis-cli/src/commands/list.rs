@@ -148,7 +148,7 @@ fn load_entry(dir: &std::path::Path, name: &str, config_type: &'static str) -> O
 }
 
 /// Extract human-readable policy and isolation descriptions from a config.
-fn describe_config(config: &AegisConfig) -> (String, String) {
+pub fn describe_config(config: &AegisConfig) -> (String, String) {
     let policy = config
         .policy_paths
         .first()
@@ -176,7 +176,7 @@ fn describe_config(config: &AegisConfig) -> (String, String) {
 ///
 /// Trims whitespace before comparison to handle trailing newlines or
 /// formatting differences. Falls back to "custom" if no builtin matches.
-fn identify_policy(content: &str) -> String {
+pub fn identify_policy(content: &str) -> String {
     let trimmed = content.trim();
     for name in aegis_policy::builtin::list_builtin_policies() {
         if let Some(builtin_text) = aegis_policy::builtin::get_builtin_policy(name) {

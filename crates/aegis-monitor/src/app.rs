@@ -13,7 +13,9 @@ use aegis_ledger::AuditEntry;
 
 /// The active view mode of the dashboard.
 pub enum AppMode {
-    /// Live audit feed -- the default view.
+    /// Dashboard home -- config list and recent activity.
+    Home,
+    /// Live audit feed -- the default view for single-config monitor.
     AuditFeed,
     /// Policy summary view.
     PolicyView,
@@ -23,6 +25,19 @@ pub enum AppMode {
     SessionList,
     /// Session detail view -- shows entries for one session.
     SessionDetail,
+}
+
+/// Configuration metadata for the dashboard home view.
+#[derive(Clone)]
+pub struct DashboardConfig {
+    /// Display name of this configuration.
+    pub name: String,
+    /// Human-readable policy description (e.g. "permit-all", "custom").
+    pub policy_desc: String,
+    /// Isolation mode description (e.g. "Seatbelt", "Process").
+    pub isolation: String,
+    /// Path to the SQLite audit ledger.
+    pub ledger_path: PathBuf,
 }
 
 /// Minimal session data loaded from the DB by the monitor.
@@ -75,6 +90,16 @@ pub struct App {
     pub session_detail_selected: usize,
     /// Action kind distribution: (action_kind, count), sorted by count DESC.
     pub action_distribution: Vec<(String, usize)>,
+    /// Whether running in dashboard mode (Home view available).
+    pub dashboard_mode: bool,
+    /// Config list for dashboard Home view.
+    pub dashboard_configs: Vec<DashboardConfig>,
+    /// Selected config index in Home view.
+    pub home_selected: usize,
+    /// Per-config stats for Home view: (total_actions, last_activity_timestamp).
+    pub home_stats: Vec<(usize, Option<String>)>,
+    /// Merged recent entries across all configs for Home view.
+    pub home_recent: Vec<AuditEntry>,
 }
 
 impl App {
@@ -96,6 +121,44 @@ impl App {
             session_detail: None,
             session_detail_selected: 0,
             action_distribution: Vec::new(),
+            dashboard_mode: false,
+            dashboard_configs: Vec::new(),
+            home_selected: 0,
+            home_stats: Vec::new(),
+            home_recent: Vec::new(),
+        }
+    }
+
+    /// Create a dashboard application with multiple configs.
+    ///
+    /// Starts in Home mode showing all configs. Enter drills into a
+    /// specific config's audit feed; Esc returns to Home.
+    pub fn new_dashboard(configs: Vec<DashboardConfig>) -> Self {
+        let ledger_path = configs
+            .first()
+            .map(|c| c.ledger_path.clone())
+            .unwrap_or_default();
+        Self {
+            mode: AppMode::Home,
+            entries: Vec::new(),
+            total_count: 0,
+            allow_count: 0,
+            deny_count: 0,
+            selected_index: 0,
+            running: true,
+            filter_text: String::new(),
+            ledger_path,
+            sessions: Vec::new(),
+            session_selected: 0,
+            session_entries: Vec::new(),
+            session_detail: None,
+            session_detail_selected: 0,
+            action_distribution: Vec::new(),
+            dashboard_mode: true,
+            dashboard_configs: configs,
+            home_selected: 0,
+            home_stats: Vec::new(),
+            home_recent: Vec::new(),
         }
     }
 
@@ -106,6 +169,11 @@ impl App {
     /// returns Ok(()) if the database cannot be opened (e.g. it does not
     /// exist yet).
     pub fn refresh(&mut self) -> anyhow::Result<()> {
+        if matches!(self.mode, AppMode::Home) {
+            self.refresh_home();
+            return Ok(());
+        }
+
         let conn = match Connection::open_with_flags(
             &self.ledger_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -242,6 +310,60 @@ impl App {
         rows.filter_map(|r| r.ok()).collect()
     }
 
+    /// Refresh home view data by scanning all config ledgers.
+    fn refresh_home(&mut self) {
+        self.home_stats.clear();
+        self.home_recent.clear();
+
+        for config in &self.dashboard_configs {
+            let conn = match Connection::open_with_flags(
+                &config.ledger_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                Ok(c) => c,
+                Err(_) => {
+                    self.home_stats.push((0, None));
+                    continue;
+                }
+            };
+
+            let total: usize = conn
+                .query_row("SELECT COUNT(*) FROM audit_log", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap_or(0) as usize;
+
+            let last: Option<String> = conn
+                .query_row(
+                    "SELECT timestamp FROM audit_log ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .ok();
+
+            // Grab last 10 entries from each config for the merged recent view
+            let recent: Vec<AuditEntry> = conn
+                .prepare(
+                    "SELECT entry_id, timestamp, action_id, action_kind, principal, \
+                            decision, reason, policy_id, prev_hash, entry_hash \
+                     FROM audit_log ORDER BY id DESC LIMIT 10",
+                )
+                .and_then(|mut stmt| {
+                    let rows = stmt.query_map([], aegis_ledger::row_to_entry)?;
+                    rows.collect()
+                })
+                .unwrap_or_default();
+
+            self.home_stats.push((total, last));
+            self.home_recent.extend(recent);
+        }
+
+        // Sort merged entries by timestamp (most recent first)
+        self.home_recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        self.home_recent.truncate(20);
+    }
+
     /// Load entries for a specific session.
     fn load_session_entries(conn: &Connection, session_id: &str) -> Vec<AuditEntry> {
         let mut stmt = match conn.prepare(
@@ -268,10 +390,37 @@ impl App {
     }
 
     /// Handle a key event based on the current mode.
+    ///
+    /// The 'q' key quits from all modes except FilterMode (where it types
+    /// the character). In dashboard mode, Esc from AuditFeed returns to Home.
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
         match self.mode {
+            AppMode::Home => match key.code {
+                KeyCode::Char('q') => self.running = false,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.home_selected > 0 {
+                        self.home_selected -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.home_selected < self.dashboard_configs.len().saturating_sub(1) {
+                        self.home_selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(config) = self.dashboard_configs.get(self.home_selected) {
+                        self.ledger_path = config.ledger_path.clone();
+                        self.selected_index = 0;
+                        self.filter_text.clear();
+                        self.mode = AppMode::AuditFeed;
+                    }
+                }
+                _ => {}
+            },
             AppMode::AuditFeed => match key.code {
+                KeyCode::Char('q') => self.running = false,
+                KeyCode::Esc if self.dashboard_mode => self.mode = AppMode::Home,
                 KeyCode::Char('p') => self.mode = AppMode::PolicyView,
                 KeyCode::Char('s') => {
                     self.session_selected = 0;
@@ -294,6 +443,7 @@ impl App {
                 _ => {}
             },
             AppMode::PolicyView => match key.code {
+                KeyCode::Char('q') => self.running = false,
                 KeyCode::Char('a') | KeyCode::Esc => self.mode = AppMode::AuditFeed,
                 _ => {}
             },
@@ -307,6 +457,7 @@ impl App {
                 _ => {}
             },
             AppMode::SessionList => match key.code {
+                KeyCode::Char('q') => self.running = false,
                 KeyCode::Esc | KeyCode::Char('a') => self.mode = AppMode::AuditFeed,
                 KeyCode::Up | KeyCode::Char('k') => {
                     if self.session_selected > 0 {
@@ -327,6 +478,7 @@ impl App {
                 _ => {}
             },
             AppMode::SessionDetail => match key.code {
+                KeyCode::Char('q') => self.running = false,
                 KeyCode::Esc => self.mode = AppMode::SessionList,
                 KeyCode::Char('a') => self.mode = AppMode::AuditFeed,
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -779,5 +931,111 @@ mod tests {
         app.handle_key(make_key(KeyCode::Char('s')));
         assert!(matches!(app.mode, AppMode::SessionList));
         assert_eq!(app.session_selected, 0);
+    }
+
+    #[test]
+    fn q_quits_from_audit_feed() {
+        let mut app = make_app();
+        assert!(app.running);
+        app.handle_key(make_key(KeyCode::Char('q')));
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn q_types_in_filter_mode() {
+        let mut app = make_app();
+        app.mode = AppMode::FilterMode;
+        app.handle_key(make_key(KeyCode::Char('q')));
+        assert!(app.running);
+        assert_eq!(app.filter_text, "q");
+    }
+
+    #[test]
+    fn q_quits_from_session_list() {
+        let mut app = make_app();
+        app.mode = AppMode::SessionList;
+        app.handle_key(make_key(KeyCode::Char('q')));
+        assert!(!app.running);
+    }
+
+    fn make_dashboard_app() -> App {
+        App::new_dashboard(vec![
+            DashboardConfig {
+                name: "config-a".into(),
+                policy_desc: "permit-all".into(),
+                isolation: "Process".into(),
+                ledger_path: PathBuf::from("/tmp/a.db"),
+            },
+            DashboardConfig {
+                name: "config-b".into(),
+                policy_desc: "read-only".into(),
+                isolation: "Seatbelt".into(),
+                ledger_path: PathBuf::from("/tmp/b.db"),
+            },
+        ])
+    }
+
+    #[test]
+    fn dashboard_starts_in_home_mode() {
+        let app = make_dashboard_app();
+        assert!(matches!(app.mode, AppMode::Home));
+        assert!(app.dashboard_mode);
+        assert_eq!(app.dashboard_configs.len(), 2);
+    }
+
+    #[test]
+    fn home_navigate_and_enter() {
+        let mut app = make_dashboard_app();
+        assert_eq!(app.home_selected, 0);
+
+        app.handle_key(make_key(KeyCode::Char('j')));
+        assert_eq!(app.home_selected, 1);
+
+        // Should not go past last config
+        app.handle_key(make_key(KeyCode::Char('j')));
+        assert_eq!(app.home_selected, 1);
+
+        app.handle_key(make_key(KeyCode::Char('k')));
+        assert_eq!(app.home_selected, 0);
+
+        // Enter drills into AuditFeed for selected config
+        app.handle_key(make_key(KeyCode::Enter));
+        assert!(matches!(app.mode, AppMode::AuditFeed));
+        assert_eq!(app.ledger_path, PathBuf::from("/tmp/a.db"));
+    }
+
+    #[test]
+    fn esc_from_audit_to_home_in_dashboard() {
+        let mut app = make_dashboard_app();
+        app.handle_key(make_key(KeyCode::Enter)); // Home -> AuditFeed
+        assert!(matches!(app.mode, AppMode::AuditFeed));
+
+        app.handle_key(make_key(KeyCode::Esc));
+        assert!(matches!(app.mode, AppMode::Home));
+    }
+
+    #[test]
+    fn esc_does_nothing_in_audit_without_dashboard() {
+        let mut app = make_app();
+        assert!(matches!(app.mode, AppMode::AuditFeed));
+        app.handle_key(make_key(KeyCode::Esc));
+        // Should stay in AuditFeed (no dashboard mode)
+        assert!(matches!(app.mode, AppMode::AuditFeed));
+    }
+
+    #[test]
+    fn q_quits_from_home() {
+        let mut app = make_dashboard_app();
+        assert!(app.running);
+        app.handle_key(make_key(KeyCode::Char('q')));
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn home_enter_with_no_configs_stays() {
+        let app_empty = App::new_dashboard(vec![]);
+        let mut app = app_empty;
+        app.handle_key(make_key(KeyCode::Enter));
+        assert!(matches!(app.mode, AppMode::Home));
     }
 }

@@ -1,12 +1,13 @@
 //! Default action when `aegis` is invoked with no subcommand.
 //!
-//! If configurations exist, shows `aegis list`. Otherwise, prints a welcome
-//! message and launches the interactive setup wizard.
+//! If configurations exist, launches the interactive TUI dashboard.
+//! Otherwise, prints a welcome message and launches the setup wizard.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 
 use aegis_ledger::AuditStore;
+use aegis_monitor::DashboardConfig;
 
 use crate::commands::init::{dirs_from_env, load_config_from_dir};
 
@@ -16,7 +17,13 @@ pub fn run() -> Result<()> {
     let aegis_dir = home.join(".aegis");
 
     if has_configs(&aegis_dir) {
-        crate::commands::list::run()
+        let configs = build_dashboard_configs(&aegis_dir);
+        if configs.is_empty() {
+            println!("No Aegis configurations found.");
+            println!("Run `aegis init` or `aegis wrap -- <command>` to get started.");
+            return Ok(());
+        }
+        aegis_monitor::run_dashboard(configs).context("dashboard exited with error")
     } else {
         println!("Welcome to Aegis -- zero-trust runtime for AI agents.\n");
         println!("No configurations found. Let's set one up.\n");
@@ -55,6 +62,59 @@ fn has_configs(aegis_dir: &std::path::Path) -> bool {
     }
 
     false
+}
+
+/// Build DashboardConfig entries by scanning all init and wrap configs.
+fn build_dashboard_configs(aegis_dir: &std::path::Path) -> Vec<DashboardConfig> {
+    let mut configs = Vec::new();
+
+    // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" and "current")
+    scan_dashboard_configs(aegis_dir, &mut configs, |name| {
+        name != "wraps" && name != "current"
+    });
+
+    // Scan wrap configs: ~/.aegis/wraps/*/aegis.toml
+    let wraps_dir = aegis_dir.join("wraps");
+    scan_dashboard_configs(&wraps_dir, &mut configs, |_| true);
+
+    configs
+}
+
+/// Scan a directory for aegis configs and build DashboardConfig entries.
+fn scan_dashboard_configs(
+    dir: &std::path::Path,
+    out: &mut Vec<DashboardConfig>,
+    filter: impl Fn(&str) -> bool,
+) {
+    let readdir = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    for entry in readdir.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        if !filter(&name) || !path.join(aegis_types::CONFIG_FILENAME).exists() {
+            continue;
+        }
+
+        if let Ok(config) = load_config_from_dir(&path) {
+            let (policy_desc, isolation) = crate::commands::list::describe_config(&config);
+            out.push(DashboardConfig {
+                name,
+                policy_desc,
+                isolation,
+                ledger_path: config.ledger_path,
+            });
+        }
+    }
 }
 
 /// Find the most recently used config name.

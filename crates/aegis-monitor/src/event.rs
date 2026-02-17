@@ -5,16 +5,14 @@
 
 use std::time::Duration;
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
 
 /// Events produced by the terminal event loop.
 pub enum AppEvent {
     /// No user input within the tick window; used to trigger a data refresh.
     Tick,
-    /// A key was pressed (excluding the quit key).
+    /// A key was pressed.
     Key(KeyEvent),
-    /// The user requested to quit (pressed 'q' outside filter mode).
-    Quit,
 }
 
 /// Polls crossterm for terminal events at a fixed tick rate.
@@ -38,12 +36,7 @@ impl EventHandler {
     pub fn next(&self) -> anyhow::Result<AppEvent> {
         if event::poll(self.tick_rate)? {
             match event::read()? {
-                CrosstermEvent::Key(key) => {
-                    if key.code == KeyCode::Char('q') {
-                        return Ok(AppEvent::Quit);
-                    }
-                    Ok(AppEvent::Key(key))
-                }
+                CrosstermEvent::Key(key) => Ok(AppEvent::Key(key)),
                 _ => Ok(AppEvent::Tick),
             }
         } else {
