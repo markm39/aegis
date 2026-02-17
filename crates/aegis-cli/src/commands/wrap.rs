@@ -19,6 +19,7 @@ use aegis_types::{
     LEDGER_FILENAME,
 };
 
+use crate::commands::init::dirs_from_env;
 use crate::commands::pipeline::{self, PipelineOptions};
 
 /// Run the `aegis wrap` command.
@@ -79,9 +80,7 @@ pub fn derive_name(command: &str) -> String {
 
 /// Base directory for wrap configs: `$HOME/.aegis/wraps/`
 pub fn wraps_base_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME")
-        .map(PathBuf::from)
-        .context("HOME environment variable is not set")?;
+    let home = dirs_from_env()?;
     Ok(home.join(".aegis").join("wraps"))
 }
 
