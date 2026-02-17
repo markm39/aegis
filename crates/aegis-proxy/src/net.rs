@@ -209,37 +209,39 @@ mod tests {
     use aegis_policy::PolicyEngine;
     use tempfile::NamedTempFile;
 
-    fn make_proxy(policy_str: &str) -> NetworkProxy {
+    /// Returns the proxy along with the temp file handle to keep it alive.
+    fn make_proxy(policy_str: &str) -> (NetworkProxy, NamedTempFile) {
         let engine =
             PolicyEngine::from_policies(policy_str, None).expect("should create policy engine");
         let db_file = NamedTempFile::new().expect("should create temp file");
         let store = AuditStore::open(db_file.path()).expect("should open audit store");
 
-        NetworkProxy::new(
+        let proxy = NetworkProxy::new(
             Arc::new(Mutex::new(engine)),
             Arc::new(Mutex::new(store)),
             "test-agent".to_string(),
             0, // OS-assigned port
-        )
+        );
+        (proxy, db_file)
     }
 
     #[test]
     fn proxy_creation() {
-        let proxy = make_proxy(r#"permit(principal, action, resource);"#);
+        let (proxy, _db) = make_proxy(r#"permit(principal, action, resource);"#);
         assert_eq!(proxy.principal, "test-agent");
         assert_eq!(proxy.bind_addr.ip(), std::net::Ipv4Addr::LOCALHOST);
     }
 
     #[test]
     fn proxy_stop_sends_signal() {
-        let proxy = make_proxy(r#"permit(principal, action, resource);"#);
+        let (proxy, _db) = make_proxy(r#"permit(principal, action, resource);"#);
         proxy.stop();
         assert!(*proxy.shutdown_rx.borrow());
     }
 
     #[test]
     fn proxy_bind_addr() {
-        let proxy = make_proxy(r#"permit(principal, action, resource);"#);
+        let (proxy, _db) = make_proxy(r#"permit(principal, action, resource);"#);
         let addr = proxy.bind_addr();
         assert_eq!(addr.ip(), std::net::Ipv4Addr::new(127, 0, 0, 1));
     }

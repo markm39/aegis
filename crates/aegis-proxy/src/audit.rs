@@ -209,20 +209,23 @@ mod tests {
     use aegis_policy::PolicyEngine;
     use tempfile::NamedTempFile;
 
+    /// Returns the test deps along with the temp file handle to keep it alive
+    /// for the duration of the test. SQLite holds the file descriptor, but
+    /// dropping `NamedTempFile` removes the path from the filesystem.
     fn make_test_deps(
         policy_str: &str,
-    ) -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>) {
+    ) -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>, NamedTempFile) {
         let engine =
             PolicyEngine::from_policies(policy_str, None).expect("should create policy engine");
         let db_file = NamedTempFile::new().expect("should create temp file");
         let store = AuditStore::open(db_file.path()).expect("should open audit store");
 
-        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)))
+        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)), db_file)
     }
 
     #[test]
     fn log_process_spawn_creates_audit_entry() {
-        let (store, engine) =
+        let (store, engine, _db) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
         log_process_spawn(&store, &engine, "test-agent", "echo", &["hello".into()], None)
@@ -234,7 +237,7 @@ mod tests {
 
     #[test]
     fn log_process_exit_creates_audit_entry() {
-        let (store, engine) =
+        let (store, engine, _db) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
         log_process_exit(&store, &engine, "test-agent", "echo", 0, None)
@@ -246,7 +249,7 @@ mod tests {
 
     #[test]
     fn spawn_and_exit_creates_two_entries() {
-        let (store, engine) =
+        let (store, engine, _db) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
         log_process_spawn(&store, &engine, "test-agent", "cat", &["/tmp/f".into()], None)
@@ -260,7 +263,7 @@ mod tests {
 
     #[test]
     fn denied_spawn_still_logs() {
-        let (store, engine) =
+        let (store, engine, _db) =
             make_test_deps(r#"forbid(principal, action, resource);"#);
 
         log_process_spawn(&store, &engine, "test-agent", "rm", &["-rf".into(), "/".into()], None)
@@ -273,7 +276,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn harvest_violations_returns_zero_for_nonexistent_pid() {
-        let (store, _engine) =
+        let (store, _engine, _db) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
         let now = chrono::Utc::now();
