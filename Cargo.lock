@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "aegis-ledger",
  "aegis-monitor",
+ "aegis-observer",
  "aegis-policy",
  "aegis-proxy",
  "aegis-sandbox",

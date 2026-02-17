@@ -15,6 +15,7 @@ aegis-policy = { workspace = true }
 aegis-ledger = { workspace = true }
 aegis-sandbox = { workspace = true }
 aegis-proxy = { workspace = true }
+aegis-observer = { workspace = true }
 aegis-monitor = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

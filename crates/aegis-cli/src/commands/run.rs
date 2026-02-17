@@ -6,7 +6,7 @@ use tracing::info;
 use aegis_ledger::AuditStore;
 use aegis_policy::PolicyEngine;
 use aegis_sandbox::SandboxBackend;
-use aegis_types::IsolationConfig;
+use aegis_types::{IsolationConfig, ObserverConfig};
 
 use crate::commands::init::load_config;
 
@@ -16,13 +16,15 @@ use crate::commands::init::load_config;
 /// 1. Load config, init policy engine and audit store
 /// 2. Begin a session in the audit ledger
 /// 3. Compile Cedar policies into a Seatbelt SBPL profile
-/// 4. Create SeatbeltBackend with the compiled profile
-/// 5. Log ProcessSpawn to the audit ledger (linked to session)
-/// 6. Spawn the command in the sandbox, capturing PID and timestamps
-/// 7. Log ProcessExit to the audit ledger (linked to session)
-/// 8. End the session with the exit code
-/// 9. Harvest Seatbelt violation logs from macOS system logs
-/// 10. Print summary including session info
+/// 4. Prepare the sandbox
+/// 5. Start the filesystem observer (FSEvents watcher + pre-snapshot)
+/// 6. Log ProcessSpawn to the audit ledger (linked to session)
+/// 7. Spawn the command in the sandbox, capturing PID and timestamps
+/// 8. Log ProcessExit to the audit ledger (linked to session)
+/// 9. Wait for FSEvents delivery, then stop the observer (post-snapshot diff)
+/// 10. End the session with the exit code
+/// 11. Harvest Seatbelt violation logs from macOS system logs
+/// 12. Print summary including session and observer stats
 pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let config = load_config(config_name)?;
 
@@ -57,6 +59,33 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     let policy_arc = Arc::new(Mutex::new(policy_engine));
     let store_arc = Arc::new(Mutex::new(store));
 
+    // Start the filesystem observer (if configured)
+    let observer_session = match &config.observer {
+        ObserverConfig::FsEvents { .. } => {
+            match aegis_observer::start_observer(
+                &config.sandbox_dir,
+                Arc::clone(&store_arc),
+                Arc::clone(&policy_arc),
+                &config.name,
+                Some(session_id),
+            ) {
+                Ok(session) => {
+                    info!("filesystem observer started");
+                    Some(session)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to start observer, continuing without it");
+                    None
+                }
+            }
+        }
+        ObserverConfig::EndpointSecurity => {
+            tracing::warn!("EndpointSecurity observer not yet implemented");
+            None
+        }
+        ObserverConfig::None => None,
+    };
+
     // Log process spawn (linked to session)
     aegis_proxy::log_process_spawn_with_session(
         &store_arc, &policy_arc, &config.name, command, args, &session_id,
@@ -79,6 +108,30 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
         &store_arc, &policy_arc, &config.name, command, exit_code, &session_id,
     )
     .context("failed to log process exit")?;
+
+    // Stop the observer: wait for FSEvents delivery, capture post-snapshot, diff
+    let observer_summary = if let Some(obs) = observer_session {
+        // Brief delay for FSEvents delivery latency
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        match aegis_observer::stop_observer(obs) {
+            Ok(summary) => {
+                info!(
+                    fsevents = summary.fsevents_count,
+                    snapshot_reads = summary.snapshot_read_count,
+                    total = summary.total_logged,
+                    "observer stopped"
+                );
+                Some(summary)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to stop observer cleanly");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // End the session
     store_arc
@@ -121,6 +174,14 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
     println!("Audit entries logged: {entry_count}");
     if let Some(s) = &session {
         println!("Session actions: {} total, {} denied", s.total_actions, s.denied_actions);
+    }
+    if let Some(obs) = &observer_summary {
+        if obs.total_logged > 0 {
+            println!(
+                "Observer: {} file events ({} realtime, {} snapshot reads)",
+                obs.total_logged, obs.fsevents_count, obs.snapshot_read_count
+            );
+        }
     }
     if violation_count > 0 {
         println!("Seatbelt violations detected: {violation_count}");

@@ -18,6 +18,28 @@ pub struct NetworkRule {
     pub protocol: Protocol,
 }
 
+/// Observer configuration controlling how Aegis monitors filesystem activity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ObserverConfig {
+    /// No filesystem observation.
+    None,
+    /// FSEvents-based observation (no privileges required).
+    FsEvents {
+        /// Whether to perform pre/post snapshot diffing (catches reads, rapid events).
+        enable_snapshots: bool,
+    },
+    /// Endpoint Security logger (requires root + Full Disk Access).
+    EndpointSecurity,
+}
+
+impl Default for ObserverConfig {
+    fn default() -> Self {
+        ObserverConfig::FsEvents {
+            enable_snapshots: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum IsolationConfig {
     Seatbelt {
@@ -36,6 +58,8 @@ pub struct AegisConfig {
     pub ledger_path: PathBuf,
     pub allowed_network: Vec<NetworkRule>,
     pub isolation: IsolationConfig,
+    #[serde(default)]
+    pub observer: ObserverConfig,
 }
 
 impl AegisConfig {
@@ -62,6 +86,7 @@ impl AegisConfig {
             isolation: IsolationConfig::Seatbelt {
                 profile_overrides: None,
             },
+            observer: ObserverConfig::default(),
         }
     }
 }
@@ -86,6 +111,7 @@ mod tests {
             isolation: IsolationConfig::Seatbelt {
                 profile_overrides: None,
             },
+            observer: ObserverConfig::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
