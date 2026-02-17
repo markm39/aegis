@@ -100,6 +100,8 @@ pub struct App {
     pub home_stats: Vec<(usize, Option<String>)>,
     /// Merged recent entries across all configs for Home view.
     pub home_recent: Vec<AuditEntry>,
+    /// Name of the config currently being viewed (set when drilling in from Home).
+    pub active_config_name: Option<String>,
 }
 
 impl App {
@@ -126,6 +128,7 @@ impl App {
             home_selected: 0,
             home_stats: Vec::new(),
             home_recent: Vec::new(),
+            active_config_name: None,
         }
     }
 
@@ -159,6 +162,7 @@ impl App {
             home_selected: 0,
             home_stats: Vec::new(),
             home_recent: Vec::new(),
+            active_config_name: None,
         }
     }
 
@@ -411,6 +415,7 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(config) = self.dashboard_configs.get(self.home_selected) {
                         self.ledger_path = config.ledger_path.clone();
+                        self.active_config_name = Some(config.name.clone());
                         self.selected_index = 0;
                         self.filter_text.clear();
                         self.mode = AppMode::AuditFeed;

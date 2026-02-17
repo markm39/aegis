@@ -103,10 +103,19 @@ fn draw_audit_feed(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         AppMode::SessionDetail => "SESSION",
     };
 
+    let config_suffix = app
+        .active_config_name
+        .as_deref()
+        .map(|n| format!(" - {n}"))
+        .unwrap_or_default();
+
     let title = if app.filter_text.is_empty() {
-        format!(" Aegis Audit Feed [{mode_label}] ")
+        format!(" Aegis Audit Feed [{mode_label}]{config_suffix} ")
     } else {
-        format!(" Aegis Audit Feed [{mode_label}] filter: \"{}\" ", app.filter_text)
+        format!(
+            " Aegis Audit Feed [{mode_label}]{config_suffix} filter: \"{}\" ",
+            app.filter_text
+        )
     };
 
     let block = Block::default()
@@ -257,7 +266,11 @@ fn draw_info(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Style::default().fg(Color::White),
         )),
         Line::from(Span::styled(
-            "a/Esc   Audit view",
+            if app.dashboard_mode {
+                "Esc     Back to home"
+            } else {
+                "a/Esc   Audit view"
+            },
             Style::default().fg(Color::White),
         )),
         Line::from(Span::styled(
