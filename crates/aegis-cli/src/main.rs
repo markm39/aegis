@@ -85,6 +85,20 @@ enum Commands {
     /// List all Aegis configurations
     List,
 
+    /// Compare two sessions for forensic analysis
+    Diff {
+        /// Name of the aegis configuration
+        config: String,
+
+        /// First session UUID
+        #[arg(long)]
+        session1: String,
+
+        /// Second session UUID
+        #[arg(long)]
+        session2: String,
+    },
+
     /// Configuration management subcommands
     Config {
         #[command(subcommand)]
@@ -345,6 +359,13 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::List => {
             commands::list::run()
+        }
+        Commands::Diff {
+            config,
+            session1,
+            session2,
+        } => {
+            commands::diff::run(&config, &session1, &session2)
         }
         Commands::Config { action } => match action {
             ConfigCommands::Show { config } => commands::config::show(&config),
@@ -751,6 +772,33 @@ mod tests {
             "default-deny",
         ]);
         assert!(cli.is_ok(), "should parse policy generate: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_diff() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "diff",
+            "myagent",
+            "--session1",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--session2",
+            "550e8400-e29b-41d4-a716-446655440001",
+        ]);
+        assert!(cli.is_ok(), "should parse diff: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Diff {
+                config,
+                session1,
+                session2,
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(session1, "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(session2, "550e8400-e29b-41d4-a716-446655440001");
+            }
+            _ => panic!("expected Diff command"),
+        }
     }
 
     #[test]
