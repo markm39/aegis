@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use aegis_types::{Action, AegisError, Verdict};
 
-use crate::entry::{compute_hash, AuditEntry};
+use crate::entry::AuditEntry;
 use crate::integrity::IntegrityReport;
 use crate::query::row_to_entry;
 
@@ -214,16 +214,7 @@ impl AuditStore {
             }
 
             // Recompute and verify entry hash
-            let recomputed = compute_hash(
-                &entry.entry_id,
-                &entry.timestamp,
-                &entry.action_id,
-                &entry.action_kind,
-                &entry.principal,
-                &entry.decision,
-                &entry.reason,
-                &entry.prev_hash,
-            );
+            let recomputed = entry.recompute_hash();
             if entry.entry_hash != recomputed {
                 return Ok(IntegrityReport {
                     total_entries,

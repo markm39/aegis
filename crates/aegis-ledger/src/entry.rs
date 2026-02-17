@@ -60,6 +60,23 @@ impl AuditEntry {
             entry_hash,
         })
     }
+
+    /// Recompute this entry's hash from its fields.
+    ///
+    /// Useful for integrity verification -- compare the result against
+    /// `self.entry_hash` to detect tampering.
+    pub fn recompute_hash(&self) -> String {
+        compute_hash(
+            &self.entry_id,
+            &self.timestamp,
+            &self.action_id,
+            &self.action_kind,
+            &self.principal,
+            &self.decision,
+            &self.reason,
+            &self.prev_hash,
+        )
+    }
 }
 
 /// Compute the SHA-256 hash for an audit entry by concatenating all fields.
@@ -201,16 +218,6 @@ mod tests {
         let verdict = Verdict::deny(action.id, "forbidden", None);
         let entry = AuditEntry::new(&action, &verdict, "prev".to_string()).unwrap();
 
-        let recomputed = compute_hash(
-            &entry.entry_id,
-            &entry.timestamp,
-            &entry.action_id,
-            &entry.action_kind,
-            &entry.principal,
-            &entry.decision,
-            &entry.reason,
-            &entry.prev_hash,
-        );
-        assert_eq!(entry.entry_hash, recomputed);
+        assert_eq!(entry.entry_hash, entry.recompute_hash());
     }
 }
