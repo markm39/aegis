@@ -45,6 +45,17 @@ pub struct ActionMeta {
     pub infrastructure: bool,
 }
 
+impl ActionMeta {
+    /// Whether this action operates on the filesystem and should be
+    /// auto-scoped to the project directory.
+    pub fn is_file_action(&self) -> bool {
+        matches!(
+            self.action,
+            "FileRead" | "FileWrite" | "FileDelete" | "DirCreate" | "DirList"
+        )
+    }
+}
+
 /// A configurable action entry: metadata + current permission setting.
 #[derive(Debug, Clone)]
 pub struct ActionEntry {
@@ -332,6 +343,22 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for meta in ACTION_METAS {
             assert!(seen.insert(meta.action), "duplicate action: {}", meta.action);
+        }
+    }
+
+    #[test]
+    fn action_meta_is_file_action() {
+        let file_actions = ["FileRead", "FileWrite", "FileDelete", "DirCreate", "DirList"];
+        let non_file_actions = ["NetConnect", "ToolCall", "ProcessSpawn", "ProcessExit"];
+
+        for meta in ACTION_METAS {
+            if file_actions.contains(&meta.action) {
+                assert!(meta.is_file_action(), "{} should be a file action", meta.action);
+            } else if non_file_actions.contains(&meta.action) {
+                assert!(!meta.is_file_action(), "{} should not be a file action", meta.action);
+            } else {
+                panic!("unexpected action: {}", meta.action);
+            }
         }
     }
 }

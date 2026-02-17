@@ -75,7 +75,7 @@ pub fn draw(f: &mut Frame, app: &WizardApp) {
         WizardStep::ConfigName => "Enter: continue  Esc: cancel",
         WizardStep::SecurityPreset => "j/k: navigate  Enter: select  Esc: back",
         WizardStep::ActionConfig => {
-            "j/k: navigate  Space: toggle  Enter: edit scope  Tab: continue  Esc: back"
+            "j/k: navigate  Space: toggle  Enter: edit scope rules  Tab: continue  Esc: back"
         }
         WizardStep::ScopeEditor if app.scope_editing => "Enter: add rule  Esc: cancel input",
         WizardStep::ScopeEditor => "a: add rule  d: delete  j/k: navigate  Esc: back",
@@ -192,7 +192,7 @@ fn draw_action_config(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rec
         .split(area);
 
     let desc = Paragraph::new(Span::styled(
-        "Toggle actions with Space. Enter to set scope rules. Tab when done.",
+        "Toggle actions with Space. Press Enter on any action to customize its scope rules.",
         Style::default().fg(Color::White),
     ));
     f.render_widget(desc, chunks[0]);
@@ -221,26 +221,28 @@ fn draw_action_config(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rec
 
             let tag = if entry.meta.infrastructure {
                 "  (infrastructure)"
-            } else if entry.meta.recommended {
+            } else if entry.meta.recommended
+                && !matches!(&entry.permission, ActionPermission::Scoped(r) if !r.is_empty())
+            {
                 "  (recommended)"
             } else {
                 ""
             };
 
-            let scope_hint = match &entry.permission {
+            // Show scope summary inline for scoped actions; description for others
+            let (detail_text, detail_color) = match &entry.permission {
                 ActionPermission::Scoped(rules) if !rules.is_empty() => {
-                    format!("  [{} scope(s)]", rules.len())
+                    (format_scope_inline(rules), Color::Yellow)
                 }
-                _ => String::new(),
+                _ => (entry.meta.description.to_string(), Color::DarkGray),
             };
 
             let line = Line::from(vec![
                 Span::styled(marker, label_style),
                 Span::styled(format!("{checkbox} "), Style::default().fg(check_color)),
                 Span::styled(format!("{:<18}", entry.meta.label), label_style),
-                Span::styled(entry.meta.description, Style::default().fg(Color::DarkGray)),
+                Span::styled(detail_text, Style::default().fg(detail_color)),
                 Span::styled(tag, Style::default().fg(Color::DarkGray)),
-                Span::styled(scope_hint, Style::default().fg(Color::Yellow)),
             ]);
             ListItem::new(line)
         })
@@ -271,7 +273,7 @@ fn draw_scope_editor(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect
     let hint = if is_network {
         "Add network hosts (e.g. api.openai.com or api.openai.com:443)"
     } else {
-        "Add path patterns (e.g. /Users/me/project/*)"
+        "Add path patterns (e.g. /Users/me/project/**). Remove all to allow globally."
     };
 
     let desc = Paragraph::new(vec![
@@ -300,7 +302,7 @@ fn draw_scope_editor(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect
 
     let items: Vec<ListItem> = if rules.is_empty() {
         vec![ListItem::new(Span::styled(
-            "  (no scope rules -- action allowed globally)",
+            "  No restrictions. Press 'a' to add a path restriction.",
             Style::default().fg(Color::DarkGray),
         ))]
     } else {
@@ -316,6 +318,17 @@ fn draw_scope_editor(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect
                     ScopeRule::HostPort(h, port) => format!("Host: {h}:{port}"),
                 };
 
+                // Annotate auto-generated project-dir scopes
+                let auto_label = if let ScopeRule::PathPattern(p) = rule {
+                    if p.ends_with("/**") && rules.len() == 1 {
+                        "  (auto: project dir)"
+                    } else {
+                        ""
+                    }
+                } else {
+                    ""
+                };
+
                 let style = if selected {
                     Style::default()
                         .fg(Color::Yellow)
@@ -324,7 +337,10 @@ fn draw_scope_editor(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect
                     Style::default().fg(Color::White)
                 };
 
-                ListItem::new(Span::styled(format!("{marker}{text}"), style))
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{marker}{text}"), style),
+                    Span::styled(auto_label, Style::default().fg(Color::DarkGray)),
+                ]))
             })
             .collect()
     };
@@ -488,6 +504,32 @@ fn draw_summary(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect) {
             .title("Configuration Summary"),
     );
     f.render_widget(summary, area);
+}
+
+/// Format scope rules for inline display in the action list.
+fn format_scope_inline(rules: &[ScopeRule]) -> String {
+    let formatted: Vec<String> = rules
+        .iter()
+        .map(|r| match r {
+            ScopeRule::PathPattern(p) => truncate_path(p, 40),
+            ScopeRule::Host(h) => format!("{h}:*"),
+            ScopeRule::HostPort(h, port) => format!("{h}:{port}"),
+        })
+        .collect();
+    match formatted.len() {
+        0 => String::new(),
+        1 => formatted[0].clone(),
+        2 | 3 => formatted.join(", "),
+        n => format!("{}, {} (+{} more)", formatted[0], formatted[1], n - 2),
+    }
+}
+
+/// Truncate a path string for display, keeping the end visible.
+fn truncate_path(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        return path.to_string();
+    }
+    format!("...{}", &path[path.len() - (max_len - 3)..])
 }
 
 /// Build cursor-aware text input spans (before | cursor | after).
