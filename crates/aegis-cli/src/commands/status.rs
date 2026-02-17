@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use aegis_ledger::AuditStore;
+use aegis_ledger::{AuditFilter, AuditStore};
 
 use crate::commands::init::{load_config, resolve_config_dir};
 
@@ -62,6 +62,21 @@ pub fn run(config_name: &str) -> Result<()> {
         println!("  Sandbox dir:  MISSING");
     }
 
+    // Ledger disk usage
+    if config.ledger_path.exists() {
+        if let Ok(meta) = std::fs::metadata(&config.ledger_path) {
+            let size = meta.len();
+            let display = if size < 1024 {
+                format!("{size} B")
+            } else if size < 1024 * 1024 {
+                format!("{:.1} KB", size as f64 / 1024.0)
+            } else {
+                format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+            };
+            println!("  Ledger size:  {display}");
+        }
+    }
+
     // Check ledger
     if config.ledger_path.exists() {
         match AuditStore::open(&config.ledger_path) {
@@ -79,6 +94,35 @@ pub fn run(config_name: &str) -> Result<()> {
                     }
                     Err(e) => {
                         println!("  Integrity:    ERROR - {e}");
+                    }
+                }
+
+                // Session info
+                if let Ok(sessions) = store.list_sessions(10_000, 0) {
+                    let session_count = sessions.len();
+                    println!("  Sessions:     {session_count}");
+                    if let Some(last) = sessions.first() {
+                        println!(
+                            "  Last session: {} ({})",
+                            last.start_time.format("%Y-%m-%d %H:%M"),
+                            last.command
+                        );
+                        if let Some(tag) = &last.tag {
+                            println!("  Last tag:     {tag}");
+                        }
+                    }
+                }
+
+                // Denial count from decision breakdown
+                let filter = AuditFilter::default();
+                if let Ok(decisions) = store.count_by_decision(&filter) {
+                    let deny_count = decisions
+                        .iter()
+                        .find(|(d, _)| d == "Deny")
+                        .map(|(_, c)| *c)
+                        .unwrap_or(0);
+                    if deny_count > 0 {
+                        println!("  Denied:       {deny_count} total");
                     }
                 }
             }
