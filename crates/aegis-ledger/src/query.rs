@@ -154,19 +154,19 @@ impl AuditStore {
         Ok((entries, total_count))
     }
 
-    /// Return aggregate counts grouped by action_kind for entries matching the filter.
-    pub fn count_by_action_kind(
+    /// Return aggregate counts grouped by the given column for entries matching the filter.
+    pub(crate) fn count_grouped_by(
         &self,
+        column: &str,
         filter: &AuditFilter,
     ) -> Result<Vec<(String, usize)>, AegisError> {
         let fragment = filter.to_sql();
 
         let sql = if fragment.where_clause.is_empty() {
-            "SELECT action_kind, COUNT(*) FROM audit_log GROUP BY action_kind ORDER BY COUNT(*) DESC"
-                .to_string()
+            format!("SELECT {column}, COUNT(*) FROM audit_log GROUP BY {column} ORDER BY COUNT(*) DESC")
         } else {
             format!(
-                "SELECT action_kind, COUNT(*) FROM audit_log WHERE {} GROUP BY action_kind ORDER BY COUNT(*) DESC",
+                "SELECT {column}, COUNT(*) FROM audit_log WHERE {} GROUP BY {column} ORDER BY COUNT(*) DESC",
                 fragment.where_clause
             )
         };
@@ -177,16 +177,24 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(&sql)
-            .map_err(|e| AegisError::LedgerError(format!("count_by_action_kind failed: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("count_grouped_by({column}) failed: {e}")))?;
 
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
             })
-            .map_err(|e| AegisError::LedgerError(format!("count_by_action_kind query: {e}")))?;
+            .map_err(|e| AegisError::LedgerError(format!("count_grouped_by({column}) query: {e}")))?;
 
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AegisError::LedgerError(format!("count_by_action_kind read: {e}")))
+            .map_err(|e| AegisError::LedgerError(format!("count_grouped_by({column}) read: {e}")))
+    }
+
+    /// Return aggregate counts grouped by action_kind for entries matching the filter.
+    pub fn count_by_action_kind(
+        &self,
+        filter: &AuditFilter,
+    ) -> Result<Vec<(String, usize)>, AegisError> {
+        self.count_grouped_by("action_kind", filter)
     }
 
     /// Return aggregate counts grouped by decision for entries matching the filter.
@@ -194,34 +202,7 @@ impl AuditStore {
         &self,
         filter: &AuditFilter,
     ) -> Result<Vec<(String, usize)>, AegisError> {
-        let fragment = filter.to_sql();
-
-        let sql = if fragment.where_clause.is_empty() {
-            "SELECT decision, COUNT(*) FROM audit_log GROUP BY decision ORDER BY COUNT(*) DESC"
-                .to_string()
-        } else {
-            format!(
-                "SELECT decision, COUNT(*) FROM audit_log WHERE {} GROUP BY decision ORDER BY COUNT(*) DESC",
-                fragment.where_clause
-            )
-        };
-
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            fragment.params.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = self
-            .connection()
-            .prepare(&sql)
-            .map_err(|e| AegisError::LedgerError(format!("count_by_decision failed: {e}")))?;
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            })
-            .map_err(|e| AegisError::LedgerError(format!("count_by_decision query: {e}")))?;
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AegisError::LedgerError(format!("count_by_decision read: {e}")))
+        self.count_grouped_by("decision", filter)
     }
 
     /// Return entries with row id strictly greater than `after_id`, ordered by id ASC.

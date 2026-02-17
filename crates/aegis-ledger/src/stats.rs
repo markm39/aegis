@@ -100,34 +100,7 @@ impl AuditStore {
         &self,
         filter: &AuditFilter,
     ) -> Result<Vec<(String, usize)>, AegisError> {
-        let fragment = filter.to_sql();
-
-        let sql = if fragment.where_clause.is_empty() {
-            "SELECT principal, COUNT(*) FROM audit_log GROUP BY principal ORDER BY COUNT(*) DESC"
-                .to_string()
-        } else {
-            format!(
-                "SELECT principal, COUNT(*) FROM audit_log WHERE {} GROUP BY principal ORDER BY COUNT(*) DESC",
-                fragment.where_clause
-            )
-        };
-
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            fragment.params.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = self
-            .connection()
-            .prepare(&sql)
-            .map_err(|e| AegisError::LedgerError(format!("count_by_principal failed: {e}")))?;
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            })
-            .map_err(|e| AegisError::LedgerError(format!("count_by_principal query: {e}")))?;
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AegisError::LedgerError(format!("count_by_principal read: {e}")))
+        self.count_grouped_by("principal", filter)
     }
 
     /// Return the top N most-accessed resources, extracted from action_kind JSON.

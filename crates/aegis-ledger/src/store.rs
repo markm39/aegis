@@ -11,7 +11,7 @@ use aegis_types::{Action, AegisError, Verdict};
 
 use crate::entry::{compute_hash, AuditEntry};
 use crate::integrity::IntegrityReport;
-use crate::parse_helpers::{parse_datetime, parse_uuid};
+use crate::query::row_to_entry;
 
 /// The sentinel value used as prev_hash for the very first entry.
 const GENESIS_HASH: &str = "genesis";
@@ -160,20 +160,7 @@ impl AuditStore {
             .map_err(|e| AegisError::LedgerError(format!("failed to prepare query: {e}")))?;
 
         let rows = stmt
-            .query_map([], |row| {
-                Ok(AuditEntry {
-                    entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
-                    timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
-                    action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
-                    action_kind: row.get(3)?,
-                    principal: row.get(4)?,
-                    decision: row.get(5)?,
-                    reason: row.get(6)?,
-                    policy_id: row.get(7)?,
-                    prev_hash: row.get(8)?,
-                    entry_hash: row.get(9)?,
-                })
-            })
+            .query_map([], row_to_entry)
             .map_err(|e| AegisError::LedgerError(format!("failed to query entries: {e}")))?;
 
         let entries: Vec<AuditEntry> = rows
