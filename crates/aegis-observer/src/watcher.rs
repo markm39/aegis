@@ -190,7 +190,11 @@ fn process_notify_event(notify_event: &notify::Event, ctx: &EventContext<'_>) {
     let fs_events = map_notify_event(notify_event, ctx.sandbox_dir);
 
     for fs_event in fs_events {
-        for action_kind in fs_event.to_actions() {
+        // Capture debug info before consuming the event.
+        let debug_path = fs_event.path.display().to_string();
+        let debug_kind = format!("{:?}", fs_event.kind);
+
+        for action_kind in fs_event.into_actions() {
             let action = Action::new(ctx.principal, action_kind);
 
             let verdict = match ctx.engine.lock() {
@@ -217,8 +221,8 @@ fn process_notify_event(notify_event: &notify::Event, ctx: &EventContext<'_>) {
             } else {
                 ctx.event_count.fetch_add(1, Ordering::SeqCst);
                 tracing::debug!(
-                    path = %fs_event.path.display(),
-                    kind = ?fs_event.kind,
+                    path = %debug_path,
+                    kind = %debug_kind,
                     decision = %verdict.decision,
                     "observed filesystem event"
                 );

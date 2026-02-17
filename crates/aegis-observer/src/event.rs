@@ -50,10 +50,12 @@ pub struct FsEvent {
 }
 
 impl FsEvent {
-    /// Map this filesystem event to Aegis `ActionKind` values.
+    /// Map this filesystem event to Aegis `ActionKind` values (borrowing).
     ///
     /// Most events produce a single action. `FileRename` produces two:
     /// a delete of the old path and a write to the new path.
+    ///
+    /// Use `into_actions()` when the event is owned to avoid path clones.
     pub fn to_actions(&self) -> Vec<ActionKind> {
         match &self.kind {
             FsEventKind::FileCreate | FsEventKind::FileModify => {
@@ -87,6 +89,32 @@ impl FsEvent {
                 vec![ActionKind::FileRead {
                     path: self.path.clone(),
                 }]
+            }
+        }
+    }
+
+    /// Consuming variant of `to_actions()` that moves paths instead of cloning.
+    pub fn into_actions(self) -> Vec<ActionKind> {
+        match self.kind {
+            FsEventKind::FileCreate | FsEventKind::FileModify => {
+                vec![ActionKind::FileWrite { path: self.path }]
+            }
+            FsEventKind::FileDelete | FsEventKind::DirDelete => {
+                vec![ActionKind::FileDelete { path: self.path }]
+            }
+            FsEventKind::FileRename { from } => {
+                let mut actions = Vec::with_capacity(2);
+                if let Some(old_path) = from {
+                    actions.push(ActionKind::FileDelete { path: old_path });
+                }
+                actions.push(ActionKind::FileWrite { path: self.path });
+                actions
+            }
+            FsEventKind::DirCreate => {
+                vec![ActionKind::DirCreate { path: self.path }]
+            }
+            FsEventKind::FileRead => {
+                vec![ActionKind::FileRead { path: self.path }]
             }
         }
     }
@@ -170,6 +198,33 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], ActionKind::FileDelete { path } if path == &PathBuf::from("/sandbox/old_name.txt")));
         assert!(matches!(&actions[1], ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/new_name.txt")));
+    }
+
+    #[test]
+    fn into_actions_moves_path_without_cloning() {
+        let event = make_event(FsEventKind::FileCreate, "/sandbox/moved.txt");
+        let actions = event.into_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/moved.txt")
+        ));
+    }
+
+    #[test]
+    fn into_actions_rename_produces_two_actions() {
+        let event = FsEvent {
+            timestamp: Utc::now(),
+            path: PathBuf::from("/sandbox/new.txt"),
+            kind: FsEventKind::FileRename {
+                from: Some(PathBuf::from("/sandbox/old.txt")),
+            },
+            source: ObserverSource::FsEvents,
+        };
+        let actions = event.into_actions();
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(&actions[0], ActionKind::FileDelete { path } if path == &PathBuf::from("/sandbox/old.txt")));
+        assert!(matches!(&actions[1], ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/new.txt")));
     }
 
     #[test]
