@@ -190,7 +190,7 @@ fn start_observer(
             }
         }
         ObserverConfig::EndpointSecurity => {
-            tracing::warn!("EndpointSecurity observer not yet implemented");
+            eprintln!("Warning: EndpointSecurity observer is not yet implemented; running without observation");
             None
         }
         ObserverConfig::None => None,

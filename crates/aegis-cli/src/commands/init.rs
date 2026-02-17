@@ -121,7 +121,9 @@ fn run_wizard() -> Result<()> {
     let (policy_text, isolation) = if mode_index < SECURITY_MODES.len() {
         let mode = SECURITY_MODES[mode_index];
         let (template, isolation) = mode.to_config();
-        let text = get_builtin_policy(template).unwrap().to_string();
+        let text = get_builtin_policy(template)
+            .with_context(|| format!("unknown builtin policy template: {template}"))?
+            .to_string();
         (text, isolation)
     } else {
         build_custom_policy()?

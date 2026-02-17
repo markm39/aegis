@@ -359,6 +359,10 @@ fn parse_duration(s: &str) -> Result<Duration> {
         .parse()
         .with_context(|| format!("invalid duration number: '{num_str}'"))?;
 
+    if num <= 0 {
+        bail!("duration must be positive (e.g. '30d', '24h', '60m')");
+    }
+
     match unit {
         "d" => Ok(Duration::days(num)),
         "h" => Ok(Duration::hours(num)),
@@ -719,31 +723,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_duration_zero_days() {
-        let d = parse_duration("0d").unwrap();
-        assert_eq!(d.num_days(), 0);
+    fn parse_duration_zero_days_rejected() {
+        assert!(parse_duration("0d").is_err());
     }
 
     #[test]
-    fn parse_duration_zero_hours() {
-        let d = parse_duration("0h").unwrap();
-        assert_eq!(d.num_hours(), 0);
+    fn parse_duration_zero_hours_rejected() {
+        assert!(parse_duration("0h").is_err());
     }
 
     #[test]
-    fn parse_duration_zero_minutes() {
-        let d = parse_duration("0m").unwrap();
-        assert_eq!(d.num_minutes(), 0);
+    fn parse_duration_zero_minutes_rejected() {
+        assert!(parse_duration("0m").is_err());
     }
 
     #[test]
-    fn parse_duration_negative_is_accepted() {
-        // chrono::Duration supports negative values; the function doesn't reject them
-        let d = parse_duration("-1d");
-        // Whether this succeeds or fails, verify deterministic behavior
-        if let Ok(d) = d {
-            assert_eq!(d.num_days(), -1);
-        }
+    fn parse_duration_negative_rejected() {
+        let result = parse_duration("-1d");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("positive"),
+            "error should mention 'positive'"
+        );
     }
 
     #[test]
