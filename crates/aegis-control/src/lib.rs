@@ -11,6 +11,7 @@
 //! - Hot-reload Cedar policies
 
 pub mod command;
+pub mod daemon;
 pub mod event;
 pub mod pending;
 pub mod server;
