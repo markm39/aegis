@@ -341,8 +341,19 @@ impl AuditStore {
     /// Reads all entries in order, recomputes prev_hash and entry_hash for
     /// each one, and updates the database. The first remaining entry gets
     /// "genesis" as its prev_hash.
-    #[allow(clippy::type_complexity)]
     fn rebuild_hash_chain(&mut self) -> Result<(), AegisError> {
+        /// A raw row from the audit_log table for hash chain rebuilding.
+        struct RawRow {
+            row_id: i64,
+            entry_id: String,
+            timestamp: String,
+            action_id: String,
+            action_kind: String,
+            principal: String,
+            decision: String,
+            reason: String,
+        }
+
         // Read all remaining entries in order
         let mut stmt = self
             .conn
@@ -352,18 +363,18 @@ impl AuditStore {
             )
             .map_err(|e| AegisError::LedgerError(format!("rebuild prepare failed: {e}")))?;
 
-        let rows: Vec<(i64, String, String, String, String, String, String, String)> = stmt
+        let rows: Vec<RawRow> = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                ))
+                Ok(RawRow {
+                    row_id: row.get(0)?,
+                    entry_id: row.get(1)?,
+                    timestamp: row.get(2)?,
+                    action_id: row.get(3)?,
+                    action_kind: row.get(4)?,
+                    principal: row.get(5)?,
+                    decision: row.get(6)?,
+                    reason: row.get(7)?,
+                })
             })
             .map_err(|e| AegisError::LedgerError(format!("rebuild query failed: {e}")))?
             .collect::<Result<Vec<_>, _>>()
@@ -373,14 +384,14 @@ impl AuditStore {
 
         let mut prev_hash = GENESIS_HASH.to_string();
 
-        for (row_id, entry_id_str, timestamp_str, action_id_str, action_kind, principal, decision, reason) in &rows {
-            let entry_id: Uuid = entry_id_str
+        for row in &rows {
+            let entry_id: Uuid = row.entry_id
                 .parse()
                 .map_err(|e| AegisError::LedgerError(format!("invalid entry_id: {e}")))?;
-            let timestamp: DateTime<chrono::Utc> = DateTime::parse_from_rfc3339(timestamp_str)
+            let timestamp: DateTime<chrono::Utc> = DateTime::parse_from_rfc3339(&row.timestamp)
                 .map_err(|e| AegisError::LedgerError(format!("invalid timestamp: {e}")))?
                 .into();
-            let action_id: Uuid = action_id_str
+            let action_id: Uuid = row.action_id
                 .parse()
                 .map_err(|e| AegisError::LedgerError(format!("invalid action_id: {e}")))?;
 
@@ -388,17 +399,17 @@ impl AuditStore {
                 &entry_id,
                 &timestamp,
                 &action_id,
-                action_kind,
-                principal,
-                decision,
-                reason,
+                &row.action_kind,
+                &row.principal,
+                &row.decision,
+                &row.reason,
                 &prev_hash,
             );
 
             self.conn
                 .execute(
                     "UPDATE audit_log SET prev_hash = ?1, entry_hash = ?2 WHERE id = ?3",
-                    params![prev_hash, new_hash, row_id],
+                    params![prev_hash, new_hash, row.row_id],
                 )
                 .map_err(|e| AegisError::LedgerError(format!("rebuild update failed: {e}")))?;
 

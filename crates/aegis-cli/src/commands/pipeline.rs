@@ -223,18 +223,17 @@ fn stop_observer(
 }
 
 /// Harvest Seatbelt violations on macOS.
-#[allow(unused_variables)]
 fn harvest_violations(
-    store_arc: &Arc<Mutex<AuditStore>>,
-    config_name: &str,
-    pid: u32,
-    start_time: &chrono::DateTime<chrono::Utc>,
-    end_time: &chrono::DateTime<chrono::Utc>,
+    _store_arc: &Arc<Mutex<AuditStore>>,
+    _config_name: &str,
+    _pid: u32,
+    _start_time: &chrono::DateTime<chrono::Utc>,
+    _end_time: &chrono::DateTime<chrono::Utc>,
 ) -> usize {
     #[cfg(target_os = "macos")]
     {
-        if pid > 0 {
-            aegis_proxy::harvest_seatbelt_violations(store_arc, config_name, pid, start_time, end_time)
+        if _pid > 0 {
+            aegis_proxy::harvest_seatbelt_violations(_store_arc, _config_name, _pid, _start_time, _end_time)
                 .unwrap_or_else(|e| {
                     tracing::warn!(error = %e, "failed to harvest seatbelt violations");
                     0
