@@ -18,6 +18,17 @@ pub enum Protocol {
     Https,
 }
 
+impl std::fmt::Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Protocol::Tcp => write!(f, "TCP"),
+            Protocol::Udp => write!(f, "UDP"),
+            Protocol::Http => write!(f, "HTTP"),
+            Protocol::Https => write!(f, "HTTPS"),
+        }
+    }
+}
+
 /// A network access rule specifying which host/port/protocol combinations are allowed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NetworkRule {

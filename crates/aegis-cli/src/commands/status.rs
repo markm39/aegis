@@ -1,3 +1,5 @@
+//! Health check and status display for a named Aegis configuration.
+
 use anyhow::{Context, Result};
 
 use aegis_ledger::{AuditFilter, AuditStore};
@@ -133,8 +135,9 @@ pub fn run(config_name: &str) -> Result<()> {
         println!("  Ledger:       not yet created (will be created on first run)");
     }
 
-    // Isolation mode
+    // Isolation mode and observer
     println!("  Isolation:    {}", config.isolation);
+    println!("  Observer:     {}", config.observer);
 
     Ok(())
 }

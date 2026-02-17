@@ -66,7 +66,7 @@ pub fn show(config_name: &str) -> Result<()> {
                 .port
                 .map(|p| format!(":{p}"))
                 .unwrap_or_default();
-            println!("    - {:?} {}{}", rule.protocol, rule.host, port);
+            println!("    - {} {}{}", rule.protocol, rule.host, port);
         }
     }
 
