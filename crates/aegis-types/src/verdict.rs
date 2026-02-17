@@ -29,10 +29,10 @@ impl std::str::FromStr for Decision {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Allow" | "allow" | "ALLOW" => Ok(Decision::Allow),
-            "Deny" | "deny" | "DENY" => Ok(Decision::Deny),
-            other => Err(format!("invalid decision: {other:?} (expected Allow or Deny)")),
+        match s.to_ascii_uppercase().as_str() {
+            "ALLOW" => Ok(Decision::Allow),
+            "DENY" => Ok(Decision::Deny),
+            _ => Err(format!("invalid decision: {s:?} (expected Allow or Deny)")),
         }
     }
 }
