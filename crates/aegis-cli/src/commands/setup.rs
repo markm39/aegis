@@ -174,8 +174,15 @@ mod tests {
     }
 
     #[test]
-    fn create_aegis_dir_succeeds() {
-        assert!(create_aegis_dir().is_ok());
+    fn create_aegis_dir_succeeds_and_returns_valid_path() {
+        let path = create_aegis_dir().expect("create_aegis_dir should succeed");
+        assert!(path.exists(), "returned path should exist on disk");
+        assert!(
+            path.ends_with(".aegis"),
+            "returned path should end with .aegis, got: {}",
+            path.display()
+        );
+        assert!(path.is_dir(), "returned path should be a directory");
     }
 
     #[test]

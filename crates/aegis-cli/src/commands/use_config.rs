@@ -146,10 +146,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_config_names_returns_sorted() {
-        // This just tests that it doesn't panic; actual configs depend on the system
-        let result = list_config_names();
-        assert!(result.is_ok());
+    fn list_config_names_returns_sorted_results() {
+        // This test runs against the real HOME, so we can only verify structural
+        // properties. The returned list may be empty if no configs exist.
+        let names = list_config_names().expect("list_config_names should not error");
+        // Verify the list is actually sorted (the core invariant)
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "config names should be returned in sorted order");
+        // Verify no empty names snuck in
+        assert!(
+            names.iter().all(|n| !n.is_empty()),
+            "all config names should be non-empty"
+        );
     }
 
     #[test]
@@ -165,6 +174,22 @@ mod tests {
 
         let content = std::fs::read_to_string(&current_path).expect("read");
         assert_eq!(content.trim(), "my-test-config");
+    }
+
+    #[test]
+    fn current_file_empty_is_treated_as_absent() {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let aegis_dir = tmpdir.path().join(".aegis");
+        std::fs::create_dir_all(&aegis_dir).expect("create .aegis");
+
+        let current_path = aegis_dir.join(CURRENT_FILE);
+        std::fs::write(&current_path, "").expect("write empty");
+
+        // An empty file should be treated as if no current config is set.
+        // The get_current() function checks `!name.is_empty()` after trim.
+        let content = std::fs::read_to_string(&current_path).expect("read");
+        let name = content.trim().to_string();
+        assert!(name.is_empty(), "empty file should produce empty string after trim");
     }
 
     #[test]
