@@ -18,7 +18,7 @@ struct Cli {
     quiet: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -56,7 +56,7 @@ enum Commands {
         tag: Option<String>,
 
         /// Command and arguments to execute
-        #[arg(trailing_var_arg = true, required = true)]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
 
@@ -96,6 +96,16 @@ enum Commands {
 
     /// List all Aegis configurations
     List,
+
+    /// Show recent audit log entries (shortcut for `audit query`)
+    Log {
+        /// Config name (omit to use most recently active config)
+        config: Option<String>,
+
+        /// Number of entries to show
+        #[arg(long, default_value = "20")]
+        last: usize,
+    },
 
     /// Compare two sessions for forensic analysis
     Diff {
@@ -145,7 +155,7 @@ enum Commands {
         tag: Option<String>,
 
         /// Command and arguments to execute
-        #[arg(trailing_var_arg = true, required = true)]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
 }
@@ -373,7 +383,12 @@ fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
-    match cli.command {
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => return commands::default_action::run(),
+    };
+
+    match command {
         Commands::Setup => {
             commands::setup::run()
         }
@@ -465,6 +480,26 @@ fn main() -> anyhow::Result<()> {
         Commands::List => {
             commands::list::run()
         }
+        Commands::Log { config, last } => {
+            let config_name = match config {
+                Some(name) => name,
+                None => commands::default_action::most_recent_config()?,
+            };
+            commands::audit::query(
+                &config_name,
+                commands::audit::QueryOptions {
+                    last: Some(last),
+                    from: None,
+                    to: None,
+                    action: None,
+                    decision: None,
+                    principal: None,
+                    search: None,
+                    page: 1,
+                    page_size: last,
+                },
+            )
+        }
         Commands::Diff {
             config,
             session1,
@@ -517,7 +552,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "init", "myagent"]);
         assert!(cli.is_ok(), "should parse init with positional name: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Init { name, policy, dir } => {
                 assert_eq!(name, Some("myagent".to_string()));
                 assert_eq!(policy, "default-deny");
@@ -532,7 +567,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "init"]);
         assert!(cli.is_ok(), "should parse init with no name: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Init { name, .. } => {
                 assert!(name.is_none(), "name should be None for wizard mode");
             }
@@ -546,7 +581,7 @@ mod tests {
             Cli::try_parse_from(["aegis", "init", "agent2", "--policy", "allow-read-only"]);
         assert!(cli.is_ok(), "should parse init with policy: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Init { name, policy, dir } => {
                 assert_eq!(name, Some("agent2".to_string()));
                 assert_eq!(policy, "allow-read-only");
@@ -563,7 +598,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse init with dir: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Init { name, dir, .. } => {
                 assert_eq!(name, Some("agent3".to_string()));
                 assert_eq!(dir, Some(PathBuf::from("/tmp/my-project")));
@@ -579,7 +614,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse run with --config: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Run { config, policy, tag, command } => {
                 assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(policy, "allow-read-only");
@@ -597,7 +632,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse run with --tag: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Run { tag, .. } => {
                 assert_eq!(tag, Some("deploy-v2.1".to_string()));
             }
@@ -612,7 +647,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse run without --config: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Run { config, command, .. } => {
                 assert!(config.is_none(), "config should be None when not specified");
                 assert_eq!(command, vec!["echo", "hello"]);
@@ -628,7 +663,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse run with --policy: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Run { config, policy, command, .. } => {
                 assert!(config.is_none());
                 assert_eq!(policy, "permit-all");
@@ -649,7 +684,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse policy validate: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Policy {
                 action: PolicyCommands::Validate { path },
             } => {
@@ -666,7 +701,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit query: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Query { config, last, .. },
             } => {
@@ -695,7 +730,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse filtered query: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action:
                     AuditCommands::Query {
@@ -724,7 +759,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit sessions: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Sessions { config, last },
             } => {
@@ -747,7 +782,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit session: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Session { config, id },
             } => {
@@ -772,7 +807,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit tag: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Tag { config, id, tag },
             } => {
@@ -797,7 +832,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit purge: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action:
                     AuditCommands::Purge {
@@ -819,7 +854,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "audit", "watch", "myagent"]);
         assert!(cli.is_ok(), "should parse audit watch: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Watch { config, decision },
             } => {
@@ -837,7 +872,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit watch with filter: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Watch { config, decision },
             } => {
@@ -860,7 +895,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit export: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Export { config, format, follow, .. },
             } => {
@@ -885,7 +920,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit export with follow: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Export { config, format, follow, .. },
             } => {
@@ -902,7 +937,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "status", "myagent"]);
         assert!(cli.is_ok(), "should parse status: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Status { config } => {
                 assert_eq!(config, "myagent");
             }
@@ -915,7 +950,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "monitor", "myagent"]);
         assert!(cli.is_ok(), "should parse monitor: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Monitor { config } => {
                 assert_eq!(config, "myagent");
             }
@@ -942,7 +977,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse policy import: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Policy {
                 action: PolicyCommands::Import { config, path },
             } => {
@@ -967,7 +1002,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse policy test: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Policy {
                 action:
                     PolicyCommands::Test {
@@ -1009,7 +1044,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse diff: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Diff {
                 config,
                 session1,
@@ -1028,7 +1063,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "config", "show", "myagent"]);
         assert!(cli.is_ok(), "should parse config show: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Config {
                 action: ConfigCommands::Show { config },
             } => {
@@ -1043,7 +1078,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "config", "path", "myagent"]);
         assert!(cli.is_ok(), "should parse config path: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Config {
                 action: ConfigCommands::Path { config },
             } => {
@@ -1058,7 +1093,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "config", "edit", "myagent"]);
         assert!(cli.is_ok(), "should parse config edit: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Config {
                 action: ConfigCommands::Edit { config },
             } => {
@@ -1075,7 +1110,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse audit export with limit: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Audit {
                 action: AuditCommands::Export { config, format, limit, follow },
             } => {
@@ -1093,7 +1128,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "list"]);
         assert!(cli.is_ok(), "should parse list: {cli:?}");
         let cli = cli.unwrap();
-        assert!(matches!(cli.command, Commands::List));
+        assert!(matches!(cli.command, Some(Commands::List)));
     }
 
     #[test]
@@ -1119,7 +1154,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "setup"]);
         assert!(cli.is_ok(), "should parse setup: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Setup => {}
             _ => panic!("expected Setup command"),
         }
@@ -1130,7 +1165,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "wrap", "--", "claude", "--help"]);
         assert!(cli.is_ok(), "should parse wrap with defaults: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Wrap {
                 dir,
                 policy,
@@ -1165,7 +1200,7 @@ mod tests {
         ]);
         assert!(cli.is_ok(), "should parse wrap with options: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Wrap {
                 dir,
                 policy,
@@ -1183,11 +1218,38 @@ mod tests {
     }
 
     #[test]
+    fn cli_parse_wrap_without_double_dash() {
+        // The key UX improvement: `aegis wrap claude` should work without `--`
+        let cli = Cli::try_parse_from(["aegis", "wrap", "claude"]);
+        assert!(cli.is_ok(), "should parse wrap without --: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Wrap { command, .. } => {
+                assert_eq!(command, vec!["claude"]);
+            }
+            _ => panic!("expected Wrap command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_run_without_double_dash() {
+        let cli = Cli::try_parse_from(["aegis", "run", "echo", "hello"]);
+        assert!(cli.is_ok(), "should parse run without --: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Run { command, .. } => {
+                assert_eq!(command, vec!["echo", "hello"]);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
     fn cli_parse_completions() {
         let cli = Cli::try_parse_from(["aegis", "completions", "zsh"]);
         assert!(cli.is_ok(), "should parse completions: {cli:?}");
         let cli = cli.unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Commands::Completions { shell } => {
                 assert_eq!(shell, clap_complete::Shell::Zsh);
             }
@@ -1206,7 +1268,7 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis", "manpage"]);
         assert!(cli.is_ok(), "should parse manpage: {cli:?}");
         let cli = cli.unwrap();
-        assert!(matches!(cli.command, Commands::Manpage));
+        assert!(matches!(cli.command, Some(Commands::Manpage)));
     }
 
     #[test]
@@ -1224,6 +1286,14 @@ mod tests {
         // status without config should fail
         let result = Cli::try_parse_from(["aegis", "status"]);
         assert!(result.is_err(), "status without config should fail");
+    }
+
+    #[test]
+    fn cli_bare_aegis_no_subcommand() {
+        let cli = Cli::try_parse_from(["aegis"]);
+        assert!(cli.is_ok(), "bare aegis should parse: {cli:?}");
+        let cli = cli.unwrap();
+        assert!(cli.command.is_none(), "command should be None for bare aegis");
     }
 
     #[test]

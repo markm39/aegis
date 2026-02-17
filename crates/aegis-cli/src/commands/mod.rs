@@ -8,6 +8,7 @@ pub const DATETIME_FULL_FMT: &str = "%Y-%m-%d %H:%M:%S";
 
 pub mod audit;
 pub mod config;
+pub mod default_action;
 pub mod diff;
 pub mod init;
 pub mod list;
