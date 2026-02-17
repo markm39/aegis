@@ -14,16 +14,66 @@ use uuid::Uuid;
 /// The fields carry context used for policy evaluation and audit logging.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ActionKind {
-    FileRead { path: PathBuf },
-    FileWrite { path: PathBuf },
-    FileDelete { path: PathBuf },
-    DirCreate { path: PathBuf },
-    DirList { path: PathBuf },
-    NetConnect { host: String, port: u16 },
-    NetRequest { method: String, url: String },
-    ToolCall { tool: String, args: serde_json::Value },
-    ProcessSpawn { command: String, args: Vec<String> },
-    ProcessExit { command: String, exit_code: i32 },
+    /// Read a file at the given path.
+    FileRead {
+        /// Absolute path to the file being read.
+        path: PathBuf,
+    },
+    /// Write (create or modify) a file at the given path.
+    FileWrite {
+        /// Absolute path to the file being written.
+        path: PathBuf,
+    },
+    /// Delete a file at the given path.
+    FileDelete {
+        /// Absolute path to the file being deleted.
+        path: PathBuf,
+    },
+    /// Create a directory at the given path.
+    DirCreate {
+        /// Absolute path to the directory being created.
+        path: PathBuf,
+    },
+    /// List the contents of a directory.
+    DirList {
+        /// Absolute path to the directory being listed.
+        path: PathBuf,
+    },
+    /// Open a TCP connection to a remote host.
+    NetConnect {
+        /// Hostname or IP address of the remote endpoint.
+        host: String,
+        /// TCP port number.
+        port: u16,
+    },
+    /// Make an HTTP request (higher-level than NetConnect).
+    NetRequest {
+        /// HTTP method (GET, POST, etc.).
+        method: String,
+        /// Full URL of the request.
+        url: String,
+    },
+    /// Invoke an external tool or API.
+    ToolCall {
+        /// Name of the tool being called.
+        tool: String,
+        /// Tool-specific arguments as a JSON value.
+        args: serde_json::Value,
+    },
+    /// Spawn a child process.
+    ProcessSpawn {
+        /// Command name or path.
+        command: String,
+        /// Command-line arguments.
+        args: Vec<String>,
+    },
+    /// Record the exit of a child process.
+    ProcessExit {
+        /// Command name or path that exited.
+        command: String,
+        /// Process exit code (negative if terminated by signal).
+        exit_code: i32,
+    },
 }
 
 /// A principal performing an action at a point in time.

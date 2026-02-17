@@ -6,18 +6,23 @@
 /// audit ledger, sandbox, filesystem, or configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum AegisError {
+    /// Cedar policy evaluation or parsing failure.
     #[error("policy evaluation failed: {0}")]
     PolicyError(String),
 
+    /// Audit ledger (SQLite) read/write failure.
     #[error("audit ledger error: {0}")]
     LedgerError(String),
 
+    /// Sandbox execution or preparation failure.
     #[error("sandbox error: {0}")]
     SandboxError(String),
 
+    /// Filesystem observation or interception error.
     #[error("filesystem interception error: {0}")]
     FsError(String),
 
+    /// Configuration loading or validation error.
     #[error("configuration error: {0}")]
     ConfigError(String),
 }

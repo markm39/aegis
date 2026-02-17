@@ -21,9 +21,13 @@ pub const LEDGER_FILENAME: &str = "audit.db";
 /// Network protocol for access control rules.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Protocol {
+    /// Raw TCP connections.
     Tcp,
+    /// UDP datagrams.
     Udp,
+    /// Unencrypted HTTP traffic.
     Http,
+    /// TLS-encrypted HTTPS traffic.
     Https,
 }
 
