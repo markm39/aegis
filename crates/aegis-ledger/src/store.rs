@@ -228,24 +228,14 @@ impl AuditStore {
     ) -> Result<AuditEntry, AegisError> {
         let entry = self.insert_entry(action, verdict, Some(session_id))?;
 
-        // Update session counters
+        // Update session counters in a single query
+        let denied_incr: i64 = if entry.decision == "Deny" { 1 } else { 0 };
         self.conn
             .execute(
-                "UPDATE sessions SET total_actions = total_actions + 1 WHERE session_id = ?1",
-                params![session_id.to_string()],
+                "UPDATE sessions SET total_actions = total_actions + 1, denied_actions = denied_actions + ?1 WHERE session_id = ?2",
+                params![denied_incr, session_id.to_string()],
             )
-            .map_err(|e| AegisError::LedgerError(format!("failed to update session total: {e}")))?;
-
-        if entry.decision == "Deny" {
-            self.conn
-                .execute(
-                    "UPDATE sessions SET denied_actions = denied_actions + 1 WHERE session_id = ?1",
-                    params![session_id.to_string()],
-                )
-                .map_err(|e| {
-                    AegisError::LedgerError(format!("failed to update session denied: {e}"))
-                })?;
-        }
+            .map_err(|e| AegisError::LedgerError(format!("failed to update session counters: {e}")))?;
 
         Ok(entry)
     }

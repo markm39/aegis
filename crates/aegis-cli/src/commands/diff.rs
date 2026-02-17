@@ -71,53 +71,27 @@ pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<
     );
     println!();
 
-    // Files only in A
-    let mut only_a: Vec<(String, String)> = Vec::new();
-    let mut only_b: Vec<(String, String)> = Vec::new();
-    let mut common: Vec<(String, String)> = Vec::new();
+    // Categorize resources into only-A, only-B, common
+    let mut only_a: Vec<String> = Vec::new();
+    let mut only_b: Vec<String> = Vec::new();
+    let mut common: Vec<String> = Vec::new();
 
     for key in &all_keys {
         let in_a = s1_resources.contains_key(*key);
         let in_b = s2_resources.contains_key(*key);
 
         if in_a && !in_b {
-            only_a.push((key.to_string(), "(A only)".to_string()));
+            only_a.push(key.to_string());
         } else if !in_a && in_b {
-            only_b.push((key.to_string(), "(B only)".to_string()));
+            only_b.push(key.to_string());
         } else {
-            common.push((key.to_string(), "(both)".to_string()));
+            common.push(key.to_string());
         }
     }
 
-    println!("Files only in A:");
-    if only_a.is_empty() {
-        println!("  (none)");
-    } else {
-        for (resource, _) in &only_a {
-            println!("  {resource}");
-        }
-    }
-    println!();
-
-    println!("Files only in B:");
-    if only_b.is_empty() {
-        println!("  (none)");
-    } else {
-        for (resource, _) in &only_b {
-            println!("  {resource}");
-        }
-    }
-    println!();
-
-    println!("Common files:");
-    if common.is_empty() {
-        println!("  (none)");
-    } else {
-        for (resource, _) in &common {
-            println!("  {resource}");
-        }
-    }
-    println!();
+    print_section("Files only in A:", &only_a);
+    print_section("Files only in B:", &only_b);
+    print_section("Common files:", &common);
 
     // Action count comparison
     let a_count = s1_entries.len();
@@ -141,6 +115,19 @@ pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<
     }
 
     Ok(())
+}
+
+/// Print a labeled section of resource names, or "(none)" if empty.
+fn print_section(header: &str, items: &[String]) {
+    println!("{header}");
+    if items.is_empty() {
+        println!("  (none)");
+    } else {
+        for item in items {
+            println!("  {item}");
+        }
+    }
+    println!();
 }
 
 /// Build a map of "action_kind:resource" -> count from audit entries.
