@@ -582,4 +582,116 @@ mod tests {
 
         assert_eq!(e2.prev_hash, e1.entry_hash);
     }
+
+    #[test]
+    fn tamper_detection_prev_hash_chain_break() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        for i in 0..5 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, "ok", None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        // Break the chain by modifying prev_hash of the 4th entry
+        store
+            .connection()
+            .execute(
+                "UPDATE audit_log SET prev_hash = 'corrupted' WHERE id = 4",
+                [],
+            )
+            .unwrap();
+
+        let report = store.verify_integrity().unwrap();
+        assert!(!report.valid);
+        assert_eq!(report.first_invalid_entry, Some(3)); // 0-indexed
+        assert!(report.message.contains("chain broken"));
+    }
+
+    #[test]
+    fn purge_partial_rebuilds_valid_chain() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        // Insert entries with known timestamps via raw SQL so we can
+        // control which ones get purged.
+        let old_time = "2020-01-01T00:00:00+00:00";
+        let now = chrono::Utc::now();
+
+        // 3 old entries
+        for i in 0..3 {
+            let action = sample_action(&format!("old-agent-{i}"));
+            let verdict = Verdict::allow(action.id, "old", None);
+            store.append(&action, &verdict).unwrap();
+        }
+        // Force old timestamps
+        store
+            .connection()
+            .execute_batch(&format!(
+                "UPDATE audit_log SET timestamp = '{old_time}' WHERE id <= 3"
+            ))
+            .unwrap();
+
+        // 2 new entries (current timestamp, will survive purge)
+        for i in 0..2 {
+            let action = sample_action(&format!("new-agent-{i}"));
+            let verdict = Verdict::allow(action.id, "new", None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        // Purge entries before "now - 1 second"
+        let cutoff = now - chrono::Duration::seconds(1);
+        let deleted = store.purge_before(cutoff).unwrap();
+        assert_eq!(deleted, 3);
+
+        // Remaining entries should have a valid rebuilt chain
+        let report = store.verify_integrity().unwrap();
+        assert!(report.valid, "chain should be valid after partial purge: {}", report.message);
+        assert_eq!(report.total_entries, 2);
+    }
+
+    #[test]
+    fn reopen_preserves_chain_continuity() {
+        let tmp = test_db_path();
+
+        // Scope 1: create entries
+        {
+            let mut store = AuditStore::open(tmp.path()).unwrap();
+            for i in 0..3 {
+                let action = sample_action(&format!("agent-{i}"));
+                let verdict = Verdict::allow(action.id, "ok", None);
+                store.append(&action, &verdict).unwrap();
+            }
+        }
+
+        // Scope 2: reopen and add more entries
+        {
+            let mut store = AuditStore::open(tmp.path()).unwrap();
+            let action = sample_action("agent-3");
+            let verdict = Verdict::allow(action.id, "after reopen", None);
+            store.append(&action, &verdict).unwrap();
+
+            // Full chain should be valid
+            let report = store.verify_integrity().unwrap();
+            assert!(report.valid, "chain broken after reopen: {}", report.message);
+            assert_eq!(report.total_entries, 4);
+        }
+    }
+
+    #[test]
+    fn count_returns_total_entries() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        assert_eq!(store.count().unwrap(), 0);
+
+        for i in 0..3 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, "ok", None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        assert_eq!(store.count().unwrap(), 3);
+    }
 }
