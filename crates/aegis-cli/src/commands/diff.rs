@@ -54,14 +54,14 @@ pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<
     println!("Session Comparison");
     println!("==================");
     println!(
-        "Session A: {} ({}, {} {})",
+        "Session A: {}... ({}, {} {})",
         &session1_str[..8.min(session1_str.len())],
         s1_meta.start_time.format(DATETIME_SHORT_FMT),
         s1_meta.command,
         s1_meta.args.join(" "),
     );
     println!(
-        "Session B: {} ({}, {} {})",
+        "Session B: {}... ({}, {} {})",
         &session2_str[..8.min(session2_str.len())],
         s2_meta.start_time.format(DATETIME_SHORT_FMT),
         s2_meta.command,

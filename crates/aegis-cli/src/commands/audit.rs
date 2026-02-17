@@ -287,7 +287,10 @@ pub fn tag_session(config_name: &str, session_id_str: &str, tag: &str) -> Result
         .update_session_tag(&session_id, tag)
         .context("failed to tag session")?;
 
-    println!("Session {} tagged: {tag}", &session_id_str[..8.min(session_id_str.len())]);
+    println!(
+        "Session {}... tagged: {tag}",
+        &session_id_str[..8.min(session_id_str.len())]
+    );
 
     Ok(())
 }

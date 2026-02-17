@@ -455,10 +455,10 @@ fn draw_session_list_view(frame: &mut Frame, app: &App) {
             };
 
             // Truncate session_id to first 8 chars for display
-            let short_id = if session.session_id.len() >= 8 {
-                &session.session_id[..8]
+            let short_id = if session.session_id.len() > 8 {
+                format!("{}...", &session.session_id[..8])
             } else {
-                &session.session_id
+                session.session_id.clone()
             };
 
             // Format the start time -- just show the time portion if available

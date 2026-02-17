@@ -242,10 +242,10 @@ fn parse_action_kind(action_name: &str, resource: &str) -> Result<ActionKind> {
         "DirList" => Ok(ActionKind::DirList {
             path: PathBuf::from(resource),
         }),
-        "NetConnect" => Ok(ActionKind::NetConnect {
-            host: resource.to_string(),
-            port: 443,
-        }),
+        "NetConnect" => {
+            let (host, port) = parse_host_port(resource);
+            Ok(ActionKind::NetConnect { host, port })
+        }
         "NetRequest" => Ok(ActionKind::NetRequest {
             method: "GET".to_string(),
             url: resource.to_string(),
@@ -266,6 +266,16 @@ fn parse_action_kind(action_name: &str, resource: &str) -> Result<ActionKind> {
             "unknown action '{action_name}'; valid actions: FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, NetRequest, ToolCall, ProcessSpawn, ProcessExit"
         ),
     }
+}
+
+/// Parse a `host:port` string, defaulting to port 443 if omitted.
+fn parse_host_port(resource: &str) -> (String, u16) {
+    if let Some((host, port_str)) = resource.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            return (host.to_string(), port);
+        }
+    }
+    (resource.to_string(), 443)
 }
 
 #[cfg(test)]
@@ -344,6 +354,39 @@ mod tests {
                 parse_action_kind(action, "/resource").is_ok(),
                 "should parse {action}"
             );
+        }
+    }
+
+    #[test]
+    fn parse_host_port_with_port() {
+        let (host, port) = parse_host_port("example.com:8080");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn parse_host_port_default() {
+        let (host, port) = parse_host_port("example.com");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 443);
+    }
+
+    #[test]
+    fn parse_host_port_invalid_port() {
+        let (host, port) = parse_host_port("example.com:notaport");
+        assert_eq!(host, "example.com:notaport");
+        assert_eq!(port, 443);
+    }
+
+    #[test]
+    fn parse_action_kind_net_connect_with_port() {
+        let kind = parse_action_kind("NetConnect", "example.com:8080").unwrap();
+        match kind {
+            ActionKind::NetConnect { host, port } => {
+                assert_eq!(host, "example.com");
+                assert_eq!(port, 8080);
+            }
+            _ => panic!("expected NetConnect"),
         }
     }
 }

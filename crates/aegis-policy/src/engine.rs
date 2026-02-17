@@ -94,7 +94,7 @@ impl PolicyEngine {
                 "FileDelete" => ActionKind::FileDelete { path: probe_path() },
                 "DirCreate" => ActionKind::DirCreate { path: probe_path() },
                 "DirList" => ActionKind::DirList { path: probe_path() },
-                "NetConnect" => ActionKind::NetConnect {
+                "NetConnect" | "NetRequest" => ActionKind::NetConnect {
                     host: "__probe__".into(),
                     port: 0,
                 },
