@@ -633,6 +633,77 @@ mod tests {
         assert_eq!(ps.policies().count(), 1);
     }
 
+    // Test: non-UTF-8 path produces a Deny verdict (security: prevents policy bypass)
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_path_denies() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        // Create a path with invalid UTF-8 bytes
+        let bad_bytes: &[u8] = &[0xff, 0xfe];
+        let bad_os_str = OsStr::from_bytes(bad_bytes);
+        let bad_path = PathBuf::from(bad_os_str);
+
+        let action = Action::new("agent-1", ActionKind::FileRead { path: bad_path });
+        let verdict = engine.evaluate(&action);
+        assert_eq!(
+            verdict.decision,
+            Decision::Deny,
+            "non-UTF-8 paths must be denied to prevent policy bypass"
+        );
+        assert!(
+            verdict.reason.contains("non-UTF8"),
+            "reason should mention non-UTF8: {}",
+            verdict.reason
+        );
+    }
+
+    // Test: require_utf8 returns error for non-UTF-8 path
+    #[cfg(unix)]
+    #[test]
+    fn require_utf8_rejects_invalid_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let bad_path = PathBuf::from(OsStr::from_bytes(&[0x80, 0x81]));
+        let result = require_utf8(&bad_path);
+        assert!(result.is_err());
+    }
+
+    // Test: require_utf8 accepts valid UTF-8 path
+    #[test]
+    fn require_utf8_accepts_valid_path() {
+        let path = PathBuf::from("/tmp/hello.txt");
+        let result = require_utf8(&path);
+        assert_eq!(result.unwrap(), "/tmp/hello.txt");
+    }
+
+    // Test: extract_action_info returns correct action names
+    #[test]
+    fn extract_action_info_maps_all_kinds() {
+        let cases: Vec<(ActionKind, &str)> = vec![
+            (ActionKind::FileRead { path: PathBuf::from("/f") }, "FileRead"),
+            (ActionKind::FileWrite { path: PathBuf::from("/f") }, "FileWrite"),
+            (ActionKind::FileDelete { path: PathBuf::from("/f") }, "FileDelete"),
+            (ActionKind::DirCreate { path: PathBuf::from("/d") }, "DirCreate"),
+            (ActionKind::DirList { path: PathBuf::from("/d") }, "DirList"),
+            (ActionKind::NetConnect { host: "h".into(), port: 80 }, "NetConnect"),
+            (ActionKind::NetRequest { method: "GET".into(), url: "u".into() }, "NetConnect"),
+            (ActionKind::ToolCall { tool: "t".into(), args: serde_json::Value::Null }, "ToolCall"),
+            (ActionKind::ProcessSpawn { command: "c".into(), args: vec![] }, "ProcessSpawn"),
+            (ActionKind::ProcessExit { command: "c".into(), exit_code: 0 }, "ProcessExit"),
+        ];
+
+        for (kind, expected_name) in &cases {
+            let (name, _resource) = extract_action_info(kind).unwrap();
+            assert_eq!(name, *expected_name, "action kind {:?} should map to {}", kind, expected_name);
+        }
+    }
+
     // Test: NetRequest maps to NetConnect action
     #[test]
     fn net_request_maps_to_net_connect() {
