@@ -295,6 +295,16 @@ enum AuditCommands {
         confirm: bool,
     },
 
+    /// Watch audit events in real-time (like tail -f)
+    Watch {
+        /// Name of the aegis configuration
+        config: String,
+
+        /// Filter by decision (Allow or Deny)
+        #[arg(long)]
+        decision: Option<String>,
+    },
+
     /// Export audit entries in a structured format
     Export {
         /// Name of the aegis configuration
@@ -387,6 +397,9 @@ fn main() -> anyhow::Result<()> {
                 older_than,
                 confirm,
             } => commands::audit::purge(&config, &older_than, confirm),
+            AuditCommands::Watch { config, decision } => {
+                commands::audit::watch(&config, decision.as_deref())
+            }
             AuditCommands::Export {
                 config,
                 format,
@@ -731,6 +744,40 @@ mod tests {
                 assert!(confirm);
             }
             _ => panic!("expected Audit Purge command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_watch() {
+        let cli = Cli::try_parse_from(["aegis", "audit", "watch", "myagent"]);
+        assert!(cli.is_ok(), "should parse audit watch: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Watch { config, decision },
+            } => {
+                assert_eq!(config, "myagent");
+                assert!(decision.is_none());
+            }
+            _ => panic!("expected Audit Watch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_watch_with_filter() {
+        let cli = Cli::try_parse_from([
+            "aegis", "audit", "watch", "myagent", "--decision", "Deny",
+        ]);
+        assert!(cli.is_ok(), "should parse audit watch with filter: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Watch { config, decision },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(decision, Some("Deny".to_string()));
+            }
+            _ => panic!("expected Audit Watch command"),
         }
     }
 

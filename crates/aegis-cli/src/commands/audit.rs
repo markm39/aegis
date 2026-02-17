@@ -340,6 +340,57 @@ fn parse_duration(s: &str) -> Result<Duration> {
     }
 }
 
+/// Run `aegis audit watch NAME [--decision Allow|Deny]`.
+///
+/// Streams audit events to the terminal in real-time, like `tail -f`.
+/// Optionally filters by decision.
+pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
+    let config = load_config(config_name)?;
+    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    // Start from the latest entry
+    let initial = store.query_after_id(0).context("failed to query entries")?;
+    let mut last_id: i64 = initial.last().map(|(id, _)| *id).unwrap_or(0);
+
+    println!("Watching audit events for '{}' (Ctrl+C to stop)...", config_name);
+    println!();
+
+    loop {
+        let new_entries = store
+            .query_after_id(last_id)
+            .context("failed to poll for new entries")?;
+
+        for (row_id, entry) in &new_entries {
+            // Apply decision filter
+            if let Some(filter) = decision_filter {
+                if entry.decision != filter {
+                    last_id = *row_id;
+                    continue;
+                }
+            }
+
+            let timestamp = entry.timestamp.format("%H:%M:%S");
+            let decision_marker = if entry.decision == "Deny" {
+                "DENY "
+            } else {
+                "ALLOW"
+            };
+
+            // Parse action_kind for display
+            let action_display = crate::commands::diff::extract_resource_key(&entry.action_kind);
+
+            println!(
+                "[{timestamp}] {decision_marker}  {:<15}  {action_display}",
+                entry.principal
+            );
+
+            last_id = *row_id;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
 /// Run `aegis audit export --config NAME --format json|jsonl|csv|cef [--follow]`.
 ///
 /// Exports audit entries in the specified format. With `--follow`, polls for

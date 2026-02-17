@@ -159,7 +159,7 @@ fn build_resource_map(
 }
 
 /// Extract a display-friendly key from the action_kind JSON string.
-fn extract_resource_key(action_kind: &str) -> String {
+pub fn extract_resource_key(action_kind: &str) -> String {
     // Parse as JSON to get the variant name and resource
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(action_kind) {
         if let Some(obj) = value.as_object() {
