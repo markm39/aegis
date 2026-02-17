@@ -16,6 +16,9 @@ use crate::entry::AuditEntry;
 use crate::parse_helpers::{parse_datetime, parse_uuid};
 use crate::store::AuditStore;
 
+/// Column list for session queries (must match `row_to_session` field order).
+const SESSION_COLUMNS: &str = "session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag";
+
 /// A session represents one `aegis run` invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -114,8 +117,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag
-                 FROM sessions ORDER BY id DESC LIMIT ?1 OFFSET ?2",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions ORDER BY id DESC LIMIT ?1 OFFSET ?2"),
             )
             .map_err(|e| AegisError::LedgerError(format!("list_sessions prepare: {e}")))?;
 
@@ -142,8 +144,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag
-                 FROM sessions ORDER BY id DESC LIMIT 1",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions ORDER BY id DESC LIMIT 1"),
             )
             .map_err(|e| AegisError::LedgerError(format!("latest_session prepare: {e}")))?;
 
@@ -163,8 +164,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag
-                 FROM sessions WHERE session_id = ?1",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE session_id = ?1"),
             )
             .map_err(|e| AegisError::LedgerError(format!("get_session prepare: {e}")))?;
 

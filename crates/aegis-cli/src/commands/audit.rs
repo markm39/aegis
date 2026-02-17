@@ -11,6 +11,9 @@ use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
 use crate::commands::init::load_config;
 
+/// CSV header for audit entry export (must match `print_csv_entry` field order).
+const CSV_HEADER: &str = "entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash";
+
 /// Filter options for `aegis audit query`, bundling all CLI filter arguments.
 pub struct QueryOptions {
     pub last: Option<usize>,
@@ -463,7 +466,7 @@ fn export_follow(store: &AuditStore, format: &str) -> Result<()> {
 
     // Print header for CSV
     if format == "csv" {
-        println!("entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash");
+        println!("{CSV_HEADER}");
     }
 
     loop {
@@ -517,7 +520,7 @@ fn export_json(entries: &[AuditEntry]) -> Result<()> {
 
 /// Export entries as CSV.
 fn export_csv(entries: &[AuditEntry]) {
-    println!("entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash");
+    println!("{CSV_HEADER}");
     for e in entries {
         print_csv_entry(e);
     }
