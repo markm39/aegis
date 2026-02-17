@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use aegis_types::ActionKind;
 
 /// The kind of filesystem change observed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsEventKind {
     /// A new file was created.
     FileCreate,
@@ -30,7 +30,7 @@ pub enum FsEventKind {
 }
 
 /// How the event was detected.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObserverSource {
     /// FSEvents watcher (notify crate).
     FsEvents,
