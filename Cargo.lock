@@ -37,6 +37,7 @@ dependencies = [
  "aegis-sandbox",
  "aegis-types",
  "assert_cmd",
+ "chrono",
  "predicates",
  "rusqlite",
  "serde_json",

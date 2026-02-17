@@ -31,9 +31,9 @@ impl SeatbeltBackend {
     ///
     /// Used by the Cedar-to-SBPL compiler to pass in a tailored profile
     /// that reflects the loaded Cedar policies.
-    pub fn with_profile(profile: String) -> Self {
+    pub fn with_profile(profile: impl Into<String>) -> Self {
         Self {
-            custom_profile: Some(profile),
+            custom_profile: Some(profile.into()),
         }
     }
 
