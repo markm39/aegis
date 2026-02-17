@@ -323,3 +323,94 @@ pub fn load_config_from_dir(base_dir: &Path) -> Result<AegisConfig> {
         format!("failed to parse {}", config_path.display())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_mode_observe_only_config() {
+        let (policy, isolation) = SecurityMode::ObserveOnly.to_config();
+        assert_eq!(policy, "permit-all");
+        assert!(matches!(isolation, IsolationConfig::Process));
+    }
+
+    #[test]
+    fn security_mode_read_only_config() {
+        let (policy, isolation) = SecurityMode::ReadOnlySandbox.to_config();
+        assert_eq!(policy, "allow-read-only");
+        assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
+    }
+
+    #[test]
+    fn security_mode_full_lockdown_config() {
+        let (policy, isolation) = SecurityMode::FullLockdown.to_config();
+        assert_eq!(policy, "default-deny");
+        assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
+    }
+
+    #[test]
+    fn run_in_dir_creates_config_and_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join("test-cfg");
+
+        run_in_dir("test-cfg", "permit-all", &base_dir, None).unwrap();
+
+        // Config file should exist
+        assert!(base_dir.join(CONFIG_FILENAME).exists());
+        // Policy file should exist
+        assert!(base_dir.join("policies").join(DEFAULT_POLICY_FILENAME).exists());
+        // Sandbox dir should exist
+        assert!(base_dir.join("sandbox").is_dir());
+    }
+
+    #[test]
+    fn run_in_dir_fails_if_dir_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join("existing");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let result = run_in_dir("existing", "permit-all", &base_dir, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_in_dir_with_project_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join("my-cfg");
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        run_in_dir("my-cfg", "allow-read-only", &base_dir, Some(&project)).unwrap();
+
+        // Config should reference the project directory as sandbox
+        let config = load_config_from_dir(&base_dir).unwrap();
+        assert_eq!(config.sandbox_dir, project.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn run_in_dir_unknown_template_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join("bad-template");
+
+        let result = run_in_dir("bad-template", "nonexistent", &base_dir, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_config_from_dir_nonexistent_fails() {
+        let result = load_config_from_dir(Path::new("/nonexistent/path"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_config_from_dir_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join("roundtrip");
+
+        run_in_dir("roundtrip", "default-deny", &base_dir, None).unwrap();
+
+        let config = load_config_from_dir(&base_dir).unwrap();
+        assert_eq!(config.name, "roundtrip");
+    }
+}
