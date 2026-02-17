@@ -188,7 +188,7 @@ pub fn run_in_dir_with_isolation(
     // Look up the builtin policy text
     let policy_text = get_builtin_policy(policy_template).with_context(|| {
         format!(
-            "unknown policy template '{policy_template}'; valid options: default-deny, allow-read-only, permit-all"
+            "unknown policy template '{policy_template}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
         )
     })?;
 

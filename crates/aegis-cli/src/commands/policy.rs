@@ -112,7 +112,8 @@ pub fn generate(template_name: &str) -> Result<()> {
         }
         None => {
             bail!(
-                "unknown policy template '{template_name}'; valid options: default-deny, allow-read-only"
+                "unknown policy template '{template_name}'; valid options: {}",
+                aegis_policy::builtin::list_builtin_policies().join(", ")
             );
         }
     }

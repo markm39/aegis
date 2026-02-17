@@ -235,7 +235,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
 
     let policy_text = get_builtin_policy(policy).with_context(|| {
         format!(
-            "unknown policy template '{policy}'; valid options: default-deny, allow-read-only, permit-all"
+            "unknown policy template '{policy}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
         )
     })?;
 

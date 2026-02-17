@@ -103,7 +103,7 @@ pub fn ensure_wrap_config(
         // Create new wrap config
         let policy_text = get_builtin_policy(policy_template).with_context(|| {
             format!(
-                "unknown policy template '{policy_template}'; valid options: default-deny, allow-read-only, permit-all"
+                "unknown policy template '{policy_template}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
             )
         })?;
 
