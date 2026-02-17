@@ -1,0 +1,22 @@
+[package]
+name = "aegis-pilot"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-types = { workspace = true }
+aegis-policy = { path = "../aegis-policy" }
+aegis-ledger = { path = "../aegis-ledger" }
+nix = { version = "0.29", features = ["fs", "process", "term", "poll", "signal"] }
+libc = "0.2"
+regex = "1"
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

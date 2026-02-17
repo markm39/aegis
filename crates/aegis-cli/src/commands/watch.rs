@@ -177,13 +177,16 @@ fn run_watch(
     }
     println!("Press Ctrl-C to stop.");
 
-    // Wait for ctrl-c
+    // Handle both SIGINT (Ctrl-C) and SIGTERM (from --stop)
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = Arc::clone(&shutdown);
     ctrlc::set_handler(move || {
         shutdown_clone.store(true, Ordering::SeqCst);
     })
     .context("failed to set ctrl-c handler")?;
+
+    // Also handle SIGTERM so `aegis watch --stop` triggers graceful shutdown
+    install_sigterm_handler(&shutdown);
 
     while !shutdown.load(Ordering::SeqCst) {
         std::thread::sleep(POLL_INTERVAL);
@@ -291,6 +294,33 @@ fn send_sigterm(pid: u32) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Install a SIGTERM handler that triggers the same shutdown flag as ctrl-c.
+///
+/// The `ctrlc` crate only handles SIGINT. When `--stop` sends SIGTERM, we
+/// need this handler to trigger graceful shutdown with cleanup.
+fn install_sigterm_handler(shutdown: &Arc<AtomicBool>) {
+    // Leak an Arc clone to get a 'static pointer for the signal handler.
+    // This is intentional -- the process is shutting down when this fires.
+    let shutdown_ptr = Arc::into_raw(Arc::clone(shutdown));
+
+    unsafe {
+        SHUTDOWN_PTR.store(shutdown_ptr as *mut (), Ordering::SeqCst);
+        libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+    }
+}
+
+static SHUTDOWN_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+extern "C" fn sigterm_handler(_sig: libc::c_int) {
+    let ptr = SHUTDOWN_PTR.load(Ordering::SeqCst);
+    if !ptr.is_null() {
+        // Safety: ptr was created from Arc::into_raw and points to a valid AtomicBool
+        let flag = unsafe { &*(ptr as *const AtomicBool) };
+        flag.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Record a policy snapshot (same logic as pipeline.rs).
