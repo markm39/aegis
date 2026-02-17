@@ -39,3 +39,30 @@ pub(crate) const SYSTEM_READ_PATHS: &[&str] = &[
     "/private/var/folders",
     "/dev",
 ];
+
+/// Write the common SBPL directives shared by all profile generators.
+///
+/// Emits the base directives that every Seatbelt profile needs:
+/// - Version header and default-deny stance
+/// - Global file metadata and data reads (required by dyld)
+/// - System path read access
+/// - Process execution and forking
+/// - Sysctl reads and mach lookups
+#[cfg(target_os = "macos")]
+pub(crate) fn write_sbpl_base(profile: &mut String) {
+    profile.push_str("(version 1)\n");
+    profile.push_str("(deny default)\n");
+
+    profile.push_str("(allow file-read-metadata)\n");
+    profile.push_str("(allow file-read-data)\n");
+
+    for path in SYSTEM_READ_PATHS {
+        profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
+    }
+
+    profile.push_str("(allow process-exec)\n");
+    profile.push_str("(allow process-fork)\n");
+
+    profile.push_str("(allow sysctl-read)\n");
+    profile.push_str("(allow mach-lookup)\n");
+}

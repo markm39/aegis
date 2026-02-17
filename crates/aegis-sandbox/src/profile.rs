@@ -1,6 +1,6 @@
 use aegis_types::{AegisConfig, IsolationConfig};
 
-use crate::SYSTEM_READ_PATHS;
+use crate::write_sbpl_base;
 
 /// Generate a macOS Seatbelt profile in SBPL format from the given config.
 ///
@@ -14,18 +14,8 @@ use crate::SYSTEM_READ_PATHS;
 pub fn generate_seatbelt_profile(config: &AegisConfig) -> String {
     let mut profile = String::new();
 
-    profile.push_str("(version 1)\n");
-    profile.push_str("(deny default)\n");
-
-    // Allow reading file metadata and data globally (needed for dyld, path resolution,
-    // and symlink traversal on macOS)
-    profile.push_str("(allow file-read-metadata)\n");
-    profile.push_str("(allow file-read-data)\n");
-
-    // Allow read access to system paths (includes subdirectory traversal)
-    for path in SYSTEM_READ_PATHS {
-        profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
-    }
+    // Common base: version, deny default, system reads, process exec, system primitives
+    write_sbpl_base(&mut profile);
 
     // Allow read and write access to the sandbox directory
     let sandbox_dir = config.sandbox_dir.display();
@@ -33,14 +23,6 @@ pub fn generate_seatbelt_profile(config: &AegisConfig) -> String {
     profile.push_str(&format!(
         "(allow file-write* (subpath \"{sandbox_dir}\"))\n"
     ));
-
-    // Allow process execution and forking
-    profile.push_str("(allow process-exec)\n");
-    profile.push_str("(allow process-fork)\n");
-
-    // Allow sysctl-read and mach-lookup for basic process operation
-    profile.push_str("(allow sysctl-read)\n");
-    profile.push_str("(allow mach-lookup)\n");
 
     // Network rules: allow outbound only if rules are present
     if config.allowed_network.is_empty() {

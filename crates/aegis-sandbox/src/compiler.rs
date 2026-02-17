@@ -8,7 +8,7 @@
 use aegis_policy::PolicyEngine;
 use aegis_types::AegisConfig;
 
-use crate::SYSTEM_READ_PATHS;
+use crate::write_sbpl_base;
 
 /// Compile Cedar policies into a Seatbelt SBPL profile string.
 ///
@@ -26,20 +26,8 @@ use crate::SYSTEM_READ_PATHS;
 pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> String {
     let mut profile = String::new();
 
-    // Base: deny everything by default
-    profile.push_str("(version 1)\n");
-    profile.push_str("(deny default)\n");
-
-    // System-level reads: always needed for dyld, path resolution, symlinks.
-    // file-read-data is required globally because macOS's dynamic linker (dyld)
-    // needs to read the shared cache from various locations during process startup.
-    profile.push_str("(allow file-read-metadata)\n");
-    profile.push_str("(allow file-read-data)\n");
-
-    // System paths: always readable (binaries, libraries, etc.)
-    for path in SYSTEM_READ_PATHS {
-        profile.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
-    }
+    // Common base: version, deny default, system reads, process exec, system primitives
+    write_sbpl_base(&mut profile);
 
     let sandbox_dir = config.sandbox_dir.display();
 
@@ -59,14 +47,6 @@ pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Str
             "(allow file-write* (subpath \"{sandbox_dir}\"))\n"
         ));
     }
-
-    // Process execution: always allowed (we need to run the sandboxed command)
-    profile.push_str("(allow process-exec)\n");
-    profile.push_str("(allow process-fork)\n");
-
-    // System primitives needed for basic process operation
-    profile.push_str("(allow sysctl-read)\n");
-    profile.push_str("(allow mach-lookup)\n");
 
     // Network: allow outbound only if Cedar permits NetConnect
     if engine.permits_action("NetConnect") {
