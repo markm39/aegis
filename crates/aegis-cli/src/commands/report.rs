@@ -47,6 +47,9 @@ fn print_text_report(config_name: &str, stats: &aegis_ledger::AuditStats) {
         "  Integrity:         {}",
         if stats.integrity_valid { "VALID" } else { "INVALID" }
     );
+    if let (Some(earliest), Some(latest)) = (&stats.earliest_entry, &stats.latest_entry) {
+        println!("  Time range:        {} to {}", earliest, latest);
+    }
     println!();
 
     // Action breakdown
@@ -67,6 +70,17 @@ fn print_text_report(config_name: &str, stats: &aegis_ledger::AuditStats) {
         for (principal, count) in &stats.entries_by_principal {
             let bar = bar_chart(*count, stats.total_entries, 30);
             println!("  {:<20} {:>5}  {}", principal, count, bar);
+        }
+        println!();
+    }
+
+    // Top resources
+    if !stats.top_resources.is_empty() {
+        println!("Top Resources");
+        println!("-------------");
+        for (resource, count) in &stats.top_resources {
+            let bar = bar_chart(*count, stats.total_entries, 30);
+            println!("  {:<40} {:>5}  {}", resource, count, bar);
         }
         println!();
     }

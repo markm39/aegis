@@ -21,6 +21,12 @@ pub struct AuditStats {
     pub entries_by_principal: Vec<(String, usize)>,
     pub integrity_valid: bool,
     pub policy_changes: usize,
+    /// Top accessed resources (extracted from action_kind JSON), sorted by count descending.
+    pub top_resources: Vec<(String, usize)>,
+    /// Earliest entry timestamp, if any.
+    pub earliest_entry: Option<String>,
+    /// Latest entry timestamp, if any.
+    pub latest_entry: Option<String>,
 }
 
 impl AuditStore {
@@ -66,6 +72,12 @@ impl AuditStore {
             .list_policy_snapshots(config_name, 10_000)?
             .len();
 
+        // Top resources
+        let top_resources = self.top_resources(filter, 10)?;
+
+        // Time range
+        let (earliest_entry, latest_entry) = self.time_range()?;
+
         Ok(AuditStats {
             total_entries,
             total_sessions,
@@ -76,6 +88,9 @@ impl AuditStore {
             entries_by_principal,
             integrity_valid: integrity.valid,
             policy_changes,
+            top_resources,
+            earliest_entry,
+            latest_entry,
         })
     }
 
@@ -114,6 +129,79 @@ impl AuditStore {
             .map_err(|e| AegisError::LedgerError(format!("count_by_principal read: {e}")))
     }
 
+    /// Return the top N most-accessed resources, extracted from action_kind JSON.
+    fn top_resources(
+        &self,
+        filter: &AuditFilter,
+        limit: usize,
+    ) -> Result<Vec<(String, usize)>, AegisError> {
+        let fragment = filter.to_sql();
+
+        let sql = if fragment.where_clause.is_empty() {
+            "SELECT action_kind, COUNT(*) as cnt FROM audit_log GROUP BY action_kind ORDER BY cnt DESC"
+                .to_string()
+        } else {
+            format!(
+                "SELECT action_kind, COUNT(*) as cnt FROM audit_log WHERE {} GROUP BY action_kind ORDER BY cnt DESC",
+                fragment.where_clause
+            )
+        };
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            fragment.params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self
+            .connection()
+            .prepare(&sql)
+            .map_err(|e| AegisError::LedgerError(format!("top_resources failed: {e}")))?;
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })
+            .map_err(|e| AegisError::LedgerError(format!("top_resources query: {e}")))?;
+
+        let all: Vec<(String, usize)> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("top_resources read: {e}")))?;
+
+        // Extract human-readable resource names from the action_kind JSON
+        let mut resource_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (action_kind, count) in &all {
+            let key = extract_resource_display(action_kind);
+            *resource_counts.entry(key).or_insert(0) += count;
+        }
+
+        let mut sorted: Vec<(String, usize)> = resource_counts.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.truncate(limit);
+
+        Ok(sorted)
+    }
+
+    /// Get the earliest and latest entry timestamps.
+    fn time_range(&self) -> Result<(Option<String>, Option<String>), AegisError> {
+        let earliest: Option<String> = self
+            .connection()
+            .query_row(
+                "SELECT timestamp FROM audit_log ORDER BY id ASC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let latest: Option<String> = self
+            .connection()
+            .query_row(
+                "SELECT timestamp FROM audit_log ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        Ok((earliest, latest))
+    }
+
     /// Count the total number of sessions for a config.
     fn count_sessions(&self, config_name: &str) -> Result<usize, AegisError> {
         self.connection()
@@ -125,6 +213,30 @@ impl AuditStore {
             .map(|c| c as usize)
             .map_err(|e| AegisError::LedgerError(format!("count_sessions failed: {e}")))
     }
+}
+
+/// Extract a human-readable resource display name from the action_kind JSON.
+fn extract_resource_display(action_kind: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(action_kind) {
+        if let Some(obj) = value.as_object() {
+            if let Some((variant, inner)) = obj.iter().next() {
+                if let Some(path) = inner.get("path").and_then(|p| p.as_str()) {
+                    return format!("{variant}: {path}");
+                }
+                if let Some(host) = inner.get("host").and_then(|h| h.as_str()) {
+                    return format!("{variant}: {host}");
+                }
+                if let Some(command) = inner.get("command").and_then(|c| c.as_str()) {
+                    return format!("{variant}: {command}");
+                }
+                if let Some(tool) = inner.get("tool").and_then(|t| t.as_str()) {
+                    return format!("{variant}: {tool}");
+                }
+                return variant.clone();
+            }
+        }
+    }
+    action_kind.to_string()
 }
 
 #[cfg(test)]
