@@ -152,8 +152,7 @@ impl AuditStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
-                 FROM audit_log ORDER BY id ASC",
+                &format!("SELECT {} FROM audit_log ORDER BY id ASC", crate::query::ENTRY_COLUMNS),
             )
             .map_err(|e| AegisError::LedgerError(format!("failed to prepare query: {e}")))?;
 

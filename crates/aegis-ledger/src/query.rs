@@ -9,14 +9,16 @@ use crate::filter::AuditFilter;
 use crate::parse_helpers::{parse_datetime, parse_uuid};
 use crate::store::AuditStore;
 
+/// Column list for audit entry queries (must match `row_to_entry` field order).
+pub(crate) const ENTRY_COLUMNS: &str = "entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash";
+
 impl AuditStore {
     /// Return the last `n` entries, ordered by timestamp descending (most recent first).
     pub fn query_last(&self, n: usize) -> Result<Vec<AuditEntry>, AegisError> {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
-                 FROM audit_log ORDER BY id DESC LIMIT ?1",
+                &format!("SELECT {ENTRY_COLUMNS} FROM audit_log ORDER BY id DESC LIMIT ?1"),
             )
             .map_err(|e| AegisError::LedgerError(format!("query_last prepare failed: {e}")))?;
 
@@ -33,8 +35,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
-                 FROM audit_log WHERE principal = ?1 ORDER BY id ASC",
+                &format!("SELECT {ENTRY_COLUMNS} FROM audit_log WHERE principal = ?1 ORDER BY id ASC"),
             )
             .map_err(|e| {
                 AegisError::LedgerError(format!("query_by_principal prepare failed: {e}"))
@@ -53,8 +54,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
-                 FROM audit_log WHERE decision = ?1 ORDER BY id ASC",
+                &format!("SELECT {ENTRY_COLUMNS} FROM audit_log WHERE decision = ?1 ORDER BY id ASC"),
             )
             .map_err(|e| {
                 AegisError::LedgerError(format!("query_by_decision prepare failed: {e}"))
@@ -94,8 +94,6 @@ impl AuditStore {
             offset,
         } = filter.to_sql();
 
-        let base_columns = "entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash";
-
         // Count query (ignores limit/offset)
         let count_sql = if where_clause.is_empty() {
             "SELECT COUNT(*) FROM audit_log".to_string()
@@ -116,10 +114,10 @@ impl AuditStore {
 
         // Data query with limit/offset
         let mut data_sql = if where_clause.is_empty() {
-            format!("SELECT {base_columns} FROM audit_log ORDER BY id DESC")
+            format!("SELECT {ENTRY_COLUMNS} FROM audit_log ORDER BY id DESC")
         } else {
             format!(
-                "SELECT {base_columns} FROM audit_log WHERE {where_clause} ORDER BY id DESC"
+                "SELECT {ENTRY_COLUMNS} FROM audit_log WHERE {where_clause} ORDER BY id DESC"
             )
         };
 
