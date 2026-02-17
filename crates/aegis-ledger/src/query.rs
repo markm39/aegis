@@ -214,26 +214,16 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(
-                "SELECT id, entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
-                 FROM audit_log WHERE id > ?1 ORDER BY id ASC",
+                &format!(
+                    "SELECT {ENTRY_COLUMNS}, id FROM audit_log WHERE id > ?1 ORDER BY id ASC"
+                ),
             )
             .map_err(|e| AegisError::LedgerError(format!("query_after_id prepare: {e}")))?;
 
         let rows = stmt
             .query_map(params![after_id], |row| {
-                let row_id: i64 = row.get(0)?;
-                let entry = AuditEntry {
-                    entry_id: parse_uuid(&row.get::<_, String>(1)?, 1)?,
-                    timestamp: parse_datetime(&row.get::<_, String>(2)?, 2)?,
-                    action_id: parse_uuid(&row.get::<_, String>(3)?, 3)?,
-                    action_kind: row.get(4)?,
-                    principal: row.get(5)?,
-                    decision: row.get(6)?,
-                    reason: row.get(7)?,
-                    policy_id: row.get(8)?,
-                    prev_hash: row.get(9)?,
-                    entry_hash: row.get(10)?,
-                };
+                let entry = row_to_entry(row)?;
+                let row_id: i64 = row.get(10)?;
                 Ok((row_id, entry))
             })
             .map_err(|e| AegisError::LedgerError(format!("query_after_id failed: {e}")))?;
