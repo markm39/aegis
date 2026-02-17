@@ -540,6 +540,39 @@ enum DaemonCommands {
         name: String,
     },
 
+    /// Approve a pending permission prompt for an agent
+    Approve {
+        /// Agent name
+        name: String,
+
+        /// Request ID (UUID from pending list)
+        request_id: String,
+    },
+
+    /// Deny a pending permission prompt for an agent
+    Deny {
+        /// Agent name
+        name: String,
+
+        /// Request ID (UUID from pending list)
+        request_id: String,
+    },
+
+    /// Nudge a stalled agent
+    Nudge {
+        /// Agent name
+        name: String,
+
+        /// Optional message to include with the nudge
+        message: Option<String>,
+    },
+
+    /// List pending permission prompts for an agent
+    Pending {
+        /// Agent name
+        name: String,
+    },
+
     /// Install launchd plist for auto-start
     Install {
         /// Start the daemon after installing
@@ -844,6 +877,18 @@ fn main() -> anyhow::Result<()> {
             }
             DaemonCommands::RestartAgent { name } => {
                 commands::daemon::restart_agent(&name)
+            }
+            DaemonCommands::Approve { name, request_id } => {
+                commands::daemon::approve(&name, &request_id)
+            }
+            DaemonCommands::Deny { name, request_id } => {
+                commands::daemon::deny(&name, &request_id)
+            }
+            DaemonCommands::Nudge { name, message } => {
+                commands::daemon::nudge(&name, message.as_deref())
+            }
+            DaemonCommands::Pending { name } => {
+                commands::daemon::pending(&name)
             }
             DaemonCommands::Install { start } => {
                 commands::daemon::install(start)
@@ -1989,5 +2034,80 @@ mod tests {
         assert!(cli.is_ok(), "should parse fleet: {cli:?}");
         let cli = cli.unwrap();
         assert!(matches!(cli.command, Some(Commands::Fleet)));
+    }
+
+    #[test]
+    fn cli_parse_daemon_approve() {
+        let cli = Cli::try_parse_from([
+            "aegis", "daemon", "approve", "claude-1", "550e8400-e29b-41d4-a716-446655440000",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon approve: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Approve { name, request_id } } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(request_id, "550e8400-e29b-41d4-a716-446655440000");
+            }
+            _ => panic!("expected Daemon Approve command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_deny() {
+        let cli = Cli::try_parse_from([
+            "aegis", "daemon", "deny", "claude-1", "550e8400-e29b-41d4-a716-446655440000",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon deny: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Deny { name, request_id } } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(request_id, "550e8400-e29b-41d4-a716-446655440000");
+            }
+            _ => panic!("expected Daemon Deny command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_nudge() {
+        let cli = Cli::try_parse_from([
+            "aegis", "daemon", "nudge", "claude-1", "wake up",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon nudge: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Nudge { name, message } } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(message, Some("wake up".to_string()));
+            }
+            _ => panic!("expected Daemon Nudge command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_nudge_no_message() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "nudge", "claude-1"]);
+        assert!(cli.is_ok(), "should parse daemon nudge without message: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Nudge { name, message } } => {
+                assert_eq!(name, "claude-1");
+                assert!(message.is_none());
+            }
+            _ => panic!("expected Daemon Nudge command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_pending() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "pending", "claude-1"]);
+        assert!(cli.is_ok(), "should parse daemon pending: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Pending { name } } => {
+                assert_eq!(name, "claude-1");
+            }
+            _ => panic!("expected Daemon Pending command"),
+        }
     }
 }

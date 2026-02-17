@@ -4,6 +4,7 @@
 //! overview of all agent slots. Supports drilling into individual agents
 //! to view their output, and sending start/stop/restart commands.
 
+pub mod command;
 pub mod event;
 pub mod ui;
 pub mod wizard;
@@ -89,6 +90,24 @@ pub struct FleetApp {
     /// Whether the detail agent needs attention.
     pub detail_attention: bool,
 
+    // -- Command mode --
+    /// Whether command mode is active (: bar).
+    pub command_mode: bool,
+    /// Text buffer for the command bar.
+    pub command_buffer: String,
+    /// Cursor position in the command buffer.
+    pub command_cursor: usize,
+    /// History of executed commands.
+    pub command_history: Vec<String>,
+    /// Index into command history (-1 means current buffer).
+    pub history_index: Option<usize>,
+    /// Current tab completions.
+    pub command_completions: Vec<String>,
+    /// Selected completion index (None = no completion selected).
+    pub completion_idx: Option<usize>,
+    /// Error/result message from last command execution.
+    pub command_result: Option<String>,
+
     // -- Wizard --
     /// Add-agent wizard (active when view == AddAgent).
     pub wizard: Option<AddAgentWizard>,
@@ -122,6 +141,14 @@ impl FleetApp {
             pending_selected: 0,
             focus_pending: false,
             detail_attention: false,
+            command_mode: false,
+            command_buffer: String::new(),
+            command_cursor: 0,
+            command_history: Vec::new(),
+            history_index: None,
+            command_completions: Vec::new(),
+            completion_idx: None,
+            command_result: None,
             wizard: None,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
@@ -268,6 +295,15 @@ impl FleetApp {
             return;
         }
 
+        // Command mode intercepts all keys
+        if self.command_mode {
+            self.handle_command_key(key);
+            return;
+        }
+
+        // Clear command result on any keypress (so it fades after one action)
+        self.command_result = None;
+
         // Input mode intercepts all keys
         if self.input_mode {
             self.handle_input_key(key);
@@ -321,6 +357,9 @@ impl FleetApp {
             KeyCode::Char('a') => {
                 self.wizard = Some(AddAgentWizard::new());
                 self.view = FleetView::AddAgent;
+            }
+            KeyCode::Char(':') => {
+                self.enter_command_mode();
             }
             _ => {}
         }
@@ -436,6 +475,9 @@ impl FleetApp {
                     name: self.detail_name.clone(),
                 });
             }
+            KeyCode::Char(':') => {
+                self.enter_command_mode();
+            }
             _ => {}
         }
     }
@@ -485,6 +527,241 @@ impl FleetApp {
                 self.input_cursor = self.input_buffer.len();
             }
             _ => {}
+        }
+    }
+
+    /// Enter command mode.
+    fn enter_command_mode(&mut self) {
+        self.command_mode = true;
+        self.command_buffer.clear();
+        self.command_cursor = 0;
+        self.command_completions.clear();
+        self.completion_idx = None;
+        self.command_result = None;
+        self.history_index = None;
+    }
+
+    /// Handle keys in command mode (: bar).
+    fn handle_command_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.command_mode = false;
+                self.command_buffer.clear();
+                self.command_cursor = 0;
+                self.command_completions.clear();
+                self.completion_idx = None;
+            }
+            KeyCode::Enter => {
+                let buffer = self.command_buffer.clone();
+                if !buffer.is_empty() {
+                    self.command_history.push(buffer.clone());
+                    self.execute_command(&buffer);
+                }
+                self.command_mode = false;
+                self.command_buffer.clear();
+                self.command_cursor = 0;
+                self.command_completions.clear();
+                self.completion_idx = None;
+            }
+            KeyCode::Tab => {
+                self.cycle_completion();
+            }
+            KeyCode::BackTab => {
+                self.cycle_completion_back();
+            }
+            KeyCode::Up => {
+                self.history_prev();
+            }
+            KeyCode::Down => {
+                self.history_next();
+            }
+            KeyCode::Char(c) => {
+                self.command_buffer.insert(self.command_cursor, c);
+                self.command_cursor += 1;
+                self.update_completions();
+            }
+            KeyCode::Backspace => {
+                if self.command_cursor > 0 {
+                    self.command_cursor -= 1;
+                    self.command_buffer.remove(self.command_cursor);
+                    self.update_completions();
+                }
+            }
+            KeyCode::Left => {
+                self.command_cursor = self.command_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                if self.command_cursor < self.command_buffer.len() {
+                    self.command_cursor += 1;
+                }
+            }
+            KeyCode::Home => {
+                self.command_cursor = 0;
+            }
+            KeyCode::End => {
+                self.command_cursor = self.command_buffer.len();
+            }
+            _ => {}
+        }
+    }
+
+    /// Update tab completions based on current buffer.
+    fn update_completions(&mut self) {
+        let agent_names: Vec<String> = self.agents.iter().map(|a| a.name.clone()).collect();
+        self.command_completions = command::completions(&self.command_buffer, &agent_names);
+        self.completion_idx = None;
+    }
+
+    /// Cycle to the next completion.
+    fn cycle_completion(&mut self) {
+        if self.command_completions.is_empty() {
+            self.update_completions();
+            if self.command_completions.is_empty() {
+                return;
+            }
+        }
+        let idx = match self.completion_idx {
+            Some(i) => (i + 1) % self.command_completions.len(),
+            None => 0,
+        };
+        self.completion_idx = Some(idx);
+        let completion = self.command_completions[idx].clone();
+        self.command_buffer = command::apply_completion(&self.command_buffer, &completion);
+        self.command_cursor = self.command_buffer.len();
+    }
+
+    /// Cycle to the previous completion.
+    fn cycle_completion_back(&mut self) {
+        if self.command_completions.is_empty() {
+            return;
+        }
+        let idx = match self.completion_idx {
+            Some(0) | None => self.command_completions.len() - 1,
+            Some(i) => i - 1,
+        };
+        self.completion_idx = Some(idx);
+        let completion = self.command_completions[idx].clone();
+        self.command_buffer = command::apply_completion(&self.command_buffer, &completion);
+        self.command_cursor = self.command_buffer.len();
+    }
+
+    /// Navigate to previous command in history.
+    fn history_prev(&mut self) {
+        if self.command_history.is_empty() {
+            return;
+        }
+        let idx = match self.history_index {
+            Some(0) => 0, // already at oldest
+            Some(i) => i - 1,
+            None => self.command_history.len() - 1,
+        };
+        self.history_index = Some(idx);
+        self.command_buffer = self.command_history[idx].clone();
+        self.command_cursor = self.command_buffer.len();
+    }
+
+    /// Navigate to next command in history.
+    fn history_next(&mut self) {
+        match self.history_index {
+            Some(i) if i + 1 < self.command_history.len() => {
+                self.history_index = Some(i + 1);
+                self.command_buffer = self.command_history[i + 1].clone();
+                self.command_cursor = self.command_buffer.len();
+            }
+            Some(_) => {
+                // Past the end of history -- clear to empty
+                self.history_index = None;
+                self.command_buffer.clear();
+                self.command_cursor = 0;
+            }
+            None => {} // already at newest
+        }
+    }
+
+    /// Execute a parsed command.
+    fn execute_command(&mut self, input: &str) {
+        match command::parse(input) {
+            Ok(Some(cmd)) => self.dispatch_command(cmd),
+            Ok(None) => {}
+            Err(e) => {
+                self.command_result = Some(e);
+            }
+        }
+    }
+
+    /// Dispatch a parsed FleetCommand.
+    fn dispatch_command(&mut self, cmd: command::FleetCommand) {
+        use command::FleetCommand;
+        match cmd {
+            FleetCommand::Add => {
+                self.wizard = Some(AddAgentWizard::new());
+                self.view = FleetView::AddAgent;
+            }
+            FleetCommand::Start { agent } => {
+                self.send_named_command(DaemonCommand::StartAgent { name: agent });
+            }
+            FleetCommand::Stop { agent } => {
+                self.send_named_command(DaemonCommand::StopAgent { name: agent });
+            }
+            FleetCommand::Restart { agent } => {
+                self.send_named_command(DaemonCommand::RestartAgent { name: agent });
+            }
+            FleetCommand::Send { agent, text } => {
+                self.send_named_command(DaemonCommand::SendToAgent { name: agent, text });
+            }
+            FleetCommand::Approve { agent } => {
+                // Approve the first pending prompt (if we have it cached)
+                if let Some(pending) = self.detail_pending.first() {
+                    let cmd = DaemonCommand::ApproveRequest {
+                        name: agent,
+                        request_id: pending.request_id.clone(),
+                    };
+                    self.send_named_command(cmd);
+                } else {
+                    self.command_result = Some(format!("no pending prompts for '{agent}'"));
+                }
+            }
+            FleetCommand::Deny { agent } => {
+                if let Some(pending) = self.detail_pending.first() {
+                    let cmd = DaemonCommand::DenyRequest {
+                        name: agent,
+                        request_id: pending.request_id.clone(),
+                    };
+                    self.send_named_command(cmd);
+                } else {
+                    self.command_result = Some(format!("no pending prompts for '{agent}'"));
+                }
+            }
+            FleetCommand::Nudge { agent, message } => {
+                self.send_named_command(DaemonCommand::NudgeAgent { name: agent, message });
+            }
+            FleetCommand::Follow { agent } => {
+                self.detail_name = agent;
+                self.detail_output.clear();
+                self.detail_scroll = 0;
+                self.detail_pending.clear();
+                self.pending_selected = 0;
+                self.focus_pending = false;
+                self.detail_attention = false;
+                self.view = FleetView::AgentDetail;
+                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+            }
+            FleetCommand::Status => {
+                // Show status as command result
+                let running = self.running_count();
+                let total = self.agents.len();
+                self.command_result = Some(format!(
+                    "{running} running / {total} total, daemon PID {}, uptime {}",
+                    self.daemon_pid,
+                    format_uptime(self.daemon_uptime_secs),
+                ));
+            }
+            FleetCommand::Help => {
+                self.command_result = Some(command::help_text().to_string());
+            }
+            FleetCommand::Quit => {
+                self.running = false;
+            }
         }
     }
 
@@ -544,6 +821,17 @@ impl FleetApp {
             .take(end - start)
             .map(|s| s.as_str())
             .collect()
+    }
+}
+
+/// Format seconds into a human-readable uptime string.
+fn format_uptime(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     }
 }
 

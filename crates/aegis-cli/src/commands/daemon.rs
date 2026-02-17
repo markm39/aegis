@@ -372,6 +372,126 @@ pub fn restart_agent(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Approve a pending permission prompt for an agent.
+pub fn approve(name: &str, request_id: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::ApproveRequest {
+            name: name.to_string(),
+            request_id: request_id.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to approve: {e}"))?;
+
+    if response.ok {
+        println!("Approved request {request_id} for '{name}'.");
+    } else {
+        anyhow::bail!("{}", response.message);
+    }
+
+    Ok(())
+}
+
+/// Deny a pending permission prompt for an agent.
+pub fn deny(name: &str, request_id: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::DenyRequest {
+            name: name.to_string(),
+            request_id: request_id.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to deny: {e}"))?;
+
+    if response.ok {
+        println!("Denied request {request_id} for '{name}'.");
+    } else {
+        anyhow::bail!("{}", response.message);
+    }
+
+    Ok(())
+}
+
+/// Nudge a stalled agent.
+pub fn nudge(name: &str, message: Option<&str>) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::NudgeAgent {
+            name: name.to_string(),
+            message: message.map(|s| s.to_string()),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to nudge: {e}"))?;
+
+    if response.ok {
+        println!("Nudged '{name}'.");
+    } else {
+        anyhow::bail!("{}", response.message);
+    }
+
+    Ok(())
+}
+
+/// List pending permission prompts for an agent.
+pub fn pending(name: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::ListPending {
+            name: name.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to list pending: {e}"))?;
+
+    if !response.ok {
+        anyhow::bail!("{}", response.message);
+    }
+
+    if let Some(data) = response.data {
+        if let Ok(prompts) =
+            serde_json::from_value::<Vec<aegis_control::daemon::PendingPromptSummary>>(data)
+        {
+            if prompts.is_empty() {
+                println!("No pending prompts for '{name}'.");
+                return Ok(());
+            }
+
+            println!("{:<38} {:<8} PROMPT", "REQUEST ID", "AGE");
+            println!("{}", "-".repeat(80));
+
+            for p in &prompts {
+                println!(
+                    "{:<38} {:<8} {}",
+                    p.request_id,
+                    format!("{}s", p.age_secs),
+                    if p.raw_prompt.len() > 40 {
+                        format!("{}...", &p.raw_prompt[..37])
+                    } else {
+                        p.raw_prompt.clone()
+                    }
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Install the launchd plist.
 pub fn install(start_after: bool) -> anyhow::Result<()> {
     let binary = std::env::current_exe()

@@ -41,14 +41,29 @@ use super::{FleetApp, FleetView};
 
 /// Draw the fleet TUI to the terminal frame.
 pub fn draw(frame: &mut Frame, app: &FleetApp) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Header
-            Constraint::Min(0),   // Main content
-            Constraint::Length(3), // Status bar
-        ])
-        .split(frame.area());
+    // If command mode is active, add a command bar at the bottom
+    let has_command = app.command_mode || app.command_result.is_some();
+
+    let chunks = if has_command {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Header
+                Constraint::Min(0),   // Main content
+                Constraint::Length(3), // Status bar
+                Constraint::Length(3), // Command bar
+            ])
+            .split(frame.area())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Header
+                Constraint::Min(0),   // Main content
+                Constraint::Length(3), // Status bar
+            ])
+            .split(frame.area())
+    };
 
     match app.view {
         FleetView::Overview => {
@@ -78,6 +93,11 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
                 draw_wizard(frame, wiz, frame.area());
             }
         }
+    }
+
+    // Draw command bar / result overlay if active
+    if has_command && chunks.len() > 3 {
+        draw_command_bar(frame, app, chunks[3]);
     }
 }
 
@@ -471,6 +491,57 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(status, area);
+}
+
+/// Render the command bar (: mode) or command result.
+fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    if app.command_mode {
+        let cursor_pos = app.command_cursor.min(app.command_buffer.len());
+        let before = &app.command_buffer[..cursor_pos];
+        let cursor_char = app.command_buffer.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
+        let after = if cursor_pos < app.command_buffer.len() {
+            &app.command_buffer[cursor_pos + 1..]
+        } else {
+            ""
+        };
+
+        let mut spans = vec![
+            Span::styled(":", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(before, Style::default().fg(Color::White)),
+            Span::styled(
+                cursor_char,
+                Style::default().fg(Color::Black).bg(Color::White),
+            ),
+            Span::styled(after, Style::default().fg(Color::White)),
+        ];
+
+        // Show completions hint
+        if !app.command_completions.is_empty() {
+            let hint = app.command_completions.iter().take(5).cloned().collect::<Vec<_>>().join(" | ");
+            spans.push(Span::styled(
+                format!("  [{hint}]"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        let bar = Paragraph::new(Line::from(spans)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
+        frame.render_widget(bar, area);
+    } else if let Some(ref result) = app.command_result {
+        let bar = Paragraph::new(Span::styled(
+            format!(" {result}"),
+            Style::default().fg(Color::DarkGray),
+        ))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+        frame.render_widget(bar, area);
+    }
 }
 
 /// Draw the add-agent wizard.
