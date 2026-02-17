@@ -188,7 +188,10 @@ impl App {
              FROM sessions ORDER BY id DESC LIMIT 50",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "failed to prepare sessions query");
+                return Vec::new();
+            }
         };
 
         let rows = match stmt.query_map([], |row| {
@@ -204,7 +207,10 @@ impl App {
             })
         }) {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "failed to query sessions");
+                return Vec::new();
+            }
         };
 
         rows.filter_map(|r| r.ok()).collect()
@@ -217,14 +223,20 @@ impl App {
              GROUP BY action_kind ORDER BY cnt DESC",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "failed to prepare action distribution query");
+                return Vec::new();
+            }
         };
 
         let rows = match stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
         }) {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "failed to query action distribution");
+                return Vec::new();
+            }
         };
 
         rows.filter_map(|r| r.ok()).collect()
@@ -238,12 +250,18 @@ impl App {
              FROM audit_log WHERE session_id = ?1 ORDER BY id ASC",
         ) {
             Ok(s) => s,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "failed to prepare session entries query");
+                return Vec::new();
+            }
         };
 
         let rows = match stmt.query_map(params![session_id], aegis_ledger::row_to_entry) {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "failed to query session entries");
+                return Vec::new();
+            }
         };
 
         rows.filter_map(|r| r.ok()).collect()

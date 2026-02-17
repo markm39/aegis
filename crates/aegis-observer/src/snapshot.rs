@@ -160,15 +160,30 @@ fn walk_dir(
             continue;
         }
 
+        let modified = metadata.modified().unwrap_or_else(|e| {
+            tracing::debug!(path = %path.display(), error = %e, "mtime unavailable, using epoch");
+            SystemTime::UNIX_EPOCH
+        });
+        let accessed = metadata.accessed().unwrap_or_else(|e| {
+            tracing::debug!(path = %path.display(), error = %e, "atime unavailable, using epoch");
+            SystemTime::UNIX_EPOCH
+        });
+
         let info = FileInfo {
             is_dir: metadata.is_dir(),
             size: metadata.len(),
-            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-            accessed: metadata.accessed().unwrap_or(SystemTime::UNIX_EPOCH),
+            modified,
+            accessed,
         };
 
         // Store path relative to base for consistent comparison
-        let rel_path = path.strip_prefix(base).unwrap_or(&path).to_path_buf();
+        let rel_path = match path.strip_prefix(base) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), base = %base.display(), error = %e, "failed to strip prefix, using absolute path");
+                path.clone()
+            }
+        };
         entries.insert(rel_path, info);
 
         if metadata.is_dir() {

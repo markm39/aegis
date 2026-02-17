@@ -106,8 +106,10 @@ fn print_ledger_status(config: &aegis_types::AegisConfig) -> Result<()> {
         }
     };
 
-    let count = store.count().unwrap_or(0);
-    println!("  Ledger:       {count} entries");
+    match store.count() {
+        Ok(count) => println!("  Ledger:       {count} entries"),
+        Err(e) => println!("  Ledger:       ERROR counting entries - {e}"),
+    }
 
     // Integrity
     match store.verify_integrity() {
