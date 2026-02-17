@@ -301,14 +301,16 @@ pub fn purge(config_name: &str, older_than: &str, confirm: bool) -> Result<()> {
         // Show a preview of what would be deleted
         let cutoff = Utc::now() - duration;
         let (_config, store) = open_store(config_name)?;
-        let total = store.count().unwrap_or(0);
+        let total = store.count().context("failed to count audit entries")?;
 
         // Count entries that would be deleted
         let filter = AuditFilter {
             to: Some(cutoff),
             ..Default::default()
         };
-        let (_, would_delete) = store.query_filtered(&filter).unwrap_or((vec![], 0));
+        let (_, would_delete) = store
+            .query_filtered(&filter)
+            .context("failed to query entries for purge preview")?;
 
         bail!(
             "purge would delete {would_delete} of {total} entries older than {older_than}.\n\
@@ -525,7 +527,10 @@ fn export_jsonl(entries: &[AuditEntry]) {
 
 /// Print a single entry as a JSONL line.
 fn print_jsonl_entry(e: &AuditEntry) {
-    println!("{}", serde_json::to_string(e).unwrap_or_default());
+    match serde_json::to_string(e) {
+        Ok(json) => println!("{json}"),
+        Err(err) => eprintln!("warning: failed to serialize entry {}: {err}", e.entry_id),
+    }
 }
 
 /// Print a single entry as a CSV row (no header).
