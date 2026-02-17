@@ -26,6 +26,22 @@ const BAR_CHART_WIDTH: usize = 20;
 /// Maximum number of action kinds shown in the distribution chart.
 const MAX_DISTRIBUTION_BARS: usize = 6;
 
+/// Build a styled label-value line for metadata displays.
+///
+/// The label is right-padded to 10 characters with a white foreground,
+/// and the value is styled with the given color and optional bold modifier.
+fn labeled_line<'a>(label: &str, value: impl Into<String>, color: Color, bold: bool) -> Line<'a> {
+    let style = if bold {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color)
+    };
+    Line::from(vec![
+        Span::styled(format!("{label:<10} "), Style::default().fg(Color::White)),
+        Span::styled(value.into(), style),
+    ])
+}
+
 /// Render an audit entry as a styled ListItem.
 fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
     let ts = entry.timestamp.format("%H:%M:%S");
@@ -146,6 +162,35 @@ fn draw_audit_feed(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     frame.render_widget(list, area);
 }
 
+/// Append a horizontal bar chart for action distribution to `lines`.
+fn build_distribution_chart<'a>(distribution: &[(String, usize)], lines: &mut Vec<Line<'a>>) {
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Action Distribution",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    let max_count = distribution.iter().map(|(_, c)| *c).max().unwrap_or(1);
+
+    for (kind, count) in distribution.iter().take(MAX_DISTRIBUTION_BARS) {
+        let filled = if max_count > 0 {
+            (*count as f64 / max_count as f64 * BAR_CHART_WIDTH as f64).round() as usize
+        } else {
+            0
+        };
+        let filled = filled.min(BAR_CHART_WIDTH);
+        let bar: String = "#".repeat(filled) + &".".repeat(BAR_CHART_WIDTH - filled);
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<14} ", kind), Style::default().fg(Color::Yellow)),
+            Span::styled(bar, Style::default().fg(Color::Cyan)),
+            Span::styled(format!(" {count}"), Style::default().fg(Color::White)),
+        ]));
+    }
+}
+
 /// Render the statistics panel (bottom-left).
 fn draw_stats(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let block = Block::default()
@@ -168,86 +213,16 @@ fn draw_stats(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     };
 
     let mut text = vec![
-        Line::from(vec![
-            Span::styled("Total:     ", Style::default().fg(Color::White)),
-            Span::styled(
-                app.total_count.to_string(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Allowed:   ", Style::default().fg(Color::White)),
-            Span::styled(
-                app.allow_count.to_string(),
-                Style::default().fg(Color::Green),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Denied:    ", Style::default().fg(Color::White)),
-            Span::styled(
-                app.deny_count.to_string(),
-                Style::default().fg(Color::Red),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Deny rate: ", Style::default().fg(Color::White)),
-            Span::styled(
-                format!("{deny_rate:.1}%"),
-                Style::default()
-                    .fg(deny_rate_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Sessions:  ", Style::default().fg(Color::White)),
-            Span::styled(
-                app.sessions.len().to_string(),
-                Style::default().fg(Color::Cyan),
-            ),
-        ]),
+        labeled_line("Total:", app.total_count.to_string(), Color::Cyan, true),
+        labeled_line("Allowed:", app.allow_count.to_string(), Color::Green, false),
+        labeled_line("Denied:", app.deny_count.to_string(), Color::Red, false),
+        labeled_line("Deny rate:", format!("{deny_rate:.1}%"), deny_rate_color, true),
+        labeled_line("Sessions:", app.sessions.len().to_string(), Color::Cyan, false),
     ];
 
     // Action distribution bar chart
     if !app.action_distribution.is_empty() {
-        text.push(Line::from(""));
-        text.push(Line::from(Span::styled(
-            "Action Distribution",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )));
-
-        let max_count = app
-            .action_distribution
-            .iter()
-            .map(|(_, c)| *c)
-            .max()
-            .unwrap_or(1);
-
-        for (kind, count) in app.action_distribution.iter().take(MAX_DISTRIBUTION_BARS) {
-            let filled = if max_count > 0 {
-                (*count as f64 / max_count as f64 * BAR_CHART_WIDTH as f64).round() as usize
-            } else {
-                0
-            };
-            let filled = filled.min(BAR_CHART_WIDTH);
-            let bar: String =
-                "#".repeat(filled) + &".".repeat(BAR_CHART_WIDTH - filled);
-
-            text.push(Line::from(vec![
-                Span::styled(
-                    format!("{:<14} ", kind),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(bar, Style::default().fg(Color::Cyan)),
-                Span::styled(
-                    format!(" {count}"),
-                    Style::default().fg(Color::White),
-                ),
-            ]));
-        }
+        build_distribution_chart(&app.action_distribution, &mut text);
     }
 
     let paragraph = Paragraph::new(text).block(block);
@@ -565,57 +540,23 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
         };
 
         vec![
-            Line::from(vec![
-                Span::styled("Session:  ", Style::default().fg(Color::White)),
-                Span::styled(
-                    &session.session_id,
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Command:  ", Style::default().fg(Color::White)),
-                Span::styled(
-                    &session.command,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Status:   ", Style::default().fg(Color::White)),
-                Span::styled(status_text, Style::default().fg(status_color)),
-            ]),
-            Line::from(vec![
-                Span::styled("Actions:  ", Style::default().fg(Color::White)),
-                Span::styled(
-                    format!(
-                        "{} total, {} denied",
-                        session.total_actions, session.denied_actions
-                    ),
-                    Style::default().fg(Color::White),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Config:   ", Style::default().fg(Color::White)),
-                Span::styled(
-                    &session.config_name,
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Started:  ", Style::default().fg(Color::White)),
-                Span::styled(
-                    &session.start_time,
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Ended:    ", Style::default().fg(Color::White)),
-                Span::styled(
-                    session.end_time.as_deref().unwrap_or("(running)"),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]),
+            labeled_line("Session:", session.session_id.clone(), Color::Cyan, false),
+            labeled_line("Command:", session.command.clone(), Color::Yellow, true),
+            labeled_line("Status:", status_text, status_color, false),
+            labeled_line(
+                "Actions:",
+                format!("{} total, {} denied", session.total_actions, session.denied_actions),
+                Color::White,
+                false,
+            ),
+            labeled_line("Config:", session.config_name.clone(), Color::Cyan, false),
+            labeled_line("Started:", session.start_time.clone(), Color::DarkGray, false),
+            labeled_line(
+                "Ended:",
+                session.end_time.as_deref().unwrap_or("(running)").to_string(),
+                Color::DarkGray,
+                false,
+            ),
         ]
     } else {
         vec![Line::from(Span::styled(
