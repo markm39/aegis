@@ -85,6 +85,12 @@ enum Commands {
     /// List all Aegis configurations
     List,
 
+    /// Configuration management subcommands
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommands,
+    },
+
     /// Wrap a command with Aegis observability (observe-only by default)
     Wrap {
         /// Project directory to observe (defaults to current directory)
@@ -102,6 +108,15 @@ enum Commands {
         /// Command and arguments to execute
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCommands {
+    /// Show the full configuration for a named config
+    Show {
+        /// Name of the aegis configuration
+        config: String,
     },
 }
 
@@ -292,6 +307,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::List => {
             commands::list::run()
+        }
+        Commands::Config { action } => match action {
+            ConfigCommands::Show { config } => commands::config::show(&config),
         }
         Commands::Wrap {
             dir,
@@ -634,6 +652,21 @@ mod tests {
             "default-deny",
         ]);
         assert!(cli.is_ok(), "should parse policy generate: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_config_show() {
+        let cli = Cli::try_parse_from(["aegis", "config", "show", "myagent"]);
+        assert!(cli.is_ok(), "should parse config show: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Config {
+                action: ConfigCommands::Show { config },
+            } => {
+                assert_eq!(config, "myagent");
+            }
+            _ => panic!("expected Config Show command"),
+        }
     }
 
     #[test]
