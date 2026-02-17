@@ -58,7 +58,19 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
         }
         FleetView::AgentDetail => {
             draw_detail_header(frame, app, chunks[0]);
-            draw_agent_output(frame, app, chunks[1]);
+
+            if app.input_mode {
+                // Split main area into output + input bar
+                let detail_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(0), Constraint::Length(3)])
+                    .split(chunks[1]);
+                draw_detail_main(frame, app, detail_chunks[0]);
+                draw_input_bar(frame, app, detail_chunks[1]);
+            } else {
+                draw_detail_main(frame, app, chunks[1]);
+            }
+
             draw_detail_status(frame, app, chunks[2]);
         }
         FleetView::AddAgent => {
@@ -252,7 +264,7 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         .map(|a| a.tool.as_str())
         .unwrap_or("?");
 
-    let header_line = Line::from(vec![
+    let mut header_spans = vec![
         Span::styled(" ", Style::default()),
         Span::styled(
             &app.detail_name,
@@ -269,7 +281,23 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             format!("  {} lines", app.detail_output.len()),
             Style::default().fg(Color::DarkGray),
         ),
-    ]);
+    ];
+
+    if !app.detail_pending.is_empty() {
+        header_spans.push(Span::styled(
+            format!("  [{} pending]", app.detail_pending.len()),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    if app.detail_attention {
+        header_spans.push(Span::styled(
+            "  [ATTENTION]",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let header_line = Line::from(header_spans);
 
     let header = Paragraph::new(header_line).block(
         Block::default()
@@ -311,24 +339,131 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
     frame.render_widget(list, area);
 }
 
+/// Render the main content of the detail view (output + optional pending panel).
+fn draw_detail_main(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    if app.detail_pending.is_empty() {
+        // No pending prompts -- full width output
+        draw_agent_output(frame, app, area);
+    } else {
+        // Split horizontally: output on the left, pending on the right
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .split(area);
+        draw_agent_output(frame, app, split[0]);
+        draw_pending_panel(frame, app, split[1]);
+    }
+}
+
+/// Render the pending prompts panel.
+fn draw_pending_panel(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    let items: Vec<ListItem> = app
+        .detail_pending
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let marker = if i == app.pending_selected && app.focus_pending {
+                "> "
+            } else {
+                "  "
+            };
+            let style = if i == app.pending_selected && app.focus_pending {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+            let age = format!(" ({}s)", p.age_secs);
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(
+                    truncate_str(&p.raw_prompt, (area.width as usize).saturating_sub(12)),
+                    style,
+                ),
+                Span::styled(age, Style::default().fg(Color::DarkGray)),
+            ]))
+        })
+        .collect();
+
+    let border_color = if app.focus_pending {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let title = format!(" Pending ({}) ", app.detail_pending.len());
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(border_color)),
+    );
+    frame.render_widget(list, area);
+}
+
+/// Render the text input bar at the bottom of the detail view.
+fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    let cursor_pos = app.input_cursor.min(app.input_buffer.len());
+    let before = &app.input_buffer[..cursor_pos];
+    let cursor_char = app.input_buffer.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
+    let after = if cursor_pos < app.input_buffer.len() {
+        &app.input_buffer[cursor_pos + 1..]
+    } else {
+        ""
+    };
+
+    let line = Line::from(vec![
+        Span::styled(" > ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(before, Style::default().fg(Color::White)),
+        Span::styled(
+            cursor_char,
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
+        Span::styled(after, Style::default().fg(Color::White)),
+    ]);
+
+    let bar = Paragraph::new(line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Send Input ")
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    frame.render_widget(bar, area);
+}
+
 /// Render the detail status bar.
-fn draw_detail_status(frame: &mut Frame, _app: &FleetApp, area: ratatui::layout::Rect) {
-    let spans = vec![
+fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    let mut spans = vec![
         Span::styled(" Esc", Style::default().fg(Color::Yellow)),
         Span::styled(": back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("i", Style::default().fg(Color::Cyan)),
+        Span::styled(": input  ", Style::default().fg(Color::DarkGray)),
+    ];
+
+    if !app.detail_pending.is_empty() {
+        spans.extend([
+            Span::styled("a", Style::default().fg(Color::Green)),
+            Span::styled(": approve  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("d", Style::default().fg(Color::Red)),
+            Span::styled(": deny  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab", Style::default().fg(Color::Yellow)),
+            Span::styled(": focus  ", Style::default().fg(Color::DarkGray)),
+        ]);
+    }
+
+    spans.extend([
+        Span::styled("n", Style::default().fg(Color::Magenta)),
+        Span::styled(": nudge  ", Style::default().fg(Color::DarkGray)),
         Span::styled("j/k", Style::default().fg(Color::Yellow)),
         Span::styled(": scroll  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("G", Style::default().fg(Color::Yellow)),
-        Span::styled(": bottom  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("g", Style::default().fg(Color::Yellow)),
-        Span::styled(": top  ", Style::default().fg(Color::DarkGray)),
         Span::styled("x", Style::default().fg(Color::Red)),
         Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
-        Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("q", Style::default().fg(Color::DarkGray)),
-        Span::styled(": quit", Style::default().fg(Color::DarkGray)),
-    ];
+        Span::styled(": restart", Style::default().fg(Color::DarkGray)),
+    ]);
+
+    if app.detail_attention {
+        spans.push(Span::styled("  ATTENTION", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+    }
 
     let status = Paragraph::new(Line::from(spans)).block(
         Block::default()
@@ -703,6 +838,55 @@ mod tests {
         let mut app = FleetApp::new(None);
         app.view = FleetView::AddAgent;
         app.wizard = Some(crate::fleet_tui::wizard::AddAgentWizard::new());
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_detail_with_pending() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "test-agent".into();
+        app.detail_output.push_back("line 1".into());
+        app.detail_pending = vec![
+            aegis_control::daemon::PendingPromptSummary {
+                request_id: "abc-123".into(),
+                raw_prompt: "Allow Bash(rm -rf)?".into(),
+                age_secs: 10,
+            },
+            aegis_control::daemon::PendingPromptSummary {
+                request_id: "def-456".into(),
+                raw_prompt: "Allow FileWrite?".into(),
+                age_secs: 5,
+            },
+        ];
+        app.focus_pending = true;
+        app.pending_selected = 1;
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_input_mode() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "test-agent".into();
+        app.input_mode = true;
+        app.input_buffer = "hello world".into();
+        app.input_cursor = 5;
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_attention() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "test-agent".into();
+        app.detail_attention = true;
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();

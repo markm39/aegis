@@ -14,7 +14,7 @@ use std::time::Instant;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use aegis_control::daemon::{AgentSummary, DaemonClient, DaemonCommand};
+use aegis_control::daemon::{AgentSummary, DaemonClient, DaemonCommand, PendingPromptSummary};
 use aegis_types::AgentStatus;
 
 use self::event::{AppEvent, EventHandler};
@@ -71,6 +71,24 @@ pub struct FleetApp {
     /// Daemon PID (from last ping).
     pub daemon_pid: u32,
 
+    // -- Input mode (detail view) --
+    /// Whether text input mode is active (typing to agent stdin).
+    pub input_mode: bool,
+    /// Text buffer for input mode.
+    pub input_buffer: String,
+    /// Cursor position in the input buffer.
+    pub input_cursor: usize,
+
+    // -- Pending prompts (detail view) --
+    /// Pending permission prompts for the detail agent.
+    pub detail_pending: Vec<PendingPromptSummary>,
+    /// Selected index in the pending prompts panel.
+    pub pending_selected: usize,
+    /// Whether focus is on the pending panel (vs output).
+    pub focus_pending: bool,
+    /// Whether the detail agent needs attention.
+    pub detail_attention: bool,
+
     // -- Wizard --
     /// Add-agent wizard (active when view == AddAgent).
     pub wizard: Option<AddAgentWizard>,
@@ -97,6 +115,13 @@ impl FleetApp {
             last_error: None,
             daemon_uptime_secs: 0,
             daemon_pid: 0,
+            input_mode: false,
+            input_buffer: String::new(),
+            input_cursor: 0,
+            detail_pending: Vec::new(),
+            pending_selected: 0,
+            focus_pending: false,
+            detail_attention: false,
             wizard: None,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
@@ -178,13 +203,14 @@ impl FleetApp {
         }
     }
 
-    /// Fetch output for the currently viewed agent.
+    /// Fetch output and pending prompts for the currently viewed agent.
     fn poll_agent_output(&mut self) {
         let client = match &self.client {
             Some(c) => c,
             None => return,
         };
 
+        // Fetch output
         let cmd = DaemonCommand::AgentOutput {
             name: self.detail_name.clone(),
             lines: Some(MAX_OUTPUT_LINES),
@@ -203,12 +229,48 @@ impl FleetApp {
             }
             _ => {} // Don't overwrite error; ping handles connection state
         }
+
+        // Fetch pending prompts
+        let pending_cmd = DaemonCommand::ListPending {
+            name: self.detail_name.clone(),
+        };
+        match client.send(&pending_cmd) {
+            Ok(resp) if resp.ok => {
+                if let Some(data) = resp.data {
+                    if let Ok(pending) = serde_json::from_value::<Vec<PendingPromptSummary>>(data) {
+                        self.detail_pending = pending;
+                        // Clamp selection
+                        if self.pending_selected >= self.detail_pending.len()
+                            && !self.detail_pending.is_empty()
+                        {
+                            self.pending_selected = self.detail_pending.len() - 1;
+                        }
+                        // If pending list became empty, unfocus it
+                        if self.detail_pending.is_empty() {
+                            self.focus_pending = false;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Update attention status from agent summary
+        if let Some(agent) = self.agents.iter().find(|a| a.name == self.detail_name) {
+            self.detail_attention = agent.attention_needed;
+        }
     }
 
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) {
         // Only handle key press events (not release/repeat)
         if key.kind != KeyEventKind::Press {
+            return;
+        }
+
+        // Input mode intercepts all keys
+        if self.input_mode {
+            self.handle_input_key(key);
             return;
         }
 
@@ -238,6 +300,10 @@ impl FleetApp {
                     self.detail_name = agent.name.clone();
                     self.detail_output.clear();
                     self.detail_scroll = 0;
+                    self.detail_pending.clear();
+                    self.pending_selected = 0;
+                    self.focus_pending = false;
+                    self.detail_attention = false;
                     self.view = FleetView::AgentDetail;
                     // Force immediate poll for output
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
@@ -297,18 +363,68 @@ impl FleetApp {
                 self.running = false;
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                if self.detail_scroll > 0 {
+                if self.focus_pending {
+                    // Navigate pending list
+                    if !self.detail_pending.is_empty() {
+                        self.pending_selected =
+                            (self.pending_selected + 1).min(self.detail_pending.len() - 1);
+                    }
+                } else if self.detail_scroll > 0 {
                     self.detail_scroll -= 1;
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.detail_scroll += 1;
+                if self.focus_pending {
+                    self.pending_selected = self.pending_selected.saturating_sub(1);
+                } else {
+                    self.detail_scroll += 1;
+                }
             }
             KeyCode::Char('G') | KeyCode::End => {
                 self.detail_scroll = 0; // bottom
             }
             KeyCode::Char('g') | KeyCode::Home => {
                 self.detail_scroll = self.detail_output.len().saturating_sub(1);
+            }
+            KeyCode::Char('i') => {
+                // Enter input mode
+                self.input_mode = true;
+                self.input_buffer.clear();
+                self.input_cursor = 0;
+            }
+            KeyCode::Char('a') => {
+                // Approve selected pending prompt
+                if let Some(pending) = self.detail_pending.get(self.pending_selected) {
+                    let cmd = DaemonCommand::ApproveRequest {
+                        name: self.detail_name.clone(),
+                        request_id: pending.request_id.clone(),
+                    };
+                    self.send_named_command(cmd);
+                }
+            }
+            KeyCode::Char('d') => {
+                // Deny selected pending prompt
+                if let Some(pending) = self.detail_pending.get(self.pending_selected) {
+                    let cmd = DaemonCommand::DenyRequest {
+                        name: self.detail_name.clone(),
+                        request_id: pending.request_id.clone(),
+                    };
+                    self.send_named_command(cmd);
+                }
+            }
+            KeyCode::Char('n') => {
+                // Nudge stalled agent
+                let cmd = DaemonCommand::NudgeAgent {
+                    name: self.detail_name.clone(),
+                    message: None,
+                };
+                self.send_named_command(cmd);
+            }
+            KeyCode::Tab => {
+                // Toggle focus between output and pending panel
+                if !self.detail_pending.is_empty() {
+                    self.focus_pending = !self.focus_pending;
+                }
             }
             KeyCode::Char('x') => {
                 self.send_named_command(DaemonCommand::StopAgent {
@@ -319,6 +435,54 @@ impl FleetApp {
                 self.send_named_command(DaemonCommand::RestartAgent {
                     name: self.detail_name.clone(),
                 });
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle keys in input mode (typing text to send to agent).
+    fn handle_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.input_mode = false;
+                self.input_buffer.clear();
+                self.input_cursor = 0;
+            }
+            KeyCode::Enter => {
+                if !self.input_buffer.is_empty() {
+                    let cmd = DaemonCommand::SendToAgent {
+                        name: self.detail_name.clone(),
+                        text: self.input_buffer.clone(),
+                    };
+                    self.send_named_command(cmd);
+                }
+                self.input_mode = false;
+                self.input_buffer.clear();
+                self.input_cursor = 0;
+            }
+            KeyCode::Char(c) => {
+                self.input_buffer.insert(self.input_cursor, c);
+                self.input_cursor += 1;
+            }
+            KeyCode::Backspace => {
+                if self.input_cursor > 0 {
+                    self.input_cursor -= 1;
+                    self.input_buffer.remove(self.input_cursor);
+                }
+            }
+            KeyCode::Left => {
+                self.input_cursor = self.input_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_cursor += 1;
+                }
+            }
+            KeyCode::Home => {
+                self.input_cursor = 0;
+            }
+            KeyCode::End => {
+                self.input_cursor = self.input_buffer.len();
             }
             _ => {}
         }
@@ -685,5 +849,180 @@ mod tests {
         };
         app.handle_key(release);
         assert!(app.running, "release events should be ignored");
+    }
+
+    #[test]
+    fn input_mode_enter_and_exit() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "alpha".into();
+
+        // 'i' enters input mode
+        app.handle_key(press(KeyCode::Char('i')));
+        assert!(app.input_mode);
+        assert!(app.input_buffer.is_empty());
+
+        // Typing adds characters
+        app.handle_key(press(KeyCode::Char('h')));
+        app.handle_key(press(KeyCode::Char('i')));
+        assert_eq!(app.input_buffer, "hi");
+        assert_eq!(app.input_cursor, 2);
+
+        // Esc exits input mode
+        app.handle_key(press(KeyCode::Esc));
+        assert!(!app.input_mode);
+        assert!(app.input_buffer.is_empty());
+    }
+
+    #[test]
+    fn input_mode_cursor_movement() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "alpha".into();
+        app.input_mode = true;
+
+        // Type "hello"
+        for c in "hello".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        assert_eq!(app.input_cursor, 5);
+
+        // Left moves cursor back
+        app.handle_key(press(KeyCode::Left));
+        assert_eq!(app.input_cursor, 4);
+
+        // Home goes to start
+        app.handle_key(press(KeyCode::Home));
+        assert_eq!(app.input_cursor, 0);
+
+        // End goes to end
+        app.handle_key(press(KeyCode::End));
+        assert_eq!(app.input_cursor, 5);
+
+        // Right at end doesn't overflow
+        app.handle_key(press(KeyCode::Right));
+        assert_eq!(app.input_cursor, 5);
+    }
+
+    #[test]
+    fn input_mode_backspace() {
+        let mut app = make_app();
+        app.input_mode = true;
+
+        app.handle_key(press(KeyCode::Char('a')));
+        app.handle_key(press(KeyCode::Char('b')));
+        app.handle_key(press(KeyCode::Char('c')));
+        assert_eq!(app.input_buffer, "abc");
+
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.input_buffer, "ab");
+        assert_eq!(app.input_cursor, 2);
+
+        // Backspace at start does nothing
+        app.input_cursor = 0;
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.input_buffer, "ab");
+    }
+
+    #[test]
+    fn input_mode_enter_clears() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "alpha".into();
+        app.input_mode = true;
+
+        app.handle_key(press(KeyCode::Char('x')));
+        app.handle_key(press(KeyCode::Enter));
+
+        // Enter exits input mode and clears buffer
+        assert!(!app.input_mode);
+        assert!(app.input_buffer.is_empty());
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn input_mode_blocks_quit() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+
+        // 'q' in input mode should type 'q', not quit
+        app.handle_key(press(KeyCode::Char('q')));
+        assert!(app.running);
+        assert_eq!(app.input_buffer, "q");
+    }
+
+    #[test]
+    fn tab_toggles_focus() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.detail_pending = vec![PendingPromptSummary {
+            request_id: "abc".into(),
+            raw_prompt: "Allow?".into(),
+            age_secs: 5,
+        }];
+
+        assert!(!app.focus_pending);
+        app.handle_key(press(KeyCode::Tab));
+        assert!(app.focus_pending);
+        app.handle_key(press(KeyCode::Tab));
+        assert!(!app.focus_pending);
+    }
+
+    #[test]
+    fn tab_no_toggle_when_no_pending() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+
+        app.handle_key(press(KeyCode::Tab));
+        assert!(!app.focus_pending);
+    }
+
+    #[test]
+    fn jk_navigates_pending_when_focused() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.focus_pending = true;
+        app.detail_pending = vec![
+            PendingPromptSummary {
+                request_id: "a".into(),
+                raw_prompt: "one".into(),
+                age_secs: 1,
+            },
+            PendingPromptSummary {
+                request_id: "b".into(),
+                raw_prompt: "two".into(),
+                age_secs: 2,
+            },
+        ];
+
+        assert_eq!(app.pending_selected, 0);
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.pending_selected, 1);
+
+        // Can't go past end
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.pending_selected, 1);
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.pending_selected, 0);
+    }
+
+    #[test]
+    fn enter_drills_resets_pending_state() {
+        let mut app = make_app();
+        app.detail_pending = vec![PendingPromptSummary {
+            request_id: "old".into(),
+            raw_prompt: "stale".into(),
+            age_secs: 100,
+        }];
+        app.focus_pending = true;
+        app.detail_attention = true;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.view, FleetView::AgentDetail);
+        assert!(app.detail_pending.is_empty());
+        assert!(!app.focus_pending);
+        assert!(!app.detail_attention);
     }
 }
