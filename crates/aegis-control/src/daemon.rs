@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use aegis_types::daemon::AgentSlotConfig;
 use aegis_types::AgentStatus;
 
 /// A command sent to the daemon control plane.
@@ -29,8 +30,19 @@ pub enum DaemonCommand {
     StopAgent { name: String },
     /// Restart a specific agent slot (stop + start).
     RestartAgent { name: String },
+    /// Add a new agent slot at runtime and optionally start it.
+    AddAgent {
+        config: AgentSlotConfig,
+        /// Whether to start the agent immediately after adding.
+        #[serde(default = "default_true")]
+        start: bool,
+    },
     /// Request graceful daemon shutdown (stops all agents first).
     Shutdown,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Response to a daemon command.
