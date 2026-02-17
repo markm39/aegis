@@ -21,3 +21,32 @@ pub enum AegisError {
     #[error("configuration error: {0}")]
     ConfigError(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_display_messages() {
+        assert_eq!(
+            AegisError::PolicyError("test".into()).to_string(),
+            "policy evaluation failed: test"
+        );
+        assert_eq!(
+            AegisError::LedgerError("db locked".into()).to_string(),
+            "audit ledger error: db locked"
+        );
+        assert_eq!(
+            AegisError::SandboxError("denied".into()).to_string(),
+            "sandbox error: denied"
+        );
+        assert_eq!(
+            AegisError::FsError("not found".into()).to_string(),
+            "filesystem interception error: not found"
+        );
+        assert_eq!(
+            AegisError::ConfigError("missing field".into()).to_string(),
+            "configuration error: missing field"
+        );
+    }
+}

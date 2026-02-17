@@ -347,6 +347,38 @@ mod tests {
     }
 
     #[test]
+    fn compute_policy_hash_empty_map_is_deterministic() {
+        let h1 = compute_policy_hash(&BTreeMap::new());
+        let h2 = compute_policy_hash(&BTreeMap::new());
+        assert_eq!(h1, h2);
+        assert!(!h1.is_empty(), "hash of empty map should be non-empty");
+    }
+
+    #[test]
+    fn read_policy_files_nonexistent_dir_returns_error() {
+        let result = read_policy_files(Path::new("/nonexistent/path/to/policies"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_policy_files_empty_dir_returns_empty_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = read_policy_files(dir.path()).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn read_policy_files_skips_non_cedar_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("policy.cedar"), "permit(principal, action, resource);")
+            .unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not a policy").unwrap();
+        let result = read_policy_files(dir.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key("policy.cedar"));
+    }
+
+    #[test]
     fn different_configs_have_independent_snapshots() {
         let (_tmp, mut store) = test_db();
         let files = sample_files();

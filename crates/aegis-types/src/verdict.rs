@@ -100,6 +100,16 @@ mod tests {
     }
 
     #[test]
+    fn verdict_deny_serialization_roundtrip() {
+        let v = Verdict::deny(Uuid::new_v4(), "blocked by forbid rule", Some("policy-2".into()));
+        let json = serde_json::to_string(&v).unwrap();
+        let back: Verdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.decision, Decision::Deny);
+        assert_eq!(back.reason, "blocked by forbid rule");
+        assert_eq!(back.policy_id, Some("policy-2".into()));
+    }
+
+    #[test]
     fn decision_from_str() {
         assert_eq!("Allow".parse::<Decision>().unwrap(), Decision::Allow);
         assert_eq!("allow".parse::<Decision>().unwrap(), Decision::Allow);

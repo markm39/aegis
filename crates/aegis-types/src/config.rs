@@ -329,6 +329,18 @@ mod tests {
     }
 
     #[test]
+    fn from_toml_invalid_toml_returns_error() {
+        let result = AegisConfig::from_toml("{{invalid toml");
+        assert!(result.is_err(), "invalid TOML should fail");
+    }
+
+    #[test]
+    fn from_toml_missing_required_fields_returns_error() {
+        let result = AegisConfig::from_toml("name = \"test\"");
+        assert!(result.is_err(), "valid TOML with missing fields should fail");
+    }
+
+    #[test]
     fn isolation_config_display() {
         assert_eq!(IsolationConfig::Process.to_string(), "Process");
         assert_eq!(IsolationConfig::None.to_string(), "None");

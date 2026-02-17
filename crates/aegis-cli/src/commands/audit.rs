@@ -595,11 +595,12 @@ fn cef_escape(s: &str) -> String {
         .replace('|', "\\|")
         .replace('=', "\\=")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// Escape a string for CSV output by quoting if it contains commas, quotes, or newlines.
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -705,5 +706,26 @@ mod tests {
     #[test]
     fn cef_escape_clean_string() {
         assert_eq!(cef_escape("simple"), "simple");
+    }
+
+    #[test]
+    fn cef_escape_carriage_return() {
+        assert_eq!(cef_escape("a\rb"), "a\\rb");
+    }
+
+    #[test]
+    fn csv_escape_carriage_return() {
+        assert_eq!(csv_escape("a\rb"), "\"a\rb\"");
+    }
+
+    #[test]
+    fn csv_escape_lone_quote() {
+        assert_eq!(csv_escape("\""), "\"\"\"\"");
+    }
+
+    #[test]
+    fn parse_duration_zero_days() {
+        let d = parse_duration("0d").unwrap();
+        assert_eq!(d.num_days(), 0);
     }
 }
