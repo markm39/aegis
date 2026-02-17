@@ -4,6 +4,8 @@
 //! initialize engines, simulate action evaluation, log to audit ledger,
 //! and verify integrity.
 
+mod common;
+
 use std::path::PathBuf;
 
 use tempfile::TempDir;
@@ -12,40 +14,10 @@ use aegis_ledger::AuditStore;
 use aegis_policy::builtin::ALLOW_READ_ONLY;
 use aegis_policy::PolicyEngine;
 use aegis_types::{
-    Action, ActionKind, AegisConfig, Decision, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME,
-    LEDGER_FILENAME,
+    AegisConfig, Decision, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn file_read_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileRead {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn file_write_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileWrite {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn dir_list_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::DirList {
-            path: PathBuf::from(path),
-        },
-    )
-}
+use common::{dir_list_action, file_read_action, file_write_action};
 
 /// Set up a temporary aegis directory structure mimicking `aegis init`.
 /// Returns (TempDir, policies_dir, sandbox_dir, ledger_path, config_path).

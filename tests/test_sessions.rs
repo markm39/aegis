@@ -3,44 +3,15 @@
 //! Verifies session begin/end, tagging, counting, stats computation,
 //! and policy snapshot recording across the aegis-ledger crate.
 
-use std::path::PathBuf;
-
-use tempfile::NamedTempFile;
+mod common;
 
 use aegis_ledger::{AuditFilter, AuditStore};
-use aegis_types::{Action, ActionKind, Verdict};
+use aegis_types::Verdict;
 
-fn temp_db() -> NamedTempFile {
-    NamedTempFile::new().expect("should create temp file")
-}
-
-fn file_read(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileRead {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn file_write(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileWrite {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn net_connect(principal: &str, host: &str, port: u16) -> Action {
-    Action::new(
-        principal,
-        ActionKind::NetConnect {
-            host: host.to_string(),
-            port,
-        },
-    )
-}
+use common::{
+    file_read_action as file_read, file_write_action as file_write,
+    net_connect_action as net_connect, temp_db,
+};
 
 #[test]
 fn session_lifecycle_with_mixed_verdicts() {

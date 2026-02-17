@@ -3,6 +3,8 @@
 //! Verifies that the policy engine (aegis-policy) correctly integrates with
 //! the types crate (aegis-types) to produce expected verdicts.
 
+mod common;
+
 use std::path::PathBuf;
 
 use tempfile::TempDir;
@@ -13,36 +15,7 @@ use aegis_policy::builtin::{
 use aegis_policy::PolicyEngine;
 use aegis_types::{Action, ActionKind, Decision};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn file_read_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileRead {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn file_write_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileWrite {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn dir_list_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::DirList {
-            path: PathBuf::from(path),
-        },
-    )
-}
+use common::{dir_list_action, file_read_action, file_write_action};
 
 // ---------------------------------------------------------------------------
 // Tests

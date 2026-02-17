@@ -3,20 +3,18 @@
 //! Verifies that the audit ledger (aegis-ledger) correctly integrates with
 //! the types crate (aegis-types) for append, query, and tamper detection.
 
-use std::path::PathBuf;
+mod common;
 
-use tempfile::NamedTempFile;
+use std::path::PathBuf;
 
 use aegis_ledger::AuditStore;
 use aegis_types::{Action, ActionKind, Verdict};
 
+use common::temp_db;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn temp_db() -> NamedTempFile {
-    NamedTempFile::new().expect("should create temp file for ledger database")
-}
 
 fn sample_action(principal: &str, kind: ActionKind) -> Action {
     Action::new(principal, kind)

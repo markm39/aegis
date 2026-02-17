@@ -4,40 +4,14 @@
 //! into the audit ledger from aegis-ledger, and that the hash chain remains
 //! intact across all recorded entries.
 
-use std::path::PathBuf;
-
-use tempfile::NamedTempFile;
+mod common;
 
 use aegis_ledger::AuditStore;
 use aegis_policy::builtin::DEFAULT_DENY;
 use aegis_policy::PolicyEngine;
-use aegis_types::{Action, ActionKind, Decision};
+use aegis_types::Decision;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn temp_db() -> NamedTempFile {
-    NamedTempFile::new().expect("should create temp file for ledger database")
-}
-
-fn file_read_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileRead {
-            path: PathBuf::from(path),
-        },
-    )
-}
-
-fn file_write_action(principal: &str, path: &str) -> Action {
-    Action::new(
-        principal,
-        ActionKind::FileWrite {
-            path: PathBuf::from(path),
-        },
-    )
-}
+use common::{dir_list_action, file_read_action, file_write_action, temp_db};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -100,12 +74,7 @@ fn test_permit_engine_verdicts_stored_in_ledger() {
     let actions = vec![
         file_read_action("agent-1", "/data/report.csv"),
         file_write_action("agent-1", "/output/summary.txt"),
-        Action::new(
-            "agent-1",
-            ActionKind::DirList {
-                path: PathBuf::from("/data"),
-            },
-        ),
+        dir_list_action("agent-1", "/data"),
     ];
 
     for action in &actions {
