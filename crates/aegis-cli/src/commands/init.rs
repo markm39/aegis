@@ -111,15 +111,31 @@ fn run_wizard() -> Result<()> {
     let mode = SECURITY_MODES[mode_index];
     let (policy, isolation) = mode.to_config();
 
-    // Project directory
-    let default_dir = cwd.display().to_string();
-    let dir_str: String = Input::new()
+    // Project directory selection
+    let home_dir = dirs_from_env()?;
+    let cwd_label = format!("Current directory: {}", cwd.display());
+    let home_label = format!("Home directory:    {}", home_dir.display());
+    let custom_label = "Custom path (type a path)".to_string();
+    let dir_choices = vec![&cwd_label, &home_label, &custom_label];
+    let dir_index = Select::new()
         .with_prompt("Project directory")
-        .default(default_dir)
-        .interact_text()
-        .context("failed to read project directory")?;
+        .items(&dir_choices)
+        .default(0)
+        .interact()
+        .context("failed to read directory selection")?;
 
-    let project_dir = PathBuf::from(&dir_str);
+    let project_dir = match dir_index {
+        0 => cwd.clone(),
+        1 => home_dir,
+        _ => {
+            let dir_str: String = Input::new()
+                .with_prompt("Enter path")
+                .interact_text()
+                .context("failed to read directory path")?;
+            PathBuf::from(dir_str)
+        }
+    };
+    let dir_str = project_dir.display().to_string();
 
     // Summary
     let isolation_desc = match &isolation {
@@ -157,11 +173,11 @@ fn run_wizard() -> Result<()> {
     // Auto-set as current config
     crate::commands::use_config::set_current(&name)?;
 
+    println!("\nYou're all set. Active config: {name}");
     println!("\nNext steps:");
-    println!("  aegis run echo hello          # sandbox a command");
-    println!("  aegis wrap claude             # observe an agent");
-    println!("  aegis monitor {name}      # live dashboard");
-    println!("  aegis audit query {name}  # query audit trail");
+    println!("  aegis wrap claude    # observe an AI agent");
+    println!("  aegis monitor        # live TUI dashboard");
+    println!("  aegis log            # view audit trail");
 
     Ok(())
 }
