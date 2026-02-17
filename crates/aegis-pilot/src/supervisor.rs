@@ -80,6 +80,8 @@ pub struct SupervisorConfig {
 /// - `engine`: the Cedar policy engine for evaluating detected actions
 /// - `config`: supervisor configuration
 /// - `event_tx`: optional channel for emitting pilot events
+/// - `output_tx`: optional channel for mirroring completed output lines
+///   (used by the daemon to expose agent output without sharing the buffer)
 ///
 /// Returns the child's exit code and session statistics.
 pub fn run(
@@ -88,6 +90,7 @@ pub fn run(
     engine: &PolicyEngine,
     config: &SupervisorConfig,
     event_tx: Option<&mpsc::Sender<PilotEvent>>,
+    output_tx: Option<&mpsc::Sender<String>>,
 ) -> Result<(i32, PilotStats), AegisError> {
     let mut output_buf = OutputBuffer::new(config.pilot_config.output_buffer_lines);
     let mut stall = StallDetector::new(&config.pilot_config.stall);
@@ -134,6 +137,11 @@ pub fn run(
 
             // Scan each completed line through the adapter
             for line in &lines {
+                // Mirror to external consumer (daemon fleet manager)
+                if let Some(tx) = output_tx {
+                    let _ = tx.send(line.clone());
+                }
+
                 let result = adapter.scan_line(line);
                 handle_scan_result(
                     result,

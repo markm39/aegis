@@ -165,7 +165,7 @@ pub fn run(
 
     // Run the supervisor loop (blocks until child exits)
     let (exit_code, stats) =
-        supervisor::run(&pty, adapter.as_mut(), &eval_engine, &sup_config, Some(&event_tx))?;
+        supervisor::run(&pty, adapter.as_mut(), &eval_engine, &sup_config, Some(&event_tx), None)?;
 
     // Drop the event sender to signal the logger thread to exit
     drop(event_tx);

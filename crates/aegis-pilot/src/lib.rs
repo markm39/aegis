@@ -18,6 +18,8 @@
 pub mod adapter;
 pub mod adapters;
 pub mod ansi;
+pub mod driver;
+pub mod drivers;
 pub mod output;
 pub mod pty;
 pub mod stall;
