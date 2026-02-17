@@ -3,7 +3,7 @@
 /// Errors that can occur across the Aegis runtime.
 ///
 /// Each variant corresponds to a different subsystem: policy engine,
-/// audit ledger, sandbox, filesystem, network, or configuration.
+/// audit ledger, sandbox, filesystem, or configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum AegisError {
     #[error("policy evaluation failed: {0}")]
@@ -17,9 +17,6 @@ pub enum AegisError {
 
     #[error("filesystem interception error: {0}")]
     FsError(String),
-
-    #[error("network proxy error: {0}")]
-    NetError(String),
 
     #[error("configuration error: {0}")]
     ConfigError(String),
