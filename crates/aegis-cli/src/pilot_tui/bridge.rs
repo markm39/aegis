@@ -39,6 +39,8 @@ pub struct SharedPilotState {
 /// Minimal pending request info for the control API.
 pub struct SharedPendingInfo {
     pub request_id: Uuid,
+    /// Stored for future list-pending control endpoint (Phase 4).
+    #[allow(dead_code)]
     pub raw_prompt: String,
 }
 

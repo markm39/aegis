@@ -9,9 +9,11 @@
 //! - [`fleet::Fleet`]: owns all agent slots, handles spawning/stopping
 //! - [`slot::AgentSlot`]: runtime state for one agent
 //! - [`lifecycle`]: per-agent thread body (PTY + supervisor + audit)
+//! - [`control`]: Unix socket server for external control
 //! - [`persistence`]: launchd integration, PID files, caffeinate
 //! - [`state`]: crash recovery via persistent state.json
 
+pub mod control;
 pub mod fleet;
 pub mod lifecycle;
 pub mod persistence;
@@ -24,9 +26,13 @@ use std::time::{Duration, Instant};
 
 use tracing::info;
 
-use aegis_types::daemon::DaemonConfig;
+use aegis_control::daemon::{
+    AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
+};
+use aegis_types::daemon::{AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
 
+use crate::control::DaemonCmdRx;
 use crate::fleet::Fleet;
 use crate::state::DaemonState;
 
@@ -59,9 +65,10 @@ impl DaemonRuntime {
     ///
     /// 1. Write PID file
     /// 2. Recover from previous crash (if applicable)
-    /// 3. Start all enabled agents
-    /// 4. Enter tick loop (health checks, restart logic, output draining)
-    /// 5. On shutdown: stop all agents, clean up
+    /// 3. Start control socket server
+    /// 4. Start all enabled agents
+    /// 5. Enter tick loop (health checks, restart logic, command dispatch)
+    /// 6. On shutdown: stop all agents, clean up
     pub fn run(&mut self) -> Result<(), String> {
         // Write PID file
         let _pid_path = persistence::write_pid_file()?;
@@ -78,8 +85,15 @@ impl DaemonRuntime {
             None
         };
 
+        // Start control socket server
+        let mut cmd_rx = control::spawn_control_server(
+            self.config.control.socket_path.clone(),
+            Arc::clone(&self.shutdown),
+        );
+
         info!(
             agents = self.fleet.agent_count(),
+            socket = %self.config.control.socket_path.display(),
             "daemon starting"
         );
 
@@ -92,6 +106,9 @@ impl DaemonRuntime {
         let mut last_state_save = Instant::now();
 
         while !self.shutdown.load(Ordering::Relaxed) {
+            // Drain pending control commands (non-blocking)
+            self.drain_commands(&mut cmd_rx);
+
             // Tick the fleet (check for exits, apply restart policies)
             self.fleet.tick();
 
@@ -116,6 +133,132 @@ impl DaemonRuntime {
 
         info!("daemon shutdown complete");
         Ok(())
+    }
+
+    /// Drain all pending commands from the control socket.
+    fn drain_commands(&mut self, cmd_rx: &mut DaemonCmdRx) {
+        while let Ok((cmd, reply_tx)) = cmd_rx.try_recv() {
+            let response = self.handle_command(cmd);
+            let _ = reply_tx.send(response);
+        }
+    }
+
+    /// Handle a single daemon control command.
+    fn handle_command(&mut self, cmd: DaemonCommand) -> DaemonResponse {
+        match cmd {
+            DaemonCommand::Ping => {
+                let ping = DaemonPing {
+                    uptime_secs: self.uptime_secs(),
+                    agent_count: self.fleet.agent_count(),
+                    running_count: self.fleet.running_count(),
+                    daemon_pid: std::process::id(),
+                };
+                match serde_json::to_value(&ping) {
+                    Ok(data) => DaemonResponse::ok_with_data("pong", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::ListAgents => {
+                let summaries: Vec<AgentSummary> = self
+                    .fleet
+                    .agent_names_sorted()
+                    .iter()
+                    .filter_map(|name| {
+                        let status = self.fleet.agent_status(name)?.clone();
+                        let tool = self.fleet.agent_tool_name(name).unwrap_or_default();
+                        let config = self.fleet.agent_config(name)?;
+                        Some(AgentSummary {
+                            name: name.clone(),
+                            status,
+                            tool,
+                            working_dir: config.working_dir.to_string_lossy().into_owned(),
+                            restart_count: self
+                                .fleet
+                                .slot(name)
+                                .map(|s| s.restart_count)
+                                .unwrap_or(0),
+                        })
+                    })
+                    .collect();
+                match serde_json::to_value(&summaries) {
+                    Ok(data) => DaemonResponse::ok_with_data("agents listed", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::AgentStatus { ref name } => {
+                let Some(slot) = self.fleet.slot(name) else {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                };
+                let detail = AgentDetail {
+                    name: name.clone(),
+                    status: slot.status.clone(),
+                    tool: self.fleet.agent_tool_name(name).unwrap_or_default(),
+                    working_dir: slot.config.working_dir.to_string_lossy().into_owned(),
+                    restart_count: slot.restart_count,
+                    pid: match &slot.status {
+                        AgentStatus::Running { pid } => Some(*pid),
+                        _ => None,
+                    },
+                    uptime_secs: slot.started_at.map(|t| t.elapsed().as_secs()),
+                    session_id: None,
+                    task: slot.config.task.clone(),
+                    enabled: slot.config.enabled,
+                };
+                match serde_json::to_value(&detail) {
+                    Ok(data) => DaemonResponse::ok_with_data("agent detail", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::AgentOutput { ref name, lines } => {
+                let line_count = lines.unwrap_or(50);
+                match self.fleet.agent_output(name, line_count) {
+                    Ok(output) => match serde_json::to_value(&output) {
+                        Ok(data) => DaemonResponse::ok_with_data("output", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::StartAgent { ref name } => {
+                if self.fleet.agent_status(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                self.fleet.start_agent(name);
+                DaemonResponse::ok(format!("agent '{name}' starting"))
+            }
+
+            DaemonCommand::StopAgent { ref name } => {
+                if self.fleet.agent_status(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                self.fleet.stop_agent(name);
+                DaemonResponse::ok(format!("agent '{name}' stopped"))
+            }
+
+            DaemonCommand::RestartAgent { ref name } => {
+                if self.fleet.agent_status(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                self.fleet.restart_agent(name);
+                DaemonResponse::ok(format!("agent '{name}' restarted"))
+            }
+
+            DaemonCommand::SendToAgent { ref name, ref text } => {
+                match self.fleet.send_to_agent(name, text) {
+                    Ok(()) => DaemonResponse::ok(format!("sent to '{name}'")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::Shutdown => {
+                self.request_shutdown();
+                DaemonResponse::ok("shutdown initiated")
+            }
+        }
     }
 
     /// Signal the daemon to shut down.
@@ -144,7 +287,7 @@ impl DaemonRuntime {
                 daemon_state.agents.push(state::AgentState {
                     name: name.clone(),
                     was_running: slot.is_thread_alive(),
-                    session_id: None, // Could be populated from lifecycle
+                    session_id: None,
                     restart_count: slot.restart_count,
                 });
             }
@@ -159,41 +302,151 @@ impl DaemonRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aegis_types::daemon::{DaemonControlConfig, PersistenceConfig};
+    use aegis_types::daemon::{
+        AgentSlotConfig, AgentToolConfig, DaemonControlConfig, PersistenceConfig, RestartPolicy,
+    };
     use std::path::PathBuf;
 
-    #[test]
-    fn daemon_runtime_creation() {
+    fn test_runtime(agents: Vec<AgentSlotConfig>) -> DaemonRuntime {
         let config = DaemonConfig {
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
-            agents: vec![],
+            agents,
             channel: None,
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        DaemonRuntime::new(config, aegis_config)
+    }
 
-        let runtime = DaemonRuntime::new(config, aegis_config);
+    fn test_agent(name: &str) -> AgentSlotConfig {
+        AgentSlotConfig {
+            name: name.to_string(),
+            tool: AgentToolConfig::ClaudeCode {
+                skip_permissions: false,
+                one_shot: false,
+                extra_args: vec![],
+            },
+            working_dir: PathBuf::from("/tmp"),
+            task: Some("test task".into()),
+            pilot: None,
+            restart: RestartPolicy::OnFailure,
+            max_restarts: 5,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn daemon_runtime_creation() {
+        let runtime = test_runtime(vec![]);
         assert_eq!(runtime.fleet.agent_count(), 0);
         assert!(!runtime.shutdown.load(Ordering::Relaxed));
     }
 
     #[test]
     fn shutdown_flag() {
-        let config = DaemonConfig {
-            persistence: PersistenceConfig::default(),
-            control: DaemonControlConfig::default(),
-            alerts: vec![],
-            agents: vec![],
-            channel: None,
-        };
-        let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
-
-        let runtime = DaemonRuntime::new(config, aegis_config);
+        let runtime = test_runtime(vec![]);
         let flag = runtime.shutdown_flag();
-
         assert!(!flag.load(Ordering::Relaxed));
         runtime.request_shutdown();
         assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn handle_command_ping() {
+        let mut runtime = test_runtime(vec![test_agent("a1"), test_agent("a2")]);
+        let resp = runtime.handle_command(DaemonCommand::Ping);
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let ping: DaemonPing = serde_json::from_value(data).unwrap();
+        assert_eq!(ping.agent_count, 2);
+        assert_eq!(ping.running_count, 0);
+    }
+
+    #[test]
+    fn handle_command_list_agents() {
+        let mut runtime = test_runtime(vec![test_agent("beta"), test_agent("alpha")]);
+        let resp = runtime.handle_command(DaemonCommand::ListAgents);
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let agents: Vec<AgentSummary> = serde_json::from_value(data).unwrap();
+        assert_eq!(agents.len(), 2);
+        // Should be sorted alphabetically
+        assert_eq!(agents[0].name, "alpha");
+        assert_eq!(agents[1].name, "beta");
+    }
+
+    #[test]
+    fn handle_command_agent_status_unknown() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::AgentStatus {
+            name: "nonexistent".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("unknown"));
+    }
+
+    #[test]
+    fn handle_command_agent_status_known() {
+        let mut runtime = test_runtime(vec![test_agent("claude-1")]);
+        let resp = runtime.handle_command(DaemonCommand::AgentStatus {
+            name: "claude-1".into(),
+        });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let detail: AgentDetail = serde_json::from_value(data).unwrap();
+        assert_eq!(detail.name, "claude-1");
+        assert_eq!(detail.tool, "ClaudeCode");
+        assert!(detail.enabled);
+        assert_eq!(detail.task, Some("test task".into()));
+    }
+
+    #[test]
+    fn handle_command_start_unknown() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::StartAgent {
+            name: "nope".into(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_stop_unknown() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::StopAgent {
+            name: "nope".into(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_shutdown() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::Shutdown);
+        assert!(resp.ok);
+        assert!(runtime.shutdown.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn handle_command_agent_output_unknown() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::AgentOutput {
+            name: "nope".into(),
+            lines: Some(10),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_agent_output_empty() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::AgentOutput {
+            name: "a1".into(),
+            lines: Some(10),
+        });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let lines: Vec<String> = serde_json::from_value(data).unwrap();
+        assert!(lines.is_empty());
     }
 }

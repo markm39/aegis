@@ -10,7 +10,7 @@ use std::thread;
 
 use tracing::{error, info, warn};
 
-use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig, RestartPolicy};
+use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy};
 use aegis_types::AegisConfig;
 
 use crate::lifecycle;
@@ -303,6 +303,36 @@ impl Fleet {
             .filter(|s| matches!(s.status, AgentStatus::Running { .. }))
             .count()
     }
+
+    /// Get agent names sorted alphabetically (for stable display order).
+    pub fn agent_names_sorted(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.slots.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Add a new agent slot at runtime.
+    pub fn add_agent(&mut self, config: AgentSlotConfig) {
+        let slot = AgentSlot::new(config.clone());
+        self.slots.insert(config.name.clone(), slot);
+    }
+
+    /// Restart a specific agent (stop then start).
+    pub fn restart_agent(&mut self, name: &str) {
+        self.stop_agent(name);
+        self.start_agent(name);
+    }
+
+    /// Get the tool type name for an agent.
+    pub fn agent_tool_name(&self, name: &str) -> Option<String> {
+        self.slots.get(name).map(|s| match &s.config.tool {
+            AgentToolConfig::ClaudeCode { .. } => "ClaudeCode".to_string(),
+            AgentToolConfig::Codex { .. } => "Codex".to_string(),
+            AgentToolConfig::OpenClaw { .. } => "OpenClaw".to_string(),
+            AgentToolConfig::Cursor { .. } => "Cursor".to_string(),
+            AgentToolConfig::Custom { command, .. } => format!("Custom({command})"),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -394,5 +424,47 @@ mod tests {
         let fleet = Fleet::new(&config, aegis);
 
         assert!(fleet.send_to_agent("no-such", "hello").is_err());
+    }
+
+    #[test]
+    fn agent_names_sorted_returns_alphabetical() {
+        let config = test_daemon_config(vec![
+            test_slot_config("charlie"),
+            test_slot_config("alpha"),
+            test_slot_config("bravo"),
+        ]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let fleet = Fleet::new(&config, aegis);
+
+        let names = fleet.agent_names_sorted();
+        assert_eq!(names, vec!["alpha", "bravo", "charlie"]);
+    }
+
+    #[test]
+    fn add_agent_increases_count() {
+        let config = test_daemon_config(vec![test_slot_config("existing")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        assert_eq!(fleet.agent_count(), 1);
+        fleet.add_agent(test_slot_config("new-agent"));
+        assert_eq!(fleet.agent_count(), 2);
+        assert!(fleet.agent_status("new-agent").is_some());
+    }
+
+    #[test]
+    fn agent_tool_name_variants() {
+        let mut agents = vec![test_slot_config("claude")];
+        agents[0].tool = AgentToolConfig::ClaudeCode {
+            skip_permissions: false,
+            one_shot: false,
+            extra_args: vec![],
+        };
+        let config = test_daemon_config(agents);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let fleet = Fleet::new(&config, aegis);
+
+        assert_eq!(fleet.agent_tool_name("claude"), Some("ClaudeCode".to_string()));
+        assert_eq!(fleet.agent_tool_name("nonexistent"), None);
     }
 }
