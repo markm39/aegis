@@ -166,7 +166,7 @@ fn smoke_test_full_lifecycle() {
         .join(".aegis")
         .join("smoke-test")
         .join("policies")
-        .join("default.cedar");
+        .join(aegis_types::DEFAULT_POLICY_FILENAME);
     aegis_cmd(home)
         .args([
             "policy",

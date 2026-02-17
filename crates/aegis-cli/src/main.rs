@@ -1235,9 +1235,14 @@ mod tests {
         assert!(result.is_ok(), "init should succeed: {result:?}");
 
         assert!(base.exists(), "base dir should exist");
-        assert!(base.join("aegis.toml").exists(), "config should exist");
         assert!(
-            base.join("policies").join("default.cedar").exists(),
+            base.join(aegis_types::CONFIG_FILENAME).exists(),
+            "config should exist"
+        );
+        assert!(
+            base.join("policies")
+                .join(aegis_types::DEFAULT_POLICY_FILENAME)
+                .exists(),
             "policy file should exist"
         );
         assert!(base.join("sandbox").exists(), "sandbox dir should exist");

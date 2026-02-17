@@ -194,8 +194,8 @@ mod tests {
         assert_eq!(config.name, "test-wrap");
         assert_eq!(config.sandbox_dir, project_dir);
         assert_eq!(config.isolation, IsolationConfig::Process);
-        assert!(wrap_dir.join("aegis.toml").exists());
-        assert!(wrap_dir.join("policies").join("default.cedar").exists());
+        assert!(wrap_dir.join(CONFIG_FILENAME).exists());
+        assert!(wrap_dir.join("policies").join(DEFAULT_POLICY_FILENAME).exists());
     }
 
     #[test]

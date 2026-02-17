@@ -11,7 +11,10 @@ use tempfile::TempDir;
 use aegis_ledger::AuditStore;
 use aegis_policy::builtin::ALLOW_READ_ONLY;
 use aegis_policy::PolicyEngine;
-use aegis_types::{Action, ActionKind, AegisConfig, Decision};
+use aegis_types::{
+    Action, ActionKind, AegisConfig, Decision, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME,
+    LEDGER_FILENAME,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,14 +58,14 @@ fn setup_aegis_dir(
 
     let policies_dir = base.join("policies");
     let sandbox_dir = base.join("sandbox");
-    let ledger_path = base.join("audit.db");
-    let config_path = base.join("aegis.toml");
+    let ledger_path = base.join(LEDGER_FILENAME);
+    let config_path = base.join(CONFIG_FILENAME);
 
     std::fs::create_dir_all(&policies_dir).expect("should create policies dir");
     std::fs::create_dir_all(&sandbox_dir).expect("should create sandbox dir");
 
     // Write the policy file
-    let policy_file = policies_dir.join("default.cedar");
+    let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
     std::fs::write(&policy_file, policy_text).expect("should write policy file");
 
     // Generate and write the config
@@ -246,7 +249,7 @@ fn test_init_structure_matches_config() {
     assert!(config_path.exists(), "config file should exist");
 
     // Verify the policy file was written
-    let policy_file = policies_dir.join("default.cedar");
+    let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
     assert!(policy_file.exists(), "default.cedar should exist");
 
     // Verify the config can be loaded and points to the right paths
@@ -312,12 +315,12 @@ fn test_e2e_policy_reload_mid_session() {
     let tmpdir = TempDir::new().expect("should create temp dir");
     let base = tmpdir.path().join("reload-test");
     let policies_dir = base.join("policies");
-    let ledger_path = base.join("audit.db");
+    let ledger_path = base.join(LEDGER_FILENAME);
 
     std::fs::create_dir_all(&policies_dir).expect("should create policies dir");
 
     // Start with deny-all
-    let policy_file = policies_dir.join("default.cedar");
+    let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
     std::fs::write(&policy_file, "forbid(principal, action, resource);")
         .expect("should write deny-all policy");
 
