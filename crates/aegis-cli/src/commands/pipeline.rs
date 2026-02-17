@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use tracing::info;
 use uuid::Uuid;
 
+use aegis_alert::dispatcher::DispatcherConfig;
 use aegis_ledger::AuditStore;
 
 /// Exit code used when a process is terminated by a signal (no normal exit code available).
@@ -55,6 +56,27 @@ pub fn execute(
     let mut store =
         AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
     info!(ledger_path = %config.ledger_path.display(), "audit store opened");
+
+    // Set up the alert dispatcher if alert rules are configured.
+    let alert_thread = if !config.alerts.is_empty() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        store.set_alert_sender(tx);
+        let dispatcher_config = DispatcherConfig {
+            rules: config.alerts.clone(),
+            config_name: config.name.clone(),
+            db_path: config.ledger_path.to_string_lossy().into_owned(),
+        };
+        let handle = std::thread::Builder::new()
+            .name("aegis-alert-dispatcher".into())
+            .spawn(move || {
+                aegis_alert::dispatcher::run(dispatcher_config, rx);
+            })
+            .context("failed to spawn alert dispatcher thread")?;
+        info!(rules = config.alerts.len(), "alert dispatcher started");
+        Some(handle)
+    } else {
+        None
+    };
 
     // Begin a session for this invocation
     let session_id = store
@@ -131,6 +153,14 @@ pub fn execute(
 
     // Print summary
     print_summary(&store_arc, &session_id, exit_code, &observer_summary, violation_count);
+
+    // Shut down the alert dispatcher by dropping the store (which drops the
+    // alert sender), then join the thread.
+    drop(store_arc);
+    if let Some(handle) = alert_thread {
+        let _ = handle.join();
+        info!("alert dispatcher shut down");
+    }
 
     if !status.success() {
         std::process::exit(exit_code);

@@ -95,6 +95,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
         allowed_network: Vec::new(),
         isolation: IsolationConfig::Process,
         observer: ObserverConfig::default(),
+        alerts: Vec::new(),
     };
 
     let toml_content = config

@@ -1,4 +1,5 @@
 mod commands;
+mod wizard;
 
 use std::path::PathBuf;
 
@@ -142,6 +143,12 @@ enum Commands {
     /// Generate a man page and print to stdout
     Manpage,
 
+    /// Manage webhook alert rules
+    Alerts {
+        #[command(subcommand)]
+        action: AlertCommands,
+    },
+
     /// Wrap a command with Aegis observability (observe-only by default)
     Wrap {
         /// Project directory to observe (defaults to current directory)
@@ -163,6 +170,33 @@ enum Commands {
         /// Command and arguments to execute
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
+    },
+
+    /// Watch a directory for filesystem changes (background daemon mode)
+    Watch {
+        /// Directory to watch (defaults to current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Policy template to use (default: permit-all for observe-only)
+        #[arg(long, default_value = "permit-all")]
+        policy: String,
+
+        /// Config name (defaults to directory basename)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Human-readable session tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Seconds of inactivity before session rotation (default: 300)
+        #[arg(long, default_value = "300")]
+        idle_timeout: u64,
+
+        /// Stop a running watch for this directory/name
+        #[arg(long)]
+        stop: bool,
     },
 }
 
@@ -368,6 +402,35 @@ enum AuditCommands {
         /// Continuously follow new entries (like tail -f)
         #[arg(long)]
         follow: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AlertCommands {
+    /// List all configured alert rules
+    List {
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
+    },
+
+    /// Send a test webhook to verify connectivity
+    Test {
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
+
+        /// Only test the named rule (tests all if omitted)
+        #[arg(long)]
+        rule: Option<String>,
+    },
+
+    /// Show alert dispatch history
+    History {
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
+
+        /// Number of recent dispatches to show (default 20)
+        #[arg(long, default_value = "20")]
+        last: u32,
     },
 }
 
@@ -580,6 +643,20 @@ fn main() -> anyhow::Result<()> {
             man.render(&mut std::io::stdout())
                 .map_err(|e| anyhow::anyhow!("failed to render man page: {e}"))
         }
+        Commands::Alerts { action } => match action {
+            AlertCommands::List { config } => {
+                let config = resolve_config(config)?;
+                commands::alerts::list(&config)
+            }
+            AlertCommands::Test { config, rule } => {
+                let config = resolve_config(config)?;
+                commands::alerts::test(&config, rule.as_deref())
+            }
+            AlertCommands::History { config, last } => {
+                let config = resolve_config(config)?;
+                commands::alerts::history(&config, last)
+            }
+        },
         Commands::Wrap {
             dir,
             policy,
@@ -591,6 +668,23 @@ fn main() -> anyhow::Result<()> {
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis wrap -- <command> [args...]"))?;
             commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref())
+        }
+        Commands::Watch {
+            dir,
+            policy,
+            name,
+            tag,
+            idle_timeout,
+            stop,
+        } => {
+            commands::watch::run(
+                dir.as_deref(),
+                &policy,
+                name.as_deref(),
+                tag.as_deref(),
+                idle_timeout,
+                stop,
+            )
         }
     }
 }
@@ -1454,23 +1548,6 @@ mod tests {
     }
 
     #[test]
-    fn wizard_mode_mapping() {
-        use commands::init::SecurityMode;
-
-        let (policy, isolation) = SecurityMode::ObserveOnly.to_config();
-        assert_eq!(policy, "permit-all");
-        assert!(matches!(isolation, aegis_types::IsolationConfig::Process));
-
-        let (policy, isolation) = SecurityMode::ReadOnlySandbox.to_config();
-        assert_eq!(policy, "allow-read-only");
-        assert!(matches!(isolation, aegis_types::IsolationConfig::Seatbelt { .. }));
-
-        let (policy, isolation) = SecurityMode::FullLockdown.to_config();
-        assert_eq!(policy, "default-deny");
-        assert!(matches!(isolation, aegis_types::IsolationConfig::Seatbelt { .. }));
-    }
-
-    #[test]
     fn init_with_dir_sets_sandbox_dir() {
         let tmpdir = tempfile::tempdir().expect("failed to create temp dir");
         let base = tmpdir.path().join("dir-agent");
@@ -1493,5 +1570,84 @@ mod tests {
         );
         // The dedicated sandbox/ subdir should NOT have been created
         assert!(!base.join("sandbox").exists());
+    }
+
+    #[test]
+    fn cli_parse_watch_defaults() {
+        let cli = Cli::try_parse_from(["aegis", "watch"]);
+        assert!(cli.is_ok(), "should parse watch with defaults: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Watch {
+                dir,
+                policy,
+                name,
+                tag,
+                idle_timeout,
+                stop,
+            } => {
+                assert!(dir.is_none());
+                assert_eq!(policy, "permit-all");
+                assert!(name.is_none());
+                assert!(tag.is_none());
+                assert_eq!(idle_timeout, 300);
+                assert!(!stop);
+            }
+            _ => panic!("expected Watch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_watch_with_options() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "watch",
+            "--dir",
+            "/tmp/project",
+            "--name",
+            "myproject",
+            "--policy",
+            "default-deny",
+            "--tag",
+            "sprint-42",
+            "--idle-timeout",
+            "600",
+        ]);
+        assert!(cli.is_ok(), "should parse watch with options: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Watch {
+                dir,
+                policy,
+                name,
+                tag,
+                idle_timeout,
+                stop,
+            } => {
+                assert_eq!(dir, Some(PathBuf::from("/tmp/project")));
+                assert_eq!(policy, "default-deny");
+                assert_eq!(name, Some("myproject".to_string()));
+                assert_eq!(tag, Some("sprint-42".to_string()));
+                assert_eq!(idle_timeout, 600);
+                assert!(!stop);
+            }
+            _ => panic!("expected Watch command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_watch_stop() {
+        let cli = Cli::try_parse_from([
+            "aegis", "watch", "--name", "myproject", "--stop",
+        ]);
+        assert!(cli.is_ok(), "should parse watch --stop: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Watch { name, stop, .. } => {
+                assert_eq!(name, Some("myproject".to_string()));
+                assert!(stop);
+            }
+            _ => panic!("expected Watch command"),
+        }
     }
 }

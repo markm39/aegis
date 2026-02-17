@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::Confirm;
 
 use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::PolicyEngine;
@@ -56,168 +56,38 @@ fn platform_isolation() -> IsolationConfig {
     }
 }
 
-/// Security mode options for the interactive wizard.
-#[derive(Debug, Clone, Copy)]
-pub enum SecurityMode {
-    /// Log all file activity, enforce nothing
-    ObserveOnly,
-    /// Allow reads, block writes (Seatbelt)
-    ReadOnlySandbox,
-    /// Block everything by default (Seatbelt)
-    FullLockdown,
-}
 
-impl SecurityMode {
-    /// Map a security mode to its policy template name and isolation config.
-    pub fn to_config(self) -> (&'static str, IsolationConfig) {
-        match self {
-            SecurityMode::ObserveOnly => ("permit-all", IsolationConfig::Process),
-            SecurityMode::ReadOnlySandbox => ("allow-read-only", platform_isolation()),
-            SecurityMode::FullLockdown => ("default-deny", platform_isolation()),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            SecurityMode::ObserveOnly => "Observe only       -- Log all file activity, enforce nothing",
-            SecurityMode::ReadOnlySandbox => if cfg!(target_os = "macos") {
-                "Read-only sandbox  -- Allow reads, block writes (Seatbelt)"
-            } else {
-                "Read-only policy   -- Allow reads, deny writes (policy only)"
-            },
-            SecurityMode::FullLockdown => if cfg!(target_os = "macos") {
-                "Full lockdown      -- Block everything by default (Seatbelt)"
-            } else {
-                "Full lockdown      -- Block everything by default (policy only)"
-            },
-        }
-    }
-}
-
-const SECURITY_MODES: [SecurityMode; 3] = [
-    SecurityMode::ObserveOnly,
-    SecurityMode::ReadOnlySandbox,
-    SecurityMode::FullLockdown,
-];
-
-/// Interactive setup wizard for `aegis init` with no arguments.
+/// Interactive TUI setup wizard for `aegis init` with no arguments.
+///
+/// Launches a ratatui-based wizard that matches the visual style of the
+/// Aegis monitor dashboard. Returns the user's selections which are then
+/// used to create the config via `create_config()`.
 fn run_wizard() -> Result<()> {
-    println!("Aegis Setup Wizard");
-    println!("==================\n");
+    let result = crate::wizard::run_wizard().context("wizard failed")?;
 
-    // Default name from CWD basename
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let default_name = cwd
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "my-project".to_string());
-
-    let name: String = Input::new()
-        .with_prompt("Configuration name")
-        .default(default_name)
-        .interact_text()
-        .context("failed to read configuration name")?;
-
-    // Security mode selection (presets + custom option)
-    let mut choices: Vec<String> = SECURITY_MODES
-        .iter()
-        .map(|m| m.label().to_string())
-        .collect();
-    choices.push("Custom             -- Pick specific capabilities".to_string());
-    let choice_refs: Vec<&str> = choices.iter().map(|s| s.as_str()).collect();
-
-    let mode_index = Select::new()
-        .with_prompt("Security mode")
-        .items(&choice_refs)
-        .default(0)
-        .interact()
-        .context("failed to read security mode")?;
-
-    let (policy_text, isolation) = if mode_index < SECURITY_MODES.len() {
-        let mode = SECURITY_MODES[mode_index];
-        let (template, isolation) = mode.to_config();
-        let text = get_builtin_policy(template)
-            .with_context(|| format!("unknown builtin policy template: {template}"))?
-            .to_string();
-        (text, isolation)
-    } else {
-        build_custom_policy()?
-    };
-
-    // Project directory selection
-    let home_dir = dirs_from_env()?;
-    let cwd_label = format!("Current directory: {}", cwd.display());
-    let home_label = format!("Home directory:    {}", home_dir.display());
-    let custom_label = "Custom path (type a path)".to_string();
-    let dir_choices = vec![&cwd_label, &home_label, &custom_label];
-    let dir_index = Select::new()
-        .with_prompt("Project directory")
-        .items(&dir_choices)
-        .default(0)
-        .interact()
-        .context("failed to read directory selection")?;
-
-    let project_dir = match dir_index {
-        0 => cwd.clone(),
-        1 => home_dir,
-        _ => {
-            let dir_str: String = Input::new()
-                .with_prompt("Enter path")
-                .interact_text()
-                .context("failed to read directory path")?;
-            PathBuf::from(dir_str)
-        }
-    };
-    let dir_str = project_dir.display().to_string();
-
-    // Summary
-    let isolation_desc = match &isolation {
-        IsolationConfig::Process => "Process (no kernel enforcement)",
-        IsolationConfig::Seatbelt { .. } => "Seatbelt (macOS kernel sandbox)",
-        IsolationConfig::None => "None",
-    };
-
-    let mode_desc = if mode_index < SECURITY_MODES.len() {
-        SECURITY_MODES[mode_index]
-            .label()
-            .split("  --")
-            .next()
-            .unwrap_or("")
-            .to_string()
-    } else {
-        "Custom".to_string()
-    };
-
-    println!("\nSummary:");
-    println!("  Name:      {name}");
-    println!("  Mode:      {mode_desc}");
-    println!("  Isolation: {isolation_desc}");
-    println!("  Directory: {dir_str}");
-    println!("  Config at: ~/.aegis/{name}/");
-
-    let confirmed = Confirm::new()
-        .with_prompt("\nCreate this configuration?")
-        .default(true)
-        .interact()
-        .context("failed to read confirmation")?;
-
-    if !confirmed {
+    if result.cancelled {
         println!("Aborted.");
         return Ok(());
     }
 
     // Create the config
     ensure_aegis_dir()?;
-    let base_dir = aegis_base_dir(&name)?;
-    create_config(&name, &policy_text, &base_dir, Some(&project_dir), isolation)?;
+    let base_dir = aegis_base_dir(&result.name)?;
+    create_config(
+        &result.name,
+        &result.policy_text,
+        &base_dir,
+        Some(&result.project_dir),
+        result.isolation,
+    )?;
 
     // Auto-set as current config
-    crate::commands::use_config::set_current(&name)?;
+    crate::commands::use_config::set_current(&result.name)?;
 
-    // Offer policy demo
-    run_policy_demo(&name, &policy_text, &project_dir)?;
+    // Offer policy demo (in CLI mode, after TUI closes)
+    run_policy_demo(&result.name, &result.policy_text, &result.project_dir)?;
 
-    println!("\nYou're all set. Active config: {name}");
+    println!("\nYou're all set. Active config: {}", result.name);
     println!("\nNext steps:");
     println!("  aegis wrap claude    # observe an AI agent");
     println!("  aegis monitor        # live TUI dashboard");
@@ -226,92 +96,6 @@ fn run_wizard() -> Result<()> {
     Ok(())
 }
 
-/// Capability labels shown in the interactive MultiSelect.
-const CAPABILITY_LABELS: &[&str] = &[
-    "Read files in the project directory",
-    "Write/modify files",
-    "Delete files",
-    "Create new directories",
-    "Access the network",
-];
-
-/// Cedar action names corresponding to each capability.
-const CAPABILITY_ACTIONS: &[&[&str]] = &[
-    &["FileRead"],
-    &["FileWrite"],
-    &["FileDelete"],
-    &["DirCreate"],
-    &["NetConnect"],
-];
-
-/// Build a Cedar policy from user-selected capabilities.
-///
-/// Shows a MultiSelect checklist of capabilities. Selected items become
-/// Cedar `permit` statements. DirList, ProcessSpawn, and ProcessExit are
-/// always included (required for basic Aegis operation).
-///
-/// Returns `(policy_text, isolation_config)`. Uses Seatbelt when any
-/// capability is denied; Process when everything is permitted.
-fn build_custom_policy() -> Result<(String, IsolationConfig)> {
-    let defaults = vec![true, false, false, false, false];
-    let selected = MultiSelect::new()
-        .with_prompt("What should this agent be allowed to do?")
-        .items(CAPABILITY_LABELS)
-        .defaults(&defaults)
-        .interact()
-        .context("failed to read capability selection")?;
-
-    // Collect all permitted actions (always include infrastructure actions)
-    let mut actions: Vec<&str> = vec!["DirList", "ProcessSpawn", "ProcessExit"];
-    let mut allowed_display: Vec<&str> = Vec::new();
-    let mut denied_display: Vec<&str> = Vec::new();
-
-    for (i, &label) in CAPABILITY_LABELS.iter().enumerate() {
-        if selected.contains(&i) {
-            for &action in CAPABILITY_ACTIONS[i] {
-                actions.push(action);
-            }
-            allowed_display.push(label);
-        } else {
-            denied_display.push(label);
-        }
-    }
-
-    actions.sort();
-    actions.dedup();
-
-    // Generate Cedar policy text
-    let policy_text = generate_cedar_policy(&actions);
-
-    // Show summary
-    if !allowed_display.is_empty() {
-        println!("\n  ALLOW: {}", allowed_display.join(", "));
-    }
-    if !denied_display.is_empty() {
-        println!("  DENY:  {}", denied_display.join(", "));
-    }
-
-    // If everything is allowed, no need for kernel enforcement
-    let all_allowed = selected.len() == CAPABILITY_LABELS.len();
-    let isolation = if all_allowed {
-        IsolationConfig::Process
-    } else {
-        platform_isolation()
-    };
-
-    Ok((policy_text, isolation))
-}
-
-/// Generate Cedar policy text from a list of action names.
-pub fn generate_cedar_policy(actions: &[&str]) -> String {
-    let mut policy = String::new();
-    for action in actions {
-        policy.push_str(&format!(
-            "permit(\n    principal,\n    action == Aegis::Action::\"{action}\",\n    resource\n);\n\n"
-        ));
-    }
-    policy
-}
 
 /// Run a policy demo showing what actions would be allowed or denied.
 ///
@@ -562,35 +346,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn security_mode_observe_only_config() {
-        let (policy, isolation) = SecurityMode::ObserveOnly.to_config();
-        assert_eq!(policy, "permit-all");
-        assert!(matches!(isolation, IsolationConfig::Process));
-    }
-
-    #[test]
-    fn security_mode_read_only_config() {
-        let (policy, isolation) = SecurityMode::ReadOnlySandbox.to_config();
-        assert_eq!(policy, "allow-read-only");
-        if cfg!(target_os = "macos") {
-            assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
-        } else {
-            assert!(matches!(isolation, IsolationConfig::Process));
-        }
-    }
-
-    #[test]
-    fn security_mode_full_lockdown_config() {
-        let (policy, isolation) = SecurityMode::FullLockdown.to_config();
-        assert_eq!(policy, "default-deny");
-        if cfg!(target_os = "macos") {
-            assert!(matches!(isolation, IsolationConfig::Seatbelt { .. }));
-        } else {
-            assert!(matches!(isolation, IsolationConfig::Process));
-        }
-    }
-
-    #[test]
     fn run_in_dir_creates_config_and_policy() {
         let dir = tempfile::tempdir().unwrap();
         let base_dir = dir.path().join("test-cfg");
@@ -655,58 +410,4 @@ mod tests {
         assert_eq!(config.name, "roundtrip");
     }
 
-    #[test]
-    fn generate_cedar_policy_produces_valid_cedar() {
-        let actions = ["FileRead", "DirList", "ProcessSpawn", "ProcessExit"];
-        let policy_text = generate_cedar_policy(&actions);
-
-        // Should parse as valid Cedar
-        let pset: Result<cedar_policy::PolicySet, _> = policy_text.parse();
-        assert!(pset.is_ok(), "generated policy should parse: {pset:?}");
-        assert_eq!(pset.unwrap().policies().count(), 4);
-    }
-
-    #[test]
-    fn generate_cedar_policy_empty_actions() {
-        let policy_text = generate_cedar_policy(&[]);
-        assert!(policy_text.is_empty());
-    }
-
-    #[test]
-    fn create_config_with_custom_policy() {
-        let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join("custom-cfg");
-
-        let actions = ["FileRead", "DirList", "ProcessSpawn", "ProcessExit"];
-        let policy_text = generate_cedar_policy(&actions);
-
-        create_config(
-            "custom-cfg",
-            &policy_text,
-            &base_dir,
-            None,
-            IsolationConfig::Seatbelt { profile_overrides: None },
-        )
-        .unwrap();
-
-        assert!(base_dir.join(CONFIG_FILENAME).exists());
-        assert!(base_dir.join("policies").join(DEFAULT_POLICY_FILENAME).exists());
-
-        // Verify the policy file contains our generated Cedar
-        let saved_policy = fs::read_to_string(
-            base_dir.join("policies").join(DEFAULT_POLICY_FILENAME),
-        )
-        .unwrap();
-        assert!(saved_policy.contains("FileRead"));
-        assert!(saved_policy.contains("DirList"));
-    }
-
-    #[test]
-    fn capability_arrays_match_length() {
-        assert_eq!(
-            CAPABILITY_LABELS.len(),
-            CAPABILITY_ACTIONS.len(),
-            "labels and actions arrays must have same length"
-        );
-    }
 }

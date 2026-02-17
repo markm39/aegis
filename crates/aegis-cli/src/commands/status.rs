@@ -75,7 +75,27 @@ pub fn run(config_name: &str) -> Result<()> {
     println!("  Isolation:    {}", config.isolation);
     println!("  Observer:     {}", config.observer);
 
+    // Active watches
+    print_active_watches();
+
     Ok(())
+}
+
+/// Print any actively running watch processes.
+fn print_active_watches() {
+    let watches = crate::commands::watch::find_active_watches();
+    if watches.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("Active Watches:");
+    for (name, pid_info) in &watches {
+        println!(
+            "  {name}: PID {} watching {}",
+            pid_info.pid, pid_info.directory,
+        );
+    }
 }
 
 /// Print ledger disk size, entry count, integrity, session info, and denial count.

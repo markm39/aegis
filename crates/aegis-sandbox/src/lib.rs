@@ -151,6 +151,7 @@ pub(crate) mod test_helpers {
             allowed_network: vec![],
             isolation,
             observer: aegis_types::ObserverConfig::default(),
+            alerts: Vec::new(),
         }
     }
 }

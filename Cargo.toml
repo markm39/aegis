@@ -4,6 +4,7 @@ members = [
     "crates/aegis-types",
     "crates/aegis-policy",
     "crates/aegis-ledger",
+    "crates/aegis-alert",
     "crates/aegis-sandbox",
     "crates/aegis-proxy",
     "crates/aegis-observer",
@@ -44,9 +45,14 @@ assert_cmd = "2"
 predicates = "3"
 dialoguer = "0.12"
 
+glob = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+wiremock = "0.6"
+
 # Types crate (used by all)
 aegis-types = { path = "crates/aegis-types" }
 aegis-policy = { path = "crates/aegis-policy" }
+aegis-alert = { path = "crates/aegis-alert" }
 aegis-ledger = { path = "crates/aegis-ledger" }
 aegis-sandbox = { path = "crates/aegis-sandbox" }
 aegis-proxy = { path = "crates/aegis-proxy" }

@@ -166,6 +166,7 @@ mod tests {
                 profile_overrides: None,
             },
             observer: aegis_types::ObserverConfig::default(),
+            alerts: Vec::new(),
         };
         assert!(describe_isolation(&seatbelt).contains("Seatbelt"));
 

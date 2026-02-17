@@ -142,10 +142,42 @@ impl std::fmt::Display for IsolationConfig {
     }
 }
 
+/// Default cooldown between repeated alert dispatches for the same rule.
+fn default_cooldown() -> u64 {
+    60
+}
+
+/// A webhook alert rule that fires when audit events match its filters.
+///
+/// Configured via `[[alerts]]` sections in `aegis.toml`. Each rule specifies
+/// a webhook URL and optional filters on decision, action kind, file path,
+/// and principal. When an audit event matches all specified filters, a JSON
+/// payload is POSTed to the webhook URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AlertRule {
+    /// Unique name for this alert rule (used in logs and cooldown tracking).
+    pub name: String,
+    /// HTTP(S) URL to POST the webhook payload to.
+    pub webhook_url: String,
+    /// Filter: only fire on this decision ("Allow" or "Deny"). `None` matches both.
+    pub decision: Option<String>,
+    /// Filter: only fire on these action kinds. Empty means all actions.
+    #[serde(default)]
+    pub action_kinds: Vec<String>,
+    /// Filter: glob pattern matched against the event's file path.
+    pub path_glob: Option<String>,
+    /// Filter: exact match on the agent principal name.
+    pub principal: Option<String>,
+    /// Minimum seconds between dispatches for this rule (default 60).
+    #[serde(default = "default_cooldown")]
+    pub cooldown_secs: u64,
+}
+
 /// Top-level configuration for an Aegis agent instance.
 ///
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,
-/// audit storage, network rules, isolation backend, and observer settings.
+/// audit storage, network rules, isolation backend, observer settings,
+/// and real-time webhook alert rules.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AegisConfig {
     /// Human-readable name for this configuration (also the Cedar principal).
@@ -165,6 +197,9 @@ pub struct AegisConfig {
     /// How Aegis monitors filesystem activity during execution.
     #[serde(default)]
     pub observer: ObserverConfig,
+    /// Webhook alert rules evaluated against every audit event.
+    #[serde(default)]
+    pub alerts: Vec<AlertRule>,
 }
 
 /// Validate that a config name is safe for use as a directory component.
@@ -242,6 +277,7 @@ impl AegisConfig {
             allowed_network: Vec::new(),
             isolation,
             observer: ObserverConfig::default(),
+            alerts: Vec::new(),
         }
     }
 }
@@ -267,6 +303,15 @@ mod tests {
                 profile_overrides: None,
             },
             observer: ObserverConfig::default(),
+            alerts: vec![AlertRule {
+                name: "deny-alert".into(),
+                webhook_url: "https://hooks.slack.com/test".into(),
+                decision: Some("Deny".into()),
+                action_kinds: vec![],
+                path_glob: None,
+                principal: None,
+                cooldown_secs: 30,
+            }],
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -274,6 +319,9 @@ mod tests {
         assert_eq!(parsed.name, "test");
         assert_eq!(parsed.allowed_network.len(), 1);
         assert_eq!(parsed.allowed_network[0].host, "api.openai.com");
+        assert_eq!(parsed.alerts.len(), 1);
+        assert_eq!(parsed.alerts[0].name, "deny-alert");
+        assert_eq!(parsed.alerts[0].cooldown_secs, 30);
     }
 
     #[test]
@@ -429,5 +477,85 @@ mod tests {
             .to_string(),
             "Seatbelt (overrides: /tmp/custom.sb)"
         );
+    }
+
+    #[test]
+    fn config_without_alerts_parses_with_empty_vec() {
+        // Existing configs that predate the alerts feature must still parse.
+        let toml_str = r#"
+            name = "legacy-agent"
+            sandbox_dir = "/tmp/sandbox"
+            policy_paths = ["/tmp/policies"]
+            ledger_path = "/tmp/audit.db"
+            allowed_network = []
+            isolation = "Process"
+        "#;
+        let config = AegisConfig::from_toml(toml_str).unwrap();
+        assert_eq!(config.name, "legacy-agent");
+        assert!(config.alerts.is_empty(), "alerts should default to empty vec");
+    }
+
+    #[test]
+    fn alert_rule_toml_roundtrip() {
+        let rule = AlertRule {
+            name: "write-to-secrets".into(),
+            webhook_url: "https://events.pagerduty.com/v2/enqueue".into(),
+            decision: Some("Deny".into()),
+            action_kinds: vec!["FileWrite".into(), "FileDelete".into()],
+            path_glob: Some("**/.env*".into()),
+            principal: Some("my-agent".into()),
+            cooldown_secs: 10,
+        };
+
+        let json = serde_json::to_string(&rule).unwrap();
+        let back: AlertRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, rule);
+    }
+
+    #[test]
+    fn alert_rule_default_cooldown() {
+        // When cooldown_secs is omitted, it defaults to 60.
+        let json = r#"{"name":"test","webhook_url":"https://example.com"}"#;
+        let rule: AlertRule = serde_json::from_str(json).unwrap();
+        assert_eq!(rule.cooldown_secs, 60);
+        assert!(rule.action_kinds.is_empty());
+        assert!(rule.decision.is_none());
+        assert!(rule.path_glob.is_none());
+        assert!(rule.principal.is_none());
+    }
+
+    #[test]
+    fn config_with_multiple_alerts_roundtrip() {
+        let toml_str = r#"
+            name = "test-agent"
+            sandbox_dir = "/tmp/sandbox"
+            policy_paths = ["/tmp/policies"]
+            ledger_path = "/tmp/audit.db"
+            allowed_network = []
+            isolation = "Process"
+
+            [[alerts]]
+            name = "deny-alert"
+            webhook_url = "https://hooks.slack.com/services/T/B/xxx"
+            decision = "Deny"
+            cooldown_secs = 30
+
+            [[alerts]]
+            name = "all-network"
+            webhook_url = "https://intake.logs.datadoghq.com/api/v2/logs"
+            action_kinds = ["NetConnect"]
+        "#;
+        let config = AegisConfig::from_toml(toml_str).unwrap();
+        assert_eq!(config.alerts.len(), 2);
+
+        assert_eq!(config.alerts[0].name, "deny-alert");
+        assert_eq!(config.alerts[0].decision, Some("Deny".into()));
+        assert_eq!(config.alerts[0].cooldown_secs, 30);
+        assert!(config.alerts[0].action_kinds.is_empty());
+
+        assert_eq!(config.alerts[1].name, "all-network");
+        assert_eq!(config.alerts[1].action_kinds, vec!["NetConnect"]);
+        assert_eq!(config.alerts[1].cooldown_secs, 60); // default
+        assert!(config.alerts[1].decision.is_none());
     }
 }

@@ -1,12 +1,14 @@
 //! AuditStore: SQLite-backed append-only hash-chained audit ledger.
 
 use std::path::Path;
+use std::sync::mpsc::SyncSender;
 
 use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension};
-use tracing::info;
+use tracing::{debug, info};
 use uuid::Uuid;
 
+use aegis_alert::AlertEvent;
 use aegis_types::{Action, AegisError, Verdict};
 
 use crate::entry::AuditEntry;
@@ -72,12 +74,26 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX IF NOT EXISTS idx_session_id ON audit_log(session_id);",
     // Migration 2: Add tag column to sessions
     "ALTER TABLE sessions ADD COLUMN tag TEXT;",
+    // Migration 3: Create alert_log table for webhook dispatch history
+    "CREATE TABLE IF NOT EXISTS alert_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id    TEXT NOT NULL,
+        rule_name   TEXT NOT NULL,
+        entry_id    TEXT NOT NULL,
+        fired_at    TEXT NOT NULL,
+        webhook_url TEXT NOT NULL,
+        status_code INTEGER,
+        success     INTEGER NOT NULL DEFAULT 0,
+        error       TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );",
 ];
 
 /// An append-only, hash-chained audit store backed by SQLite.
 pub struct AuditStore {
     conn: Connection,
     latest_hash: String,
+    alert_tx: Option<SyncSender<AlertEvent>>,
 }
 
 impl AuditStore {
@@ -131,7 +147,20 @@ impl AuditStore {
 
         info!(latest_hash = %latest_hash, "audit store opened");
 
-        Ok(Self { conn, latest_hash })
+        Ok(Self {
+            conn,
+            latest_hash,
+            alert_tx: None,
+        })
+    }
+
+    /// Set the alert channel sender for real-time webhook alerting.
+    ///
+    /// When set, every successful `insert_entry()` will push an [`AlertEvent`]
+    /// to this channel via non-blocking `try_send`. If the channel is full,
+    /// the event is silently dropped (the audit record is still persisted).
+    pub fn set_alert_sender(&mut self, tx: SyncSender<AlertEvent>) {
+        self.alert_tx = Some(tx);
     }
 
     /// Append a new entry to the ledger recording the given action and verdict.
@@ -274,6 +303,25 @@ impl AuditStore {
             .map_err(|e| AegisError::LedgerError(format!("failed to insert entry: {e}")))?;
 
         self.latest_hash = entry.entry_hash.clone();
+
+        // Notify the alert dispatcher (non-blocking, best-effort).
+        if let Some(ref tx) = self.alert_tx {
+            let alert_event = AlertEvent {
+                entry_id: entry.entry_id,
+                timestamp: entry.timestamp,
+                action_kind: extract_action_variant(&entry.action_kind),
+                action_detail: entry.action_kind.clone(),
+                principal: entry.principal.clone(),
+                decision: entry.decision.clone(),
+                reason: entry.reason.clone(),
+                policy_id: entry.policy_id.clone(),
+                session_id: session_id.copied(),
+            };
+            if tx.try_send(alert_event).is_err() {
+                debug!("alert channel full or disconnected, dropping alert event");
+            }
+        }
+
         Ok(entry)
     }
 
@@ -406,6 +454,20 @@ impl AuditStore {
     /// Provide read access to the underlying connection (for query extensions).
     pub(crate) fn connection(&self) -> &Connection {
         &self.conn
+    }
+}
+
+/// Extract the action variant name from a JSON-serialized `ActionKind`.
+///
+/// Given `{"FileWrite":{"path":"/foo"}}`, returns `"FileWrite"`.
+/// Falls back to the full string if parsing fails.
+fn extract_action_variant(action_kind_json: &str) -> String {
+    // The JSON is always `{"VariantName":{...}}` -- find the first quoted key.
+    let start = action_kind_json.find('"').map(|i| i + 1);
+    let end = start.and_then(|s| action_kind_json[s..].find('"').map(|e| s + e));
+    match (start, end) {
+        (Some(s), Some(e)) => action_kind_json[s..e].to_string(),
+        _ => action_kind_json.to_string(),
     }
 }
 
@@ -684,5 +746,76 @@ mod tests {
         }
 
         assert_eq!(store.count().unwrap(), 3);
+    }
+
+    #[test]
+    fn alert_sender_receives_events_on_append() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<AlertEvent>(16);
+        store.set_alert_sender(tx);
+
+        let action = sample_action("alert-agent");
+        let verdict = Verdict::deny(action.id, "forbidden", Some("pol-1".into()));
+        store.append(&action, &verdict).unwrap();
+
+        let event = rx.try_recv().expect("should receive an alert event");
+        assert_eq!(event.principal, "alert-agent");
+        assert_eq!(event.decision, "Deny");
+        assert_eq!(event.reason, "forbidden");
+        assert_eq!(event.policy_id, Some("pol-1".into()));
+        assert_eq!(event.action_kind, "FileRead");
+        assert!(event.action_detail.contains("\"path\""));
+    }
+
+    #[test]
+    fn alert_sender_with_session_id() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        let session_id = store
+            .begin_session("test-config", "echo", &["hello".into()], None)
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<AlertEvent>(16);
+        store.set_alert_sender(tx);
+
+        let action = sample_action("agent");
+        let verdict = Verdict::allow(action.id, "ok", None);
+        store.append_with_session(&action, &verdict, &session_id).unwrap();
+
+        let event = rx.try_recv().expect("should receive an alert event");
+        assert_eq!(event.session_id, Some(session_id));
+    }
+
+    #[test]
+    fn no_alert_sender_does_not_panic() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        // No set_alert_sender call -- should work fine.
+        let action = sample_action("agent");
+        let verdict = Verdict::allow(action.id, "ok", None);
+        store.append(&action, &verdict).unwrap();
+    }
+
+    #[test]
+    fn extract_action_variant_file_write() {
+        assert_eq!(
+            extract_action_variant(r#"{"FileWrite":{"path":"/tmp/f.txt"}}"#),
+            "FileWrite"
+        );
+    }
+
+    #[test]
+    fn extract_action_variant_net_connect() {
+        assert_eq!(
+            extract_action_variant(r#"{"NetConnect":{"host":"evil.com","port":443}}"#),
+            "NetConnect"
+        );
+    }
+
+    #[test]
+    fn extract_action_variant_fallback() {
+        assert_eq!(extract_action_variant("not json"), "not json");
     }
 }

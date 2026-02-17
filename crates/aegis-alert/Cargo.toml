@@ -1,5 +1,6 @@
 [package]
-name = "aegis-ledger"
+name = "aegis-alert"
+description = "Real-time webhook alerting for Aegis audit events"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,16 +8,16 @@ license.workspace = true
 
 [dependencies]
 aegis-types = { workspace = true }
-aegis-alert = { workspace = true }
+chrono = { workspace = true }
+glob = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-chrono = { workspace = true }
-uuid = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
-thiserror = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wiremock = "0.6"

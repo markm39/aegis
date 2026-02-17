@@ -243,6 +243,7 @@ mod tests {
                 profile_overrides: None,
             },
             observer: aegis_types::ObserverConfig::default(),
+            alerts: Vec::new(),
         };
 
         let (_, isolation) = describe_config(&config);
@@ -260,6 +261,7 @@ mod tests {
             allowed_network: vec![],
             isolation: aegis_types::IsolationConfig::Process,
             observer: aegis_types::ObserverConfig::default(),
+            alerts: Vec::new(),
         };
 
         let (_, isolation) = describe_config(&config);
