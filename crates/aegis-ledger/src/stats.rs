@@ -78,9 +78,7 @@ impl AuditStore {
         let integrity = self.verify_integrity()?;
 
         // Policy change count
-        let policy_changes = self
-            .list_policy_snapshots(config_name, 10_000)?
-            .len();
+        let policy_changes = self.count_policy_snapshots(config_name)?;
 
         // Top resources
         let top_resources = self.top_resources(filter, 10)?;

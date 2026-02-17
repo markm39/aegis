@@ -176,6 +176,20 @@ impl AuditStore {
         Ok(result)
     }
 
+    /// Count the total number of policy snapshots for a config.
+    pub fn count_policy_snapshots(&self, config_name: &str) -> Result<usize, AegisError> {
+        self.connection()
+            .query_row(
+                "SELECT COUNT(*) FROM policy_snapshots WHERE config_name = ?1",
+                params![config_name],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as usize)
+            .map_err(|e| {
+                AegisError::LedgerError(format!("count_policy_snapshots: {e}"))
+            })
+    }
+
     /// List policy snapshots for a config, ordered by most recent first.
     pub fn list_policy_snapshots(
         &self,
@@ -396,5 +410,23 @@ mod tests {
         assert!(a.is_some());
         assert!(b.is_some());
         assert_ne!(a.unwrap().snapshot_id, b.unwrap().snapshot_id);
+    }
+
+    #[test]
+    fn count_policy_snapshots_matches_list() {
+        let (_tmp, mut store) = test_db();
+
+        assert_eq!(store.count_policy_snapshots("test").unwrap(), 0);
+
+        for i in 0..3 {
+            let mut files = BTreeMap::new();
+            files.insert("a.cedar".into(), format!("v{i}"));
+            store.record_policy_snapshot("test", &files, None).unwrap();
+        }
+
+        assert_eq!(store.count_policy_snapshots("test").unwrap(), 3);
+        // Count should match list length
+        let listed = store.list_policy_snapshots("test", 100).unwrap();
+        assert_eq!(store.count_policy_snapshots("test").unwrap(), listed.len());
     }
 }

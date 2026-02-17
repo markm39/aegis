@@ -151,4 +151,35 @@ mod tests {
         let result = list_config_names();
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn current_file_roundtrip() {
+        // Test the file read/write logic directly without mutating HOME,
+        // since env var changes affect parallel tests.
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let aegis_dir = tmpdir.path().join(".aegis");
+        std::fs::create_dir_all(&aegis_dir).expect("create .aegis");
+
+        let current_path = aegis_dir.join(CURRENT_FILE);
+        std::fs::write(&current_path, "my-test-config").expect("write");
+
+        let content = std::fs::read_to_string(&current_path).expect("read");
+        assert_eq!(content.trim(), "my-test-config");
+    }
+
+    #[test]
+    fn current_file_trims_whitespace() {
+        let tmpdir = tempfile::tempdir().expect("temp dir");
+        let aegis_dir = tmpdir.path().join(".aegis");
+        std::fs::create_dir_all(&aegis_dir).expect("create .aegis");
+
+        let current_path = aegis_dir.join(CURRENT_FILE);
+        std::fs::write(&current_path, "  my-config  \n").expect("write");
+
+        // The get_current() function trims whitespace; verify the same logic
+        let content = std::fs::read_to_string(&current_path).expect("read");
+        let name = content.trim().to_string();
+        assert_eq!(name, "my-config");
+        assert!(!name.is_empty());
+    }
 }
