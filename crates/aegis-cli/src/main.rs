@@ -148,6 +148,18 @@ enum ConfigCommands {
         /// Name of the aegis configuration
         config: String,
     },
+
+    /// Print the path to the config file (for scripting)
+    Path {
+        /// Name of the aegis configuration
+        config: String,
+    },
+
+    /// Open the config file in $EDITOR
+    Edit {
+        /// Name of the aegis configuration
+        config: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -437,6 +449,8 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Config { action } => match action {
             ConfigCommands::Show { config } => commands::config::show(&config),
+            ConfigCommands::Path { config } => commands::config::path(&config),
+            ConfigCommands::Edit { config } => commands::config::edit(&config),
         }
         Commands::Wrap {
             dir,
