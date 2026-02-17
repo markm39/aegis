@@ -3,7 +3,6 @@
 //! Computes summary metrics from audit entries: total counts, deny rates,
 //! breakdowns by action kind and principal, and integrity status.
 
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use aegis_types::{ActionKind, AegisError};
@@ -128,29 +127,15 @@ impl AuditStore {
         Ok(sorted)
     }
 
-    /// Get the earliest and latest entry timestamps.
+    /// Get the earliest and latest entry timestamps in a single query.
     fn time_range(&self) -> Result<(Option<String>, Option<String>), AegisError> {
-        let earliest: Option<String> = self
-            .connection()
+        self.connection()
             .query_row(
-                "SELECT timestamp FROM audit_log ORDER BY id ASC LIMIT 1",
+                "SELECT MIN(timestamp), MAX(timestamp) FROM audit_log",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .optional()
-            .map_err(|e| AegisError::LedgerError(format!("time_range earliest query failed: {e}")))?;
-
-        let latest: Option<String> = self
-            .connection()
-            .query_row(
-                "SELECT timestamp FROM audit_log ORDER BY id DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| AegisError::LedgerError(format!("time_range latest query failed: {e}")))?;
-
-        Ok((earliest, latest))
+            .map_err(|e| AegisError::LedgerError(format!("time_range query failed: {e}")))
     }
 
     /// Count the total number of sessions for a config.
