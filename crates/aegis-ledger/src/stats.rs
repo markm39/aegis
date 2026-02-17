@@ -109,39 +109,13 @@ impl AuditStore {
         filter: &AuditFilter,
         limit: usize,
     ) -> Result<Vec<(String, usize)>, AegisError> {
-        let fragment = filter.to_sql();
+        let raw = self.count_grouped_by("action_kind", filter)?;
 
-        let sql = if fragment.where_clause.is_empty() {
-            "SELECT action_kind, COUNT(*) as cnt FROM audit_log GROUP BY action_kind ORDER BY cnt DESC"
-                .to_string()
-        } else {
-            format!(
-                "SELECT action_kind, COUNT(*) as cnt FROM audit_log WHERE {} GROUP BY action_kind ORDER BY cnt DESC",
-                fragment.where_clause
-            )
-        };
-
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            fragment.params.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = self
-            .connection()
-            .prepare(&sql)
-            .map_err(|e| AegisError::LedgerError(format!("top_resources failed: {e}")))?;
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            })
-            .map_err(|e| AegisError::LedgerError(format!("top_resources query: {e}")))?;
-
-        let all: Vec<(String, usize)> = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AegisError::LedgerError(format!("top_resources read: {e}")))?;
-
-        // Extract human-readable resource names from the action_kind JSON
-        let mut resource_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for (action_kind, count) in &all {
+        // Merge counts by human-readable resource name (multiple action_kind JSON
+        // variants may map to the same display string via ActionKind::Display).
+        let mut resource_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (action_kind, count) in &raw {
             let key = extract_resource_display(action_kind);
             *resource_counts.entry(key).or_insert(0) += count;
         }
