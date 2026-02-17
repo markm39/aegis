@@ -2,7 +2,7 @@ mod commands;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 /// Aegis -- zero-trust runtime for AI agents.
@@ -115,6 +115,12 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigCommands,
+    },
+
+    /// Generate shell completions for bash, zsh, fish, elvish, or powershell
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
     },
 
     /// Wrap a command with Aegis observability (observe-only by default)
@@ -467,6 +473,15 @@ fn main() -> anyhow::Result<()> {
             ConfigCommands::Show { config } => commands::config::show(&config),
             ConfigCommands::Path { config } => commands::config::path(&config),
             ConfigCommands::Edit { config } => commands::config::edit(&config),
+        }
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "aegis",
+                &mut std::io::stdout(),
+            );
+            Ok(())
         }
         Commands::Wrap {
             dir,
@@ -1156,6 +1171,31 @@ mod tests {
             }
             _ => panic!("expected Wrap command"),
         }
+    }
+
+    #[test]
+    fn cli_parse_completions() {
+        let cli = Cli::try_parse_from(["aegis", "completions", "zsh"]);
+        assert!(cli.is_ok(), "should parse completions: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Completions { shell } => {
+                assert_eq!(shell, clap_complete::Shell::Zsh);
+            }
+            _ => panic!("expected Completions command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_completions_bash() {
+        let cli = Cli::try_parse_from(["aegis", "completions", "bash"]);
+        assert!(cli.is_ok(), "should parse completions bash: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_completions_invalid_shell() {
+        let result = Cli::try_parse_from(["aegis", "completions", "invalid"]);
+        assert!(result.is_err(), "invalid shell should fail");
     }
 
     #[test]
