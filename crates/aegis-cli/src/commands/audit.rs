@@ -519,19 +519,7 @@ fn export_json(entries: &[AuditEntry]) -> Result<()> {
 fn export_csv(entries: &[AuditEntry]) {
     println!("entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash");
     for e in entries {
-        println!(
-            "{},{},{},{},{},{},{},{},{},{}",
-            e.entry_id,
-            e.timestamp.to_rfc3339(),
-            e.action_id,
-            csv_escape(&e.action_kind),
-            csv_escape(&e.principal),
-            e.decision,
-            csv_escape(&e.reason),
-            e.policy_id.as_deref().unwrap_or(""),
-            e.prev_hash,
-            e.entry_hash,
-        );
+        print_csv_entry(e);
     }
 }
 

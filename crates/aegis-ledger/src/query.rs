@@ -87,56 +87,56 @@ impl AuditStore {
         &self,
         filter: &AuditFilter,
     ) -> Result<(Vec<AuditEntry>, usize), AegisError> {
-        let fragment = filter.to_sql();
+        let crate::filter::SqlFragment {
+            where_clause,
+            mut params,
+            limit,
+            offset,
+        } = filter.to_sql();
 
         let base_columns = "entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash";
 
         // Count query (ignores limit/offset)
-        let count_sql = if fragment.where_clause.is_empty() {
+        let count_sql = if where_clause.is_empty() {
             "SELECT COUNT(*) FROM audit_log".to_string()
         } else {
-            format!("SELECT COUNT(*) FROM audit_log WHERE {}", fragment.where_clause)
+            format!("SELECT COUNT(*) FROM audit_log WHERE {where_clause}")
         };
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            fragment.params.iter().map(|p| p.as_ref()).collect();
-
-        let total_count: usize = self
-            .connection()
-            .query_row(&count_sql, param_refs.as_slice(), |row| {
-                row.get::<_, i64>(0)
-            })
-            .map(|c| c as usize)
-            .map_err(|e| AegisError::LedgerError(format!("query_filtered count failed: {e}")))?;
+        let total_count: usize = {
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+            self.connection()
+                .query_row(&count_sql, param_refs.as_slice(), |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map(|c| c as usize)
+                .map_err(|e| AegisError::LedgerError(format!("query_filtered count failed: {e}")))?
+        };
 
         // Data query with limit/offset
-        let mut data_sql = if fragment.where_clause.is_empty() {
+        let mut data_sql = if where_clause.is_empty() {
             format!("SELECT {base_columns} FROM audit_log ORDER BY id DESC")
         } else {
             format!(
-                "SELECT {base_columns} FROM audit_log WHERE {} ORDER BY id DESC",
-                fragment.where_clause
+                "SELECT {base_columns} FROM audit_log WHERE {where_clause} ORDER BY id DESC"
             )
         };
 
-        // Rebuild params for the data query (we consumed param_refs above)
-        let fragment = filter.to_sql();
-        let mut data_params: Vec<Box<dyn rusqlite::types::ToSql>> = fragment.params;
-
-        if let Some(limit) = fragment.limit {
-            let idx = data_params.len() + 1;
+        if let Some(lim) = limit {
+            let idx = params.len() + 1;
             data_sql.push_str(&format!(" LIMIT ?{idx}"));
-            data_params.push(Box::new(limit as i64));
+            params.push(Box::new(lim as i64));
         }
 
-        if let Some(offset) = fragment.offset {
-            let idx = data_params.len() + 1;
+        if let Some(off) = offset {
+            let idx = params.len() + 1;
             data_sql.push_str(&format!(" OFFSET ?{idx}"));
-            data_params.push(Box::new(offset as i64));
+            params.push(Box::new(off as i64));
         }
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            data_params.iter().map(|p| p.as_ref()).collect();
+            params.iter().map(|p| p.as_ref()).collect();
 
         let mut stmt = self
             .connection()
