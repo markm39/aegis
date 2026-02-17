@@ -43,6 +43,12 @@ pub struct ClaudeCodeAdapter {
     re_allow: Regex,
 }
 
+impl Default for ClaudeCodeAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClaudeCodeAdapter {
     pub fn new() -> Self {
         Self {

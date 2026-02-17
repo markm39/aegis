@@ -222,6 +222,8 @@ fn build_pilot_config(
     if let Some(name) = adapter_name {
         pilot.adapter = match name.to_lowercase().as_str() {
             "claudecode" | "claude" => AdapterConfig::ClaudeCode,
+            "codex" => AdapterConfig::Codex,
+            "passthrough" | "none" => AdapterConfig::Passthrough,
             "auto" => AdapterConfig::Auto,
             _ => {
                 tracing::warn!("unknown adapter {name:?}, using Auto");

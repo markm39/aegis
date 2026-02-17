@@ -271,15 +271,27 @@ impl WizardApp {
                 }
             }
             KeyCode::Char(' ') => {
-                // Toggle allow/deny (skip infrastructure actions)
-                let entry = &mut self.actions[self.action_selected];
-                if !entry.meta.infrastructure {
-                    entry.permission = match &entry.permission {
+                // Toggle allow/deny (skip infrastructure actions).
+                // File actions default to project-scoped; non-file actions to global Allow.
+                let idx = self.action_selected;
+                let is_infra = self.actions[idx].meta.infrastructure;
+                if !is_infra {
+                    let is_file = self.actions[idx].meta.is_file_action();
+                    let new_perm = match &self.actions[idx].permission {
                         ActionPermission::Allow | ActionPermission::Scoped(_) => {
                             ActionPermission::Deny
                         }
-                        ActionPermission::Deny => ActionPermission::Allow,
+                        ActionPermission::Deny => {
+                            if is_file {
+                                let pattern =
+                                    format!("{}/**", self.selected_project_dir().display());
+                                ActionPermission::Scoped(vec![ScopeRule::PathPattern(pattern)])
+                            } else {
+                                ActionPermission::Allow
+                            }
+                        }
                     };
+                    self.actions[idx].permission = new_perm;
                 }
             }
             KeyCode::Enter => {
@@ -417,6 +429,7 @@ impl WizardApp {
                 KeyCode::Enter => {
                     if !self.dir_input.trim().is_empty() {
                         self.dir_editing = false;
+                        self.apply_auto_scopes();
                         self.step = WizardStep::Summary;
                     }
                 }
@@ -472,6 +485,7 @@ impl WizardApp {
                     self.dir_input.clear();
                     self.dir_cursor = 0;
                 } else {
+                    self.apply_auto_scopes();
                     self.step = WizardStep::Summary;
                 }
             }
@@ -499,6 +513,51 @@ impl WizardApp {
     }
 
     // -- Helpers --
+
+    /// Get the currently selected (or default) project directory.
+    ///
+    /// During ActionConfig (before the user reaches ProjectDir), this
+    /// returns CWD (dir_choices[0]) as a sensible default.
+    fn selected_project_dir(&self) -> &std::path::Path {
+        if self.dir_selected < self.dir_choices.len() - 1 {
+            &self.dir_choices[self.dir_selected].1
+        } else if !self.dir_input.is_empty() {
+            std::path::Path::new(&self.dir_input)
+        } else {
+            &self.dir_choices[0].1
+        }
+    }
+
+    /// Update auto-generated project-directory scopes to match the
+    /// currently selected project directory.
+    ///
+    /// For preset flows, converts globally-allowed file actions to
+    /// project-scoped. For custom flows where the user changed the
+    /// project dir, updates single-rule `/**` patterns to the new dir.
+    pub(crate) fn apply_auto_scopes(&mut self) {
+        let new_pattern = format!("{}/**", self.selected_project_dir().display());
+        for entry in &mut self.actions {
+            if !entry.meta.is_file_action() {
+                continue;
+            }
+            match &entry.permission {
+                ActionPermission::Allow => {
+                    entry.permission =
+                        ActionPermission::Scoped(vec![ScopeRule::PathPattern(new_pattern.clone())]);
+                }
+                ActionPermission::Scoped(rules) if rules.len() == 1 => {
+                    if let ScopeRule::PathPattern(p) = &rules[0] {
+                        if p.ends_with("/**") {
+                            entry.permission = ActionPermission::Scoped(vec![
+                                ScopeRule::PathPattern(new_pattern.clone()),
+                            ]);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 
     fn current_scope_count(&self) -> usize {
         match &self.actions[self.scope_action_index].permission {
@@ -629,18 +688,46 @@ mod tests {
     }
 
     #[test]
-    fn action_config_toggle() {
+    fn action_config_toggle_file_action_scopes_to_project() {
         let mut app = WizardApp::new();
         app.step = WizardStep::ActionConfig;
-        app.action_selected = 1; // FileWrite
+        app.action_selected = 1; // FileWrite (denied by default)
 
-        let was_deny = matches!(app.actions[1].permission, ActionPermission::Deny);
+        assert!(matches!(app.actions[1].permission, ActionPermission::Deny));
         app.handle_key(make_key(KeyCode::Char(' ')));
-        if was_deny {
-            assert!(matches!(app.actions[1].permission, ActionPermission::Allow));
-        } else {
-            assert!(matches!(app.actions[1].permission, ActionPermission::Deny));
+
+        // File actions should be scoped to CWD/**, not global Allow
+        match &app.actions[1].permission {
+            ActionPermission::Scoped(rules) => {
+                assert_eq!(rules.len(), 1);
+                match &rules[0] {
+                    ScopeRule::PathPattern(p) => assert!(p.ends_with("/**"), "got: {p}"),
+                    other => panic!("expected PathPattern, got {other:?}"),
+                }
+            }
+            other => panic!("expected Scoped, got {other:?}"),
         }
+
+        // Toggle back off
+        app.handle_key(make_key(KeyCode::Char(' ')));
+        assert!(matches!(app.actions[1].permission, ActionPermission::Deny));
+    }
+
+    #[test]
+    fn action_config_toggle_network_allows_globally() {
+        let mut app = WizardApp::new();
+        app.step = WizardStep::ActionConfig;
+        app.action_selected = 5; // NetConnect (denied by default)
+
+        assert!(matches!(app.actions[5].permission, ActionPermission::Deny));
+        app.handle_key(make_key(KeyCode::Char(' ')));
+
+        // Non-file actions should go to global Allow
+        assert!(
+            matches!(app.actions[5].permission, ActionPermission::Allow),
+            "NetConnect should be Allow, got {:?}",
+            app.actions[5].permission
+        );
     }
 
     #[test]
@@ -850,5 +937,98 @@ mod tests {
         let result = app.result();
         assert!(!result.cancelled);
         assert_eq!(result.name, "test-config");
+    }
+
+    #[test]
+    fn apply_auto_scopes_converts_preset_allow_to_scoped() {
+        let mut app = WizardApp::new();
+        apply_preset(&mut app.actions, SecurityPreset::ReadOnly);
+
+        // FileRead and DirList should be Allow after preset
+        assert!(matches!(app.actions[0].permission, ActionPermission::Allow));
+        assert!(matches!(app.actions[4].permission, ActionPermission::Allow));
+
+        app.apply_auto_scopes();
+
+        // Both should now be scoped to project dir
+        for idx in [0, 4] {
+            match &app.actions[idx].permission {
+                ActionPermission::Scoped(rules) => {
+                    assert_eq!(rules.len(), 1);
+                    match &rules[0] {
+                        ScopeRule::PathPattern(p) => assert!(p.ends_with("/**"), "got: {p}"),
+                        other => panic!("expected PathPattern, got {other:?}"),
+                    }
+                }
+                other => panic!("{} expected Scoped, got {other:?}", app.actions[idx].meta.action),
+            }
+        }
+
+        // ProcessSpawn should still be Allow (infrastructure, not file action)
+        assert!(matches!(app.actions[7].permission, ActionPermission::Allow));
+    }
+
+    #[test]
+    fn apply_auto_scopes_updates_on_dir_change() {
+        let mut app = WizardApp::new();
+        app.step = WizardStep::ActionConfig;
+        app.action_selected = 0; // FileRead
+
+        // Toggle off then on to get auto-scope with CWD
+        app.handle_key(make_key(KeyCode::Char(' '))); // Allow -> Deny
+        app.handle_key(make_key(KeyCode::Char(' '))); // Deny -> Scoped(cwd/**)
+
+        let cwd_pattern = match &app.actions[0].permission {
+            ActionPermission::Scoped(rules) => match &rules[0] {
+                ScopeRule::PathPattern(p) => p.clone(),
+                _ => panic!("expected PathPattern"),
+            },
+            _ => panic!("expected Scoped"),
+        };
+
+        // Change dir_selected to home (index 1) and re-apply
+        app.dir_selected = 1;
+        app.apply_auto_scopes();
+
+        let home = &app.dir_choices[1].1;
+        let expected = format!("{}/**", home.display());
+        match &app.actions[0].permission {
+            ActionPermission::Scoped(rules) => {
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0], ScopeRule::PathPattern(expected));
+                // Verify it actually changed
+                assert_ne!(
+                    rules[0],
+                    ScopeRule::PathPattern(cwd_pattern),
+                    "scope should have changed from CWD to home"
+                );
+            }
+            other => panic!("expected Scoped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_auto_scopes_preserves_user_customized_scopes() {
+        let mut app = WizardApp::new();
+
+        // Simulate user adding multiple custom scopes to FileRead
+        app.actions[0].permission = ActionPermission::Scoped(vec![
+            ScopeRule::PathPattern("/custom/path/*".to_string()),
+            ScopeRule::PathPattern("/another/path/*".to_string()),
+        ]);
+
+        app.apply_auto_scopes();
+
+        // Multi-rule scope should be untouched
+        match &app.actions[0].permission {
+            ActionPermission::Scoped(rules) => {
+                assert_eq!(rules.len(), 2);
+                assert_eq!(
+                    rules[0],
+                    ScopeRule::PathPattern("/custom/path/*".to_string())
+                );
+            }
+            other => panic!("expected Scoped, got {other:?}"),
+        }
     }
 }

@@ -5,6 +5,7 @@
 //! - [`passthrough::PassthroughAdapter`]: no-op adapter that detects nothing
 
 pub mod claude;
+pub mod codex;
 pub mod generic;
 pub mod passthrough;
 
@@ -16,7 +17,9 @@ use crate::adapter::AgentAdapter;
 pub fn create_adapter(config: &AdapterConfig, command: &str) -> Box<dyn AgentAdapter> {
     match config {
         AdapterConfig::ClaudeCode => Box::new(claude::ClaudeCodeAdapter::new()),
+        AdapterConfig::Codex => Box::new(codex::CodexAdapter::new()),
         AdapterConfig::Generic { patterns } => Box::new(generic::GenericAdapter::new(patterns)),
+        AdapterConfig::Passthrough => Box::new(passthrough::PassthroughAdapter),
         AdapterConfig::Auto => auto_detect(command),
     }
 }
@@ -32,6 +35,9 @@ fn auto_detect(command: &str) -> Box<dyn AgentAdapter> {
     if base == "claude" || base.starts_with("claude-") || base.contains("claude") {
         tracing::info!("auto-detected Claude Code adapter for command: {command}");
         Box::new(claude::ClaudeCodeAdapter::new())
+    } else if base == "codex" || base.starts_with("codex-") || base.contains("codex") {
+        tracing::info!("auto-detected Codex adapter for command: {command}");
+        Box::new(codex::CodexAdapter::new())
     } else {
         tracing::info!("no specific adapter for command: {command}, using passthrough");
         Box::new(passthrough::PassthroughAdapter)

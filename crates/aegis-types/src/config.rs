@@ -223,11 +223,15 @@ fn default_deny_response() -> String {
 pub enum AdapterConfig {
     /// Built-in Claude Code adapter.
     ClaudeCode,
+    /// Built-in Codex adapter.
+    Codex,
     /// Regex-based generic adapter with custom patterns.
     Generic {
         /// Custom prompt detection patterns.
         patterns: Vec<PromptPatternConfig>,
     },
+    /// Passthrough adapter (no prompt detection; for autonomous tools).
+    Passthrough,
     /// Auto-detect based on the command name.
     #[default]
     Auto,
@@ -237,9 +241,11 @@ impl std::fmt::Display for AdapterConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AdapterConfig::ClaudeCode => write!(f, "ClaudeCode"),
+            AdapterConfig::Codex => write!(f, "Codex"),
             AdapterConfig::Generic { patterns } => {
                 write!(f, "Generic ({} patterns)", patterns.len())
             }
+            AdapterConfig::Passthrough => write!(f, "Passthrough"),
             AdapterConfig::Auto => write!(f, "Auto"),
         }
     }

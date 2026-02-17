@@ -5,6 +5,7 @@
 
 pub mod action;
 pub mod config;
+pub mod daemon;
 pub mod error;
 pub mod verdict;
 
@@ -13,6 +14,10 @@ pub use config::{
     validate_config_name, AdapterConfig, AegisConfig, AlertRule, ControlConfig, IsolationConfig,
     NetworkRule, ObserverConfig, PilotConfig, PromptPatternConfig, Protocol, StallConfig,
     UncertainAction, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
+};
+pub use daemon::{
+    AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, DaemonControlConfig,
+    PersistenceConfig, RestartPolicy,
 };
 pub use error::AegisError;
 pub use verdict::{Decision, Verdict};

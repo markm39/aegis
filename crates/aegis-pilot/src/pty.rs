@@ -157,10 +157,7 @@ impl PtySession {
 
     /// Check if the child process is still alive.
     pub fn is_alive(&self) -> bool {
-        match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::StillAlive) => true,
-            _ => false,
-        }
+        matches!(waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)), Ok(WaitStatus::StillAlive))
     }
 
     /// Wait for the child to exit and return its exit code.
