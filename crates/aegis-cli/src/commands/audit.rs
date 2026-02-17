@@ -405,11 +405,11 @@ pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
     }
 }
 
-/// Run `aegis audit export --config NAME --format json|jsonl|csv|cef [--follow]`.
+/// Run `aegis audit export --config NAME --format json|jsonl|csv|cef [--limit N] [--follow]`.
 ///
 /// Exports audit entries in the specified format. With `--follow`, polls for
 /// new entries every second (like `tail -f`).
-pub fn export(config_name: &str, format: &str, follow: bool) -> Result<()> {
+pub fn export(config_name: &str, format: &str, limit: usize, follow: bool) -> Result<()> {
     // Validate format up front
     if !matches!(format, "json" | "jsonl" | "csv" | "cef") {
         bail!("unsupported format '{format}'; valid options: json, jsonl, csv, cef");
@@ -423,7 +423,7 @@ pub fn export(config_name: &str, format: &str, follow: bool) -> Result<()> {
     }
 
     let entries = store
-        .query_last(10_000)
+        .query_last(limit)
         .context("failed to query audit entries")?;
 
     match format {
@@ -623,6 +623,15 @@ fn cef_escape(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
+/// Escape a string for CSV output by quoting if it contains commas, quotes, or newlines.
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,30 +671,31 @@ mod tests {
 
     #[test]
     fn csv_escape_no_special_chars() {
-        assert_eq!(super::csv_escape("hello"), "hello");
+        assert_eq!(csv_escape("hello"), "hello");
     }
 
     #[test]
     fn csv_escape_with_comma() {
-        assert_eq!(super::csv_escape("hello,world"), "\"hello,world\"");
+        assert_eq!(csv_escape("hello,world"), "\"hello,world\"");
     }
 
     #[test]
     fn csv_escape_with_quotes() {
-        assert_eq!(super::csv_escape(r#"say "hi""#), r#""say ""hi""""#);
+        assert_eq!(csv_escape(r#"say "hi""#), r#""say ""hi""""#);
+    }
+
+    #[test]
+    fn csv_escape_with_newline() {
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
     }
 
     #[test]
     fn cef_escape_pipes_and_backslashes() {
-        assert_eq!(super::cef_escape("a|b\\c"), "a\\|b\\\\c");
+        assert_eq!(cef_escape("a|b\\c"), "a\\|b\\\\c");
     }
-}
 
-/// Escape a string for CSV output by quoting if it contains commas, quotes, or newlines.
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
+    #[test]
+    fn cef_escape_equals_and_newlines() {
+        assert_eq!(cef_escape("key=val\nnext"), "key\\=val\\nnext");
     }
 }

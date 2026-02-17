@@ -178,20 +178,20 @@ mod tests {
     use std::fs;
     use tempfile::NamedTempFile;
 
-    fn test_deps() -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>) {
+    /// Returns (store, engine, _db_handle). The caller must keep `_db_handle`
+    /// alive for the duration of the test so the temp file is not deleted.
+    fn test_deps() -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>, NamedTempFile) {
         let db = NamedTempFile::new().unwrap();
         let store = AuditStore::open(db.path()).unwrap();
         let engine =
             PolicyEngine::from_policies(r#"permit(principal, action, resource);"#, None).unwrap();
-        // Leak the NamedTempFile so it doesn't get cleaned up during the test
-        std::mem::forget(db);
-        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)))
+        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)), db)
     }
 
     #[test]
     fn start_and_stop_observer_empty_dir() {
         let sandbox = tempfile::tempdir().unwrap();
-        let (store, engine) = test_deps();
+        let (store, engine, _db) = test_deps();
 
         let session = start_observer(
             sandbox.path(),
@@ -212,7 +212,7 @@ mod tests {
     #[ignore] // Requires FSEvents which may not deliver events inside sandboxed environments
     fn observer_detects_file_write() {
         let sandbox = tempfile::tempdir().unwrap();
-        let (store, engine) = test_deps();
+        let (store, engine, _db) = test_deps();
 
         let session = start_observer(
             sandbox.path(),
@@ -247,7 +247,7 @@ mod tests {
         let file_path = sandbox.path().join("doomed.txt");
         fs::write(&file_path, "bye").unwrap();
 
-        let (store, engine) = test_deps();
+        let (store, engine, _db) = test_deps();
 
         let session = start_observer(
             sandbox.path(),
@@ -276,7 +276,7 @@ mod tests {
     #[ignore] // Requires FSEvents which may not deliver events inside sandboxed environments
     fn observer_detects_directory_creation() {
         let sandbox = tempfile::tempdir().unwrap();
-        let (store, engine) = test_deps();
+        let (store, engine, _db) = test_deps();
 
         let session = start_observer(
             sandbox.path(),

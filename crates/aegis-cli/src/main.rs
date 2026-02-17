@@ -336,6 +336,10 @@ enum AuditCommands {
         #[arg(long, default_value = "json")]
         format: String,
 
+        /// Maximum number of entries to export (default 10000)
+        #[arg(long, default_value = "10000")]
+        limit: usize,
+
         /// Continuously follow new entries (like tail -f)
         #[arg(long)]
         follow: bool,
@@ -428,8 +432,9 @@ fn main() -> anyhow::Result<()> {
             AuditCommands::Export {
                 config,
                 format,
+                limit,
                 follow,
-            } => commands::audit::export(&config, &format, follow),
+            } => commands::audit::export(&config, &format, limit, follow),
         },
         Commands::Report { config, format } => {
             commands::report::run(&config, &format)
@@ -822,7 +827,7 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command {
             Commands::Audit {
-                action: AuditCommands::Export { config, format, follow },
+                action: AuditCommands::Export { config, format, follow, .. },
             } => {
                 assert_eq!(config, "myagent");
                 assert_eq!(format, "csv");
@@ -847,7 +852,7 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command {
             Commands::Audit {
-                action: AuditCommands::Export { config, format, follow },
+                action: AuditCommands::Export { config, format, follow, .. },
             } => {
                 assert_eq!(config, "myagent");
                 assert_eq!(format, "jsonl");
@@ -995,6 +1000,56 @@ mod tests {
                 assert_eq!(config, "myagent");
             }
             _ => panic!("expected Config Show command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_config_path() {
+        let cli = Cli::try_parse_from(["aegis", "config", "path", "myagent"]);
+        assert!(cli.is_ok(), "should parse config path: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Config {
+                action: ConfigCommands::Path { config },
+            } => {
+                assert_eq!(config, "myagent");
+            }
+            _ => panic!("expected Config Path command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_config_edit() {
+        let cli = Cli::try_parse_from(["aegis", "config", "edit", "myagent"]);
+        assert!(cli.is_ok(), "should parse config edit: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Config {
+                action: ConfigCommands::Edit { config },
+            } => {
+                assert_eq!(config, "myagent");
+            }
+            _ => panic!("expected Config Edit command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_export_with_limit() {
+        let cli = Cli::try_parse_from([
+            "aegis", "audit", "export", "myagent", "--format", "csv", "--limit", "500",
+        ]);
+        assert!(cli.is_ok(), "should parse audit export with limit: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Export { config, format, limit, follow },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(format, "csv");
+                assert_eq!(limit, 500);
+                assert!(!follow);
+            }
+            _ => panic!("expected Audit Export command"),
         }
     }
 
