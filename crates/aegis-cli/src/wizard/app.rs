@@ -69,6 +69,8 @@ pub struct WizardApp {
     pub scope_selected: usize,
     /// Text buffer for adding a new scope rule.
     pub scope_input: String,
+    /// Cursor position in scope input.
+    pub scope_cursor: usize,
     /// Whether currently typing a new scope rule.
     pub scope_editing: bool,
 
@@ -79,6 +81,8 @@ pub struct WizardApp {
     pub dir_selected: usize,
     /// Text buffer for custom path input.
     pub dir_input: String,
+    /// Cursor position in directory input.
+    pub dir_cursor: usize,
     /// Whether currently typing a custom path.
     pub dir_editing: bool,
 
@@ -120,10 +124,12 @@ impl WizardApp {
             scope_action_index: 0,
             scope_selected: 0,
             scope_input: String::new(),
+            scope_cursor: 0,
             scope_editing: false,
             dir_choices,
             dir_selected: 0,
             dir_input: String::new(),
+            dir_cursor: 0,
             dir_editing: false,
             isolation: IsolationConfig::Process,
         }
@@ -307,6 +313,7 @@ impl WizardApp {
                 KeyCode::Esc => {
                     self.scope_editing = false;
                     self.scope_input.clear();
+                    self.scope_cursor = 0;
                 }
                 KeyCode::Enter => {
                     let text = self.scope_input.trim().to_string();
@@ -330,12 +337,31 @@ impl WizardApp {
                     }
                     self.scope_editing = false;
                     self.scope_input.clear();
+                    self.scope_cursor = 0;
                 }
                 KeyCode::Char(c) => {
-                    self.scope_input.push(c);
+                    self.scope_input.insert(self.scope_cursor, c);
+                    self.scope_cursor += 1;
                 }
                 KeyCode::Backspace => {
-                    self.scope_input.pop();
+                    if self.scope_cursor > 0 {
+                        self.scope_cursor -= 1;
+                        self.scope_input.remove(self.scope_cursor);
+                    }
+                }
+                KeyCode::Left => {
+                    self.scope_cursor = self.scope_cursor.saturating_sub(1);
+                }
+                KeyCode::Right => {
+                    if self.scope_cursor < self.scope_input.len() {
+                        self.scope_cursor += 1;
+                    }
+                }
+                KeyCode::Home => {
+                    self.scope_cursor = 0;
+                }
+                KeyCode::End => {
+                    self.scope_cursor = self.scope_input.len();
                 }
                 _ => {}
             }
@@ -359,6 +385,7 @@ impl WizardApp {
                 // Add new scope rule
                 self.scope_editing = true;
                 self.scope_input.clear();
+                self.scope_cursor = 0;
             }
             KeyCode::Char('d') => {
                 // Delete selected scope rule
@@ -385,6 +412,7 @@ impl WizardApp {
                 KeyCode::Esc => {
                     self.dir_editing = false;
                     self.dir_input.clear();
+                    self.dir_cursor = 0;
                 }
                 KeyCode::Enter => {
                     if !self.dir_input.trim().is_empty() {
@@ -393,10 +421,28 @@ impl WizardApp {
                     }
                 }
                 KeyCode::Char(c) => {
-                    self.dir_input.push(c);
+                    self.dir_input.insert(self.dir_cursor, c);
+                    self.dir_cursor += 1;
                 }
                 KeyCode::Backspace => {
-                    self.dir_input.pop();
+                    if self.dir_cursor > 0 {
+                        self.dir_cursor -= 1;
+                        self.dir_input.remove(self.dir_cursor);
+                    }
+                }
+                KeyCode::Left => {
+                    self.dir_cursor = self.dir_cursor.saturating_sub(1);
+                }
+                KeyCode::Right => {
+                    if self.dir_cursor < self.dir_input.len() {
+                        self.dir_cursor += 1;
+                    }
+                }
+                KeyCode::Home => {
+                    self.dir_cursor = 0;
+                }
+                KeyCode::End => {
+                    self.dir_cursor = self.dir_input.len();
                 }
                 _ => {}
             }
@@ -424,6 +470,7 @@ impl WizardApp {
                 if is_custom {
                     self.dir_editing = true;
                     self.dir_input.clear();
+                    self.dir_cursor = 0;
                 } else {
                     self.step = WizardStep::Summary;
                 }
@@ -439,11 +486,9 @@ impl WizardApp {
                 self.running = false;
             }
             KeyCode::Esc => {
-                if self.used_custom {
-                    self.step = WizardStep::ActionConfig;
-                } else {
-                    self.step = WizardStep::ProjectDir;
-                }
+                // Always go back to ProjectDir (the immediately preceding step).
+                // From ProjectDir, Esc goes to ActionConfig or SecurityPreset as appropriate.
+                self.step = WizardStep::ProjectDir;
             }
             KeyCode::Enter => {
                 self.step = WizardStep::Done;
@@ -734,12 +779,22 @@ mod tests {
     }
 
     #[test]
-    fn summary_esc_goes_back() {
+    fn summary_esc_goes_back_to_project_dir() {
         let mut app = WizardApp::new();
         app.step = WizardStep::Summary;
         app.used_custom = true;
         app.handle_key(make_key(KeyCode::Esc));
-        assert_eq!(app.step, WizardStep::ActionConfig);
+        // Always goes to ProjectDir regardless of custom/preset flow
+        assert_eq!(app.step, WizardStep::ProjectDir);
+    }
+
+    #[test]
+    fn summary_esc_goes_back_preset_flow() {
+        let mut app = WizardApp::new();
+        app.step = WizardStep::Summary;
+        app.used_custom = false;
+        app.handle_key(make_key(KeyCode::Esc));
+        assert_eq!(app.step, WizardStep::ProjectDir);
     }
 
     #[test]

@@ -147,6 +147,7 @@ pub fn ensure_wrap_config(
             isolation: IsolationConfig::Process,
             observer: ObserverConfig::default(),
             alerts: Vec::new(),
+            pilot: None,
         };
 
         let toml_content = config

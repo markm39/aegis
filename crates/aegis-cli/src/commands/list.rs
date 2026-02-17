@@ -244,6 +244,7 @@ mod tests {
             },
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),
+            pilot: None,
         };
 
         let (_, isolation) = describe_config(&config);
@@ -262,6 +263,7 @@ mod tests {
             isolation: aegis_types::IsolationConfig::Process,
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),
+            pilot: None,
         };
 
         let (_, isolation) = describe_config(&config);

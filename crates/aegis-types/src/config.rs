@@ -173,6 +173,179 @@ pub struct AlertRule {
     pub cooldown_secs: u64,
 }
 
+/// What to do when the pilot adapter cannot determine the action type
+/// from an agent's permission prompt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum UncertainAction {
+    /// Deny the action (safest default).
+    #[default]
+    Deny,
+    /// Allow the action (permissive mode, useful during initial setup).
+    Allow,
+    /// Fire a webhook alert and wait for external input.
+    Alert,
+}
+
+impl std::fmt::Display for UncertainAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UncertainAction::Deny => write!(f, "Deny"),
+            UncertainAction::Allow => write!(f, "Allow"),
+            UncertainAction::Alert => write!(f, "Alert"),
+        }
+    }
+}
+
+/// A regex-based prompt detection pattern for the generic agent adapter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptPatternConfig {
+    /// Regex pattern to match permission prompt lines.
+    /// May contain named capture groups `tool` and `args`.
+    pub regex: String,
+    /// String to send to the agent to approve the action.
+    #[serde(default = "default_approve_response")]
+    pub approve: String,
+    /// String to send to the agent to deny the action.
+    #[serde(default = "default_deny_response")]
+    pub deny: String,
+}
+
+fn default_approve_response() -> String {
+    "y".to_string()
+}
+
+fn default_deny_response() -> String {
+    "n".to_string()
+}
+
+/// Which agent adapter to use for PTY prompt detection.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AdapterConfig {
+    /// Built-in Claude Code adapter.
+    ClaudeCode,
+    /// Regex-based generic adapter with custom patterns.
+    Generic {
+        /// Custom prompt detection patterns.
+        patterns: Vec<PromptPatternConfig>,
+    },
+    /// Auto-detect based on the command name.
+    #[default]
+    Auto,
+}
+
+impl std::fmt::Display for AdapterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdapterConfig::ClaudeCode => write!(f, "ClaudeCode"),
+            AdapterConfig::Generic { patterns } => {
+                write!(f, "Generic ({} patterns)", patterns.len())
+            }
+            AdapterConfig::Auto => write!(f, "Auto"),
+        }
+    }
+}
+
+/// Default stall detection timeout in seconds.
+fn default_stall_timeout_secs() -> u64 {
+    120
+}
+
+/// Default maximum number of nudges before giving up.
+fn default_max_nudges() -> u32 {
+    5
+}
+
+/// Default nudge message sent to a stalled agent.
+fn default_nudge_message() -> String {
+    "continue".to_string()
+}
+
+/// Stall detection configuration for the pilot supervisor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StallConfig {
+    /// Seconds of no output before considering the agent stalled.
+    #[serde(default = "default_stall_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Maximum number of nudges before firing a "max nudges exceeded" alert.
+    #[serde(default = "default_max_nudges")]
+    pub max_nudges: u32,
+    /// Message to send when nudging (written to the agent's stdin).
+    #[serde(default = "default_nudge_message")]
+    pub nudge_message: String,
+}
+
+impl Default for StallConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: default_stall_timeout_secs(),
+            max_nudges: default_max_nudges(),
+            nudge_message: default_nudge_message(),
+        }
+    }
+}
+
+/// Default poll interval for the command polling endpoint.
+fn default_poll_interval() -> u64 {
+    5
+}
+
+/// Control plane listener configuration for remote monitoring and commands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ControlConfig {
+    /// HTTP listen address (e.g., `"0.0.0.0:8443"`). Empty means disabled.
+    #[serde(default)]
+    pub http_listen: String,
+    /// API key for HTTP authentication. Empty means no auth (not recommended for remote).
+    #[serde(default)]
+    pub api_key: String,
+    /// URL to poll for pending commands (empty means disabled).
+    #[serde(default)]
+    pub poll_endpoint: String,
+    /// Polling interval in seconds.
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_secs: u64,
+}
+
+/// Default rolling output buffer size in lines.
+fn default_output_buffer_lines() -> usize {
+    200
+}
+
+/// Configuration for the `aegis pilot` PTY supervisor.
+///
+/// Controls how the pilot detects and responds to agent permission prompts,
+/// handles stalls, and accepts remote commands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PilotConfig {
+    /// Which agent adapter to use for prompt detection.
+    #[serde(default)]
+    pub adapter: AdapterConfig,
+    /// Stall detection settings.
+    #[serde(default)]
+    pub stall: StallConfig,
+    /// Control plane settings (Unix socket + optional HTTP).
+    #[serde(default)]
+    pub control: ControlConfig,
+    /// Number of recent output lines to keep in the rolling buffer.
+    #[serde(default = "default_output_buffer_lines")]
+    pub output_buffer_lines: usize,
+    /// What to do when a prompt cannot be parsed by the adapter.
+    #[serde(default)]
+    pub uncertain_action: UncertainAction,
+}
+
+impl Default for PilotConfig {
+    fn default() -> Self {
+        Self {
+            adapter: AdapterConfig::default(),
+            stall: StallConfig::default(),
+            control: ControlConfig::default(),
+            output_buffer_lines: default_output_buffer_lines(),
+            uncertain_action: UncertainAction::default(),
+        }
+    }
+}
+
 /// Top-level configuration for an Aegis agent instance.
 ///
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,
@@ -200,6 +373,9 @@ pub struct AegisConfig {
     /// Webhook alert rules evaluated against every audit event.
     #[serde(default)]
     pub alerts: Vec<AlertRule>,
+    /// Pilot PTY supervisor configuration (used by `aegis pilot`).
+    #[serde(default)]
+    pub pilot: Option<PilotConfig>,
 }
 
 /// Validate that a config name is safe for use as a directory component.
@@ -278,6 +454,7 @@ impl AegisConfig {
             isolation,
             observer: ObserverConfig::default(),
             alerts: Vec::new(),
+            pilot: None,
         }
     }
 }
@@ -312,6 +489,7 @@ mod tests {
                 principal: None,
                 cooldown_secs: 30,
             }],
+            pilot: None,
         };
 
         let toml_str = config.to_toml().unwrap();
