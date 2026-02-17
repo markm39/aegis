@@ -37,50 +37,11 @@ pub fn run() -> Result<()> {
     let mut entries: Vec<ConfigEntry> = Vec::new();
 
     // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" directory)
-    if let Ok(readdir) = fs::read_dir(&aegis_dir) {
-        for entry in readdir.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-
-            // Skip the wraps directory -- handled separately
-            if name == "wraps" {
-                continue;
-            }
-
-            if path.join("aegis.toml").exists() {
-                if let Some(ce) = load_entry(&path, &name, "init") {
-                    entries.push(ce);
-                }
-            }
-        }
-    }
+    scan_configs(&aegis_dir, "init", &mut entries, |name| name != "wraps");
 
     // Scan wrap configs: ~/.aegis/wraps/*/aegis.toml
     let wraps_dir = aegis_dir.join("wraps");
-    if let Ok(readdir) = fs::read_dir(&wraps_dir) {
-        for entry in readdir.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-
-            if path.join("aegis.toml").exists() {
-                if let Some(ce) = load_entry(&path, &name, "wrap") {
-                    entries.push(ce);
-                }
-            }
-        }
-    }
+    scan_configs(&wraps_dir, "wrap", &mut entries, |_| true);
 
     if entries.is_empty() {
         println!("No Aegis configurations found.");
@@ -119,6 +80,42 @@ pub fn run() -> Result<()> {
     println!("\n{} configuration(s) found.", entries.len());
 
     Ok(())
+}
+
+/// Scan a directory for aegis configs, appending discovered entries to `out`.
+///
+/// Each subdirectory containing `aegis.toml` is treated as a config.
+/// The `filter` predicate can skip specific directory names (e.g., "wraps").
+fn scan_configs(
+    dir: &std::path::Path,
+    config_type: &'static str,
+    out: &mut Vec<ConfigEntry>,
+    filter: impl Fn(&str) -> bool,
+) {
+    let readdir = match fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for entry in readdir.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        if !filter(&name) {
+            continue;
+        }
+
+        if path.join("aegis.toml").exists() {
+            if let Some(ce) = load_entry(&path, &name, config_type) {
+                out.push(ce);
+            }
+        }
+    }
 }
 
 /// Load a config entry from a directory, returning None on any error.
@@ -185,12 +182,13 @@ fn describe_config(config: &AegisConfig) -> (String, String) {
     (policy, isolation)
 }
 
-/// Truncate a string to fit a column width.
+/// Truncate a string to fit a column width, using char boundaries.
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
+        let prefix: String = s.chars().take(max.saturating_sub(3)).collect();
+        format!("{prefix}...")
     }
 }
 
@@ -206,6 +204,19 @@ mod tests {
     #[test]
     fn truncate_long_string() {
         assert_eq!(truncate("hello world test", 10), "hello w...");
+    }
+
+    #[test]
+    fn truncate_exact_length() {
+        assert_eq!(truncate("1234567890", 10), "1234567890");
+    }
+
+    #[test]
+    fn truncate_multibyte_chars() {
+        // Should not panic on multi-byte UTF-8 characters
+        let s = "cafe\u{0301}"; // "cafe" + combining accent = 5 chars
+        let result = truncate(s, 3);
+        assert!(result.ends_with("..."));
     }
 
     #[test]
