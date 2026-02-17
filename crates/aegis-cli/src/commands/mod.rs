@@ -6,3 +6,4 @@ pub mod report;
 pub mod run;
 pub mod setup;
 pub mod status;
+pub mod wrap;

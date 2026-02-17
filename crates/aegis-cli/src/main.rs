@@ -81,6 +81,25 @@ enum Commands {
         #[arg(long)]
         config: String,
     },
+
+    /// Wrap a command with Aegis observability (observe-only by default)
+    Wrap {
+        /// Project directory to observe (defaults to current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Policy template to use (default: permit-all for observe-only)
+        #[arg(long, default_value = "permit-all")]
+        policy: String,
+
+        /// Config name (defaults to basename of command)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Command and arguments to execute
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -272,6 +291,17 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Status { config } => {
             commands::status::run(&config)
+        }
+        Commands::Wrap {
+            dir,
+            policy,
+            name,
+            command,
+        } => {
+            let (cmd, args) = command
+                .split_first()
+                .ok_or_else(|| anyhow::anyhow!("no command provided after --"))?;
+            commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args)
         }
     }
 }
@@ -570,6 +600,60 @@ mod tests {
         match cli.command {
             Commands::Setup => {}
             _ => panic!("expected Setup command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_wrap_defaults() {
+        let cli = Cli::try_parse_from(["aegis", "wrap", "--", "claude", "--help"]);
+        assert!(cli.is_ok(), "should parse wrap with defaults: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Wrap {
+                dir,
+                policy,
+                name,
+                command,
+            } => {
+                assert!(dir.is_none());
+                assert_eq!(policy, "permit-all");
+                assert!(name.is_none());
+                assert_eq!(command, vec!["claude", "--help"]);
+            }
+            _ => panic!("expected Wrap command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_wrap_with_options() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "wrap",
+            "--dir",
+            "/tmp/project",
+            "--policy",
+            "allow-read-only",
+            "--name",
+            "my-agent",
+            "--",
+            "python3",
+            "script.py",
+        ]);
+        assert!(cli.is_ok(), "should parse wrap with options: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Wrap {
+                dir,
+                policy,
+                name,
+                command,
+            } => {
+                assert_eq!(dir, Some(PathBuf::from("/tmp/project")));
+                assert_eq!(policy, "allow-read-only");
+                assert_eq!(name, Some("my-agent".to_string()));
+                assert_eq!(command, vec!["python3", "script.py"]);
+            }
+            _ => panic!("expected Wrap command"),
         }
     }
 
