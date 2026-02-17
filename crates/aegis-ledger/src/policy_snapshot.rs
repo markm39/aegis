@@ -10,6 +10,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -62,10 +63,9 @@ pub fn read_policy_files(dir: &Path) -> Result<BTreeMap<String, String>, AegisEr
 
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "cedar") {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+                continue;
+            };
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 AegisError::PolicyError(format!("failed to read {}: {e}", path.display()))
             })?;
@@ -104,8 +104,9 @@ impl AuditStore {
 
         let snapshot_id = Uuid::new_v4();
         let timestamp = Utc::now();
-        let files_json = serde_json::to_string(policy_files)
-            .unwrap_or_else(|_| "{}".to_string());
+        let files_json = serde_json::to_string(policy_files).map_err(|e| {
+            AegisError::LedgerError(format!("failed to serialize policy files: {e}"))
+        })?;
 
         self.connection()
             .execute(
@@ -199,8 +200,14 @@ impl AuditStore {
 /// Map a SQLite row to a PolicySnapshot.
 fn row_to_policy_snapshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<PolicySnapshot> {
     let files_json: String = row.get(3)?;
-    let policy_files: BTreeMap<String, String> =
-        serde_json::from_str(&files_json).unwrap_or_default();
+    let policy_files: BTreeMap<String, String> = serde_json::from_str(&files_json)
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            )
+        })?;
 
     let session_id = row
         .get::<_, Option<String>>(4)?
@@ -216,8 +223,6 @@ fn row_to_policy_snapshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<PolicySna
         config_name: row.get(5)?,
     })
 }
-
-use rusqlite::OptionalExtension;
 
 #[cfg(test)]
 mod tests {
