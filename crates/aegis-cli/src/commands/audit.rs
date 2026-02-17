@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 
 use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
-use crate::commands::init::load_config;
+use crate::commands::init::open_store;
 
 /// CSV header for audit entry export (must match `print_csv_entry` field order).
 const CSV_HEADER: &str = "entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash";
@@ -43,8 +43,7 @@ pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
         page,
         page_size,
     } = opts;
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     // Fast path: --last with no other filters
     let has_filters = from.is_some()
@@ -119,8 +118,7 @@ pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
 ///
 /// Opens the audit store and verifies the integrity of the hash chain.
 pub fn verify(config_name: &str) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let report = store
         .verify_integrity()
@@ -148,8 +146,7 @@ pub fn verify(config_name: &str) -> Result<()> {
 ///
 /// Lists recent sessions in a formatted table.
 pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let sessions = store
         .list_sessions(last, 0)
@@ -190,8 +187,7 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
 ///
 /// Shows details of a single session and its audit entries.
 pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let session_id: uuid::Uuid = session_id_str
         .parse()
@@ -237,8 +233,7 @@ pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
 ///
 /// Shows the history of policy changes for a configuration.
 pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let snapshots = store
         .list_policy_snapshots(config_name, last)
@@ -280,8 +275,7 @@ pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
 ///
 /// Tags an existing session with a human-readable label.
 pub fn tag_session(config_name: &str, session_id_str: &str, tag: &str) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let session_id: uuid::Uuid = session_id_str
         .parse()
@@ -306,9 +300,7 @@ pub fn purge(config_name: &str, older_than: &str, confirm: bool) -> Result<()> {
     if !confirm {
         // Show a preview of what would be deleted
         let cutoff = Utc::now() - duration;
-        let config = load_config(config_name)?;
-        let store =
-            AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+        let (_config, store) = open_store(config_name)?;
         let total = store.count().unwrap_or(0);
 
         // Count entries that would be deleted
@@ -325,9 +317,7 @@ pub fn purge(config_name: &str, older_than: &str, confirm: bool) -> Result<()> {
     }
     let cutoff = Utc::now() - duration;
 
-    let config = load_config(config_name)?;
-    let mut store =
-        AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, mut store) = open_store(config_name)?;
 
     let deleted = store
         .purge_before(cutoff)
@@ -380,8 +370,7 @@ fn parse_duration(s: &str) -> Result<Duration> {
 /// Streams audit events to the terminal in real-time, like `tail -f`.
 /// Optionally filters by decision.
 pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     // Start from the latest entry
     let initial = store.query_after_id(0).context("failed to query entries")?;
@@ -436,8 +425,7 @@ pub fn export(config_name: &str, format: &str, limit: usize, follow: bool) -> Re
         bail!("unsupported format '{format}'; valid options: json, jsonl, csv, cef");
     }
 
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     if follow {
         return export_follow(&store, format);

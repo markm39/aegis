@@ -294,6 +294,17 @@ pub fn load_config(name: &str) -> Result<AegisConfig> {
     load_config_from_dir(&config_dir)
 }
 
+/// Load config by name and open the audit store in one step.
+///
+/// Nearly every CLI subcommand starts with this exact 2-line pattern, so
+/// centralizing it eliminates 13+ repeated `.context("failed to open audit store")` calls.
+pub fn open_store(config_name: &str) -> Result<(AegisConfig, aegis_ledger::AuditStore)> {
+    let config = load_config(config_name)?;
+    let store = aegis_ledger::AuditStore::open(&config.ledger_path)
+        .context("failed to open audit store")?;
+    Ok((config, store))
+}
+
 /// Load an AegisConfig from an explicit base directory.
 pub fn load_config_from_dir(base_dir: &Path) -> Result<AegisConfig> {
     let config_path = base_dir.join("aegis.toml");

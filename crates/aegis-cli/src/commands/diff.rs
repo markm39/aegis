@@ -7,14 +7,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use aegis_ledger::AuditStore;
-
-use crate::commands::init::load_config;
+use crate::commands::init::open_store;
 
 /// Run `aegis diff NAME --session1 UUID1 --session2 UUID2`.
 pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let s1_id: uuid::Uuid = session1_str
         .parse()

@@ -5,14 +5,13 @@
 
 use anyhow::{bail, Context, Result};
 
-use aegis_ledger::{AuditFilter, AuditStore};
+use aegis_ledger::AuditFilter;
 
-use crate::commands::init::load_config;
+use crate::commands::init::open_store;
 
 /// Run `aegis report --config NAME --format text|json`.
 pub fn run(config_name: &str, format: &str) -> Result<()> {
-    let config = load_config(config_name)?;
-    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let (_config, store) = open_store(config_name)?;
 
     let stats = store
         .compute_stats(&AuditFilter::default(), config_name)
