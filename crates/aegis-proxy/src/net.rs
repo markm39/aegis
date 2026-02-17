@@ -245,4 +245,91 @@ mod tests {
         let addr = proxy.bind_addr();
         assert_eq!(addr.ip(), std::net::Ipv4Addr::new(127, 0, 0, 1));
     }
+
+    /// Returns shared policy + store for testing check_and_log_net directly.
+    fn make_test_deps(
+        policy_str: &str,
+    ) -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>, NamedTempFile) {
+        let engine =
+            PolicyEngine::from_policies(policy_str, None).expect("should create policy engine");
+        let db_file = NamedTempFile::new().expect("should create temp file");
+        let store = AuditStore::open(db_file.path()).expect("should open audit store");
+        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)), db_file)
+    }
+
+    #[test]
+    fn check_and_log_net_allows_with_permit_all() {
+        let (store, policy, _db) =
+            make_test_deps(r#"permit(principal, action, resource);"#);
+
+        let action = Action::new(
+            "test-agent",
+            ActionKind::NetConnect {
+                host: "example.com".to_string(),
+                port: 443,
+            },
+        );
+
+        let verdict = check_and_log_net(&policy, &store, &action)
+            .expect("should succeed");
+
+        assert_eq!(verdict.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn check_and_log_net_denies_with_forbid_all() {
+        let (store, policy, _db) =
+            make_test_deps(r#"forbid(principal, action, resource);"#);
+
+        let action = Action::new(
+            "test-agent",
+            ActionKind::NetConnect {
+                host: "evil.com".to_string(),
+                port: 80,
+            },
+        );
+
+        let verdict = check_and_log_net(&policy, &store, &action)
+            .expect("should succeed");
+
+        assert_eq!(verdict.decision, Decision::Deny);
+    }
+
+    #[test]
+    fn check_and_log_net_creates_audit_entry() {
+        let (store, policy, _db) =
+            make_test_deps(r#"permit(principal, action, resource);"#);
+
+        let action = Action::new(
+            "test-agent",
+            ActionKind::NetConnect {
+                host: "api.example.com".to_string(),
+                port: 8080,
+            },
+        );
+
+        check_and_log_net(&policy, &store, &action).expect("should succeed");
+
+        let count = store.lock().unwrap().count().unwrap();
+        assert_eq!(count, 1, "should have exactly 1 audit entry");
+    }
+
+    #[test]
+    fn check_and_log_net_denied_still_logs() {
+        let (store, policy, _db) =
+            make_test_deps(r#"forbid(principal, action, resource);"#);
+
+        let action = Action::new(
+            "test-agent",
+            ActionKind::NetConnect {
+                host: "blocked.com".to_string(),
+                port: 443,
+            },
+        );
+
+        check_and_log_net(&policy, &store, &action).expect("should succeed");
+
+        let count = store.lock().unwrap().count().unwrap();
+        assert_eq!(count, 1, "denied actions should still be logged");
+    }
 }
