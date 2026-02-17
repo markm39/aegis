@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// The specific type of action being performed, evaluated against Cedar policies.
+///
+/// Each variant maps to a Cedar `Action` entity (e.g., `Aegis::Action::"FileRead"`).
+/// The fields carry context used for policy evaluation and audit logging.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ActionKind {
     FileRead { path: PathBuf },
@@ -17,15 +21,25 @@ pub enum ActionKind {
     ProcessExit { command: String, exit_code: i32 },
 }
 
+/// A principal performing an action at a point in time.
+///
+/// This is the primary input to `PolicyEngine::evaluate()`. The principal
+/// identifies the agent (e.g., `"claude-agent"`), and the kind specifies
+/// what the agent is attempting to do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
+    /// Unique identifier for this action instance.
     pub id: Uuid,
+    /// When the action was created.
     pub timestamp: DateTime<Utc>,
+    /// The agent or entity performing the action (maps to Cedar principal).
     pub principal: String,
+    /// What the agent is doing.
     pub kind: ActionKind,
 }
 
 impl Action {
+    /// Create a new action with an auto-generated ID and current timestamp.
     pub fn new(principal: impl Into<String>, kind: ActionKind) -> Self {
         Self {
             id: Uuid::new_v4(),

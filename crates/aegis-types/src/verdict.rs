@@ -2,9 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// The authorization decision produced by the Cedar policy engine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Decision {
+    /// The action is permitted by at least one `permit` policy.
     Allow,
+    /// The action is denied (default-deny, or an explicit `forbid` policy matched).
     Deny,
 }
 
@@ -17,16 +20,26 @@ impl std::fmt::Display for Decision {
     }
 }
 
+/// A complete authorization verdict linking an action to its policy evaluation result.
+///
+/// Produced by `PolicyEngine::evaluate()` and recorded alongside the action
+/// in the audit ledger.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
+    /// The action this verdict applies to.
     pub action_id: Uuid,
+    /// Whether the action was allowed or denied.
     pub decision: Decision,
+    /// Human-readable explanation of why this decision was made.
     pub reason: String,
+    /// The Cedar policy ID that produced the decision, if identifiable.
     pub policy_id: Option<String>,
+    /// When the evaluation occurred.
     pub timestamp: DateTime<Utc>,
 }
 
 impl Verdict {
+    /// Create an Allow verdict for the given action.
     pub fn allow(action_id: Uuid, reason: impl Into<String>, policy_id: Option<String>) -> Self {
         Self {
             action_id,
@@ -37,6 +50,7 @@ impl Verdict {
         }
     }
 
+    /// Create a Deny verdict for the given action.
     pub fn deny(action_id: Uuid, reason: impl Into<String>, policy_id: Option<String>) -> Self {
         Self {
             action_id,
