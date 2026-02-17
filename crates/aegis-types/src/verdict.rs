@@ -25,6 +25,18 @@ impl std::fmt::Display for Decision {
     }
 }
 
+impl std::str::FromStr for Decision {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Allow" | "allow" | "ALLOW" => Ok(Decision::Allow),
+            "Deny" | "deny" | "DENY" => Ok(Decision::Deny),
+            other => Err(format!("invalid decision: {other:?} (expected Allow or Deny)")),
+        }
+    }
+}
+
 /// A complete authorization verdict linking an action to its policy evaluation result.
 ///
 /// Produced by `PolicyEngine::evaluate()` and recorded alongside the action
@@ -85,5 +97,28 @@ mod tests {
     fn decision_display() {
         assert_eq!(Decision::Allow.to_string(), "Allow");
         assert_eq!(Decision::Deny.to_string(), "Deny");
+    }
+
+    #[test]
+    fn decision_from_str() {
+        assert_eq!("Allow".parse::<Decision>().unwrap(), Decision::Allow);
+        assert_eq!("allow".parse::<Decision>().unwrap(), Decision::Allow);
+        assert_eq!("ALLOW".parse::<Decision>().unwrap(), Decision::Allow);
+        assert_eq!("Deny".parse::<Decision>().unwrap(), Decision::Deny);
+        assert_eq!("deny".parse::<Decision>().unwrap(), Decision::Deny);
+        assert_eq!("DENY".parse::<Decision>().unwrap(), Decision::Deny);
+        assert!("maybe".parse::<Decision>().is_err());
+        assert!("".parse::<Decision>().is_err());
+    }
+
+    #[test]
+    fn decision_roundtrip() {
+        let allow = Decision::Allow;
+        let parsed: Decision = allow.to_string().parse().unwrap();
+        assert_eq!(parsed, allow);
+
+        let deny = Decision::Deny;
+        let parsed: Decision = deny.to_string().parse().unwrap();
+        assert_eq!(parsed, deny);
     }
 }
