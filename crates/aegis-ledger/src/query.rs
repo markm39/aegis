@@ -153,11 +153,21 @@ impl AuditStore {
     }
 
     /// Return aggregate counts grouped by the given column for entries matching the filter.
+    ///
+    /// The `column` parameter must be one of the known audit_log column names.
+    /// This is validated at runtime to prevent SQL injection since column names
+    /// cannot be parameterized in SQL.
     pub(crate) fn count_grouped_by(
         &self,
         column: &str,
         filter: &AuditFilter,
     ) -> Result<Vec<(String, usize)>, AegisError> {
+        const ALLOWED_COLUMNS: &[&str] = &["action_kind", "decision", "principal"];
+        if !ALLOWED_COLUMNS.contains(&column) {
+            return Err(AegisError::LedgerError(format!(
+                "count_grouped_by: invalid column {column:?} (expected one of {ALLOWED_COLUMNS:?})"
+            )));
+        }
         let fragment = filter.to_sql();
 
         let sql = if fragment.where_clause.is_empty() {

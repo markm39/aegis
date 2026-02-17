@@ -47,6 +47,8 @@ pub fn run(
         None => derive_name(command),
     };
 
+    aegis_types::validate_config_name(&derived_name)
+        .with_context(|| format!("invalid config name: {derived_name:?}"))?;
     let wrap_dir = wraps_base_dir()?.join(&derived_name);
 
     let config = ensure_wrap_config(&wrap_dir, &derived_name, policy, &project_dir)?;

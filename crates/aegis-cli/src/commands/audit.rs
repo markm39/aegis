@@ -357,7 +357,12 @@ fn parse_duration(s: &str) -> Result<Duration> {
         bail!("duration string is empty");
     }
 
-    let (num_str, unit) = s.split_at(s.len() - 1);
+    // Split at the last ASCII character (the unit). Using char_indices avoids
+    // panicking on multi-byte UTF-8 input (split_at on a non-char boundary panics).
+    let (idx, unit_char) = s.char_indices().next_back()
+        .ok_or_else(|| anyhow::anyhow!("duration string is empty"))?;
+    let num_str = &s[..idx];
+    let unit = unit_char;
     let num: i64 = num_str
         .parse()
         .with_context(|| format!("invalid duration number: '{num_str}'"))?;
@@ -367,9 +372,9 @@ fn parse_duration(s: &str) -> Result<Duration> {
     }
 
     match unit {
-        "d" => Ok(Duration::days(num)),
-        "h" => Ok(Duration::hours(num)),
-        "m" => Ok(Duration::minutes(num)),
+        'd' => Ok(Duration::days(num)),
+        'h' => Ok(Duration::hours(num)),
+        'm' => Ok(Duration::minutes(num)),
         _ => bail!(
             "unknown duration unit '{unit}'; valid units: d (days), h (hours), m (minutes)"
         ),

@@ -37,7 +37,7 @@ pub fn run(config_name: &str, policy: &str, command: &str, args: &[String], tag:
     let policy_engine =
         PolicyEngine::new(policy_dir, None).context("failed to initialize policy engine")?;
 
-    let backend = create_backend(&config.isolation, &config, &policy_engine);
+    let backend = create_backend(&config.isolation, &config, &policy_engine)?;
     let harvest_violations = matches!(config.isolation, IsolationConfig::Seatbelt { .. });
 
     pipeline::execute(
@@ -119,22 +119,23 @@ fn create_backend(
     isolation: &IsolationConfig,
     config: &aegis_types::AegisConfig,
     engine: &PolicyEngine,
-) -> Box<dyn SandboxBackend> {
+) -> Result<Box<dyn SandboxBackend>> {
     match isolation {
         #[cfg(target_os = "macos")]
         IsolationConfig::Seatbelt { .. } => {
-            let sbpl = aegis_sandbox::compile_cedar_to_sbpl(config, engine);
+            let sbpl = aegis_sandbox::compile_cedar_to_sbpl(config, engine)
+                .context("failed to compile Cedar policies to SBPL")?;
             info!("compiled Cedar policies to SBPL profile");
-            Box::new(aegis_sandbox::SeatbeltBackend::with_profile(sbpl))
+            Ok(Box::new(aegis_sandbox::SeatbeltBackend::with_profile(sbpl)))
         }
         #[cfg(not(target_os = "macos"))]
         IsolationConfig::Seatbelt { .. } => {
             eprintln!("Warning: Seatbelt is only available on macOS; falling back to Process isolation (no OS-level sandbox)");
-            Box::new(aegis_sandbox::ProcessBackend)
+            Ok(Box::new(aegis_sandbox::ProcessBackend))
         }
         IsolationConfig::Process | IsolationConfig::None => {
             info!("using Process sandbox backend (no OS-level isolation)");
-            Box::new(aegis_sandbox::ProcessBackend)
+            Ok(Box::new(aegis_sandbox::ProcessBackend))
         }
     }
 }

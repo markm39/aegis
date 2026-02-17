@@ -6,9 +6,9 @@
 //! permissions at the kernel level.
 
 use aegis_policy::PolicyEngine;
-use aegis_types::AegisConfig;
+use aegis_types::{AegisConfig, AegisError};
 
-use crate::write_sbpl_base;
+use crate::{escape_sbpl_path, write_sbpl_base};
 
 /// Compile Cedar policies into a Seatbelt SBPL profile string.
 ///
@@ -23,13 +23,16 @@ use crate::write_sbpl_base;
 /// System paths are always readable. Process execution is always allowed
 /// (the sandbox runs commands). Mach-lookup and sysctl-read are required
 /// for basic process operation on macOS.
-pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> String {
+///
+/// Returns an error if the sandbox directory path contains characters
+/// that cannot be safely embedded in the SBPL profile.
+pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Result<String, AegisError> {
     let mut profile = String::new();
 
     // Common base: version, deny default, system reads, process exec, system primitives
     write_sbpl_base(&mut profile);
 
-    let sandbox_dir = config.sandbox_dir.display();
+    let sandbox_dir = escape_sbpl_path(&config.sandbox_dir.display().to_string())?;
 
     // File read access: scoped to sandbox dir, only if Cedar permits FileRead or DirList
     if engine.permits_action("FileRead") || engine.permits_action("DirList") {
@@ -59,7 +62,7 @@ pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Str
     profile.push_str("(allow file-read* (subpath \"/private/tmp\"))\n");
     profile.push_str("(allow file-read* (subpath \"/tmp\"))\n");
 
-    profile
+    Ok(profile)
 }
 
 #[cfg(test)]
@@ -83,7 +86,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(deny default)"));
         assert!(profile.contains("(deny network*)"));
@@ -108,7 +111,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(allow file-read* (subpath \"/tmp/aegis-test-sandbox\"))"));
         assert!(profile.contains("(allow file-write* (subpath \"/tmp/aegis-test-sandbox\"))"));
@@ -127,7 +130,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(allow file-read* (subpath \"/tmp/aegis-test-sandbox\"))"));
         assert!(
@@ -147,7 +150,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(
             !profile.contains("(allow file-read* (subpath \"/tmp/aegis-test-sandbox\"))"),
@@ -166,7 +169,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(allow network-outbound)"));
         assert!(!profile.contains("(deny network*)"));
@@ -183,7 +186,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(version 1)"));
         assert!(profile.contains("(allow file-read-metadata)"));
@@ -205,7 +208,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(allow file-write* (subpath \"/tmp/aegis-test-sandbox\"))"));
     }
@@ -220,7 +223,7 @@ mod tests {
         )
         .expect("engine");
         let config = test_config();
-        let profile = compile_cedar_to_sbpl(&config, &engine);
+        let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
         assert!(profile.contains("(allow file-write* (subpath \"/tmp/aegis-test-sandbox\"))"));
     }

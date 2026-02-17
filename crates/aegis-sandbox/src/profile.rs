@@ -1,8 +1,8 @@
 //! Seatbelt SBPL profile generation from `AegisConfig`.
 
-use aegis_types::{AegisConfig, IsolationConfig};
+use aegis_types::{AegisConfig, AegisError, IsolationConfig};
 
-use crate::write_sbpl_base;
+use crate::{escape_sbpl_path, write_sbpl_base};
 
 /// Generate a macOS Seatbelt profile in SBPL format from the given config.
 ///
@@ -13,14 +13,17 @@ use crate::write_sbpl_base;
 /// - Sysctl reads and mach lookups for basic operation
 /// - Network access only if `allowed_network` rules are present
 /// - Any additional overrides from a profile_overrides file
-pub fn generate_seatbelt_profile(config: &AegisConfig) -> String {
+///
+/// Returns an error if the sandbox directory path contains characters
+/// that cannot be safely embedded in the SBPL profile.
+pub fn generate_seatbelt_profile(config: &AegisConfig) -> Result<String, AegisError> {
     let mut profile = String::new();
 
     // Common base: version, deny default, system reads, process exec, system primitives
     write_sbpl_base(&mut profile);
 
-    // Allow read and write access to the sandbox directory
-    let sandbox_dir = config.sandbox_dir.display();
+    // Allow read and write access to the sandbox directory (escaped for SBPL safety)
+    let sandbox_dir = escape_sbpl_path(&config.sandbox_dir.display().to_string())?;
     profile.push_str(&format!("(allow file-read* (subpath \"{sandbox_dir}\"))\n"));
     profile.push_str(&format!(
         "(allow file-write* (subpath \"{sandbox_dir}\"))\n"
@@ -33,29 +36,24 @@ pub fn generate_seatbelt_profile(config: &AegisConfig) -> String {
         profile.push_str("(allow network-outbound)\n");
     }
 
-    // Append profile overrides if specified
+    // Append profile overrides if specified (fail hard if the file is configured but unreadable)
     if let IsolationConfig::Seatbelt {
         profile_overrides: Some(ref overrides_path),
     } = config.isolation
     {
-        match std::fs::read_to_string(overrides_path) {
-            Ok(contents) => {
-                profile.push_str(&contents);
-                if !contents.ends_with('\n') {
-                    profile.push('\n');
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %overrides_path.display(),
-                    error = %e,
-                    "failed to read profile overrides file; continuing without overrides"
-                );
-            }
+        let contents = std::fs::read_to_string(overrides_path).map_err(|e| {
+            AegisError::SandboxError(format!(
+                "failed to read profile overrides {}: {e}",
+                overrides_path.display()
+            ))
+        })?;
+        profile.push_str(&contents);
+        if !contents.ends_with('\n') {
+            profile.push('\n');
         }
     }
 
-    profile
+    Ok(profile)
 }
 
 #[cfg(test)]
@@ -74,7 +72,7 @@ mod tests {
     #[test]
     fn profile_contains_expected_sections() {
         let config = base_config();
-        let profile = generate_seatbelt_profile(&config);
+        let profile = generate_seatbelt_profile(&config).unwrap();
 
         assert!(profile.contains("(version 1)"));
         assert!(profile.contains("(deny default)"));
@@ -94,7 +92,7 @@ mod tests {
     #[test]
     fn profile_includes_sandbox_dir() {
         let config = base_config();
-        let profile = generate_seatbelt_profile(&config);
+        let profile = generate_seatbelt_profile(&config).unwrap();
 
         assert!(profile.contains("(allow file-read* (subpath \"/tmp/aegis-test-sandbox\"))"));
         assert!(profile.contains("(allow file-write* (subpath \"/tmp/aegis-test-sandbox\"))"));
@@ -103,7 +101,7 @@ mod tests {
     #[test]
     fn profile_denies_network_when_no_rules() {
         let config = base_config();
-        let profile = generate_seatbelt_profile(&config);
+        let profile = generate_seatbelt_profile(&config).unwrap();
 
         assert!(profile.contains("(deny network*)"));
         assert!(!profile.contains("(allow network-outbound)"));
@@ -118,7 +116,7 @@ mod tests {
             protocol: Protocol::Https,
         });
 
-        let profile = generate_seatbelt_profile(&config);
+        let profile = generate_seatbelt_profile(&config).unwrap();
 
         assert!(profile.contains("(allow network-outbound)"));
         assert!(!profile.contains("(deny network*)"));
@@ -136,7 +134,7 @@ mod tests {
             profile_overrides: Some(overrides_path),
         };
 
-        let profile = generate_seatbelt_profile(&config);
+        let profile = generate_seatbelt_profile(&config).unwrap();
 
         assert!(profile.contains("(allow file-read* (literal \"/custom/path\"))"));
     }

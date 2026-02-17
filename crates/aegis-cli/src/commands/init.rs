@@ -474,6 +474,8 @@ fn create_config(
 
 /// Resolve the base directory for a named aegis configuration: `~/.aegis/NAME/`.
 pub fn aegis_base_dir(name: &str) -> Result<PathBuf> {
+    aegis_types::validate_config_name(name)
+        .with_context(|| format!("invalid config name: {name:?}"))?;
     let home = dirs_from_env()?;
     Ok(home.join(".aegis").join(name))
 }

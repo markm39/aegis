@@ -40,9 +40,9 @@ impl SeatbeltBackend {
     }
 
     /// Get the SBPL profile to use: custom if set, otherwise generated from config.
-    fn resolve_profile(&self, config: &AegisConfig) -> String {
+    fn resolve_profile(&self, config: &AegisConfig) -> Result<String, AegisError> {
         match &self.custom_profile {
-            Some(p) => p.clone(),
+            Some(p) => Ok(p.clone()),
             None => generate_seatbelt_profile(config),
         }
     }
@@ -52,7 +52,7 @@ impl SeatbeltBackend {
         &self,
         config: &AegisConfig,
     ) -> Result<tempfile::NamedTempFile, AegisError> {
-        let profile = self.resolve_profile(config);
+        let profile = self.resolve_profile(config)?;
         let mut tmp = tempfile::NamedTempFile::new().map_err(|e| {
             AegisError::SandboxError(format!("failed to create temp profile file: {e}"))
         })?;
