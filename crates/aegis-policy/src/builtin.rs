@@ -234,4 +234,21 @@ mod tests {
         assert!(get_builtin_policy("nonexistent").is_none());
         assert!(get_builtin_policy("").is_none());
     }
+
+    #[test]
+    fn all_builtins_validate_against_schema() {
+        let schema = crate::schema::default_schema().expect("should load schema");
+        for name in list_builtin_policies() {
+            let policy_text = get_builtin_policy(name).unwrap();
+            let pset = cedar_policy::PolicySet::from_str(policy_text)
+                .unwrap_or_else(|e| panic!("{name} should parse: {e}"));
+            let result = cedar_policy::Validator::new(schema.clone())
+                .validate(&pset, cedar_policy::ValidationMode::Strict);
+            assert!(
+                result.validation_passed(),
+                "{name} should validate against schema: {:?}",
+                result.validation_errors().collect::<Vec<_>>()
+            );
+        }
+    }
 }
