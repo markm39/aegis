@@ -185,33 +185,41 @@ impl PolicyEngine {
         let authorizer = Authorizer::new();
         let response = authorizer.is_authorized(&request, &self.policy_set, &entities);
 
-        let reason_policies: Vec<String> = response
-            .diagnostics()
-            .reason()
-            .map(|pid| pid.to_string())
-            .collect();
+        Ok(verdict_from_response(action, &response))
+    }
+}
 
-        let policy_id = reason_policies.first().cloned();
-        let reason_str = if reason_policies.is_empty() {
-            match response.decision() {
-                cedar_policy::Decision::Allow => "allowed by policy".to_string(),
-                cedar_policy::Decision::Deny => "denied: no permit policy matched".to_string(),
-            }
-        } else {
-            format!(
-                "{} by policies: {}",
-                match response.decision() {
-                    cedar_policy::Decision::Allow => "allowed",
-                    cedar_policy::Decision::Deny => "denied",
-                },
-                reason_policies.join(", ")
-            )
-        };
+/// Convert a Cedar authorization response into an Aegis `Verdict`.
+///
+/// Extracts the determining policy IDs from diagnostics and builds a
+/// human-readable reason string describing why the decision was made.
+fn verdict_from_response(action: &Action, response: &cedar_policy::Response) -> Verdict {
+    let reason_policies: Vec<String> = response
+        .diagnostics()
+        .reason()
+        .map(|pid| pid.to_string())
+        .collect();
 
+    let policy_id = reason_policies.first().cloned();
+    let reason_str = if reason_policies.is_empty() {
         match response.decision() {
-            cedar_policy::Decision::Allow => Ok(Verdict::allow(action.id, reason_str, policy_id)),
-            cedar_policy::Decision::Deny => Ok(Verdict::deny(action.id, reason_str, policy_id)),
+            cedar_policy::Decision::Allow => "allowed by policy".to_string(),
+            cedar_policy::Decision::Deny => "denied: no permit policy matched".to_string(),
         }
+    } else {
+        format!(
+            "{} by policies: {}",
+            match response.decision() {
+                cedar_policy::Decision::Allow => "allowed",
+                cedar_policy::Decision::Deny => "denied",
+            },
+            reason_policies.join(", ")
+        )
+    };
+
+    match response.decision() {
+        cedar_policy::Decision::Allow => Verdict::allow(action.id, reason_str, policy_id),
+        cedar_policy::Decision::Deny => Verdict::deny(action.id, reason_str, policy_id),
     }
 }
 
