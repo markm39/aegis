@@ -181,6 +181,58 @@ mod tests {
     }
 
     #[test]
+    fn session_id_filter() {
+        let filter = AuditFilter {
+            session_id: Some("abc-123".into()),
+            ..Default::default()
+        };
+        let sql = filter.to_sql();
+        assert_eq!(sql.where_clause, "session_id = ?1");
+        assert_eq!(sql.params.len(), 1);
+    }
+
+    #[test]
+    fn session_id_combined_with_decision() {
+        let filter = AuditFilter {
+            decision: Some("Deny".into()),
+            session_id: Some("sess-1".into()),
+            ..Default::default()
+        };
+        let sql = filter.to_sql();
+        assert!(sql.where_clause.contains("decision = "));
+        assert!(sql.where_clause.contains("session_id = "));
+        assert!(sql.where_clause.contains(" AND "));
+        assert_eq!(sql.params.len(), 2);
+    }
+
+    #[test]
+    fn all_filters_combined() {
+        let now = Utc::now();
+        let filter = AuditFilter {
+            from: Some(now - chrono::Duration::hours(1)),
+            to: Some(now),
+            action_kind: Some("FileRead".into()),
+            decision: Some("Allow".into()),
+            principal: Some("agent".into()),
+            session_id: Some("sess-1".into()),
+            reason_contains: Some("ok".into()),
+            limit: Some(10),
+            offset: Some(5),
+        };
+        let sql = filter.to_sql();
+        assert_eq!(sql.params.len(), 7);
+        assert!(sql.where_clause.contains("timestamp >= "));
+        assert!(sql.where_clause.contains("timestamp <= "));
+        assert!(sql.where_clause.contains("action_kind LIKE "));
+        assert!(sql.where_clause.contains("decision = "));
+        assert!(sql.where_clause.contains("principal = "));
+        assert!(sql.where_clause.contains("session_id = "));
+        assert!(sql.where_clause.contains("reason LIKE"));
+        assert_eq!(sql.limit, Some(10));
+        assert_eq!(sql.offset, Some(5));
+    }
+
+    #[test]
     fn pagination_fields() {
         let filter = AuditFilter {
             limit: Some(20),

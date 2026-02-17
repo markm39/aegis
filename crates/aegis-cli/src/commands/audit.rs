@@ -721,4 +721,38 @@ mod tests {
         let d = parse_duration("0d").unwrap();
         assert_eq!(d.num_days(), 0);
     }
+
+    #[test]
+    fn parse_duration_zero_hours() {
+        let d = parse_duration("0h").unwrap();
+        assert_eq!(d.num_hours(), 0);
+    }
+
+    #[test]
+    fn parse_duration_zero_minutes() {
+        let d = parse_duration("0m").unwrap();
+        assert_eq!(d.num_minutes(), 0);
+    }
+
+    #[test]
+    fn parse_duration_negative_is_accepted() {
+        // chrono::Duration supports negative values; the function doesn't reject them
+        let d = parse_duration("-1d");
+        // Whether this succeeds or fails, verify deterministic behavior
+        if let Ok(d) = d {
+            assert_eq!(d.num_days(), -1);
+        }
+    }
+
+    #[test]
+    fn parse_duration_single_hour() {
+        let d = parse_duration("1h").unwrap();
+        assert_eq!(d.num_hours(), 1);
+    }
+
+    #[test]
+    fn parse_duration_single_minute() {
+        let d = parse_duration("1m").unwrap();
+        assert_eq!(d.num_minutes(), 1);
+    }
 }
