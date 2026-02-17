@@ -95,8 +95,12 @@ impl AuditFilter {
         if let Some(ref reason_contains) = self.reason_contains {
             conditions.push(format!("reason LIKE '%' || ?{idx} || '%'"));
             params.push(Box::new(reason_contains.clone()));
-            let _ = idx; // suppress unused warning
+            idx += 1;
         }
+
+        // Suppress unused warning; idx tracks the next parameter slot and must
+        // be kept in sync if new filter branches are added above.
+        let _ = idx;
 
         let where_clause = if conditions.is_empty() {
             String::new()

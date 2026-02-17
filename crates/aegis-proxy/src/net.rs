@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 
 use aegis_ledger::AuditStore;
 use aegis_policy::PolicyEngine;
-use aegis_types::{Action, ActionKind, Decision, Verdict};
+use aegis_types::{Action, ActionKind, AegisError, Decision, Verdict};
 
 /// A transparent TCP proxy that intercepts outbound connections with policy checks.
 pub struct NetworkProxy {
@@ -120,27 +120,24 @@ impl NetworkProxy {
 
 /// Evaluate policy and log verdict synchronously (no async).
 ///
-/// Returns `Some(verdict)` on success, or `None` if the policy lock is poisoned.
+/// Acquires both the policy and store locks, evaluates the action, appends
+/// the audit entry, and returns the verdict.
 fn check_and_log_net(
     policy: &Arc<Mutex<PolicyEngine>>,
     store: &Arc<Mutex<AuditStore>>,
     action: &Action,
-) -> Option<Verdict> {
-    let verdict = match policy.lock() {
-        Ok(engine) => engine.evaluate(action),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to acquire policy lock");
-            return None;
-        }
-    };
+) -> Result<Verdict, AegisError> {
+    let verdict = policy
+        .lock()
+        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
+        .evaluate(action);
 
-    if let Ok(mut audit) = store.lock() {
-        if let Err(e) = audit.append(action, &verdict) {
-            tracing::error!(error = %e, "failed to append audit entry");
-        }
-    }
+    store
+        .lock()
+        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
+        .append(action, &verdict)?;
 
-    Some(verdict)
+    Ok(verdict)
 }
 
 /// Handle a single proxied connection.
@@ -169,8 +166,9 @@ async fn handle_connection(
     // before any .await point so the MutexGuards (which are not Send) don't
     // cross an await boundary.
     let verdict = match check_and_log_net(&policy, &store, &action) {
-        Some(v) => v,
-        None => {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to check policy or log audit");
             let _ = stream.shutdown().await;
             return;
         }

@@ -135,7 +135,7 @@ impl PolicyEngine {
 
     /// Inner evaluation that can return errors, keeping the public API clean.
     fn evaluate_inner(&self, action: &Action) -> Result<Verdict, AegisError> {
-        let (action_name, resource_path) = extract_action_info(&action.kind);
+        let (action_name, resource_path) = extract_action_info(&action.kind)?;
 
         // Build entity UIDs
         let principal_uid = build_entity_uid("Aegis::Agent", &action.principal)?;
@@ -216,19 +216,30 @@ impl PolicyEngine {
 }
 
 /// Extract the Cedar action name and resource path from an `ActionKind`.
-fn extract_action_info(kind: &ActionKind) -> (&str, &str) {
+///
+/// Returns an error if a path cannot be converted to UTF-8, since Cedar
+/// policies operate on string-based resource identifiers and silently
+/// substituting a placeholder could bypass policy rules.
+fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
     match kind {
-        ActionKind::FileRead { path } => ("FileRead", path.to_str().unwrap_or("unknown")),
-        ActionKind::FileWrite { path } => ("FileWrite", path.to_str().unwrap_or("unknown")),
-        ActionKind::FileDelete { path } => ("FileDelete", path.to_str().unwrap_or("unknown")),
-        ActionKind::DirCreate { path } => ("DirCreate", path.to_str().unwrap_or("unknown")),
-        ActionKind::DirList { path } => ("DirList", path.to_str().unwrap_or("unknown")),
-        ActionKind::NetConnect { host, .. } => ("NetConnect", host.as_str()),
-        ActionKind::NetRequest { url, .. } => ("NetConnect", url.as_str()),
-        ActionKind::ToolCall { tool, .. } => ("ToolCall", tool.as_str()),
-        ActionKind::ProcessSpawn { command, .. } => ("ProcessSpawn", command.as_str()),
-        ActionKind::ProcessExit { command, .. } => ("ProcessExit", command.as_str()),
+        ActionKind::FileRead { path } => Ok(("FileRead", require_utf8(path)?)),
+        ActionKind::FileWrite { path } => Ok(("FileWrite", require_utf8(path)?)),
+        ActionKind::FileDelete { path } => Ok(("FileDelete", require_utf8(path)?)),
+        ActionKind::DirCreate { path } => Ok(("DirCreate", require_utf8(path)?)),
+        ActionKind::DirList { path } => Ok(("DirList", require_utf8(path)?)),
+        ActionKind::NetConnect { host, .. } => Ok(("NetConnect", host.as_str())),
+        ActionKind::NetRequest { url, .. } => Ok(("NetConnect", url.as_str())),
+        ActionKind::ToolCall { tool, .. } => Ok(("ToolCall", tool.as_str())),
+        ActionKind::ProcessSpawn { command, .. } => Ok(("ProcessSpawn", command.as_str())),
+        ActionKind::ProcessExit { command, .. } => Ok(("ProcessExit", command.as_str())),
     }
+}
+
+/// Require a path to be valid UTF-8, returning an error otherwise.
+fn require_utf8(path: &std::path::Path) -> Result<&str, AegisError> {
+    path.to_str().ok_or_else(|| {
+        AegisError::PolicyError(format!("non-UTF8 path: {}", path.display()))
+    })
 }
 
 /// Build a Cedar `EntityUid` from a type name string and an id string.
