@@ -58,9 +58,17 @@ fn session_lifecycle_with_mixed_verdicts() {
     assert_eq!(session.exit_code, Some(0));
     assert!(session.end_time.is_some());
 
-    // Check session entries
+    // Check session entries (ordered by id ASC -- insertion order)
     let entries = store.query_by_session(&sid).unwrap();
     assert_eq!(entries.len(), 5);
+    assert_eq!(entries[0].decision, "Allow");
+    assert_eq!(entries[1].decision, "Allow");
+    assert_eq!(entries[2].decision, "Deny");
+    assert_eq!(entries[3].decision, "Allow");
+    assert_eq!(entries[4].decision, "Deny");
+
+    // Verify principals are all the same session principal
+    assert!(entries.iter().all(|e| e.principal == "myagent"));
 
     // Verify hash chain integrity
     let report = store.verify_integrity().unwrap();
@@ -156,11 +164,30 @@ fn stats_across_sessions() {
     assert!(stats.integrity_valid);
     assert_eq!(stats.total_sessions, 2);
 
-    // Action breakdown should include FileRead and FileWrite
-    assert!(!stats.entries_by_action.is_empty());
+    // Deny rate should be 1/4 = 0.25
+    assert!((stats.deny_rate - 0.25).abs() < 0.01);
 
-    // Top resources should be populated
+    // Action breakdown should include FileRead and FileWrite with correct counts.
+    // Each unique action_kind JSON is its own group, so we sum across all matching entries.
+    let file_read_count: usize = stats
+        .entries_by_action
+        .iter()
+        .filter(|(k, _)| k.contains("FileRead"))
+        .map(|(_, c)| *c)
+        .sum();
+    let file_write_count: usize = stats
+        .entries_by_action
+        .iter()
+        .filter(|(k, _)| k.contains("FileWrite"))
+        .map(|(_, c)| *c)
+        .sum();
+    assert_eq!(file_read_count, 3, "should have 3 FileRead actions");
+    assert_eq!(file_write_count, 1, "should have 1 FileWrite action");
+
+    // Top resources should include paths from the actions
     assert!(!stats.top_resources.is_empty());
+    let total_resources: usize = stats.top_resources.iter().map(|(_, c)| c).sum();
+    assert_eq!(total_resources, 4, "top resources should cover all 4 entries");
 }
 
 #[test]
