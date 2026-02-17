@@ -10,6 +10,9 @@ use aegis_types::{ActionKind, AegisError};
 use crate::filter::AuditFilter;
 use crate::store::AuditStore;
 
+/// Maximum number of top resources to include in stats.
+const TOP_RESOURCES_LIMIT: usize = 10;
+
 /// Summary statistics for a set of audit entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditStats {
@@ -81,7 +84,7 @@ impl AuditStore {
         let policy_changes = self.count_policy_snapshots(config_name)?;
 
         // Top resources
-        let top_resources = self.top_resources(filter, 10)?;
+        let top_resources = self.top_resources(filter, TOP_RESOURCES_LIMIT)?;
 
         // Time range
         let (earliest_entry, latest_entry) = self.time_range()?;

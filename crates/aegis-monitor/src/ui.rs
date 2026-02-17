@@ -14,6 +14,18 @@ use aegis_ledger::AuditEntry;
 
 use crate::app::{App, AppMode};
 
+/// Deny rate percentage above which the indicator turns red.
+const DENY_RATE_RED_THRESHOLD: f64 = 50.0;
+
+/// Deny rate percentage above which the indicator turns yellow.
+const DENY_RATE_YELLOW_THRESHOLD: f64 = 20.0;
+
+/// Width of the horizontal bar chart in the stats panel.
+const BAR_CHART_WIDTH: usize = 20;
+
+/// Maximum number of action kinds shown in the distribution chart.
+const MAX_DISTRIBUTION_BARS: usize = 6;
+
 /// Render an audit entry as a styled ListItem.
 fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
     let ts = entry.timestamp.format("%H:%M:%S");
@@ -147,9 +159,9 @@ fn draw_stats(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         0.0
     };
 
-    let deny_rate_color = if deny_rate > 50.0 {
+    let deny_rate_color = if deny_rate > DENY_RATE_RED_THRESHOLD {
         Color::Red
-    } else if deny_rate > 20.0 {
+    } else if deny_rate > DENY_RATE_YELLOW_THRESHOLD {
         Color::Yellow
     } else {
         Color::Green
@@ -214,18 +226,15 @@ fn draw_stats(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             .max()
             .unwrap_or(1);
 
-        // Available width for the bar (area width minus borders, label, count)
-        let bar_width = 20usize;
-
-        for (kind, count) in app.action_distribution.iter().take(6) {
+        for (kind, count) in app.action_distribution.iter().take(MAX_DISTRIBUTION_BARS) {
             let filled = if max_count > 0 {
-                (*count as f64 / max_count as f64 * bar_width as f64).round() as usize
+                (*count as f64 / max_count as f64 * BAR_CHART_WIDTH as f64).round() as usize
             } else {
                 0
             };
-            let filled = filled.min(bar_width);
+            let filled = filled.min(BAR_CHART_WIDTH);
             let bar: String =
-                "#".repeat(filled) + &".".repeat(bar_width - filled);
+                "#".repeat(filled) + &".".repeat(BAR_CHART_WIDTH - filled);
 
             text.push(Line::from(vec![
                 Span::styled(
