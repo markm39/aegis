@@ -16,6 +16,64 @@ use crate::query::row_to_entry;
 /// The sentinel value used as prev_hash for the very first entry.
 const GENESIS_HASH: &str = "genesis";
 
+/// SQL schema for the audit ledger database (tables + indices).
+const SCHEMA_SQL: &str = "
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id TEXT NOT NULL UNIQUE,
+        timestamp TEXT NOT NULL,
+        action_id TEXT NOT NULL,
+        action_kind TEXT NOT NULL,
+        principal TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        policy_id TEXT,
+        prev_hash TEXT NOT NULL,
+        entry_hash TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_timestamp ON audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_principal ON audit_log(principal);
+    CREATE INDEX IF NOT EXISTS idx_decision ON audit_log(decision);
+    CREATE INDEX IF NOT EXISTS idx_action_kind ON audit_log(action_kind);
+    CREATE INDEX IF NOT EXISTS idx_policy_id ON audit_log(policy_id);
+
+    CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL UNIQUE,
+        config_name TEXT NOT NULL,
+        command TEXT NOT NULL,
+        args TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT,
+        exit_code INTEGER,
+        policy_hash TEXT,
+        total_actions INTEGER DEFAULT 0,
+        denied_actions INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_start ON sessions(start_time);
+
+    CREATE TABLE IF NOT EXISTS policy_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        snapshot_id TEXT NOT NULL UNIQUE,
+        timestamp TEXT NOT NULL,
+        policy_hash TEXT NOT NULL,
+        policy_files TEXT NOT NULL,
+        policy_content TEXT NOT NULL,
+        session_id TEXT,
+        config_name TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_policy_config ON policy_snapshots(config_name);
+";
+
+/// Migrations applied after initial schema creation.
+const MIGRATIONS: &[&str] = &[
+    // Migration 1: Add session_id column to audit_log
+    "ALTER TABLE audit_log ADD COLUMN session_id TEXT;
+     CREATE INDEX IF NOT EXISTS idx_session_id ON audit_log(session_id);",
+    // Migration 2: Add tag column to sessions
+    "ALTER TABLE sessions ADD COLUMN tag TEXT;",
+];
+
 /// An append-only, hash-chained audit store backed by SQLite.
 pub struct AuditStore {
     conn: Connection,
@@ -42,72 +100,18 @@ impl AuditStore {
             ))
         })?;
 
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                entry_id TEXT NOT NULL UNIQUE,
-                timestamp TEXT NOT NULL,
-                action_id TEXT NOT NULL,
-                action_kind TEXT NOT NULL,
-                principal TEXT NOT NULL,
-                decision TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                policy_id TEXT,
-                prev_hash TEXT NOT NULL,
-                entry_hash TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON audit_log(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_principal ON audit_log(principal);
-            CREATE INDEX IF NOT EXISTS idx_decision ON audit_log(decision);
-            CREATE INDEX IF NOT EXISTS idx_action_kind ON audit_log(action_kind);
-            CREATE INDEX IF NOT EXISTS idx_policy_id ON audit_log(policy_id);
-
-            CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL UNIQUE,
-                config_name TEXT NOT NULL,
-                command TEXT NOT NULL,
-                args TEXT NOT NULL,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                exit_code INTEGER,
-                policy_hash TEXT,
-                total_actions INTEGER DEFAULT 0,
-                denied_actions INTEGER DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_session_start ON sessions(start_time);
-
-            CREATE TABLE IF NOT EXISTS policy_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                snapshot_id TEXT NOT NULL UNIQUE,
-                timestamp TEXT NOT NULL,
-                policy_hash TEXT NOT NULL,
-                policy_files TEXT NOT NULL,
-                policy_content TEXT NOT NULL,
-                session_id TEXT,
-                config_name TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_policy_config ON policy_snapshots(config_name);",
-        )
-        .map_err(|e| {
+        conn.execute_batch(SCHEMA_SQL).map_err(|e| {
             AegisError::LedgerError(format!(
                 "failed to create schema in '{}': {e}",
                 path.display()
             ))
         })?;
 
-        // Add session_id column if it does not already exist (migration).
-        // This is a nullable column for backward compatibility with existing ledgers.
-        if let Err(e) = conn.execute_batch(
-            "ALTER TABLE audit_log ADD COLUMN session_id TEXT;
-             CREATE INDEX IF NOT EXISTS idx_session_id ON audit_log(session_id);",
-        ) {
-            tracing::debug!(error = %e, "session_id migration already applied or not needed");
-        }
-
-        // Add tag column to sessions table (migration for existing ledgers).
-        if let Err(e) = conn.execute_batch("ALTER TABLE sessions ADD COLUMN tag TEXT;") {
-            tracing::debug!(error = %e, "tag migration already applied or not needed");
+        // Apply migrations (each is idempotent -- ALTER fails silently if already applied).
+        for migration in MIGRATIONS {
+            if let Err(e) = conn.execute_batch(migration) {
+                tracing::debug!(error = %e, "migration already applied or not needed");
+            }
         }
 
         let latest_hash: String = conn
