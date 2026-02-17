@@ -11,6 +11,18 @@ use tracing::warn;
 
 use aegis_ledger::AuditEntry;
 
+/// Maximum number of audit entries to load in the main feed.
+const AUDIT_FEED_LIMIT: usize = 100;
+
+/// Maximum number of sessions to load in the session list.
+const SESSION_LIST_LIMIT: usize = 50;
+
+/// Maximum recent entries to load per config in the home dashboard.
+const HOME_RECENT_PER_CONFIG: usize = 10;
+
+/// Maximum total merged recent entries shown on the home dashboard.
+const HOME_RECENT_TOTAL: usize = 20;
+
 /// The active view mode of the dashboard.
 pub enum AppMode {
     /// Dashboard home -- config list and recent activity.
@@ -203,14 +215,14 @@ impl App {
                 0
             }) as usize;
 
-        // Last 100 entries (most recent first)
+        // Most recent entries (most recent first)
         let mut stmt = conn.prepare(
             "SELECT entry_id, timestamp, action_id, action_kind, principal, \
                     decision, reason, policy_id, prev_hash, entry_hash \
-             FROM audit_log ORDER BY id DESC LIMIT 100",
+             FROM audit_log ORDER BY id DESC LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map([], aegis_ledger::row_to_entry)?;
+        let rows = stmt.query_map(params![AUDIT_FEED_LIMIT as i64], aegis_ledger::row_to_entry)?;
 
         self.entries = rows.collect::<Result<Vec<_>, _>>()?;
 
@@ -237,7 +249,7 @@ impl App {
         let mut stmt = match conn.prepare(
             "SELECT session_id, config_name, command, start_time, end_time, \
                     exit_code, total_actions, denied_actions \
-             FROM sessions ORDER BY id DESC LIMIT 50",
+             FROM sessions ORDER BY id DESC LIMIT ?1",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -246,7 +258,7 @@ impl App {
             }
         };
 
-        let rows = match stmt.query_map([], |row| {
+        let rows = match stmt.query_map(params![SESSION_LIST_LIMIT as i64], |row| {
             Ok(MonitorSession {
                 session_id: row.get(0)?,
                 config_name: row.get(1)?,
@@ -340,15 +352,18 @@ impl App {
                 )
                 .ok();
 
-            // Grab last 10 entries from each config for the merged recent view
+            // Grab recent entries from each config for the merged recent view
             let recent: Vec<AuditEntry> = conn
                 .prepare(
                     "SELECT entry_id, timestamp, action_id, action_kind, principal, \
                             decision, reason, policy_id, prev_hash, entry_hash \
-                     FROM audit_log ORDER BY id DESC LIMIT 10",
+                     FROM audit_log ORDER BY id DESC LIMIT ?1",
                 )
                 .and_then(|mut stmt| {
-                    let rows = stmt.query_map([], aegis_ledger::row_to_entry)?;
+                    let rows = stmt.query_map(
+                        params![HOME_RECENT_PER_CONFIG as i64],
+                        aegis_ledger::row_to_entry,
+                    )?;
                     rows.collect()
                 })
                 .unwrap_or_default();
@@ -359,7 +374,7 @@ impl App {
 
         // Sort merged entries by timestamp (most recent first)
         self.home_recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        self.home_recent.truncate(20);
+        self.home_recent.truncate(HOME_RECENT_TOTAL);
     }
 
     /// Load entries for a specific session.

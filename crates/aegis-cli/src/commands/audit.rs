@@ -12,6 +12,12 @@ use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 use crate::commands::init::open_store;
 use crate::commands::DATETIME_FULL_FMT;
 
+/// Poll interval for `aegis audit watch` (real-time streaming).
+const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Poll interval for `aegis audit export --follow`.
+const EXPORT_FOLLOW_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// CSV header for audit entry export (must match `print_csv_entry` field order).
 const CSV_HEADER: &str = "entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash";
 
@@ -428,7 +434,7 @@ pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
             last_id = *row_id;
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(WATCH_POLL);
     }
 }
 
@@ -490,7 +496,7 @@ fn export_follow(store: &AuditStore, format: &str) -> Result<()> {
             last_id = *row_id;
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(EXPORT_FOLLOW_POLL);
     }
 }
 
