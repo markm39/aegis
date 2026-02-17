@@ -177,13 +177,16 @@ fn run_watch(
     }
     println!("Press Ctrl-C to stop.");
 
-    // Wait for ctrl-c
+    // Handle both SIGINT (Ctrl-C) and SIGTERM (from --stop)
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = Arc::clone(&shutdown);
     ctrlc::set_handler(move || {
         shutdown_clone.store(true, Ordering::SeqCst);
     })
     .context("failed to set ctrl-c handler")?;
+
+    // Also handle SIGTERM so `aegis watch --stop` triggers graceful shutdown
+    install_sigterm_handler(&shutdown);
 
     while !shutdown.load(Ordering::SeqCst) {
         std::thread::sleep(POLL_INTERVAL);
@@ -291,6 +294,38 @@ fn send_sigterm(pid: u32) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Global flag for SIGTERM handler. Must be static for signal safety.
+static SIGTERM_FLAG: std::sync::atomic::AtomicBool = AtomicBool::new(false);
+
+/// Install a SIGTERM handler that sets both the global flag and the
+/// provided shutdown AtomicBool. The event loop checks both.
+fn install_sigterm_handler(shutdown: &Arc<AtomicBool>) {
+    // Store a raw pointer to our shutdown flag for the signal handler.
+    // Safety: we leak the Arc to get a 'static reference that the signal
+    // handler can safely access. The leak is intentional -- the process
+    // is shutting down when this fires.
+    let shutdown_ptr = Arc::into_raw(Arc::clone(shutdown));
+
+    unsafe {
+        // Store the pointer in a static so the signal handler can find it
+        SHUTDOWN_PTR.store(shutdown_ptr as *mut (), Ordering::SeqCst);
+        libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+    }
+}
+
+static SHUTDOWN_PTR: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+extern "C" fn sigterm_handler(_sig: libc::c_int) {
+    SIGTERM_FLAG.store(true, Ordering::SeqCst);
+    let ptr = SHUTDOWN_PTR.load(Ordering::SeqCst);
+    if !ptr.is_null() {
+        // Safety: ptr was created from Arc::into_raw and is valid
+        let flag = unsafe { &*(ptr as *const AtomicBool) };
+        flag.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Record a policy snapshot (same logic as pipeline.rs).

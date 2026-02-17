@@ -116,16 +116,15 @@ enum Commands {
 
     /// Compare two sessions for forensic analysis
     Diff {
-        /// Name of the aegis configuration (uses current if omitted)
-        config: Option<String>,
-
         /// First session UUID
-        #[arg(long)]
         session1: String,
 
         /// Second session UUID
-        #[arg(long)]
         session2: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
     },
 
     /// Configuration management subcommands
@@ -226,7 +225,6 @@ enum PolicyCommands {
     /// Validate a .cedar policy file against the Aegis schema
     Validate {
         /// Path to the .cedar policy file
-        #[arg(long)]
         path: PathBuf,
     },
 
@@ -239,32 +237,30 @@ enum PolicyCommands {
     /// Generate a builtin policy template and print to stdout
     Generate {
         /// Template name (default-deny, allow-read-only)
-        #[arg(long)]
         template: String,
     },
 
     /// Import a Cedar policy file into a configuration
     Import {
-        /// Name of the aegis configuration (uses current if omitted)
-        config: Option<String>,
-
         /// Path to the .cedar policy file to import
-        #[arg(long)]
         path: PathBuf,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
     },
 
     /// Test a policy against a hypothetical action (dry run)
     Test {
-        /// Name of the aegis configuration (uses current if omitted)
-        config: Option<String>,
-
         /// Action to test (FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, NetRequest, ToolCall, ProcessSpawn, ProcessExit)
-        #[arg(long)]
         action: String,
 
         /// Resource path or identifier to test against
-        #[arg(long)]
         resource: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
     },
 }
 
@@ -330,12 +326,12 @@ enum AuditCommands {
 
     /// Show details for a specific session
     Session {
-        /// Name of the aegis configuration (uses current if omitted)
-        config: Option<String>,
-
         /// Session UUID
-        #[arg(long)]
         id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
     },
 
     /// Show policy change history
@@ -350,26 +346,25 @@ enum AuditCommands {
 
     /// Tag a session with a human-readable label
     Tag {
-        /// Name of the aegis configuration (uses current if omitted)
-        config: Option<String>,
-
         /// Session UUID
-        #[arg(long)]
         id: String,
 
         /// Tag to apply
-        #[arg(long)]
         tag: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
     },
 
     /// Purge old audit entries (destructive, requires --confirm)
     Purge {
-        /// Name of the aegis configuration (uses current if omitted)
-        config: Option<String>,
-
         /// Delete entries older than this duration (e.g. 30d, 7d, 24h)
-        #[arg(long)]
         older_than: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
 
         /// Confirm the destructive operation
         #[arg(long)]
@@ -826,7 +821,6 @@ mod tests {
             "aegis",
             "policy",
             "validate",
-            "--path",
             "/tmp/test.cedar",
         ]);
         assert!(cli.is_ok(), "should parse policy validate: {cli:?}");
@@ -919,15 +913,38 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_session_detail() {
+        // Positional session ID, no config (uses current)
         let cli = Cli::try_parse_from([
             "aegis",
             "audit",
             "session",
-            "myagent",
-            "--id",
             "550e8400-e29b-41d4-a716-446655440000",
         ]);
         assert!(cli.is_ok(), "should parse audit session: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Audit {
+                action: AuditCommands::Session { config, id },
+            } => {
+                assert!(config.is_none());
+                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+            }
+            _ => panic!("expected Audit Session command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_session_with_config() {
+        // Positional session ID with --config flag
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "session",
+            "--config",
+            "myagent",
+            "550e8400-e29b-41d4-a716-446655440000",
+        ]);
+        assert!(cli.is_ok(), "should parse audit session with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
@@ -942,17 +959,40 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_tag() {
+        // Positional id and tag, no config
         let cli = Cli::try_parse_from([
             "aegis",
             "audit",
             "tag",
-            "myagent",
-            "--id",
             "550e8400-e29b-41d4-a716-446655440000",
-            "--tag",
             "deploy-v2",
         ]);
         assert!(cli.is_ok(), "should parse audit tag: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Audit {
+                action: AuditCommands::Tag { config, id, tag },
+            } => {
+                assert!(config.is_none());
+                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(tag, "deploy-v2");
+            }
+            _ => panic!("expected Audit Tag command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_tag_with_config() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "tag",
+            "--config",
+            "myagent",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "deploy-v2",
+        ]);
+        assert!(cli.is_ok(), "should parse audit tag with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
@@ -968,16 +1008,45 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_purge() {
+        // Positional older_than, no config
         let cli = Cli::try_parse_from([
             "aegis",
             "audit",
             "purge",
-            "myagent",
-            "--older-than",
             "30d",
             "--confirm",
         ]);
         assert!(cli.is_ok(), "should parse audit purge: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Audit {
+                action:
+                    AuditCommands::Purge {
+                        config,
+                        older_than,
+                        confirm,
+                    },
+            } => {
+                assert!(config.is_none());
+                assert_eq!(older_than, "30d");
+                assert!(confirm);
+            }
+            _ => panic!("expected Audit Purge command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_purge_with_config() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "purge",
+            "--config",
+            "myagent",
+            "30d",
+            "--confirm",
+        ]);
+        assert!(cli.is_ok(), "should parse audit purge with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
@@ -1114,15 +1183,37 @@ mod tests {
 
     #[test]
     fn cli_parse_policy_import() {
+        // Positional path, no config
         let cli = Cli::try_parse_from([
             "aegis",
             "policy",
             "import",
-            "myagent",
-            "--path",
             "/tmp/custom.cedar",
         ]);
         assert!(cli.is_ok(), "should parse policy import: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Policy {
+                action: PolicyCommands::Import { config, path },
+            } => {
+                assert!(config.is_none());
+                assert_eq!(path, PathBuf::from("/tmp/custom.cedar"));
+            }
+            _ => panic!("expected Policy Import command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_policy_import_with_config() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "policy",
+            "import",
+            "--config",
+            "myagent",
+            "/tmp/custom.cedar",
+        ]);
+        assert!(cli.is_ok(), "should parse policy import with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Policy {
@@ -1137,17 +1228,45 @@ mod tests {
 
     #[test]
     fn cli_parse_policy_test() {
+        // Positional action and resource, no config
         let cli = Cli::try_parse_from([
             "aegis",
             "policy",
             "test",
-            "myagent",
-            "--action",
             "FileRead",
-            "--resource",
             "/tmp/test.txt",
         ]);
         assert!(cli.is_ok(), "should parse policy test: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Policy {
+                action:
+                    PolicyCommands::Test {
+                        config,
+                        action,
+                        resource,
+                    },
+            } => {
+                assert!(config.is_none());
+                assert_eq!(action, "FileRead");
+                assert_eq!(resource, "/tmp/test.txt");
+            }
+            _ => panic!("expected Policy Test command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_policy_test_with_config() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "policy",
+            "test",
+            "--config",
+            "myagent",
+            "FileRead",
+            "/tmp/test.txt",
+        ]);
+        assert!(cli.is_ok(), "should parse policy test with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Policy {
@@ -1168,11 +1287,11 @@ mod tests {
 
     #[test]
     fn cli_parse_policy_generate() {
+        // Positional template
         let cli = Cli::try_parse_from([
             "aegis",
             "policy",
             "generate",
-            "--template",
             "default-deny",
         ]);
         assert!(cli.is_ok(), "should parse policy generate: {cli:?}");
@@ -1180,16 +1299,40 @@ mod tests {
 
     #[test]
     fn cli_parse_diff() {
+        // Positional session1 and session2, no config
         let cli = Cli::try_parse_from([
             "aegis",
             "diff",
-            "myagent",
-            "--session1",
             "550e8400-e29b-41d4-a716-446655440000",
-            "--session2",
             "550e8400-e29b-41d4-a716-446655440001",
         ]);
         assert!(cli.is_ok(), "should parse diff: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Diff {
+                config,
+                session1,
+                session2,
+            } => {
+                assert!(config.is_none());
+                assert_eq!(session1, "550e8400-e29b-41d4-a716-446655440000");
+                assert_eq!(session2, "550e8400-e29b-41d4-a716-446655440001");
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_diff_with_config() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "diff",
+            "--config",
+            "myagent",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "550e8400-e29b-41d4-a716-446655440001",
+        ]);
+        assert!(cli.is_ok(), "should parse diff with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Diff {

@@ -120,35 +120,7 @@ fn draw_config_name(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect)
     f.render_widget(desc, chunks[0]);
 
     // Text input with cursor
-    let input_text = &app.name_input;
-    let cursor_pos = app.name_cursor;
-
-    let mut spans = Vec::new();
-    if cursor_pos > 0 {
-        spans.push(Span::styled(
-            &input_text[..cursor_pos],
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    if cursor_pos < input_text.len() {
-        spans.push(Span::styled(
-            &input_text[cursor_pos..cursor_pos + 1],
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow),
-        ));
-        if cursor_pos + 1 < input_text.len() {
-            spans.push(Span::styled(
-                &input_text[cursor_pos + 1..],
-                Style::default().fg(Color::Yellow),
-            ));
-        }
-    } else {
-        spans.push(Span::styled(
-            " ",
-            Style::default().bg(Color::Yellow),
-        ));
-    }
+    let spans = build_cursor_spans(&app.name_input, app.name_cursor);
 
     let input = Paragraph::new(Line::from(spans)).block(
         Block::default()
@@ -373,11 +345,8 @@ fn draw_scope_editor(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect
             "Path pattern"
         };
 
-        let input = Paragraph::new(Line::from(vec![
-            Span::styled(&app.scope_input, Style::default().fg(Color::Yellow)),
-            Span::styled(" ", Style::default().bg(Color::Yellow)),
-        ]))
-        .block(
+        let spans = build_cursor_spans(&app.scope_input, app.scope_cursor);
+        let input = Paragraph::new(Line::from(spans)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
@@ -403,11 +372,8 @@ fn draw_project_dir(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect)
     f.render_widget(desc, chunks[0]);
 
     if app.dir_editing {
-        let input = Paragraph::new(Line::from(vec![
-            Span::styled(&app.dir_input, Style::default().fg(Color::Yellow)),
-            Span::styled(" ", Style::default().bg(Color::Yellow)),
-        ]))
-        .block(
+        let spans = build_cursor_spans(&app.dir_input, app.dir_cursor);
+        let input = Paragraph::new(Line::from(spans)).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
@@ -522,6 +488,38 @@ fn draw_summary(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect) {
             .title("Configuration Summary"),
     );
     f.render_widget(summary, area);
+}
+
+/// Build cursor-aware text input spans (before | cursor | after).
+///
+/// Produces Yellow text with an inverted Yellow cursor block at `cursor_pos`.
+/// If the cursor is at the end of text, a trailing block cursor is shown.
+fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
+    let mut spans = Vec::new();
+    if cursor_pos > 0 {
+        spans.push(Span::styled(
+            &text[..cursor_pos],
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    if cursor_pos < text.len() {
+        spans.push(Span::styled(
+            &text[cursor_pos..cursor_pos + 1],
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+        if cursor_pos + 1 < text.len() {
+            spans.push(Span::styled(
+                &text[cursor_pos + 1..],
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    } else {
+        spans.push(Span::styled(
+            " ",
+            Style::default().bg(Color::Yellow),
+        ));
+    }
+    spans
 }
 
 /// Build a styled label-value line (matching the monitor's pattern).
