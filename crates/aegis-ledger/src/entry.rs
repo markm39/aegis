@@ -4,13 +4,14 @@
 //! entry via `prev_hash` to form a tamper-evident chain.
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use aegis_types::{Action, AegisError, Verdict};
 
 /// A single entry in the append-only audit ledger.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AuditEntry {
     pub entry_id: Uuid,
     pub timestamp: DateTime<Utc>,

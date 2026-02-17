@@ -513,26 +513,8 @@ fn print_table(entries: &[AuditEntry]) {
 
 /// Export entries as a JSON array.
 fn export_json(entries: &[AuditEntry]) -> Result<()> {
-    let json_entries: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|e| {
-            serde_json::json!({
-                "entry_id": e.entry_id.to_string(),
-                "timestamp": e.timestamp.to_rfc3339(),
-                "action_id": e.action_id.to_string(),
-                "action_kind": e.action_kind,
-                "principal": e.principal,
-                "decision": e.decision,
-                "reason": e.reason,
-                "policy_id": e.policy_id,
-                "prev_hash": e.prev_hash,
-                "entry_hash": e.entry_hash,
-            })
-        })
-        .collect();
-
     let output =
-        serde_json::to_string_pretty(&json_entries).context("failed to serialize entries")?;
+        serde_json::to_string_pretty(entries).context("failed to serialize entries")?;
     println!("{output}");
     Ok(())
 }
@@ -568,20 +550,7 @@ fn export_jsonl(entries: &[AuditEntry]) {
 
 /// Print a single entry as a JSONL line.
 fn print_jsonl_entry(e: &AuditEntry) {
-    let json = serde_json::json!({
-        "entry_id": e.entry_id.to_string(),
-        "timestamp": e.timestamp.to_rfc3339(),
-        "action_id": e.action_id.to_string(),
-        "action_kind": e.action_kind,
-        "principal": e.principal,
-        "decision": e.decision,
-        "reason": e.reason,
-        "policy_id": e.policy_id,
-        "prev_hash": e.prev_hash,
-        "entry_hash": e.entry_hash,
-    });
-    // Compact single-line format
-    println!("{}", serde_json::to_string(&json).unwrap_or_default());
+    println!("{}", serde_json::to_string(e).unwrap_or_default());
 }
 
 /// Print a single entry as a CSV row (no header).
