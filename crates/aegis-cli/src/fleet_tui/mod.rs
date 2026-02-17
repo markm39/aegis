@@ -1313,4 +1313,157 @@ mod tests {
         assert!(!app.focus_pending);
         assert!(!app.detail_attention);
     }
+
+    // -- Command mode tests --
+
+    #[test]
+    fn colon_enters_command_mode_from_overview() {
+        let mut app = make_app();
+        app.handle_key(press(KeyCode::Char(':')));
+        assert!(app.command_mode);
+        assert!(app.command_buffer.is_empty());
+    }
+
+    #[test]
+    fn colon_enters_command_mode_from_detail() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.handle_key(press(KeyCode::Char(':')));
+        assert!(app.command_mode);
+    }
+
+    #[test]
+    fn command_mode_esc_exits() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "start".into();
+
+        app.handle_key(press(KeyCode::Esc));
+        assert!(!app.command_mode);
+        assert!(app.command_buffer.is_empty());
+    }
+
+    #[test]
+    fn command_mode_typing() {
+        let mut app = make_app();
+        app.command_mode = true;
+
+        app.handle_key(press(KeyCode::Char('s')));
+        app.handle_key(press(KeyCode::Char('t')));
+        assert_eq!(app.command_buffer, "st");
+        assert_eq!(app.command_cursor, 2);
+    }
+
+    #[test]
+    fn command_mode_backspace() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "abc".into();
+        app.command_cursor = 3;
+
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.command_buffer, "ab");
+    }
+
+    #[test]
+    fn command_mode_enter_executes() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "quit".into();
+        app.command_cursor = 4;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert!(!app.command_mode);
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn command_mode_enter_saves_history() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "status".into();
+        app.command_cursor = 6;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.command_history, vec!["status"]);
+    }
+
+    #[test]
+    fn command_mode_history_navigation() {
+        let mut app = make_app();
+        app.command_history = vec!["first".into(), "second".into()];
+        app.command_mode = true;
+
+        // Up goes to most recent
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(app.command_buffer, "second");
+
+        // Up again goes to oldest
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(app.command_buffer, "first");
+
+        // Down goes forward
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.command_buffer, "second");
+
+        // Down past end clears
+        app.handle_key(press(KeyCode::Down));
+        assert!(app.command_buffer.is_empty());
+    }
+
+    #[test]
+    fn command_mode_follow_switches_view() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "follow alpha".into();
+        app.command_cursor = 12;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.view, FleetView::AgentDetail);
+        assert_eq!(app.detail_name, "alpha");
+    }
+
+    #[test]
+    fn command_mode_status_shows_result() {
+        let mut app = make_app();
+        app.daemon_pid = 1234;
+        app.command_mode = true;
+        app.command_buffer = "status".into();
+        app.command_cursor = 6;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.command_result.is_some());
+        assert!(app.command_result.as_ref().unwrap().contains("1234"));
+    }
+
+    #[test]
+    fn command_mode_unknown_shows_error() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "bogus".into();
+        app.command_cursor = 5;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.command_result.as_ref().unwrap().contains("unknown command"));
+    }
+
+    #[test]
+    fn command_result_clears_on_next_key() {
+        let mut app = make_app();
+        app.command_result = Some("old result".into());
+
+        // Any key clears the result
+        app.handle_key(press(KeyCode::Char('j')));
+        assert!(app.command_result.is_none());
+    }
+
+    #[test]
+    fn command_mode_blocks_quit() {
+        let mut app = make_app();
+        app.command_mode = true;
+
+        app.handle_key(press(KeyCode::Char('q')));
+        assert!(app.running, "q in command mode should type 'q', not quit");
+        assert_eq!(app.command_buffer, "q");
+    }
 }
