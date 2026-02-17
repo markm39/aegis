@@ -338,4 +338,149 @@ mod tests {
         assert!(fs_events.is_empty());
     }
 
+    #[test]
+    fn map_modify_data_event() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            paths: vec![PathBuf::from("/sandbox/modified.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(fs_events[0].kind, FsEventKind::FileModify);
+    }
+
+    #[test]
+    fn map_rename_to_event() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::To,
+            )),
+            paths: vec![PathBuf::from("/sandbox/renamed.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(
+            fs_events[0].kind,
+            FsEventKind::FileRename { from: None }
+        );
+    }
+
+    #[test]
+    fn map_rename_from_event() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::From,
+            )),
+            paths: vec![PathBuf::from("/sandbox/old_name.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(fs_events[0].kind, FsEventKind::FileDelete);
+    }
+
+    #[test]
+    fn map_rename_both_event() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Both,
+            )),
+            paths: vec![
+                PathBuf::from("/sandbox/old.txt"),
+                PathBuf::from("/sandbox/new.txt"),
+            ],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(
+            fs_events[0].kind,
+            FsEventKind::FileRename {
+                from: Some(PathBuf::from("old.txt"))
+            }
+        );
+        assert_eq!(fs_events[0].path, PathBuf::from("/sandbox/new.txt"));
+    }
+
+    #[test]
+    fn map_rename_both_with_single_path_falls_back_to_modify() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Both,
+            )),
+            paths: vec![PathBuf::from("/sandbox/only_one.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(fs_events[0].kind, FsEventKind::FileModify);
+    }
+
+    #[test]
+    fn map_remove_folder_event() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::Folder),
+            paths: vec![PathBuf::from("/sandbox/subdir")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(fs_events[0].kind, FsEventKind::DirDelete);
+    }
+
+    #[test]
+    fn map_access_event_to_file_read() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Access(notify::event::AccessKind::Read),
+            paths: vec![PathBuf::from("/sandbox/read.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events.len(), 1);
+        assert_eq!(fs_events[0].kind, FsEventKind::FileRead);
+    }
+
+    #[test]
+    fn unknown_event_kind_returns_empty() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Other,
+            paths: vec![PathBuf::from("/sandbox/file.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert!(fs_events.is_empty());
+    }
+
+    #[test]
+    fn all_fs_events_have_fsevents_source() {
+        let sandbox = PathBuf::from("/sandbox");
+        let event = notify::Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![PathBuf::from("/sandbox/file.txt")],
+            attrs: Default::default(),
+        };
+
+        let fs_events = map_notify_event(&event, &sandbox);
+        assert_eq!(fs_events[0].source, ObserverSource::FsEvents);
+    }
 }
