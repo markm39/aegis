@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use aegis_policy::builtin::{ALLOW_READ_ONLY, DEFAULT_DENY};
+use aegis_policy::builtin::{
+    ALLOW_READ_ONLY, ALLOW_READ_WRITE, CI_RUNNER, DATA_SCIENCE, DEFAULT_DENY, PERMIT_ALL,
+};
 use aegis_policy::PolicyEngine;
 use aegis_types::{Action, ActionKind, Decision};
 
@@ -99,9 +101,8 @@ fn test_policy_deny_all_blocks_net_connect() {
 
 #[test]
 fn test_permit_all_allows_file_read() {
-    let policies = "permit(principal, action, resource);";
     let engine =
-        PolicyEngine::from_policies(policies, None).expect("should create permit-all engine");
+        PolicyEngine::from_policies(PERMIT_ALL, None).expect("should create permit-all engine");
 
     let action = file_read_action("agent-1", "/tmp/data.csv");
     let verdict = engine.evaluate(&action);
@@ -111,9 +112,8 @@ fn test_permit_all_allows_file_read() {
 
 #[test]
 fn test_permit_all_allows_file_write() {
-    let policies = "permit(principal, action, resource);";
     let engine =
-        PolicyEngine::from_policies(policies, None).expect("should create permit-all engine");
+        PolicyEngine::from_policies(PERMIT_ALL, None).expect("should create permit-all engine");
 
     let action = file_write_action("agent-1", "/tmp/output.txt");
     let verdict = engine.evaluate(&action);
@@ -127,9 +127,8 @@ fn test_permit_all_allows_file_write() {
 
 #[test]
 fn test_permit_all_allows_all_action_kinds() {
-    let policies = "permit(principal, action, resource);";
     let engine =
-        PolicyEngine::from_policies(policies, None).expect("should create permit-all engine");
+        PolicyEngine::from_policies(PERMIT_ALL, None).expect("should create permit-all engine");
 
     let actions: Vec<Action> = vec![
         Action::new(
@@ -171,6 +170,13 @@ fn test_permit_all_allows_all_action_kinds() {
         ),
         Action::new(
             "a",
+            ActionKind::NetRequest {
+                method: "GET".into(),
+                url: "https://example.com".into(),
+            },
+        ),
+        Action::new(
+            "a",
             ActionKind::ToolCall {
                 tool: "bash".into(),
                 args: serde_json::json!({}),
@@ -181,6 +187,13 @@ fn test_permit_all_allows_all_action_kinds() {
             ActionKind::ProcessSpawn {
                 command: "echo".into(),
                 args: vec!["hello".into()],
+            },
+        ),
+        Action::new(
+            "a",
+            ActionKind::ProcessExit {
+                command: "echo".into(),
+                exit_code: 0,
             },
         ),
     ];
@@ -281,6 +294,126 @@ fn test_read_only_policy_allows_reads_denies_writes() {
         Decision::Deny,
         "read-only policy should deny FileDelete"
     );
+}
+
+#[test]
+fn test_allow_read_write_permits_files_denies_network() {
+    let engine = PolicyEngine::from_policies(ALLOW_READ_WRITE, None)
+        .expect("should create allow-read-write engine");
+
+    // File operations should be allowed
+    let read = engine.evaluate(&file_read_action("agent-1", "/tmp/data.csv"));
+    assert_eq!(read.decision, Decision::Allow, "should allow FileRead");
+
+    let write = engine.evaluate(&file_write_action("agent-1", "/tmp/out.txt"));
+    assert_eq!(write.decision, Decision::Allow, "should allow FileWrite");
+
+    let delete = engine.evaluate(&Action::new(
+        "agent-1",
+        ActionKind::FileDelete {
+            path: PathBuf::from("/tmp/old.txt"),
+        },
+    ));
+    assert_eq!(delete.decision, Decision::Allow, "should allow FileDelete");
+
+    let dir_create = engine.evaluate(&Action::new(
+        "agent-1",
+        ActionKind::DirCreate {
+            path: PathBuf::from("/tmp/newdir"),
+        },
+    ));
+    assert_eq!(dir_create.decision, Decision::Allow, "should allow DirCreate");
+
+    // Network should be denied
+    let net = engine.evaluate(&Action::new(
+        "agent-1",
+        ActionKind::NetConnect {
+            host: "example.com".into(),
+            port: 443,
+        },
+    ));
+    assert_eq!(net.decision, Decision::Deny, "should deny NetConnect");
+
+    // ToolCall should be denied
+    let tool = engine.evaluate(&Action::new(
+        "agent-1",
+        ActionKind::ToolCall {
+            tool: "bash".into(),
+            args: serde_json::json!({}),
+        },
+    ));
+    assert_eq!(tool.decision, Decision::Deny, "should deny ToolCall");
+}
+
+#[test]
+fn test_ci_runner_matches_allow_read_write() {
+    let rw_engine = PolicyEngine::from_policies(ALLOW_READ_WRITE, None)
+        .expect("should create allow-read-write engine");
+    let ci_engine =
+        PolicyEngine::from_policies(CI_RUNNER, None).expect("should create ci-runner engine");
+
+    // CI_RUNNER is defined as ALLOW_READ_WRITE; verify identical behavior
+    let actions: Vec<Action> = vec![
+        file_read_action("agent-1", "/tmp/f"),
+        file_write_action("agent-1", "/tmp/f"),
+        Action::new(
+            "agent-1",
+            ActionKind::NetConnect {
+                host: "example.com".into(),
+                port: 443,
+            },
+        ),
+        Action::new(
+            "agent-1",
+            ActionKind::ToolCall {
+                tool: "bash".into(),
+                args: serde_json::json!({}),
+            },
+        ),
+    ];
+
+    for action in &actions {
+        let rw_verdict = rw_engine.evaluate(action);
+        let ci_verdict = ci_engine.evaluate(action);
+        assert_eq!(
+            rw_verdict.decision, ci_verdict.decision,
+            "CI_RUNNER and ALLOW_READ_WRITE should agree on {:?}",
+            action.kind
+        );
+    }
+}
+
+#[test]
+fn test_data_science_permits_network_denies_toolcall() {
+    let engine = PolicyEngine::from_policies(DATA_SCIENCE, None)
+        .expect("should create data-science engine");
+
+    // Files should be allowed
+    let read = engine.evaluate(&file_read_action("agent-1", "/data/dataset.csv"));
+    assert_eq!(read.decision, Decision::Allow, "should allow FileRead");
+
+    let write = engine.evaluate(&file_write_action("agent-1", "/data/output.csv"));
+    assert_eq!(write.decision, Decision::Allow, "should allow FileWrite");
+
+    // Network should be allowed (unlike allow-read-write)
+    let net = engine.evaluate(&Action::new(
+        "agent-1",
+        ActionKind::NetConnect {
+            host: "api.openai.com".into(),
+            port: 443,
+        },
+    ));
+    assert_eq!(net.decision, Decision::Allow, "should allow NetConnect");
+
+    // ToolCall should be denied
+    let tool = engine.evaluate(&Action::new(
+        "agent-1",
+        ActionKind::ToolCall {
+            tool: "shell".into(),
+            args: serde_json::json!({}),
+        },
+    ));
+    assert_eq!(tool.decision, Decision::Deny, "should deny ToolCall");
 }
 
 #[test]
