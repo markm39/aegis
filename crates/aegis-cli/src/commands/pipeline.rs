@@ -171,13 +171,14 @@ fn start_observer(
     session_id: Uuid,
 ) -> Option<aegis_observer::ObserverSession> {
     match &config.observer {
-        ObserverConfig::FsEvents { .. } => {
+        ObserverConfig::FsEvents { enable_snapshots } => {
             match aegis_observer::start_observer(
                 &config.sandbox_dir,
                 Arc::clone(store_arc),
                 Arc::clone(policy_arc),
                 &config.name,
                 Some(session_id),
+                *enable_snapshots,
             ) {
                 Ok(session) => {
                     info!("filesystem observer started");

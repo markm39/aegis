@@ -50,33 +50,41 @@ pub struct ObserverSummary {
 /// Created by `start_observer()`, consumed by `stop_observer()`.
 pub struct ObserverSession {
     watcher: Option<FsWatcher>,
-    pre_snapshot: DirSnapshot,
+    pre_snapshot: Option<DirSnapshot>,
     sandbox_dir: std::path::PathBuf,
     store: Arc<Mutex<AuditStore>>,
     engine: Arc<Mutex<PolicyEngine>>,
     principal: String,
     session_id: Option<uuid::Uuid>,
+    enable_snapshots: bool,
 }
 
 /// Start observing a sandbox directory.
 ///
-/// Captures a pre-snapshot of the sandbox directory tree and starts the
-/// FSEvents watcher. Call `stop_observer()` after the sandboxed process
-/// exits to finalize.
+/// Captures a pre-snapshot of the sandbox directory tree (if `enable_snapshots`
+/// is true) and starts the FSEvents watcher. Call `stop_observer()` after the
+/// sandboxed process exits to finalize.
 pub fn start_observer(
     sandbox_dir: &Path,
     store: Arc<Mutex<AuditStore>>,
     engine: Arc<Mutex<PolicyEngine>>,
     principal: &str,
     session_id: Option<uuid::Uuid>,
+    enable_snapshots: bool,
 ) -> Result<ObserverSession, AegisError> {
-    // Capture pre-snapshot before starting the watcher
-    let pre_snapshot = DirSnapshot::capture(sandbox_dir)?;
-    tracing::info!(
-        entries = pre_snapshot.len(),
-        path = %sandbox_dir.display(),
-        "pre-snapshot captured"
-    );
+    // Capture pre-snapshot before starting the watcher (only if snapshots enabled)
+    let pre_snapshot = if enable_snapshots {
+        let snap = DirSnapshot::capture(sandbox_dir)?;
+        tracing::info!(
+            entries = snap.len(),
+            path = %sandbox_dir.display(),
+            "pre-snapshot captured"
+        );
+        Some(snap)
+    } else {
+        tracing::info!("snapshot diffing disabled");
+        None
+    };
 
     // Start FSEvents watcher
     let watcher = FsWatcher::start(
@@ -95,6 +103,7 @@ pub fn start_observer(
         engine,
         principal: principal.to_string(),
         session_id,
+        enable_snapshots,
     })
 }
 
@@ -112,44 +121,48 @@ pub fn stop_observer(mut session: ObserverSession) -> Result<ObserverSummary, Ae
         0
     };
 
-    // Capture post-snapshot
-    let post_snapshot = DirSnapshot::capture(&session.sandbox_dir)?;
-    tracing::info!(
-        entries = post_snapshot.len(),
-        path = %session.sandbox_dir.display(),
-        "post-snapshot captured"
-    );
-
-    // Diff snapshots -- only log FileRead events from the diff.
-    // Write/create/delete events are already captured by the watcher.
-    let diff_events = session.pre_snapshot.diff(&post_snapshot);
-    let read_events: Vec<_> = diff_events
-        .into_iter()
-        .filter(|e| matches!(e.kind, crate::event::FsEventKind::FileRead))
-        .collect();
-
+    // Snapshot diff -- only when snapshots are enabled and a pre-snapshot exists.
     let mut snapshot_read_count = 0;
-    for fs_event in &read_events {
-        for action_kind in fs_event.to_actions() {
-            let action = aegis_types::Action::new(&session.principal, action_kind);
+    if session.enable_snapshots {
+        if let Some(pre_snapshot) = session.pre_snapshot {
+            let post_snapshot = DirSnapshot::capture(&session.sandbox_dir)?;
+            tracing::info!(
+                entries = post_snapshot.len(),
+                path = %session.sandbox_dir.display(),
+                "post-snapshot captured"
+            );
 
-            let verdict = session
-                .engine
-                .lock()
-                .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
-                .evaluate(&action);
+            // Diff snapshots -- only log FileRead events from the diff.
+            // Write/create/delete events are already captured by the watcher.
+            let diff_events = pre_snapshot.diff(&post_snapshot);
+            let read_events: Vec<_> = diff_events
+                .into_iter()
+                .filter(|e| matches!(e.kind, crate::event::FsEventKind::FileRead))
+                .collect();
 
-            let mut store_guard = session
-                .store
-                .lock()
-                .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?;
+            for fs_event in &read_events {
+                for action_kind in fs_event.to_actions() {
+                    let action = aegis_types::Action::new(&session.principal, action_kind);
 
-            match session.session_id {
-                Some(sid) => store_guard.append_with_session(&action, &verdict, &sid)?,
-                None => store_guard.append(&action, &verdict)?,
-            };
+                    let verdict = session
+                        .engine
+                        .lock()
+                        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
+                        .evaluate(&action);
 
-            snapshot_read_count += 1;
+                    let mut store_guard = session
+                        .store
+                        .lock()
+                        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?;
+
+                    match session.session_id {
+                        Some(sid) => store_guard.append_with_session(&action, &verdict, &sid)?,
+                        None => store_guard.append(&action, &verdict)?,
+                    };
+
+                    snapshot_read_count += 1;
+                }
+            }
         }
     }
 
@@ -199,6 +212,7 @@ mod tests {
             engine,
             "test-agent",
             None,
+            true,
         )
         .unwrap();
 
@@ -206,6 +220,34 @@ mod tests {
         assert_eq!(summary.fsevents_count, 0);
         assert_eq!(summary.snapshot_read_count, 0);
         assert_eq!(summary.total_logged, 0);
+    }
+
+    #[test]
+    fn snapshots_disabled_skips_diffing() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let (store, engine, _db) = test_deps();
+
+        // Create a file before starting the observer
+        fs::write(sandbox.path().join("existing.txt"), "hello").unwrap();
+
+        let session = start_observer(
+            sandbox.path(),
+            Arc::clone(&store),
+            Arc::clone(&engine),
+            "test-agent",
+            None,
+            false, // snapshots disabled
+        )
+        .unwrap();
+
+        // pre_snapshot should be None
+        assert!(!session.enable_snapshots);
+
+        // Modify the file -- with snapshots disabled, no read events from diffing
+        fs::write(sandbox.path().join("existing.txt"), "modified").unwrap();
+
+        let summary = stop_observer(session).unwrap();
+        assert_eq!(summary.snapshot_read_count, 0, "snapshot diffing should be skipped");
     }
 
     #[test]
@@ -220,6 +262,7 @@ mod tests {
             Arc::clone(&engine),
             "test-agent",
             None,
+            true,
         )
         .unwrap();
 
@@ -255,6 +298,7 @@ mod tests {
             Arc::clone(&engine),
             "test-agent",
             None,
+            true,
         )
         .unwrap();
 
@@ -284,6 +328,7 @@ mod tests {
             Arc::clone(&engine),
             "test-agent",
             None,
+            true,
         )
         .unwrap();
 
