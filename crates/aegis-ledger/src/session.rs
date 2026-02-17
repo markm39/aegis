@@ -125,6 +125,34 @@ impl AuditStore {
             .map_err(|e| AegisError::LedgerError(format!("list_sessions read: {e}")))
     }
 
+    /// Return the total number of sessions across all configs.
+    pub fn count_all_sessions(&self) -> Result<usize, AegisError> {
+        self.connection()
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|c| c as usize)
+            .map_err(|e| AegisError::LedgerError(format!("count_all_sessions failed: {e}")))
+    }
+
+    /// Return the most recent session (by start_time DESC), if any.
+    pub fn latest_session(&self) -> Result<Option<Session>, AegisError> {
+        let mut stmt = self
+            .connection()
+            .prepare(
+                "SELECT session_id, config_name, command, args, start_time, end_time, exit_code, policy_hash, total_actions, denied_actions, tag
+                 FROM sessions ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| AegisError::LedgerError(format!("latest_session prepare: {e}")))?;
+
+        let result = stmt
+            .query_row([], row_to_session)
+            .optional()
+            .map_err(|e| AegisError::LedgerError(format!("latest_session query: {e}")))?;
+
+        Ok(result)
+    }
+
     /// Get a single session by its UUID.
     pub fn get_session(
         &self,
@@ -381,6 +409,34 @@ mod tests {
         let (_tmp, store) = test_db();
         let result = store.get_session(&Uuid::new_v4()).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn count_all_sessions_returns_correct_count() {
+        let (_tmp, mut store) = test_db();
+        assert_eq!(store.count_all_sessions().unwrap(), 0);
+
+        store.begin_session("test", "cmd1", &[], None).unwrap();
+        assert_eq!(store.count_all_sessions().unwrap(), 1);
+
+        store.begin_session("test", "cmd2", &[], None).unwrap();
+        store.begin_session("test", "cmd3", &[], None).unwrap();
+        assert_eq!(store.count_all_sessions().unwrap(), 3);
+    }
+
+    #[test]
+    fn latest_session_returns_most_recent() {
+        let (_tmp, mut store) = test_db();
+
+        assert!(store.latest_session().unwrap().is_none());
+
+        store.begin_session("test", "cmd1", &[], None).unwrap();
+        store.begin_session("test", "cmd2", &[], None).unwrap();
+        store.begin_session("test", "cmd3", &[], Some("latest-tag")).unwrap();
+
+        let latest = store.latest_session().unwrap().unwrap();
+        assert_eq!(latest.command, "cmd3");
+        assert_eq!(latest.tag, Some("latest-tag".to_string()));
     }
 
     #[test]

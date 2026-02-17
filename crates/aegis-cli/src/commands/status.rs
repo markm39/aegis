@@ -98,18 +98,17 @@ pub fn run(config_name: &str) -> Result<()> {
                 }
 
                 // Session info
-                if let Ok(sessions) = store.list_sessions(10_000, 0) {
-                    let session_count = sessions.len();
+                if let Ok(session_count) = store.count_all_sessions() {
                     println!("  Sessions:     {session_count}");
-                    if let Some(last) = sessions.first() {
-                        println!(
-                            "  Last session: {} ({})",
-                            last.start_time.format("%Y-%m-%d %H:%M"),
-                            last.command
-                        );
-                        if let Some(tag) = &last.tag {
-                            println!("  Last tag:     {tag}");
-                        }
+                }
+                if let Ok(Some(last)) = store.latest_session() {
+                    println!(
+                        "  Last session: {} ({})",
+                        last.start_time.format("%Y-%m-%d %H:%M"),
+                        last.command
+                    );
+                    if let Some(tag) = &last.tag {
+                        println!("  Last tag:     {tag}");
                     }
                 }
 
