@@ -497,12 +497,8 @@ fn print_table(entries: &[AuditEntry]) {
 
     for entry in entries {
         let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
-        // Truncate the action_kind to fit in the table
-        let action_display = if entry.action_kind.len() > 40 {
-            format!("{}...", &entry.action_kind[..37])
-        } else {
-            entry.action_kind.clone()
-        };
+        let action_display =
+            crate::commands::diff::extract_resource_key(&entry.action_kind);
 
         println!(
             "{:<36}  {:<8}  {:<15}  {:<20}  {}",
