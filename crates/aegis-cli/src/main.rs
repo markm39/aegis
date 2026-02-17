@@ -9,6 +9,14 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser, Debug)]
 #[command(name = "aegis", version, about)]
 struct Cli {
+    /// Increase logging verbosity (RUST_LOG=debug)
+    #[arg(long, short, global = true)]
+    verbose: bool,
+
+    /// Suppress all output except errors
+    #[arg(long, short, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -289,13 +297,22 @@ enum AuditCommands {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize tracing with env filter (e.g., RUST_LOG=debug)
+    let cli = Cli::parse();
+
+    // Initialize tracing based on flags: --verbose sets debug, --quiet sets error,
+    // otherwise respect RUST_LOG or default to warn.
+    let filter = if cli.verbose {
+        EnvFilter::new("debug")
+    } else if cli.quiet {
+        EnvFilter::new("error")
+    } else {
+        EnvFilter::from_default_env()
+    };
+
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_target(false)
         .init();
-
-    let cli = Cli::parse();
 
     match cli.command {
         Commands::Setup => {
@@ -847,6 +864,24 @@ mod tests {
         assert!(cli.is_ok(), "should parse list: {cli:?}");
         let cli = cli.unwrap();
         assert!(matches!(cli.command, Commands::List));
+    }
+
+    #[test]
+    fn cli_parse_verbose_flag() {
+        let cli = Cli::try_parse_from(["aegis", "--verbose", "list"]);
+        assert!(cli.is_ok(), "should parse --verbose: {cli:?}");
+        let cli = cli.unwrap();
+        assert!(cli.verbose);
+        assert!(!cli.quiet);
+    }
+
+    #[test]
+    fn cli_parse_quiet_flag() {
+        let cli = Cli::try_parse_from(["aegis", "--quiet", "list"]);
+        assert!(cli.is_ok(), "should parse --quiet: {cli:?}");
+        let cli = cli.unwrap();
+        assert!(!cli.verbose);
+        assert!(cli.quiet);
     }
 
     #[test]
