@@ -160,33 +160,13 @@ fn build_resource_map(
 }
 
 /// Extract a display-friendly key from the action_kind JSON string.
+///
+/// Deserializes the JSON back to `ActionKind` and uses its `Display` impl,
+/// which keeps this in sync with any new variants automatically.
 pub fn extract_resource_key(action_kind: &str) -> String {
-    // Parse as JSON to get the variant name and resource
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(action_kind) {
-        if let Some(obj) = value.as_object() {
-            if let Some((variant, inner)) = obj.iter().next() {
-                // Extract the path or relevant field
-                if let Some(path) = inner.get("path").and_then(|p| p.as_str()) {
-                    return format!("{variant}  {path}");
-                }
-                if let Some(host) = inner.get("host").and_then(|h| h.as_str()) {
-                    let port = inner.get("port").and_then(|p| p.as_u64()).unwrap_or(0);
-                    return format!("{variant}  {host}:{port}");
-                }
-                if let Some(command) = inner.get("command").and_then(|c| c.as_str()) {
-                    return format!("{variant}  {command}");
-                }
-                if let Some(tool) = inner.get("tool").and_then(|t| t.as_str()) {
-                    return format!("{variant}  {tool}");
-                }
-                if let Some(url) = inner.get("url").and_then(|u| u.as_str()) {
-                    return format!("{variant}  {url}");
-                }
-                return variant.clone();
-            }
-        }
-    }
-    action_kind.to_string()
+    serde_json::from_str::<aegis_types::ActionKind>(action_kind)
+        .map(|kind| kind.to_string())
+        .unwrap_or_else(|_| action_kind.to_string())
 }
 
 #[cfg(test)]
@@ -197,21 +177,21 @@ mod tests {
     fn extract_resource_key_file_read() {
         let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
         let key = extract_resource_key(json);
-        assert_eq!(key, "FileRead  /tmp/test.txt");
+        assert_eq!(key, "FileRead /tmp/test.txt");
     }
 
     #[test]
     fn extract_resource_key_net_connect() {
         let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
         let key = extract_resource_key(json);
-        assert_eq!(key, "NetConnect  example.com:443");
+        assert_eq!(key, "NetConnect example.com:443");
     }
 
     #[test]
     fn extract_resource_key_process_spawn() {
         let json = r#"{"ProcessSpawn":{"command":"echo","args":["hello"]}}"#;
         let key = extract_resource_key(json);
-        assert_eq!(key, "ProcessSpawn  echo");
+        assert_eq!(key, "ProcessSpawn echo");
     }
 
     #[test]
@@ -250,21 +230,21 @@ mod tests {
         ];
 
         let map = build_resource_map(&entries);
-        assert_eq!(map.get("FileRead  /a"), Some(&2));
+        assert_eq!(map.get("FileRead /a"), Some(&2));
     }
 
     #[test]
     fn extract_resource_key_tool_call() {
         let json = r#"{"ToolCall":{"tool":"write_file","args":null}}"#;
         let key = extract_resource_key(json);
-        assert_eq!(key, "ToolCall  write_file");
+        assert_eq!(key, "ToolCall write_file");
     }
 
     #[test]
     fn extract_resource_key_empty_object() {
         let json = r#"{}"#;
         let key = extract_resource_key(json);
-        // Empty JSON object -> no variant, returns raw string
+        // Empty JSON object can't deserialize to ActionKind -> raw string
         assert_eq!(key, "{}");
     }
 
@@ -272,15 +252,15 @@ mod tests {
     fn extract_resource_key_unknown_variant_no_fields() {
         let json = r#"{"CustomAction":{"unknown":"data"}}"#;
         let key = extract_resource_key(json);
-        // No recognized field -> just the variant name
-        assert_eq!(key, "CustomAction");
+        // Unknown variant can't deserialize to ActionKind -> raw string
+        assert_eq!(key, json);
     }
 
     #[test]
     fn extract_resource_key_net_request() {
         let json = r#"{"NetRequest":{"method":"GET","url":"https://example.com"}}"#;
         let key = extract_resource_key(json);
-        assert_eq!(key, "NetRequest  https://example.com");
+        assert_eq!(key, "NetRequest GET https://example.com");
     }
 
     #[test]
@@ -313,8 +293,8 @@ mod tests {
         ];
 
         let map = build_resource_map(&entries);
-        assert_eq!(map.get("FileRead  /a"), Some(&1));
-        assert_eq!(map.get("FileWrite  /b"), Some(&1));
+        assert_eq!(map.get("FileRead /a"), Some(&1));
+        assert_eq!(map.get("FileWrite /b"), Some(&1));
         assert_eq!(map.len(), 2);
     }
 }

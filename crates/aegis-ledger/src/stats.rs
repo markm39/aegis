@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use aegis_types::AegisError;
+use aegis_types::{ActionKind, AegisError};
 
 use crate::filter::AuditFilter;
 use crate::store::AuditStore;
@@ -217,27 +217,13 @@ impl AuditStore {
 }
 
 /// Extract a human-readable resource display name from the action_kind JSON.
+///
+/// Deserializes the JSON back to `ActionKind` and uses its `Display` impl,
+/// which keeps this in sync with any new variants automatically.
 fn extract_resource_display(action_kind: &str) -> String {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(action_kind) {
-        if let Some(obj) = value.as_object() {
-            if let Some((variant, inner)) = obj.iter().next() {
-                if let Some(path) = inner.get("path").and_then(|p| p.as_str()) {
-                    return format!("{variant}: {path}");
-                }
-                if let Some(host) = inner.get("host").and_then(|h| h.as_str()) {
-                    return format!("{variant}: {host}");
-                }
-                if let Some(command) = inner.get("command").and_then(|c| c.as_str()) {
-                    return format!("{variant}: {command}");
-                }
-                if let Some(tool) = inner.get("tool").and_then(|t| t.as_str()) {
-                    return format!("{variant}: {tool}");
-                }
-                return variant.clone();
-            }
-        }
-    }
-    action_kind.to_string()
+    serde_json::from_str::<ActionKind>(action_kind)
+        .map(|kind| kind.to_string())
+        .unwrap_or_else(|_| action_kind.to_string())
 }
 
 #[cfg(test)]
@@ -370,14 +356,14 @@ mod tests {
     fn extract_resource_display_file_read() {
         let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
         let display = extract_resource_display(json);
-        assert_eq!(display, "FileRead: /tmp/test.txt");
+        assert_eq!(display, "FileRead /tmp/test.txt");
     }
 
     #[test]
     fn extract_resource_display_net_connect() {
         let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
         let display = extract_resource_display(json);
-        assert_eq!(display, "NetConnect: example.com");
+        assert_eq!(display, "NetConnect example.com:443");
     }
 
     #[test]
@@ -387,9 +373,10 @@ mod tests {
     }
 
     #[test]
-    fn extract_resource_display_variant_only() {
+    fn extract_resource_display_unknown_json() {
+        // JSON that doesn't match ActionKind falls back to raw string
         let json = r#"{"CustomAction":{}}"#;
         let display = extract_resource_display(json);
-        assert_eq!(display, "CustomAction");
+        assert_eq!(display, json);
     }
 }
