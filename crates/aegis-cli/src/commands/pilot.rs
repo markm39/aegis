@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use tracing::info;
 
+use aegis_control::server::ControlServerConfig;
 use aegis_pilot::adapters;
 use aegis_pilot::pty::PtySession;
 use aegis_pilot::supervisor::{self, PilotEvent, PilotUpdate, SupervisorCommand, SupervisorConfig};
@@ -25,6 +26,7 @@ use aegis_types::{Action, ActionKind, AdapterConfig, AegisConfig, PilotConfig, V
 
 use crate::commands::pipeline;
 use crate::commands::wrap;
+use crate::pilot_tui::bridge::{self, SharedPilotState};
 
 /// Run the `aegis pilot` command.
 #[allow(clippy::too_many_arguments)]
@@ -152,7 +154,7 @@ pub fn run(
     let (update_tx, update_rx) = mpsc::channel::<PilotUpdate>();
     let (command_tx, command_rx) = mpsc::channel::<SupervisorCommand>();
 
-    // Capture agent info for event forwarding (before pty moves into supervisor)
+    // Capture agent info (before pty moves into supervisor)
     let agent_pid = pty.pid();
     let agent_command = command.to_string();
 
@@ -175,6 +177,28 @@ pub fn run(
             })
             .ok()
     };
+
+    // Create shared pilot state for control plane queries
+    let shared_state = Arc::new(Mutex::new(SharedPilotState::new(
+        agent_pid,
+        command.to_string(),
+        adapter_name_str.clone(),
+    )));
+
+    // Start control plane servers (Unix socket always, HTTP if configured)
+    let control_server_config = ControlServerConfig {
+        socket_path: ControlServerConfig::default_socket_path(&session_id),
+        http_listen: pilot_config.control.http_listen.clone(),
+        api_key: pilot_config.control.api_key.clone(),
+    };
+    let socket_display = control_server_config.socket_path.display().to_string();
+    let control_handle = bridge::start_control_thread(
+        &control_server_config,
+        command_tx.clone(),
+        Arc::clone(&shared_state),
+    )
+    .context("failed to start control servers")?;
+    info!(socket = %socket_display, "control plane started");
 
     // Build supervisor config -- interactive is false because the TUI handles display
     let sup_config = SupervisorConfig {
@@ -209,6 +233,8 @@ pub fn run(
     let tui_result = crate::pilot_tui::run_pilot_tui(
         update_rx,
         command_tx,
+        Some(Arc::clone(&shared_state)),
+        socket_display.clone(),
         session_id.to_string(),
         derived_name.clone(),
         command.to_string(),
@@ -234,6 +260,13 @@ pub fn run(
     if let Err(tui_err) = tui_result {
         tracing::warn!("TUI exited with error: {tui_err:#}");
     }
+
+    // Shut down control servers
+    let (shutdown_tx, control_thread) = control_handle;
+    let _ = shutdown_tx.send(true);
+    let _ = control_thread.join();
+    // Clean up socket file (belt-and-suspenders; unix server also cleans up)
+    let _ = std::fs::remove_file(&control_server_config.socket_path);
 
     // Drop the event sender to signal the logger thread to exit
     // (event_tx was moved into the supervisor thread, which has exited)
@@ -267,6 +300,7 @@ pub fn run(
     }
     println!("  Session:      {session_id}");
     println!("  Config:       {derived_name}");
+    println!("  Socket:       {socket_display}");
 
     if exit_code != 0 {
         std::process::exit(exit_code);

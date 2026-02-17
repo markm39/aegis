@@ -4,11 +4,13 @@
 //! and pending permission requests. Accepts keyboard input for approving,
 //! denying, sending text, and nudging the agent.
 
+pub mod bridge;
 pub mod event;
 pub mod ui;
 
 use std::collections::VecDeque;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
@@ -18,6 +20,7 @@ use uuid::Uuid;
 use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
 use aegis_types::Decision;
 
+use self::bridge::SharedPilotState;
 use self::event::{AppEvent, EventHandler};
 
 /// Maximum output lines to retain in the TUI buffer.
@@ -88,8 +91,12 @@ pub struct PilotApp {
     pub child_alive: bool,
     /// Whether focus is on the pending panel (vs output panel).
     pub focus_pending: bool,
+    /// Socket path for display in the header (empty if no control server).
+    pub socket_path: String,
     /// Channel to send commands back to the supervisor.
     command_tx: mpsc::Sender<SupervisorCommand>,
+    /// Shared state for the control plane bridge.
+    shared_state: Option<Arc<Mutex<SharedPilotState>>>,
 }
 
 impl PilotApp {
@@ -99,6 +106,8 @@ impl PilotApp {
         config_name: String,
         command: String,
         command_tx: mpsc::Sender<SupervisorCommand>,
+        shared_state: Option<Arc<Mutex<SharedPilotState>>>,
+        socket_path: String,
     ) -> Self {
         Self {
             output_lines: VecDeque::with_capacity(MAX_OUTPUT_LINES),
@@ -114,15 +123,21 @@ impl PilotApp {
             command,
             child_alive: true,
             focus_pending: false,
+            socket_path,
             command_tx,
+            shared_state,
         }
     }
 
     /// Apply a PilotUpdate from the supervisor.
+    ///
+    /// Updates both the local TUI state and the shared state (if present)
+    /// so the control plane bridge can serve queries.
     pub fn apply_update(&mut self, update: PilotUpdate) {
         match update {
-            PilotUpdate::OutputLine(text) => {
-                self.push_output(text, None);
+            PilotUpdate::OutputLine(ref text) => {
+                self.sync_shared(|s| s.push_output(text.clone()));
+                self.push_output(text.clone(), None);
             }
             PilotUpdate::PromptDecided { action, decision, reason } => {
                 let annotation = match decision {
@@ -144,9 +159,11 @@ impl PilotApp {
                     }
                     _ => unreachable!(),
                 };
+                self.sync_shared(|s| s.push_output(text.clone()));
                 self.push_output(text, Some(annotation));
             }
             PilotUpdate::PendingPrompt { request_id, raw_prompt } => {
+                self.sync_shared(|s| s.add_pending(request_id, raw_prompt.clone()));
                 self.pending.push(PendingInfo {
                     request_id,
                     raw_prompt: raw_prompt.clone(),
@@ -162,6 +179,7 @@ impl PilotApp {
                 }
             }
             PilotUpdate::PendingResolved { request_id, approved } => {
+                self.sync_shared(|s| s.remove_pending(request_id));
                 self.pending.retain(|p| p.request_id != request_id);
                 if self.pending_selected >= self.pending.len() && !self.pending.is_empty() {
                     self.pending_selected = self.pending.len() - 1;
@@ -185,14 +203,25 @@ impl PilotApp {
                 );
             }
             PilotUpdate::ChildExited { exit_code } => {
+                self.sync_shared(|s| s.child_alive = false);
                 self.child_alive = false;
                 self.push_output(
                     format!("[EXIT] child process exited with code {exit_code}"),
                     None,
                 );
             }
-            PilotUpdate::Stats(stats) => {
-                self.stats = stats;
+            PilotUpdate::Stats(ref stats) => {
+                self.sync_shared(|s| s.stats = stats.clone());
+                self.stats = stats.clone();
+            }
+        }
+    }
+
+    /// Update shared state (for control plane) if present.
+    fn sync_shared(&self, f: impl FnOnce(&mut SharedPilotState)) {
+        if let Some(ref state) = self.shared_state {
+            if let Ok(mut s) = state.lock() {
+                f(&mut s);
             }
         }
     }
@@ -349,6 +378,8 @@ impl PilotApp {
 pub fn run_pilot_tui(
     update_rx: mpsc::Receiver<PilotUpdate>,
     command_tx: mpsc::Sender<SupervisorCommand>,
+    shared_state: Option<Arc<Mutex<SharedPilotState>>>,
+    socket_path: String,
     session_id: String,
     config_name: String,
     command: String,
@@ -365,7 +396,14 @@ pub fn run_pilot_tui(
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let events = EventHandler::new(TICK_RATE_MS);
-    let mut app = PilotApp::new(session_id, config_name, command, command_tx);
+    let mut app = PilotApp::new(
+        session_id,
+        config_name,
+        command,
+        command_tx,
+        shared_state,
+        socket_path,
+    );
 
     let result = run_event_loop(&mut terminal, &events, &mut app, &update_rx);
 
@@ -421,6 +459,8 @@ mod tests {
             "test-config".into(),
             "echo".into(),
             tx,
+            None,
+            String::new(),
         )
     }
 
@@ -577,6 +617,8 @@ mod tests {
             "test".into(),
             "echo".into(),
             tx,
+            None,
+            String::new(),
         );
 
         app.handle_key(make_key(KeyCode::Char('i')));
@@ -615,7 +657,7 @@ mod tests {
     #[test]
     fn approve_sends_command() {
         let (tx, rx) = mpsc::channel();
-        let mut app = PilotApp::new("t".into(), "t".into(), "t".into(), tx);
+        let mut app = PilotApp::new("t".into(), "t".into(), "t".into(), tx, None, String::new());
         let id = Uuid::new_v4();
         app.apply_update(PilotUpdate::PendingPrompt {
             request_id: id,
@@ -631,7 +673,7 @@ mod tests {
     #[test]
     fn deny_sends_command() {
         let (tx, rx) = mpsc::channel();
-        let mut app = PilotApp::new("t".into(), "t".into(), "t".into(), tx);
+        let mut app = PilotApp::new("t".into(), "t".into(), "t".into(), tx, None, String::new());
         let id = Uuid::new_v4();
         app.apply_update(PilotUpdate::PendingPrompt {
             request_id: id,
@@ -646,7 +688,7 @@ mod tests {
     #[test]
     fn nudge_sends_command() {
         let (tx, rx) = mpsc::channel();
-        let mut app = PilotApp::new("t".into(), "t".into(), "t".into(), tx);
+        let mut app = PilotApp::new("t".into(), "t".into(), "t".into(), tx, None, String::new());
 
         app.handle_key(make_key(KeyCode::Char('n')));
         let cmd = rx.try_recv().unwrap();

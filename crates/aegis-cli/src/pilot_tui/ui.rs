@@ -52,7 +52,7 @@ fn draw_header(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
         app.session_id.clone()
     };
 
-    let header = Paragraph::new(Line::from(vec![
+    let mut header_spans = vec![
         Span::styled(" Pilot: ", Style::default().fg(Color::White)),
         Span::styled(
             &app.command,
@@ -68,7 +68,14 @@ fn draw_header(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
         Span::styled(short_session, Style::default().fg(Color::Cyan)),
         Span::styled("  Config: ", Style::default().fg(Color::DarkGray)),
         Span::styled(&app.config_name, Style::default().fg(Color::Cyan)),
-    ]))
+    ];
+
+    if !app.socket_path.is_empty() {
+        header_spans.push(Span::styled("  Ctrl: ", Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(&app.socket_path, Style::default().fg(Color::Magenta)));
+    }
+
+    let header = Paragraph::new(Line::from(header_spans))
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -339,7 +346,14 @@ mod tests {
 
     fn make_test_app() -> PilotApp {
         let (tx, _rx) = mpsc::channel();
-        PilotApp::new("test-session".into(), "test-config".into(), "echo".into(), tx)
+        PilotApp::new(
+            "test-session".into(),
+            "test-config".into(),
+            "echo".into(),
+            tx,
+            None,
+            String::new(),
+        )
     }
 
     #[test]
