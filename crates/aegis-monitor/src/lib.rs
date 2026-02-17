@@ -11,6 +11,9 @@ use app::App;
 
 pub use app::DashboardConfig;
 
+/// Default tick rate (milliseconds) for the TUI event loop.
+const DEFAULT_TICK_RATE_MS: u64 = 500;
+
 /// Run the monitor TUI for a single configuration's ledger.
 ///
 /// Initializes the terminal in raw/alternate-screen mode, runs the main
@@ -36,7 +39,7 @@ fn run_app(mut app: App) -> anyhow::Result<()> {
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let events = event::EventHandler::new(500);
+    let events = event::EventHandler::new(DEFAULT_TICK_RATE_MS);
 
     while app.running {
         app.refresh()?;

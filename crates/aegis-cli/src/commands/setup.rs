@@ -6,6 +6,10 @@
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
+/// Minimum macOS major version required by Aegis (Monterey).
+#[cfg(target_os = "macos")]
+const MIN_MACOS_VERSION: u32 = 12;
+
 /// Run the `aegis setup` command.
 ///
 /// Verifies the system environment is ready for Aegis:
@@ -83,9 +87,9 @@ fn check_macos_version() -> Result<()> {
         .and_then(|s| s.parse().ok())
         .with_context(|| format!("could not parse macOS version from sw_vers output: '{version_str}'"))?;
 
-    if major < 12 {
+    if major < MIN_MACOS_VERSION {
         bail!(
-            "macOS {} detected, but Aegis requires macOS 12 (Monterey) or later",
+            "macOS {} detected, but Aegis requires macOS {MIN_MACOS_VERSION} (Monterey) or later",
             version_str
         );
     }

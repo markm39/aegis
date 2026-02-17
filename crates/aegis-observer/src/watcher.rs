@@ -19,6 +19,9 @@ use aegis_types::{Action, AegisError};
 
 use crate::event::{FsEvent, FsEventKind, ObserverSource};
 
+/// Timeout for the event-loop poll (controls how often we check for shutdown).
+const EVENT_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// A filesystem watcher that monitors a sandbox directory.
 pub struct FsWatcher {
     _watcher: RecommendedWatcher,
@@ -165,7 +168,7 @@ fn consume_events(
         }
 
         // Wait for an event with a short timeout so we can check shutdown
-        match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+        match event_rx.recv_timeout(EVENT_POLL_TIMEOUT) {
             Ok(notify_event) => {
                 process_notify_event(&notify_event, ctx);
             }

@@ -268,6 +268,9 @@ fn parse_action_kind(action_name: &str, resource: &str) -> Result<ActionKind> {
     }
 }
 
+/// Default port when parsing `host:port` strings with the port omitted.
+const DEFAULT_HTTPS_PORT: u16 = 443;
+
 /// Parse a `host:port` string, defaulting to port 443 if omitted.
 fn parse_host_port(resource: &str) -> (String, u16) {
     if let Some((host, port_str)) = resource.rsplit_once(':') {
@@ -275,7 +278,7 @@ fn parse_host_port(resource: &str) -> (String, u16) {
             return (host.to_string(), port);
         }
     }
-    (resource.to_string(), 443)
+    (resource.to_string(), DEFAULT_HTTPS_PORT)
 }
 
 #[cfg(test)]
@@ -368,14 +371,14 @@ mod tests {
     fn parse_host_port_default() {
         let (host, port) = parse_host_port("example.com");
         assert_eq!(host, "example.com");
-        assert_eq!(port, 443);
+        assert_eq!(port, DEFAULT_HTTPS_PORT);
     }
 
     #[test]
     fn parse_host_port_invalid_port() {
         let (host, port) = parse_host_port("example.com:notaport");
         assert_eq!(host, "example.com:notaport");
-        assert_eq!(port, 443);
+        assert_eq!(port, DEFAULT_HTTPS_PORT);
     }
 
     #[test]

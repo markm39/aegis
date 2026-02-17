@@ -18,6 +18,18 @@ const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 /// Poll interval for `aegis audit export --follow`.
 const EXPORT_FOLLOW_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Table separator width for session listings.
+const SESSION_TABLE_WIDTH: usize = 130;
+
+/// Table separator width for policy snapshot listings.
+const SNAPSHOT_TABLE_WIDTH: usize = 90;
+
+/// Table separator width for audit entry listings.
+const ENTRY_TABLE_WIDTH: usize = 100;
+
+/// Number of hex characters to display from policy hashes.
+const HASH_DISPLAY_LEN: usize = 16;
+
 /// CSV header for audit entry export (must match `print_csv_entry` field order).
 const CSV_HEADER: &str = "entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash";
 
@@ -170,7 +182,7 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
         "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  {:<16}  COMMAND",
         "SESSION ID", "STATUS", "START TIME", "TOTAL", "DENIED", "TAG"
     );
-    let separator = "-".repeat(130);
+    let separator = "-".repeat(SESSION_TABLE_WIDTH);
     println!("{separator}");
 
     for s in &sessions {
@@ -254,15 +266,15 @@ pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
     }
 
     println!(
-        "{:<36}  {:<20}  {:<8}  HASH (first 16)",
+        "{:<36}  {:<20}  {:<8}  HASH (first {HASH_DISPLAY_LEN})",
         "SNAPSHOT ID", "TIMESTAMP", "FILES"
     );
-    let separator = "-".repeat(90);
+    let separator = "-".repeat(SNAPSHOT_TABLE_WIDTH);
     println!("{separator}");
 
     for s in &snapshots {
-        let hash_short = if s.policy_hash.len() >= 16 {
-            &s.policy_hash[..16]
+        let hash_short = if s.policy_hash.len() >= HASH_DISPLAY_LEN {
+            &s.policy_hash[..HASH_DISPLAY_LEN]
         } else {
             &s.policy_hash
         };
@@ -506,7 +518,7 @@ fn print_table(entries: &[AuditEntry]) {
         "{:<36}  {:<8}  {:<15}  {:<20}  ACTION",
         "ENTRY ID", "DECISION", "PRINCIPAL", "TIMESTAMP"
     );
-    let separator = "-".repeat(100);
+    let separator = "-".repeat(ENTRY_TABLE_WIDTH);
     println!("{separator}");
 
     for entry in entries {

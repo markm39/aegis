@@ -12,6 +12,9 @@ use dialoguer::{Confirm, Input, MultiSelect, Select};
 
 use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::PolicyEngine;
+
+/// Maximum display width for a resource path before truncation.
+const MAX_RESOURCE_DISPLAY_LEN: usize = 40;
 use aegis_types::{
     Action, ActionKind, AegisConfig, Decision, IsolationConfig, CONFIG_FILENAME,
     DEFAULT_POLICY_FILENAME,
@@ -365,8 +368,8 @@ fn run_policy_demo(agent_name: &str, policy_text: &str, project_dir: &Path) -> R
             _ => String::new(),
         };
 
-        println!("  [{symbol}] {label:<14} {resource}", resource = if resource.len() > 40 {
-            format!("...{}", &sample_path[sample_path.len().saturating_sub(37)..])
+        println!("  [{symbol}] {label:<14} {resource}", resource = if resource.len() > MAX_RESOURCE_DISPLAY_LEN {
+            format!("...{}", &sample_path[sample_path.len().saturating_sub(MAX_RESOURCE_DISPLAY_LEN - 3)..])
         } else {
             resource
         });

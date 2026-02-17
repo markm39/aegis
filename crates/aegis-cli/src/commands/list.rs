@@ -14,6 +14,9 @@ use aegis_types::{AegisConfig, CONFIG_FILENAME};
 use crate::commands::init::{dirs_from_env, load_config_from_dir};
 use crate::commands::DATETIME_SHORT_FMT;
 
+/// Table separator width for config listings.
+const CONFIG_TABLE_WIDTH: usize = 90;
+
 /// A discovered configuration entry for display.
 struct ConfigEntry {
     name: String,
@@ -60,7 +63,7 @@ pub fn run() -> Result<()> {
         "{:<20} {:<6} {:<18} {:<10} {:<10} LAST USED",
         "NAME", "TYPE", "POLICY", "ISOLATION", "SESSIONS"
     );
-    let separator = "-".repeat(90);
+    let separator = "-".repeat(CONFIG_TABLE_WIDTH);
     println!("{separator}");
 
     for e in &entries {
