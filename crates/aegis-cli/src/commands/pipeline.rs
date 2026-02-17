@@ -10,6 +10,7 @@
 ///
 /// This module extracts that shared pipeline to avoid duplication.
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tracing::info;
@@ -30,20 +31,13 @@ pub struct PipelineOptions<'a> {
     pub tag: Option<&'a str>,
 }
 
-/// Summary returned after pipeline execution.
-#[allow(dead_code)]
-pub struct PipelineSummary {
-    pub session_id: Uuid,
-    pub exit_code: i32,
-}
-
 /// Execute the full aegis pipeline: observe, audit, sandbox.
 pub fn execute(
     config: &AegisConfig,
     command: &str,
     args: &[String],
     opts: PipelineOptions<'_>,
-) -> Result<PipelineSummary> {
+) -> Result<()> {
     // Initialize the policy engine from the first policy path
     let policy_dir = config
         .policy_paths
@@ -138,10 +132,7 @@ pub fn execute(
         std::process::exit(exit_code);
     }
 
-    Ok(PipelineSummary {
-        session_id,
-        exit_code,
-    })
+    Ok(())
 }
 
 /// Record a policy snapshot (no-op if hash unchanged since last snapshot).
@@ -206,9 +197,13 @@ fn start_observer(
 fn stop_observer(
     observer_session: Option<aegis_observer::ObserverSession>,
 ) -> Option<aegis_observer::ObserverSummary> {
+    // macOS FSEvents are delivered asynchronously via a background thread;
+    // a short delay ensures late-arriving events are captured before we
+    // snapshot and diff.
+    const FSEVENT_DELIVERY_DELAY: Duration = Duration::from_millis(500);
+
     let obs = observer_session?;
-    // Brief delay for FSEvents delivery latency
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(FSEVENT_DELIVERY_DELAY);
 
     match aegis_observer::stop_observer(obs) {
         Ok(summary) => {

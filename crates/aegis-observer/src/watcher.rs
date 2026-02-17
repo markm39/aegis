@@ -77,16 +77,15 @@ impl FsWatcher {
         let count_clone = Arc::clone(&event_count);
         let sandbox_clone = sandbox_dir.clone();
         let consumer_handle = std::thread::spawn(move || {
-            consume_events(
-                event_rx,
-                shutdown_rx,
-                &store,
-                &engine,
-                &principal,
-                &session_id,
-                &sandbox_clone,
-                &count_clone,
-            );
+            let ctx = EventContext {
+                store: &store,
+                engine: &engine,
+                principal: &principal,
+                session_id: &session_id,
+                sandbox_dir: &sandbox_clone,
+                event_count: &count_clone,
+            };
+            consume_events(event_rx, shutdown_rx, &ctx);
         });
 
         Ok(Self {
@@ -120,39 +119,35 @@ impl FsWatcher {
     }
 }
 
+/// Shared context for event processing functions.
+struct EventContext<'a> {
+    store: &'a Arc<Mutex<AuditStore>>,
+    engine: &'a Arc<Mutex<PolicyEngine>>,
+    principal: &'a str,
+    session_id: &'a Option<uuid::Uuid>,
+    sandbox_dir: &'a Path,
+    event_count: &'a AtomicUsize,
+}
+
 /// Consumer loop: reads notify events, maps them to FsEvents, evaluates
 /// policy, and logs to the audit store.
-#[allow(clippy::too_many_arguments)]
 fn consume_events(
     event_rx: mpsc::Receiver<notify::Event>,
     shutdown_rx: mpsc::Receiver<()>,
-    store: &Arc<Mutex<AuditStore>>,
-    engine: &Arc<Mutex<PolicyEngine>>,
-    principal: &str,
-    session_id: &Option<uuid::Uuid>,
-    sandbox_dir: &Path,
-    event_count: &AtomicUsize,
+    ctx: &EventContext<'_>,
 ) {
     loop {
         // Check for shutdown signal (non-blocking)
         if shutdown_rx.try_recv().is_ok() {
             // Drain remaining events before exiting
-            drain_events(&event_rx, store, engine, principal, session_id, sandbox_dir, event_count);
+            drain_events(&event_rx, ctx);
             return;
         }
 
         // Wait for an event with a short timeout so we can check shutdown
         match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(notify_event) => {
-                process_notify_event(
-                    &notify_event,
-                    store,
-                    engine,
-                    principal,
-                    session_id,
-                    sandbox_dir,
-                    event_count,
-                );
+                process_notify_event(&notify_event, ctx);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -161,47 +156,21 @@ fn consume_events(
 }
 
 /// Drain any remaining events from the channel.
-#[allow(clippy::too_many_arguments)]
-fn drain_events(
-    event_rx: &mpsc::Receiver<notify::Event>,
-    store: &Arc<Mutex<AuditStore>>,
-    engine: &Arc<Mutex<PolicyEngine>>,
-    principal: &str,
-    session_id: &Option<uuid::Uuid>,
-    sandbox_dir: &Path,
-    event_count: &AtomicUsize,
-) {
+fn drain_events(event_rx: &mpsc::Receiver<notify::Event>, ctx: &EventContext<'_>) {
     while let Ok(notify_event) = event_rx.try_recv() {
-        process_notify_event(
-            &notify_event,
-            store,
-            engine,
-            principal,
-            session_id,
-            sandbox_dir,
-            event_count,
-        );
+        process_notify_event(&notify_event, ctx);
     }
 }
 
 /// Process a single notify event: map to FsEvent(s), evaluate policy, log.
-#[allow(clippy::too_many_arguments)]
-fn process_notify_event(
-    notify_event: &notify::Event,
-    store: &Arc<Mutex<AuditStore>>,
-    engine: &Arc<Mutex<PolicyEngine>>,
-    principal: &str,
-    session_id: &Option<uuid::Uuid>,
-    sandbox_dir: &Path,
-    event_count: &AtomicUsize,
-) {
-    let fs_events = map_notify_event(notify_event, sandbox_dir);
+fn process_notify_event(notify_event: &notify::Event, ctx: &EventContext<'_>) {
+    let fs_events = map_notify_event(notify_event, ctx.sandbox_dir);
 
     for fs_event in fs_events {
         for action_kind in fs_event.to_actions() {
-            let action = Action::new(principal, action_kind);
+            let action = Action::new(ctx.principal, action_kind);
 
-            let verdict = match engine.lock() {
+            let verdict = match ctx.engine.lock() {
                 Ok(eng) => eng.evaluate(&action),
                 Err(e) => {
                     tracing::warn!(error = %e, "policy engine lock poisoned");
@@ -209,8 +178,8 @@ fn process_notify_event(
                 }
             };
 
-            let result = match store.lock() {
-                Ok(mut st) => match session_id {
+            let result = match ctx.store.lock() {
+                Ok(mut st) => match ctx.session_id {
                     Some(sid) => st.append_with_session(&action, &verdict, sid),
                     None => st.append(&action, &verdict),
                 },
@@ -223,7 +192,7 @@ fn process_notify_event(
             if let Err(e) = result {
                 tracing::warn!(error = %e, "failed to log observed event");
             } else {
-                event_count.fetch_add(1, Ordering::SeqCst);
+                ctx.event_count.fetch_add(1, Ordering::SeqCst);
                 tracing::debug!(
                     path = %fs_event.path.display(),
                     kind = ?fs_event.kind,
