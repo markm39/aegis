@@ -45,3 +45,24 @@ pub fn run_monitor(ledger_path: std::path::PathBuf) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use aegis_ledger::AuditEntry;
+
+    /// Create a sample AuditEntry for testing.
+    pub fn sample_entry(principal: &str, decision: &str, action_kind: &str) -> AuditEntry {
+        AuditEntry {
+            entry_id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            action_id: uuid::Uuid::new_v4(),
+            action_kind: action_kind.to_string(),
+            principal: principal.to_string(),
+            decision: decision.to_string(),
+            reason: "test reason".to_string(),
+            policy_id: None,
+            prev_hash: "genesis".to_string(),
+            entry_hash: "abc123".to_string(),
+        }
+    }
+}

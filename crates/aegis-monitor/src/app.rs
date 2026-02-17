@@ -383,21 +383,7 @@ mod tests {
         App::new(PathBuf::from("/tmp/nonexistent-test-ledger.db"))
     }
 
-    fn sample_entry(principal: &str, decision: &str, action_kind: &str) -> AuditEntry {
-        use chrono::Utc;
-        AuditEntry {
-            entry_id: uuid::Uuid::new_v4(),
-            timestamp: Utc::now(),
-            action_id: uuid::Uuid::new_v4(),
-            action_kind: action_kind.to_string(),
-            principal: principal.to_string(),
-            decision: decision.to_string(),
-            reason: "test reason".to_string(),
-            policy_id: None,
-            prev_hash: "genesis".to_string(),
-            entry_hash: "abc123".to_string(),
-        }
-    }
+    use crate::test_helpers::sample_entry;
 
     #[test]
     fn initial_mode_is_audit_feed() {

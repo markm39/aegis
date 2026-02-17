@@ -522,26 +522,10 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
 mod tests {
     use super::*;
     use crate::app::App;
-    use aegis_ledger::AuditEntry;
-    use chrono::Utc;
+    use crate::test_helpers::sample_entry;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
-
-    fn sample_entry(principal: &str, decision: &str, action_kind: &str) -> AuditEntry {
-        AuditEntry {
-            entry_id: uuid::Uuid::new_v4(),
-            timestamp: Utc::now(),
-            action_id: uuid::Uuid::new_v4(),
-            action_kind: action_kind.to_string(),
-            principal: principal.to_string(),
-            decision: decision.to_string(),
-            reason: "test reason".to_string(),
-            policy_id: None,
-            prev_hash: "genesis".to_string(),
-            entry_hash: "abc123".to_string(),
-        }
-    }
 
     #[test]
     fn draw_does_not_panic_with_empty_app() {
