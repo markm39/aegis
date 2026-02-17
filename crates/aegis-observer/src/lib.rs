@@ -37,8 +37,6 @@ use crate::watcher::FsWatcher;
 pub struct ObserverSummary {
     /// Number of events captured by the FSEvents watcher.
     pub fsevents_count: usize,
-    /// Number of events captured by eslogger (Tier 2, 0 if not used).
-    pub eslogger_count: usize,
     /// Number of read events detected by snapshot diffing.
     pub snapshot_read_count: usize,
     /// Total events logged to the audit store by the observer.
@@ -177,7 +175,6 @@ pub fn stop_observer(mut session: ObserverSession) -> Result<ObserverSummary, Ae
 
     Ok(ObserverSummary {
         fsevents_count,
-        eslogger_count: 0,
         snapshot_read_count,
         total_logged,
     })

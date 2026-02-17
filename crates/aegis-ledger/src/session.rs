@@ -233,7 +233,13 @@ impl AuditStore {
 /// Map a SQLite row to a Session.
 fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     let args_json: String = row.get(3)?;
-    let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
+    let args: Vec<String> = serde_json::from_str(&args_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(e),
+        )
+    })?;
 
     let end_time = row
         .get::<_, Option<String>>(5)?

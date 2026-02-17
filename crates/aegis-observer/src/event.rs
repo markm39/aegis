@@ -36,9 +36,6 @@ pub enum ObserverSource {
     FsEvents,
     /// Pre/post directory snapshot diffing.
     Snapshot,
-    /// macOS Endpoint Security logger (Tier 2, not yet implemented).
-    #[allow(dead_code)]
-    EsLogger,
 }
 
 /// A single observed filesystem event.

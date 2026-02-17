@@ -47,11 +47,9 @@ pub struct DashboardConfig {
 #[derive(Clone)]
 pub struct MonitorSession {
     pub session_id: String,
-    #[allow(dead_code)] // populated from DB; will be rendered in session detail view
     pub config_name: String,
     pub command: String,
     pub start_time: String,
-    #[allow(dead_code)] // populated from DB; will be rendered in session detail view
     pub end_time: Option<String>,
     pub exit_code: Option<i32>,
     pub total_actions: usize,
@@ -141,29 +139,11 @@ impl App {
             .first()
             .map(|c| c.ledger_path.clone())
             .unwrap_or_default();
-        Self {
-            mode: AppMode::Home,
-            entries: Vec::new(),
-            total_count: 0,
-            allow_count: 0,
-            deny_count: 0,
-            selected_index: 0,
-            running: true,
-            filter_text: String::new(),
-            ledger_path,
-            sessions: Vec::new(),
-            session_selected: 0,
-            session_entries: Vec::new(),
-            session_detail: None,
-            session_detail_selected: 0,
-            action_distribution: Vec::new(),
-            dashboard_mode: true,
-            dashboard_configs: configs,
-            home_selected: 0,
-            home_stats: Vec::new(),
-            home_recent: Vec::new(),
-            active_config_name: None,
-        }
+        let mut app = Self::new(ledger_path);
+        app.mode = AppMode::Home;
+        app.dashboard_mode = true;
+        app.dashboard_configs = configs;
+        app
     }
 
     /// Refresh cached data from the audit ledger.

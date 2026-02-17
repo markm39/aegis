@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::AegisError;
+
 /// The authorization decision produced by the Cedar policy engine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Decision {
@@ -26,13 +28,15 @@ impl std::fmt::Display for Decision {
 }
 
 impl std::str::FromStr for Decision {
-    type Err = String;
+    type Err = AegisError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
             "ALLOW" => Ok(Decision::Allow),
             "DENY" => Ok(Decision::Deny),
-            _ => Err(format!("invalid decision: {s:?} (expected Allow or Deny)")),
+            _ => Err(AegisError::PolicyError(format!(
+                "invalid decision: {s:?} (expected Allow or Deny)"
+            ))),
         }
     }
 }

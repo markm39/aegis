@@ -117,11 +117,6 @@ impl FsWatcher {
         count
     }
 
-    /// Current count of events processed.
-    #[allow(dead_code)] // accessor for diagnostics; stop() returns the final count
-    pub fn event_count(&self) -> usize {
-        self.event_count.load(Ordering::SeqCst)
-    }
 }
 
 /// Shared context for event processing functions.
