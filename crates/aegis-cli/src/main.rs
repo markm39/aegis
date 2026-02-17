@@ -211,6 +211,12 @@ enum Commands {
         command: Vec<String>,
     },
 
+    /// Manage the multi-agent daemon (fleet orchestration)
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonCommands,
+    },
+
     /// Watch a directory for filesystem changes (background daemon mode)
     Watch {
         /// Directory to watch (defaults to current directory)
@@ -466,6 +472,85 @@ enum AlertCommands {
         /// Number of recent dispatches to show (default 20)
         #[arg(long, default_value = "20")]
         last: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum DaemonCommands {
+    /// Create a default daemon configuration file
+    Init,
+
+    /// Run the daemon in the foreground (blocks until shutdown)
+    Run {
+        /// Signal that we were started by launchd
+        #[arg(long)]
+        launchd: bool,
+    },
+
+    /// Start the daemon in the background
+    Start,
+
+    /// Stop a running daemon
+    Stop,
+
+    /// Show daemon status (uptime, agent count)
+    Status,
+
+    /// List all agent slots and their status
+    Agents,
+
+    /// Show recent output from an agent
+    Output {
+        /// Agent name
+        name: String,
+
+        /// Number of lines to show
+        #[arg(long, default_value = "50")]
+        lines: usize,
+    },
+
+    /// Send text to an agent's stdin
+    Send {
+        /// Agent name
+        name: String,
+
+        /// Text to send
+        text: String,
+    },
+
+    /// Start a specific agent
+    StartAgent {
+        /// Agent name
+        name: String,
+    },
+
+    /// Stop a specific agent
+    StopAgent {
+        /// Agent name
+        name: String,
+    },
+
+    /// Restart a specific agent
+    RestartAgent {
+        /// Agent name
+        name: String,
+    },
+
+    /// Install launchd plist for auto-start
+    Install {
+        /// Start the daemon after installing
+        #[arg(long)]
+        start: bool,
+    },
+
+    /// Uninstall launchd plist
+    Uninstall,
+
+    /// Show daemon log output
+    Logs {
+        /// Follow log output (like tail -f)
+        #[arg(long)]
+        follow: bool,
     },
 }
 
@@ -731,6 +816,36 @@ fn main() -> anyhow::Result<()> {
                 args,
             )
         }
+        Commands::Daemon { action } => match action {
+            DaemonCommands::Init => commands::daemon::init(),
+            DaemonCommands::Run { launchd } => commands::daemon::run(launchd),
+            DaemonCommands::Start => commands::daemon::start(),
+            DaemonCommands::Stop => commands::daemon::stop(),
+            DaemonCommands::Status => commands::daemon::status(),
+            DaemonCommands::Agents => commands::daemon::agents(),
+            DaemonCommands::Output { name, lines } => {
+                commands::daemon::output(&name, lines)
+            }
+            DaemonCommands::Send { name, text } => {
+                commands::daemon::send(&name, &text)
+            }
+            DaemonCommands::StartAgent { name } => {
+                commands::daemon::start_agent(&name)
+            }
+            DaemonCommands::StopAgent { name } => {
+                commands::daemon::stop_agent(&name)
+            }
+            DaemonCommands::RestartAgent { name } => {
+                commands::daemon::restart_agent(&name)
+            }
+            DaemonCommands::Install { start } => {
+                commands::daemon::install(start)
+            }
+            DaemonCommands::Uninstall => commands::daemon::uninstall(),
+            DaemonCommands::Logs { follow } => {
+                commands::daemon::logs(follow)
+            }
+        },
         Commands::Watch {
             dir,
             policy,

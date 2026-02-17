@@ -20,6 +20,8 @@ aegis-monitor = { workspace = true }
 aegis-alert = { workspace = true }
 aegis-pilot = { workspace = true }
 aegis-control = { workspace = true }
+aegis-channel = { workspace = true }
+aegis-daemon = { workspace = true }
 rusqlite = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

@@ -148,6 +148,7 @@ pub fn ensure_wrap_config(
             observer: ObserverConfig::default(),
             alerts: Vec::new(),
             pilot: None,
+            channel: None,
         };
 
         let toml_content = config

@@ -168,6 +168,7 @@ mod tests {
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),
             pilot: None,
+            channel: None,
         };
         assert!(describe_isolation(&seatbelt).contains("Seatbelt"));
 

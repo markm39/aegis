@@ -245,6 +245,7 @@ mod tests {
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),
             pilot: None,
+            channel: None,
         };
 
         let (_, isolation) = describe_config(&config);
@@ -264,6 +265,7 @@ mod tests {
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),
             pilot: None,
+            channel: None,
         };
 
         let (_, isolation) = describe_config(&config);

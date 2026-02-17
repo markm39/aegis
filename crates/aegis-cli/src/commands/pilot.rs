@@ -104,6 +104,21 @@ pub fn run(
         None
     };
 
+    // Set up channel (Telegram, etc.) for remote control
+    let channel_tx = if let Some(ref channel_config) = config.channel {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<aegis_channel::ChannelInput>(256);
+        let channel_config = channel_config.clone();
+        std::thread::Builder::new()
+            .name("aegis-channel".into())
+            .spawn(move || {
+                aegis_channel::run(channel_config, rx);
+            })
+            .context("failed to spawn channel thread")?;
+        Some(tx)
+    } else {
+        None
+    };
+
     // Begin audit session
     let session_id = store
         .begin_session(&config.name, command, args, tag)
@@ -137,16 +152,25 @@ pub fn run(
     let (update_tx, update_rx) = mpsc::channel::<PilotUpdate>();
     let (command_tx, command_rx) = mpsc::channel::<SupervisorCommand>();
 
-    // Spawn a thread to log pilot events to the audit store
+    // Capture agent info for event forwarding (before pty moves into supervisor)
+    let agent_pid = pty.pid();
+    let agent_command = command.to_string();
+
+    // Spawn a thread to log pilot events to the audit store and forward to channel
     let event_logger = {
         let store = Arc::clone(&store_arc);
         let config_name = config.name.clone();
         let sid = session_id;
+        let channel_tx = channel_tx.clone();
+        let cmd = agent_command.clone();
         std::thread::Builder::new()
             .name("pilot-event-logger".into())
             .spawn(move || {
                 while let Ok(event) = event_rx.recv() {
                     log_pilot_event(&event, &store, &config_name, &sid);
+                    if let Some(ref tx) = channel_tx {
+                        forward_to_channel(&event, tx, &cmd, agent_pid);
+                    }
                 }
             })
             .ok()
@@ -334,6 +358,64 @@ fn log_pilot_event(
             info!(exit_code, "pilot: child process exited");
         }
     }
+}
+
+/// Forward a pilot event to the channel (Telegram, etc.) for remote notification.
+fn forward_to_channel(
+    event: &PilotEvent,
+    tx: &std::sync::mpsc::SyncSender<aegis_channel::ChannelInput>,
+    command: &str,
+    pid: u32,
+) {
+    use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
+
+    let kind = match event {
+        PilotEvent::PromptDecided { action, decision, reason } => {
+            match decision {
+                aegis_types::Decision::Allow => PilotEventKind::PermissionApproved {
+                    action: action.clone(),
+                    reason: reason.clone(),
+                },
+                aegis_types::Decision::Deny => PilotEventKind::PermissionDenied {
+                    action: action.clone(),
+                    reason: reason.clone(),
+                },
+            }
+        }
+        PilotEvent::StallNudge { nudge_count, idle_secs } => {
+            PilotEventKind::StallDetected {
+                nudge_count: *nudge_count,
+                idle_secs: *idle_secs,
+            }
+        }
+        PilotEvent::AttentionNeeded { nudge_count } => {
+            PilotEventKind::AttentionNeeded {
+                nudge_count: *nudge_count,
+            }
+        }
+        PilotEvent::UncertainPrompt { text, .. } => {
+            PilotEventKind::PendingApproval {
+                request_id: uuid::Uuid::new_v4(),
+                raw_prompt: text.clone(),
+            }
+        }
+        PilotEvent::ChildExited { exit_code } => {
+            PilotEventKind::AgentExited {
+                exit_code: *exit_code,
+            }
+        }
+    };
+
+    let webhook_event = PilotWebhookEvent::new(
+        kind,
+        command,
+        pid,
+        vec![],
+        None,
+        EventStats::default(),
+    );
+
+    let _ = tx.try_send(aegis_channel::ChannelInput::PilotEvent(webhook_event));
 }
 
 #[cfg(test)]

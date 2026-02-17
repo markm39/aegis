@@ -21,11 +21,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-cli"
+name = "aegis-channel"
 version = "0.1.0"
 dependencies = [
  "aegis-alert",
  "aegis-control",
+ "aegis-types",
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "aegis-cli"
+version = "0.1.0"
+dependencies = [
+ "aegis-alert",
+ "aegis-channel",
+ "aegis-control",
+ "aegis-daemon",
  "aegis-ledger",
  "aegis-monitor",
  "aegis-observer",
@@ -361,6 +383,17 @@ dependencies = [
  "predicates-core",
  "predicates-tree",
  "wait-timeout",
+]
+
+[[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -97,6 +97,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
         observer: ObserverConfig::default(),
         alerts: Vec::new(),
         pilot: None,
+        channel: None,
     };
 
     let toml_content = config

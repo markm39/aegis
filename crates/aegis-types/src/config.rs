@@ -352,6 +352,39 @@ impl Default for PilotConfig {
     }
 }
 
+/// Default Telegram Bot API long-poll timeout in seconds.
+fn default_poll_timeout_secs() -> u64 {
+    30
+}
+
+/// Bidirectional messaging channel for remote control and notifications.
+///
+/// The channel receives pilot events and alert events (outbound) and
+/// forwards user commands back to the supervisor (inbound). Currently
+/// supports Telegram; additional backends (Slack, Discord) can be added
+/// as new enum variants.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChannelConfig {
+    /// Telegram Bot API channel.
+    Telegram(TelegramConfig),
+}
+
+/// Configuration for the Telegram messaging channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TelegramConfig {
+    /// Bot token from @BotFather (or `$AEGIS_TELEGRAM_BOT_TOKEN` env var).
+    pub bot_token: String,
+    /// Chat ID to send messages to and accept commands from.
+    pub chat_id: i64,
+    /// Long-poll timeout for `getUpdates` in seconds.
+    #[serde(default = "default_poll_timeout_secs")]
+    pub poll_timeout_secs: u64,
+    /// Whether to accept commands from group chats (not just the configured chat_id).
+    #[serde(default)]
+    pub allow_group_commands: bool,
+}
+
 /// Top-level configuration for an Aegis agent instance.
 ///
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,
@@ -382,6 +415,9 @@ pub struct AegisConfig {
     /// Pilot PTY supervisor configuration (used by `aegis pilot`).
     #[serde(default)]
     pub pilot: Option<PilotConfig>,
+    /// Bidirectional messaging channel (Telegram, Slack, etc.).
+    #[serde(default)]
+    pub channel: Option<ChannelConfig>,
 }
 
 /// Validate that a config name is safe for use as a directory component.
@@ -461,6 +497,7 @@ impl AegisConfig {
             observer: ObserverConfig::default(),
             alerts: Vec::new(),
             pilot: None,
+            channel: None,
         }
     }
 }
@@ -496,6 +533,7 @@ mod tests {
                 cooldown_secs: 30,
             }],
             pilot: None,
+            channel: None,
         };
 
         let toml_str = config.to_toml().unwrap();
