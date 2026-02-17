@@ -83,7 +83,8 @@ pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
     // Fast path: --last with no other filters
     if let Some(n) = opts.last {
         if !opts.has_filters() {
-            let entries = store.query_last(n).context("failed to query audit entries")?;
+            let entries = store.query_last(n)
+                .with_context(|| format!("failed to query last {n} audit entries"))?;
             if entries.is_empty() {
                 println!("No audit entries found.");
                 return Ok(());
