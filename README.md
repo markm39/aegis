@@ -23,6 +23,7 @@ Aegis adds the missing layers:
 | Session tracking | No | Yes (per-invocation sessions) |
 | SIEM export | No | Yes (JSON, JSONL, CSV, CEF) |
 | Compliance reporting | No | Yes |
+| Remote control (Telegram) | No | Yes |
 | Multi-agent fleet management | No | Yes (daemon) |
 
 ## Install
@@ -72,6 +73,20 @@ aegis status claude
 ```
 
 Three commands. Full audit trail.
+
+## The Hub
+
+Running `aegis` opens the fleet dashboard -- a full-screen TUI where you manage all your agents:
+
+- See every agent's status, output, and pending permission requests
+- Approve or deny permission prompts with a single keystroke
+- Send input to agents, nudge stalled ones, start/stop/restart
+- Type `:` for a command palette with tab completion
+- Pop agent output into separate terminal windows
+
+When you're away from the terminal, configure [Telegram notifications](#telegram-remote-control) to approve requests from your phone.
+
+The hub is the primary interface. Individual subcommands (`aegis pilot`, `aegis wrap`, `aegis daemon`) work standalone for scripting and automation.
 
 ## Pilot: Autonomous Agent Supervision
 
@@ -193,6 +208,33 @@ aegis alerts history --last 10
 
 Alert rules are defined in the config TOML and can target Slack, PagerDuty, or arbitrary HTTP endpoints.
 
+## Telegram Remote Control
+
+Connect Aegis to a Telegram bot for bidirectional remote control:
+
+```toml
+# In aegis.toml or daemon.toml
+[channel]
+type = "telegram"
+bot_token = "123456:ABC..."
+chat_id = 987654321
+```
+
+Aegis sends you notifications when agents need approval, stall, or exit. Pending permission requests include inline [Approve] / [Deny] buttons for one-tap responses.
+
+Available Telegram commands:
+
+| Command | Action |
+|---|---|
+| `/status` | Check agent status |
+| `/approve <id>` | Approve a pending request |
+| `/deny <id>` | Deny a pending request |
+| `/output [N]` | View recent agent output (default 20 lines) |
+| `/input <text>` | Send text to agent stdin |
+| `/nudge` | Nudge a stalled agent |
+| `/stop` | Stop the agent |
+| `/help` | List all commands |
+
 ## Background Watching
 
 `aegis watch` runs a persistent filesystem observer in the background:
@@ -313,6 +355,14 @@ Six layers:
 | `aegis daemon stop` | Stop the daemon |
 | `aegis daemon status` | Show daemon health |
 | `aegis daemon agents` | List agent slots and status |
+| `aegis daemon output <name> [--lines N]` | View agent output |
+| `aegis daemon send <name> <text>` | Send input to agent |
+| `aegis daemon approve <name> <request-id>` | Approve pending prompt |
+| `aegis daemon deny <name> <request-id>` | Deny pending prompt |
+| `aegis daemon nudge <name> [message]` | Nudge stalled agent |
+| `aegis daemon pending <name>` | List pending prompts |
+| `aegis daemon follow <name>` | Stream agent output in real time |
+| `aegis daemon stop-agent <name>` | Stop a specific agent |
 
 ## Cedar Policy Reference
 
@@ -390,6 +440,12 @@ api_key = ""               # Required for HTTP access
 name = "deny-alert"
 event = "deny"
 webhook_url = "https://hooks.slack.com/services/..."
+
+# Telegram remote control (optional)
+[channel]
+type = "telegram"
+bot_token = "123456:ABC-DEF..."
+chat_id = 987654321
 ```
 
 ## Crate Structure

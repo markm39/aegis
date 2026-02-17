@@ -8,7 +8,39 @@
 - Test all: `cargo test --workspace`
 - The workspace has many crates under `crates/`. Always run clippy and tests for affected crates after changes.
 
+## Product Vision: The Aegis Hub
+
+The north star: running `aegis` opens a unified interactive hub -- like running `claude`. Everything is accessible from one place.
+
+- **Fleet dashboard:** See all agents, their status, pending permission prompts, and attention indicators. Approve/deny prompts, send input, nudge stalled agents -- all with single keystrokes.
+- **Command bar:** Type `:` for a vim-style command palette with tab completion. `:approve claude-1`, `:stop agent-2`, `:follow claude-1`, `:help`.
+- **Pop-out terminals:** From the hub, `:pop` any agent's output into a separate terminal window (tmux split, iTerm tab, Terminal.app window). Pop out the audit monitor too.
+- **Remote control:** When away from the terminal, Telegram notifies you of pending approvals with inline [Approve]/[Deny] buttons. Send `/status`, `/approve`, `/stop` commands from your phone.
+- **Single binary:** Every feature is accessible from `aegis`. Standalone subcommands (`aegis pilot`, `aegis wrap`, `aegis daemon`) still work for scripting, but the hub is the primary interface.
+
+When making design decisions, optimize for the hub experience first. New features should be accessible from the TUI and command bar, not just as CLI subcommands.
+
 ## Architecture
+
+Crate dependency flow:
+
+```
+aegis-types (foundation: config, errors, shared types)
+  -> aegis-policy (Cedar policy engine)
+  -> aegis-ledger (audit store, sessions, SIEM export)
+  -> aegis-sandbox (Seatbelt/process sandbox)
+  -> aegis-observer (FSEvents filesystem monitoring)
+  -> aegis-proxy (action logging, policy evaluation bridge)
+  -> aegis-pilot (PTY supervision, prompt detection, stall detection)
+  -> aegis-control (command protocol, Unix socket + HTTP servers)
+  -> aegis-alert (webhook alert dispatching)
+  -> aegis-channel (bidirectional Telegram messaging)
+  -> aegis-daemon (fleet orchestration, agent lifecycle, restart policies)
+  -> aegis-monitor (audit TUI dashboard)
+  -> aegis-cli (binary: hub TUI, fleet management, all commands, wizard)
+```
+
+Crate summary:
 
 - `aegis-types`: Shared types and config (`AegisConfig`, `IsolationConfig`, `ObserverConfig`, etc.)
 - `aegis-policy`: Cedar policy engine
@@ -16,10 +48,23 @@
 - `aegis-sandbox`: Seatbelt/process sandbox backends
 - `aegis-observer`: Filesystem observation (FSEvents)
 - `aegis-proxy`: Action logging and policy evaluation bridge
+- `aegis-pilot`: PTY-based agent supervision with prompt detection and stall nudging
+- `aegis-control`: Control plane: Unix socket + HTTP servers, command protocol
 - `aegis-alert`: Webhook alerting on audit events
-- `aegis-monitor`: TUI dashboard (ratatui)
-- `aegis-sidecar`: PTY-based agent wrapping with prompt detection
-- `aegis-cli`: Main CLI binary with all commands
+- `aegis-channel`: Bidirectional messaging (Telegram bot with inline keyboards)
+- `aegis-daemon`: Multi-agent fleet orchestration with agent drivers and lifecycle
+- `aegis-monitor`: Audit TUI dashboard (ratatui)
+- `aegis-cli`: Binary entry point: hub TUI, fleet management, all CLI commands, wizard
+
+## Current Work in Progress
+
+Multiple agents work on this codebase. Here is what is being built, to avoid duplication:
+
+- **Daemon fleet (aegis-daemon):** Multi-agent orchestration with agent drivers (ClaudeCode, Generic), lifecycle management, fleet state persistence, restart policies. Control protocol uses `DaemonCommand`/`DaemonResponse` over Unix socket. Fleet TUI connects to daemon for real-time status. The `handle_command` match arms for ApproveRequest, DenyRequest, NudgeAgent, and ListPending still need to be wired.
+- **Interactive TUI (aegis-cli/fleet_tui):** Input mode (`i`), pending prompts panel, approve/deny/nudge keys, attention indicators. Command bar (`:` mode) with tab completion for commands and agent names. Not yet implemented.
+- **Terminal spawning:** `:pop` and `:follow` commands to open agent output in separate terminal windows. Detection of tmux/iTerm2/Terminal.app. Not yet implemented.
+- **Telegram channel (aegis-channel):** Bidirectional Telegram bot. Outbound: pilot events formatted as MarkdownV2 with inline keyboard buttons. Inbound: `/status`, `/approve`, `/deny` commands parsed and forwarded to supervisor. DONE -- crate implemented and tested (28 tests).
+- **Packaging:** install.sh, Makefile, CI/CD (GitHub Actions), Homebrew formula, license files. Partially done.
 
 ## Multi-Agent Integration Rules
 
