@@ -337,4 +337,58 @@ mod tests {
         assert_eq!(stats.deny_rate, 0.0);
         assert!(stats.integrity_valid);
     }
+
+    #[test]
+    fn compute_stats_time_range() {
+        let (_tmp, mut store) = test_db();
+        populate(&mut store);
+
+        let stats = store
+            .compute_stats(&AuditFilter::default(), "test")
+            .unwrap();
+
+        assert!(stats.earliest_entry.is_some());
+        assert!(stats.latest_entry.is_some());
+    }
+
+    #[test]
+    fn compute_stats_top_resources() {
+        let (_tmp, mut store) = test_db();
+        populate(&mut store);
+
+        let stats = store
+            .compute_stats(&AuditFilter::default(), "test")
+            .unwrap();
+
+        assert!(!stats.top_resources.is_empty());
+        let total: usize = stats.top_resources.iter().map(|(_, c)| c).sum();
+        assert_eq!(total, 5);
+    }
+
+    #[test]
+    fn extract_resource_display_file_read() {
+        let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
+        let display = extract_resource_display(json);
+        assert_eq!(display, "FileRead: /tmp/test.txt");
+    }
+
+    #[test]
+    fn extract_resource_display_net_connect() {
+        let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
+        let display = extract_resource_display(json);
+        assert_eq!(display, "NetConnect: example.com");
+    }
+
+    #[test]
+    fn extract_resource_display_invalid_json() {
+        let display = extract_resource_display("not json");
+        assert_eq!(display, "not json");
+    }
+
+    #[test]
+    fn extract_resource_display_variant_only() {
+        let json = r#"{"CustomAction":{}}"#;
+        let display = extract_resource_display(json);
+        assert_eq!(display, "CustomAction");
+    }
 }

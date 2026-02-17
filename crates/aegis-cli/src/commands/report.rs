@@ -106,3 +106,39 @@ fn bar_chart(count: usize, total: usize, width: usize) -> String {
     let filled = filled.min(width);
     format!("{}{}", "#".repeat(filled), ".".repeat(width - filled))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_chart_full() {
+        let bar = bar_chart(10, 10, 10);
+        assert_eq!(bar, "##########");
+    }
+
+    #[test]
+    fn bar_chart_half() {
+        let bar = bar_chart(5, 10, 10);
+        assert_eq!(bar, "#####.....");
+    }
+
+    #[test]
+    fn bar_chart_empty() {
+        let bar = bar_chart(0, 10, 10);
+        assert_eq!(bar, "..........");
+    }
+
+    #[test]
+    fn bar_chart_zero_total() {
+        let bar = bar_chart(0, 0, 10);
+        assert_eq!(bar, "");
+    }
+
+    #[test]
+    fn bar_chart_count_exceeds_total() {
+        // Should not overflow -- clamp to width
+        let bar = bar_chart(20, 10, 10);
+        assert_eq!(bar, "##########");
+    }
+}

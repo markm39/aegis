@@ -574,6 +574,26 @@ mod tests {
     fn parse_duration_no_number() {
         assert!(parse_duration("d").is_err());
     }
+
+    #[test]
+    fn csv_escape_no_special_chars() {
+        assert_eq!(super::csv_escape("hello"), "hello");
+    }
+
+    #[test]
+    fn csv_escape_with_comma() {
+        assert_eq!(super::csv_escape("hello,world"), "\"hello,world\"");
+    }
+
+    #[test]
+    fn csv_escape_with_quotes() {
+        assert_eq!(super::csv_escape(r#"say "hi""#), r#""say ""hi""""#);
+    }
+
+    #[test]
+    fn cef_escape_pipes_and_backslashes() {
+        assert_eq!(super::cef_escape("a|b\\c"), "a\\|b\\\\c");
+    }
 }
 
 /// Escape a string for CSV output by quoting if it contains commas, quotes, or newlines.
