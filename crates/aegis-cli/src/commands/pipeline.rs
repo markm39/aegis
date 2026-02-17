@@ -1,14 +1,15 @@
-/// Shared execution pipeline for `aegis run` and `aegis wrap`.
-///
-/// Both commands follow the same lifecycle:
-///   1. Initialize policy engine and audit store
-///   2. Begin a session, record a policy snapshot
-///   3. Start the filesystem observer
-///   4. Log process spawn, execute the command, log process exit
-///   5. Stop the observer, end the session
-///   6. Print a summary
-///
-/// This module extracts that shared pipeline to avoid duplication.
+//! Shared execution pipeline for `aegis run` and `aegis wrap`.
+//!
+//! Both commands follow the same lifecycle:
+//!   1. Initialize policy engine and audit store
+//!   2. Begin a session, record a policy snapshot
+//!   3. Start the filesystem observer
+//!   4. Log process spawn, execute the command, log process exit
+//!   5. Stop the observer, end the session
+//!   6. Print a summary
+//!
+//! This module extracts that shared pipeline to avoid duplication.
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

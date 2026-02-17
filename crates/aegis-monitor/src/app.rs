@@ -1,8 +1,9 @@
-/// Application state machine for the monitor TUI.
-///
-/// Manages the current view mode, cached audit entries, aggregate
-/// statistics, and keyboard navigation state. Data is refreshed from
-/// the SQLite ledger on every tick via a read-only connection.
+//! Application state machine for the monitor TUI.
+//!
+//! Manages the current view mode, cached audit entries, aggregate
+//! statistics, and keyboard navigation state. Data is refreshed from
+//! the SQLite ledger on every tick via a read-only connection.
+
 use std::path::PathBuf;
 
 use chrono::DateTime;

@@ -1,7 +1,8 @@
-/// Terminal event handling for the monitor TUI.
-///
-/// Wraps crossterm's event polling to produce a simple stream of
-/// `AppEvent` values (tick, key press, or quit).
+//! Terminal event handling for the monitor TUI.
+//!
+//! Wraps crossterm's event polling to produce a simple stream of
+//! `AppEvent` values (tick, key press, or quit).
+
 use std::time::Duration;
 
 use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent};

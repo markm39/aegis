@@ -1,8 +1,9 @@
-/// TUI rendering for the monitor dashboard.
-///
-/// Draws the audit feed, statistics panel, and help/info panel using
-/// ratatui widgets. The layout splits the terminal vertically (70/30)
-/// with the bottom half split horizontally for stats and keybindings.
+//! TUI rendering for the monitor dashboard.
+//!
+//! Draws the audit feed, statistics panel, and help/info panel using
+//! ratatui widgets. The layout splits the terminal vertically (70/30)
+//! with the bottom half split horizontally for stats and keybindings.
+
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

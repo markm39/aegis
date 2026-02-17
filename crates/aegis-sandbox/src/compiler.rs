@@ -1,9 +1,10 @@
-/// Cedar-to-SBPL compiler: translates Cedar policy decisions into macOS Seatbelt profiles.
-///
-/// Instead of intercepting file operations at runtime (via FUSE), this module
-/// probes the Cedar policy engine to determine which action types are permitted,
-/// then generates a tailored Seatbelt SBPL profile that enforces those
-/// permissions at the kernel level.
+//! Cedar-to-SBPL compiler: translates Cedar policy decisions into macOS Seatbelt profiles.
+//!
+//! Instead of intercepting file operations at runtime (via FUSE), this module
+//! probes the Cedar policy engine to determine which action types are permitted,
+//! then generates a tailored Seatbelt SBPL profile that enforces those
+//! permissions at the kernel level.
+
 use aegis_policy::PolicyEngine;
 use aegis_types::AegisConfig;
 

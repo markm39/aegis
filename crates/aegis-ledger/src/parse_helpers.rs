@@ -1,7 +1,8 @@
-/// Helpers for safely parsing UUID and DateTime values from SQLite rows.
-///
-/// These convert parse failures into `rusqlite::Error` instead of panicking,
-/// which is critical because database rows may contain corrupt or legacy data.
+//! Helpers for safely parsing UUID and DateTime values from SQLite rows.
+//!
+//! These convert parse failures into `rusqlite::Error` instead of panicking,
+//! which is critical because database rows may contain corrupt or legacy data.
+
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
