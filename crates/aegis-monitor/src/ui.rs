@@ -539,7 +539,7 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(7),
+            Constraint::Length(9),
             Constraint::Min(0),
             Constraint::Length(3),
         ])
@@ -595,9 +595,23 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
                 ),
             ]),
             Line::from(vec![
+                Span::styled("Config:   ", Style::default().fg(Color::White)),
+                Span::styled(
+                    &session.config_name,
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
+            Line::from(vec![
                 Span::styled("Started:  ", Style::default().fg(Color::White)),
                 Span::styled(
                     &session.start_time,
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Ended:    ", Style::default().fg(Color::White)),
+                Span::styled(
+                    session.end_time.as_deref().unwrap_or("(running)"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]),
