@@ -757,4 +757,81 @@ mod tests {
         let d = parse_duration("1m").unwrap();
         assert_eq!(d.num_minutes(), 1);
     }
+
+    fn empty_query_opts() -> QueryOptions {
+        QueryOptions {
+            last: None,
+            from: None,
+            to: None,
+            action: None,
+            decision: None,
+            principal: None,
+            search: None,
+            page: 1,
+            page_size: 50,
+        }
+    }
+
+    #[test]
+    fn has_filters_false_when_no_filters() {
+        let opts = empty_query_opts();
+        assert!(!opts.has_filters());
+    }
+
+    #[test]
+    fn has_filters_true_with_principal() {
+        let mut opts = empty_query_opts();
+        opts.principal = Some("alice".into());
+        assert!(opts.has_filters());
+    }
+
+    #[test]
+    fn has_filters_true_with_from() {
+        let mut opts = empty_query_opts();
+        opts.from = Some("2026-01-01T00:00:00Z".into());
+        assert!(opts.has_filters());
+    }
+
+    #[test]
+    fn into_filter_parses_timestamps() {
+        let mut opts = empty_query_opts();
+        opts.from = Some("2026-01-01T00:00:00Z".into());
+        opts.to = Some("2026-01-02T00:00:00Z".into());
+        let filter = opts.into_filter().unwrap();
+        assert!(filter.from.is_some());
+        assert!(filter.to.is_some());
+    }
+
+    #[test]
+    fn into_filter_rejects_invalid_from_timestamp() {
+        let mut opts = empty_query_opts();
+        opts.from = Some("not-a-timestamp".into());
+        assert!(opts.into_filter().is_err());
+    }
+
+    #[test]
+    fn into_filter_rejects_invalid_to_timestamp() {
+        let mut opts = empty_query_opts();
+        opts.to = Some("also-not-valid".into());
+        assert!(opts.into_filter().is_err());
+    }
+
+    #[test]
+    fn into_filter_uses_last_as_limit() {
+        let mut opts = empty_query_opts();
+        opts.last = Some(10);
+        let filter = opts.into_filter().unwrap();
+        assert_eq!(filter.limit, Some(10));
+        assert!(filter.offset.is_none());
+    }
+
+    #[test]
+    fn into_filter_calculates_pagination_offset() {
+        let mut opts = empty_query_opts();
+        opts.page = 3;
+        opts.page_size = 20;
+        let filter = opts.into_filter().unwrap();
+        assert_eq!(filter.limit, Some(20));
+        assert_eq!(filter.offset, Some(40)); // (3-1) * 20
+    }
 }
