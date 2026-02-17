@@ -353,3 +353,95 @@ fn smoke_test_wrap_then_query() {
         .assert()
         .success();
 }
+
+#[test]
+fn smoke_test_status_nonexistent_config() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    // Status on a config that doesn't exist should show MISSING
+    aegis_cmd(home)
+        .args(["status", "nonexistent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MISSING"));
+}
+
+#[test]
+fn smoke_test_policy_validate_invalid_file() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    // Write an invalid Cedar policy
+    let bad_policy = tmpdir.path().join("bad.cedar");
+    fs::write(&bad_policy, "this is not valid cedar syntax !!!").expect("write bad policy");
+
+    aegis_cmd(home)
+        .args([
+            "policy",
+            "validate",
+            "--path",
+            &bad_policy.display().to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("INVALID"));
+}
+
+#[test]
+fn smoke_test_use_nonexistent_config() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    // Using a nonexistent config should fail
+    aegis_cmd(home)
+        .args(["use", "does-not-exist"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn smoke_test_init_duplicate_config() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    // First init should succeed
+    aegis_cmd(home)
+        .args(["init", "dupe-test", "--policy", "permit-all"])
+        .assert()
+        .success();
+
+    // Second init with the same name should fail
+    aegis_cmd(home)
+        .args(["init", "dupe-test", "--policy", "permit-all"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn smoke_test_audit_query_no_entries() {
+    let tmpdir = tempfile::tempdir().expect("temp dir");
+    let home = tmpdir.path();
+
+    aegis_cmd(home).args(["setup"]).assert().success();
+
+    aegis_cmd(home)
+        .args(["init", "empty-test", "--policy", "permit-all"])
+        .assert()
+        .success();
+
+    // Query on a config with no entries should show "No audit entries"
+    aegis_cmd(home)
+        .args(["audit", "query", "empty-test", "--last", "10"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No audit entries"));
+}
