@@ -341,12 +341,8 @@ fn draw_home_view(frame: &mut Frame, app: &App) {
                 .unwrap_or((0, None));
 
             let last_str = last.unwrap_or_else(|| "(never)".to_string());
-            // Truncate the timestamp to just the time portion if it's long
-            let last_display = if last_str.len() > 11 {
-                &last_str[11..19.min(last_str.len())]
-            } else {
-                &last_str
-            };
+            // Extract the time portion (HH:MM:SS) from an RFC 3339 timestamp
+            let last_display = last_str.get(11..19).unwrap_or(&last_str);
 
             let line = Line::from(vec![
                 Span::styled(
@@ -461,12 +457,8 @@ fn draw_session_list_view(frame: &mut Frame, app: &App) {
                 session.session_id.clone()
             };
 
-            // Format the start time -- just show the time portion if available
-            let time_display = if session.start_time.len() > 11 {
-                &session.start_time[11..19.min(session.start_time.len())]
-            } else {
-                &session.start_time
-            };
+            // Extract the time portion (HH:MM:SS) from an RFC 3339 timestamp
+            let time_display = session.start_time.get(11..19).unwrap_or(&session.start_time);
 
             let deny_rate = if session.total_actions > 0 {
                 session.denied_actions as f64 / session.total_actions as f64 * 100.0

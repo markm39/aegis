@@ -171,6 +171,7 @@ pub struct AegisConfig {
 ///
 /// Rejects empty names, path separators, `..`, and control characters to
 /// prevent path traversal when the name is used in `~/.aegis/<name>/`.
+#[must_use = "validation result must be checked to prevent path traversal"]
 pub fn validate_config_name(name: &str) -> Result<(), AegisError> {
     if name.is_empty() {
         return Err(AegisError::ConfigError("config name cannot be empty".into()));

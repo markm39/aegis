@@ -169,7 +169,9 @@ async fn handle_connection(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "failed to check policy or log audit");
-            let _ = stream.shutdown().await;
+            if let Err(e) = stream.shutdown().await {
+                tracing::debug!(error = %e, "stream shutdown after policy error");
+            }
             return;
         }
     };

@@ -17,33 +17,7 @@ pub use app::DashboardConfig;
 /// event loop (refreshing from the ledger on every tick), and restores
 /// the terminal on exit.
 pub fn run_monitor(ledger_path: std::path::PathBuf) -> anyhow::Result<()> {
-    crossterm::terminal::enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
-    let backend = ratatui::backend::CrosstermBackend::new(stdout);
-    let mut terminal = ratatui::Terminal::new(backend)?;
-
-    let mut app = App::new(ledger_path);
-    let events = event::EventHandler::new(500);
-
-    while app.running {
-        app.refresh()?;
-        terminal.draw(|f| ui::draw(f, &app))?;
-
-        match events.next()? {
-            event::AppEvent::Tick => {}
-            event::AppEvent::Key(key) => app.handle_key(key),
-        }
-    }
-
-    crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(
-        terminal.backend_mut(),
-        crossterm::terminal::LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
-
-    Ok(())
+    run_app(App::new(ledger_path))
 }
 
 /// Run the multi-config dashboard TUI.
@@ -51,13 +25,17 @@ pub fn run_monitor(ledger_path: std::path::PathBuf) -> anyhow::Result<()> {
 /// Starts in Home mode showing all configurations. The user can select a
 /// config to drill into its audit feed, then Esc back to Home.
 pub fn run_dashboard(configs: Vec<DashboardConfig>) -> anyhow::Result<()> {
+    run_app(App::new_dashboard(configs))
+}
+
+/// Shared TUI event loop: initialize terminal, run until quit, restore terminal.
+fn run_app(mut app: App) -> anyhow::Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let mut app = App::new_dashboard(configs);
     let events = event::EventHandler::new(500);
 
     while app.running {

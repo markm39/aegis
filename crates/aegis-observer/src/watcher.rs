@@ -53,8 +53,16 @@ impl FsWatcher {
         // Create the notify watcher, forwarding events to our channel
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    let _ = event_tx.send(event);
+                match res {
+                    Ok(event) => {
+                        if event_tx.send(event).is_err() {
+                            // Receiver dropped; watcher is shutting down
+                            tracing::trace!("fsevents channel closed, event dropped");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "filesystem watcher error");
+                    }
                 }
             },
             Config::default(),
