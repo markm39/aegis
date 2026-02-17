@@ -47,6 +47,28 @@ pub fn run(config_name: &str, command: &str, args: &[String]) -> Result<()> {
         .context("failed to begin audit session")?;
     info!(%session_id, "audit session started");
 
+    // Record a policy snapshot (no-op if hash unchanged)
+    if let Some(policy_dir) = config.policy_paths.first() {
+        match aegis_ledger::policy_snapshot::read_policy_files(policy_dir) {
+            Ok(policy_files) => {
+                match store.record_policy_snapshot(&config.name, &policy_files, Some(&session_id)) {
+                    Ok(Some(snap)) => {
+                        info!(hash = %snap.policy_hash, "new policy snapshot recorded");
+                    }
+                    Ok(None) => {
+                        info!("policy unchanged since last snapshot");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to record policy snapshot");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to read policy files for snapshot");
+            }
+        }
+    }
+
     // Create sandbox backend with compiled Cedar-to-SBPL profile
     let backend: Box<dyn SandboxBackend> = create_backend(&config.isolation, &config, &policy_engine);
 

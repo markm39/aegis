@@ -208,6 +208,49 @@ pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
     Ok(())
 }
 
+/// Run `aegis audit policy-history --config NAME --last N`.
+///
+/// Shows the history of policy changes for a configuration.
+pub fn policy_history(config_name: &str, last: usize) -> Result<()> {
+    let config = load_config(config_name)?;
+    let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    let snapshots = store
+        .list_policy_snapshots(config_name, last)
+        .context("failed to list policy snapshots")?;
+
+    if snapshots.is_empty() {
+        println!("No policy snapshots found.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<36}  {:<20}  {:<8}  HASH (first 16)",
+        "SNAPSHOT ID", "TIMESTAMP", "FILES"
+    );
+    let separator = "-".repeat(90);
+    println!("{separator}");
+
+    for s in &snapshots {
+        let hash_short = if s.policy_hash.len() >= 16 {
+            &s.policy_hash[..16]
+        } else {
+            &s.policy_hash
+        };
+        let timestamp = s.timestamp.format("%Y-%m-%d %H:%M:%S");
+
+        println!(
+            "{:<36}  {:<20}  {:<8}  {}",
+            s.snapshot_id,
+            timestamp,
+            s.policy_files.len(),
+            hash_short,
+        );
+    }
+
+    Ok(())
+}
+
 /// Run `aegis audit export --config NAME --format json|jsonl|csv|cef [--follow]`.
 ///
 /// Exports audit entries in the specified format. With `--follow`, polls for

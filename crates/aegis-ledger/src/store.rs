@@ -65,7 +65,19 @@ impl AuditStore {
                 total_actions INTEGER DEFAULT 0,
                 denied_actions INTEGER DEFAULT 0
             );
-            CREATE INDEX IF NOT EXISTS idx_session_start ON sessions(start_time);",
+            CREATE INDEX IF NOT EXISTS idx_session_start ON sessions(start_time);
+
+            CREATE TABLE IF NOT EXISTS policy_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id TEXT NOT NULL UNIQUE,
+                timestamp TEXT NOT NULL,
+                policy_hash TEXT NOT NULL,
+                policy_files TEXT NOT NULL,
+                policy_content TEXT NOT NULL,
+                session_id TEXT,
+                config_name TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_policy_config ON policy_snapshots(config_name);",
         )
         .map_err(|e| AegisError::LedgerError(format!("failed to create schema: {e}")))?;
 

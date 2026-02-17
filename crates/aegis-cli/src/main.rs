@@ -165,6 +165,17 @@ enum AuditCommands {
         id: String,
     },
 
+    /// Show policy change history
+    PolicyHistory {
+        /// Name of the aegis configuration
+        #[arg(long)]
+        config: String,
+
+        /// Number of snapshots to show (default 10)
+        #[arg(long, default_value = "10")]
+        last: usize,
+    },
+
     /// Export audit entries in a structured format
     Export {
         /// Name of the aegis configuration
@@ -231,6 +242,9 @@ fn main() -> anyhow::Result<()> {
                 commands::audit::list_sessions(&config, last)
             }
             AuditCommands::Session { config, id } => commands::audit::show_session(&config, &id),
+            AuditCommands::PolicyHistory { config, last } => {
+                commands::audit::policy_history(&config, last)
+            }
             AuditCommands::Export {
                 config,
                 format,
