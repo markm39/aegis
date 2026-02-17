@@ -171,9 +171,13 @@ enum AuditCommands {
         #[arg(long)]
         config: String,
 
-        /// Output format (json or csv)
+        /// Output format (json, jsonl, csv, cef)
         #[arg(long, default_value = "json")]
         format: String,
+
+        /// Continuously follow new entries (like tail -f)
+        #[arg(long)]
+        follow: bool,
     },
 }
 
@@ -227,7 +231,11 @@ fn main() -> anyhow::Result<()> {
                 commands::audit::list_sessions(&config, last)
             }
             AuditCommands::Session { config, id } => commands::audit::show_session(&config, &id),
-            AuditCommands::Export { config, format } => commands::audit::export(&config, &format),
+            AuditCommands::Export {
+                config,
+                format,
+                follow,
+            } => commands::audit::export(&config, &format, follow),
         },
         Commands::Status { config } => {
             commands::status::run(&config)
@@ -422,10 +430,37 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command {
             Commands::Audit {
-                action: AuditCommands::Export { config, format },
+                action: AuditCommands::Export { config, format, follow },
             } => {
                 assert_eq!(config, "myagent");
                 assert_eq!(format, "csv");
+                assert!(!follow);
+            }
+            _ => panic!("expected Audit Export command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_export_follow() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "export",
+            "--config",
+            "myagent",
+            "--format",
+            "jsonl",
+            "--follow",
+        ]);
+        assert!(cli.is_ok(), "should parse audit export with follow: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action: AuditCommands::Export { config, format, follow },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(format, "jsonl");
+                assert!(follow);
             }
             _ => panic!("expected Audit Export command"),
         }

@@ -208,12 +208,22 @@ pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run `aegis audit export --config NAME --format json|csv`.
+/// Run `aegis audit export --config NAME --format json|jsonl|csv|cef [--follow]`.
 ///
-/// Exports all audit entries in the specified format.
-pub fn export(config_name: &str, format: &str) -> Result<()> {
+/// Exports audit entries in the specified format. With `--follow`, polls for
+/// new entries every second (like `tail -f`).
+pub fn export(config_name: &str, format: &str, follow: bool) -> Result<()> {
+    // Validate format up front
+    if !matches!(format, "json" | "jsonl" | "csv" | "cef") {
+        bail!("unsupported format '{format}'; valid options: json, jsonl, csv, cef");
+    }
+
     let config = load_config(config_name)?;
     let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+
+    if follow {
+        return export_follow(&store, format);
+    }
 
     let entries = store
         .query_last(10_000)
@@ -221,11 +231,44 @@ pub fn export(config_name: &str, format: &str) -> Result<()> {
 
     match format {
         "json" => export_json(&entries)?,
+        "jsonl" => export_jsonl(&entries),
         "csv" => export_csv(&entries),
-        _ => bail!("unsupported format '{format}'; valid options: json, csv"),
+        "cef" => export_cef(&entries),
+        _ => unreachable!(),
     }
 
     Ok(())
+}
+
+/// Follow mode: poll for new entries and emit them in the given format.
+fn export_follow(store: &AuditStore, format: &str) -> Result<()> {
+    // Start from the latest entry
+    let initial = store.query_after_id(0).context("failed to query entries")?;
+    let mut last_id: i64 = initial.last().map(|(id, _)| *id).unwrap_or(0);
+
+    // Print header for CSV
+    if format == "csv" {
+        println!("entry_id,timestamp,action_id,action_kind,principal,decision,reason,policy_id,prev_hash,entry_hash");
+    }
+
+    loop {
+        let new_entries = store
+            .query_after_id(last_id)
+            .context("failed to poll for new entries")?;
+
+        for (row_id, entry) in &new_entries {
+            match format {
+                "jsonl" => print_jsonl_entry(entry),
+                "csv" => print_csv_entry(entry),
+                "cef" => print_cef_entry(entry),
+                "json" => print_jsonl_entry(entry), // in follow mode, json acts as jsonl
+                _ => unreachable!(),
+            }
+            last_id = *row_id;
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 /// Print entries in a formatted table to stdout.
@@ -297,6 +340,90 @@ fn export_csv(entries: &[AuditEntry]) {
             e.entry_hash,
         );
     }
+}
+
+/// Export entries as JSONL (JSON Lines) -- one JSON object per line.
+///
+/// Standard format for Splunk, Datadog, Elastic, and other log aggregators.
+fn export_jsonl(entries: &[AuditEntry]) {
+    for e in entries {
+        print_jsonl_entry(e);
+    }
+}
+
+/// Print a single entry as a JSONL line.
+fn print_jsonl_entry(e: &AuditEntry) {
+    let json = serde_json::json!({
+        "entry_id": e.entry_id.to_string(),
+        "timestamp": e.timestamp.to_rfc3339(),
+        "action_id": e.action_id.to_string(),
+        "action_kind": e.action_kind,
+        "principal": e.principal,
+        "decision": e.decision,
+        "reason": e.reason,
+        "policy_id": e.policy_id,
+        "prev_hash": e.prev_hash,
+        "entry_hash": e.entry_hash,
+    });
+    // Compact single-line format
+    println!("{}", serde_json::to_string(&json).unwrap_or_default());
+}
+
+/// Print a single entry as a CSV row (no header).
+fn print_csv_entry(e: &AuditEntry) {
+    println!(
+        "{},{},{},{},{},{},{},{},{},{}",
+        e.entry_id,
+        e.timestamp.to_rfc3339(),
+        e.action_id,
+        csv_escape(&e.action_kind),
+        csv_escape(&e.principal),
+        e.decision,
+        csv_escape(&e.reason),
+        e.policy_id.as_deref().unwrap_or(""),
+        e.prev_hash,
+        e.entry_hash,
+    );
+}
+
+/// Export entries in CEF (Common Event Format).
+///
+/// CEF is a standard log format used by ArcSight, QRadar, and other SIEM
+/// platforms. Format: `CEF:0|Vendor|Product|Version|SignatureID|Name|Severity|Extensions`
+fn export_cef(entries: &[AuditEntry]) {
+    for e in entries {
+        print_cef_entry(e);
+    }
+}
+
+/// Print a single entry in CEF format.
+fn print_cef_entry(e: &AuditEntry) {
+    let severity = if e.decision == "Deny" { 7 } else { 3 };
+    let signature_id = &e.action_kind;
+    let name = format!("{} {}", e.decision, e.action_kind);
+
+    // CEF extensions use key=value pairs separated by spaces
+    println!(
+        "CEF:0|Aegis|Runtime|0.1.0|{sig}|{name}|{sev}|rt={ts} src={principal} act={action} reason={reason} entryId={eid} policyId={pid}",
+        sig = cef_escape(signature_id),
+        name = cef_escape(&name),
+        sev = severity,
+        ts = e.timestamp.to_rfc3339(),
+        principal = cef_escape(&e.principal),
+        action = cef_escape(&e.action_kind),
+        reason = cef_escape(&e.reason),
+        eid = e.entry_id,
+        pid = e.policy_id.as_deref().unwrap_or("none"),
+    );
+}
+
+/// Escape a string for CEF format (pipes and backslashes in header,
+/// equals and newlines in extensions).
+fn cef_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('=', "\\=")
+        .replace('\n', "\\n")
 }
 
 /// Escape a string for CSV output by quoting if it contains commas, quotes, or newlines.
