@@ -48,7 +48,9 @@ impl AuditStore {
             );
             CREATE INDEX IF NOT EXISTS idx_timestamp ON audit_log(timestamp);
             CREATE INDEX IF NOT EXISTS idx_principal ON audit_log(principal);
-            CREATE INDEX IF NOT EXISTS idx_decision ON audit_log(decision);",
+            CREATE INDEX IF NOT EXISTS idx_decision ON audit_log(decision);
+            CREATE INDEX IF NOT EXISTS idx_action_kind ON audit_log(action_kind);
+            CREATE INDEX IF NOT EXISTS idx_policy_id ON audit_log(policy_id);",
         )
         .map_err(|e| AegisError::LedgerError(format!("failed to create schema: {e}")))?;
 

@@ -6,6 +6,7 @@ use uuid::Uuid;
 use aegis_types::AegisError;
 
 use crate::entry::AuditEntry;
+use crate::filter::AuditFilter;
 use crate::store::AuditStore;
 
 impl AuditStore {
@@ -76,6 +77,197 @@ impl AuditStore {
             .map(|c| c as usize)
             .map_err(|e| AegisError::LedgerError(format!("count failed: {e}")))
     }
+
+    /// Query entries matching the given filter, ordered by id DESC.
+    ///
+    /// Returns `(matching_entries, total_matching_count)` for pagination.
+    /// The total count reflects all entries matching the filter, ignoring
+    /// limit/offset.
+    pub fn query_filtered(
+        &self,
+        filter: &AuditFilter,
+    ) -> Result<(Vec<AuditEntry>, usize), AegisError> {
+        let fragment = filter.to_sql();
+
+        let base_columns = "entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash";
+
+        // Count query (ignores limit/offset)
+        let count_sql = if fragment.where_clause.is_empty() {
+            "SELECT COUNT(*) FROM audit_log".to_string()
+        } else {
+            format!("SELECT COUNT(*) FROM audit_log WHERE {}", fragment.where_clause)
+        };
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            fragment.params.iter().map(|p| p.as_ref()).collect();
+
+        let total_count: usize = self
+            .connection()
+            .query_row(&count_sql, param_refs.as_slice(), |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|c| c as usize)
+            .map_err(|e| AegisError::LedgerError(format!("query_filtered count failed: {e}")))?;
+
+        // Data query with limit/offset
+        let mut data_sql = if fragment.where_clause.is_empty() {
+            format!("SELECT {base_columns} FROM audit_log ORDER BY id DESC")
+        } else {
+            format!(
+                "SELECT {base_columns} FROM audit_log WHERE {} ORDER BY id DESC",
+                fragment.where_clause
+            )
+        };
+
+        // Rebuild params for the data query (we consumed param_refs above)
+        let fragment = filter.to_sql();
+        let mut data_params: Vec<Box<dyn rusqlite::types::ToSql>> = fragment.params;
+
+        if let Some(limit) = fragment.limit {
+            let idx = data_params.len() + 1;
+            data_sql.push_str(&format!(" LIMIT ?{idx}"));
+            data_params.push(Box::new(limit as i64));
+        }
+
+        if let Some(offset) = fragment.offset {
+            let idx = data_params.len() + 1;
+            data_sql.push_str(&format!(" OFFSET ?{idx}"));
+            data_params.push(Box::new(offset as i64));
+        }
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            data_params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self
+            .connection()
+            .prepare(&data_sql)
+            .map_err(|e| AegisError::LedgerError(format!("query_filtered prepare failed: {e}")))?;
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), row_to_entry)
+            .map_err(|e| AegisError::LedgerError(format!("query_filtered failed: {e}")))?;
+
+        let entries: Vec<AuditEntry> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("query_filtered read failed: {e}")))?;
+
+        Ok((entries, total_count))
+    }
+
+    /// Return aggregate counts grouped by action_kind for entries matching the filter.
+    pub fn count_by_action_kind(
+        &self,
+        filter: &AuditFilter,
+    ) -> Result<Vec<(String, usize)>, AegisError> {
+        let fragment = filter.to_sql();
+
+        let sql = if fragment.where_clause.is_empty() {
+            "SELECT action_kind, COUNT(*) FROM audit_log GROUP BY action_kind ORDER BY COUNT(*) DESC"
+                .to_string()
+        } else {
+            format!(
+                "SELECT action_kind, COUNT(*) FROM audit_log WHERE {} GROUP BY action_kind ORDER BY COUNT(*) DESC",
+                fragment.where_clause
+            )
+        };
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            fragment.params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self
+            .connection()
+            .prepare(&sql)
+            .map_err(|e| AegisError::LedgerError(format!("count_by_action_kind failed: {e}")))?;
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })
+            .map_err(|e| AegisError::LedgerError(format!("count_by_action_kind query: {e}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("count_by_action_kind read: {e}")))
+    }
+
+    /// Return aggregate counts grouped by decision for entries matching the filter.
+    pub fn count_by_decision(
+        &self,
+        filter: &AuditFilter,
+    ) -> Result<Vec<(String, usize)>, AegisError> {
+        let fragment = filter.to_sql();
+
+        let sql = if fragment.where_clause.is_empty() {
+            "SELECT decision, COUNT(*) FROM audit_log GROUP BY decision ORDER BY COUNT(*) DESC"
+                .to_string()
+        } else {
+            format!(
+                "SELECT decision, COUNT(*) FROM audit_log WHERE {} GROUP BY decision ORDER BY COUNT(*) DESC",
+                fragment.where_clause
+            )
+        };
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            fragment.params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self
+            .connection()
+            .prepare(&sql)
+            .map_err(|e| AegisError::LedgerError(format!("count_by_decision failed: {e}")))?;
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })
+            .map_err(|e| AegisError::LedgerError(format!("count_by_decision query: {e}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("count_by_decision read: {e}")))
+    }
+
+    /// Return entries with row id strictly greater than `after_id`, ordered by id ASC.
+    ///
+    /// Used for streaming/tailing the ledger (`--follow` mode). Returns tuples
+    /// of `(row_id, entry)` so the caller can track the last seen ID.
+    pub fn query_after_id(
+        &self,
+        after_id: i64,
+    ) -> Result<Vec<(i64, AuditEntry)>, AegisError> {
+        let mut stmt = self
+            .connection()
+            .prepare(
+                "SELECT id, entry_id, timestamp, action_id, action_kind, principal, decision, reason, policy_id, prev_hash, entry_hash
+                 FROM audit_log WHERE id > ?1 ORDER BY id ASC",
+            )
+            .map_err(|e| AegisError::LedgerError(format!("query_after_id prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![after_id], |row| {
+                let row_id: i64 = row.get(0)?;
+                let entry = AuditEntry {
+                    entry_id: row
+                        .get::<_, String>(1)
+                        .map(|s| Uuid::parse_str(&s).unwrap())?,
+                    timestamp: row
+                        .get::<_, String>(2)
+                        .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
+                    action_id: row
+                        .get::<_, String>(3)
+                        .map(|s| Uuid::parse_str(&s).unwrap())?,
+                    action_kind: row.get(4)?,
+                    principal: row.get(5)?,
+                    decision: row.get(6)?,
+                    reason: row.get(7)?,
+                    policy_id: row.get(8)?,
+                    prev_hash: row.get(9)?,
+                    entry_hash: row.get(10)?,
+                };
+                Ok((row_id, entry))
+            })
+            .map_err(|e| AegisError::LedgerError(format!("query_after_id failed: {e}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("query_after_id read: {e}")))
+    }
 }
 
 /// Map a SQLite row to an AuditEntry.
@@ -103,8 +295,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aegis_types::{ActionKind, Verdict};
-    use aegis_types::Action;
+    use aegis_types::{Action, ActionKind, Verdict};
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
@@ -114,6 +305,26 @@ mod tests {
 
     fn make_action(principal: &str, kind: ActionKind) -> Action {
         Action::new(principal, kind)
+    }
+
+    /// Populate a store with varied entries for filter testing.
+    fn populate_test_store(store: &mut AuditStore) {
+        let actions = vec![
+            ("alice", ActionKind::FileRead { path: PathBuf::from("/a") }, "Allow"),
+            ("alice", ActionKind::FileWrite { path: PathBuf::from("/b") }, "Deny"),
+            ("bob", ActionKind::FileRead { path: PathBuf::from("/c") }, "Allow"),
+            ("bob", ActionKind::NetConnect { host: "example.com".into(), port: 443 }, "Deny"),
+            ("alice", ActionKind::DirList { path: PathBuf::from("/d") }, "Allow"),
+        ];
+        for (principal, kind, decision) in actions {
+            let action = make_action(principal, kind);
+            let verdict = if decision == "Allow" {
+                Verdict::allow(action.id, format!("{decision} by test"), None)
+            } else {
+                Verdict::deny(action.id, format!("{decision} by test"), None)
+            };
+            store.append(&action, &verdict).unwrap();
+        }
     }
 
     #[test]
@@ -251,5 +462,187 @@ mod tests {
         let store = AuditStore::open(tmp.path()).unwrap();
         let results = store.query_by_principal("nobody").unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn query_filtered_empty_filter_returns_all() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter::default();
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 5);
+        assert_eq!(entries.len(), 5);
+    }
+
+    #[test]
+    fn query_filtered_by_decision() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter {
+            decision: Some("Deny".into()),
+            ..Default::default()
+        };
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.decision == "Deny"));
+    }
+
+    #[test]
+    fn query_filtered_by_principal() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter {
+            principal: Some("alice".into()),
+            ..Default::default()
+        };
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(entries.len(), 3);
+        assert!(entries.iter().all(|e| e.principal == "alice"));
+    }
+
+    #[test]
+    fn query_filtered_by_action_kind() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter {
+            action_kind: Some("FileRead".into()),
+            ..Default::default()
+        };
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn query_filtered_combined() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter {
+            principal: Some("alice".into()),
+            decision: Some("Allow".into()),
+            ..Default::default()
+        };
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 2); // alice has 2 Allow entries (FileRead + DirList)
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn query_filtered_with_pagination() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter {
+            limit: Some(2),
+            offset: Some(0),
+            ..Default::default()
+        };
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 5); // total is unaffected by limit
+        assert_eq!(entries.len(), 2);
+
+        // Page 2
+        let filter = AuditFilter {
+            limit: Some(2),
+            offset: Some(2),
+            ..Default::default()
+        };
+        let (entries, _) = store.query_filtered(&filter).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        // Page 3 (partial)
+        let filter = AuditFilter {
+            limit: Some(2),
+            offset: Some(4),
+            ..Default::default()
+        };
+        let (entries, _) = store.query_filtered(&filter).unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn query_filtered_reason_search() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let filter = AuditFilter {
+            reason_contains: Some("Deny".into()),
+            ..Default::default()
+        };
+        let (entries, total) = store.query_filtered(&filter).unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn count_by_action_kind_returns_grouped_counts() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let counts = store
+            .count_by_action_kind(&AuditFilter::default())
+            .unwrap();
+        assert!(!counts.is_empty());
+        let total: usize = counts.iter().map(|(_, c)| c).sum();
+        assert_eq!(total, 5);
+    }
+
+    #[test]
+    fn count_by_decision_returns_grouped_counts() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let counts = store
+            .count_by_decision(&AuditFilter::default())
+            .unwrap();
+        let allow_count = counts.iter().find(|(d, _)| d == "Allow").map(|(_, c)| *c).unwrap_or(0);
+        let deny_count = counts.iter().find(|(d, _)| d == "Deny").map(|(_, c)| *c).unwrap_or(0);
+        assert_eq!(allow_count, 3);
+        assert_eq!(deny_count, 2);
+    }
+
+    #[test]
+    fn query_after_id_returns_newer_entries() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        // Get first 3 entries by querying after id=0
+        let all = store.query_after_id(0).unwrap();
+        assert_eq!(all.len(), 5);
+
+        // Get entries after the 3rd row
+        let third_row_id = all[2].0;
+        let remaining = store.query_after_id(third_row_id).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.iter().all(|(id, _)| *id > third_row_id));
+    }
+
+    #[test]
+    fn query_after_id_returns_empty_when_none_newer() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+        populate_test_store(&mut store);
+
+        let all = store.query_after_id(0).unwrap();
+        let last_id = all.last().unwrap().0;
+        let empty = store.query_after_id(last_id).unwrap();
+        assert!(empty.is_empty());
     }
 }

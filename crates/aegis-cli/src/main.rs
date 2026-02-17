@@ -93,15 +93,47 @@ enum PolicyCommands {
 
 #[derive(Subcommand, Debug)]
 enum AuditCommands {
-    /// Query recent audit entries
+    /// Query audit entries with optional filters
     Query {
         /// Name of the aegis configuration
         #[arg(long)]
         config: String,
 
-        /// Number of most recent entries to display
+        /// Number of most recent entries to display (shortcut, ignores other filters)
+        #[arg(long)]
+        last: Option<usize>,
+
+        /// Only entries at or after this time (RFC 3339, e.g. 2026-02-16T00:00:00Z)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Only entries at or before this time (RFC 3339)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Filter by action kind (e.g. FileRead, FileWrite, NetConnect)
+        #[arg(long)]
+        action: Option<String>,
+
+        /// Filter by decision (Allow or Deny)
+        #[arg(long)]
+        decision: Option<String>,
+
+        /// Filter by principal name
+        #[arg(long)]
+        principal: Option<String>,
+
+        /// Full-text search in the reason field
+        #[arg(long)]
+        search: Option<String>,
+
+        /// Page number (1-based, default 1)
+        #[arg(long, default_value = "1")]
+        page: usize,
+
+        /// Page size (default 20)
         #[arg(long, default_value = "20")]
-        last: usize,
+        page_size: usize,
     },
 
     /// Verify the integrity of the audit hash chain
@@ -154,7 +186,20 @@ fn main() -> anyhow::Result<()> {
             PolicyCommands::Generate { template } => commands::policy::generate(&template),
         },
         Commands::Audit { action } => match action {
-            AuditCommands::Query { config, last } => commands::audit::query(&config, last),
+            AuditCommands::Query {
+                config,
+                last,
+                from,
+                to,
+                action,
+                decision,
+                principal,
+                search,
+                page,
+                page_size,
+            } => commands::audit::query(
+                &config, last, from, to, action, decision, principal, search, page, page_size,
+            ),
             AuditCommands::Verify { config } => commands::audit::verify(&config),
             AuditCommands::Export { config, format } => commands::audit::export(&config, &format),
         },
@@ -244,10 +289,51 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command {
             Commands::Audit {
-                action: AuditCommands::Query { config, last },
+                action: AuditCommands::Query { config, last, .. },
             } => {
                 assert_eq!(config, "myagent");
-                assert_eq!(last, 50);
+                assert_eq!(last, Some(50));
+            }
+            _ => panic!("expected Audit Query command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_query_with_filters() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "audit",
+            "query",
+            "--config",
+            "myagent",
+            "--decision",
+            "Deny",
+            "--action",
+            "FileWrite",
+            "--principal",
+            "agent-1",
+            "--page",
+            "2",
+        ]);
+        assert!(cli.is_ok(), "should parse filtered query: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Audit {
+                action:
+                    AuditCommands::Query {
+                        config,
+                        decision,
+                        action,
+                        principal,
+                        page,
+                        ..
+                    },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(decision, Some("Deny".into()));
+                assert_eq!(action, Some("FileWrite".into()));
+                assert_eq!(principal, Some("agent-1".into()));
+                assert_eq!(page, 2);
             }
             _ => panic!("expected Audit Query command"),
         }

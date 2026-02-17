@@ -1,26 +1,96 @@
 use anyhow::{bail, Context, Result};
+use chrono::DateTime;
 
-use aegis_ledger::{AuditEntry, AuditStore};
+use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
 use crate::commands::init::load_config;
 
-/// Run `aegis audit query --config NAME --last N`.
+/// Run `aegis audit query` with optional filters.
 ///
-/// Opens the audit store and prints the last N entries in a formatted table.
-pub fn query(config_name: &str, last_n: usize) -> Result<()> {
+/// If `--last N` is provided with no other filters, uses the fast-path `query_last`.
+/// Otherwise, builds an `AuditFilter` and uses `query_filtered`.
+#[allow(clippy::too_many_arguments)]
+pub fn query(
+    config_name: &str,
+    last: Option<usize>,
+    from: Option<String>,
+    to: Option<String>,
+    action: Option<String>,
+    decision: Option<String>,
+    principal: Option<String>,
+    search: Option<String>,
+    page: usize,
+    page_size: usize,
+) -> Result<()> {
     let config = load_config(config_name)?;
     let store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
 
-    let entries = store
-        .query_last(last_n)
+    // Fast path: --last with no other filters
+    let has_filters = from.is_some()
+        || to.is_some()
+        || action.is_some()
+        || decision.is_some()
+        || principal.is_some()
+        || search.is_some();
+
+    if let Some(n) = last {
+        if !has_filters {
+            let entries = store.query_last(n).context("failed to query audit entries")?;
+            if entries.is_empty() {
+                println!("No audit entries found.");
+                return Ok(());
+            }
+            print_table(&entries);
+            return Ok(());
+        }
+    }
+
+    // Build filter
+    let filter = AuditFilter {
+        from: from
+            .map(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.into())
+                    .context("invalid --from timestamp (expected RFC 3339)")
+            })
+            .transpose()?,
+        to: to
+            .map(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.into())
+                    .context("invalid --to timestamp (expected RFC 3339)")
+            })
+            .transpose()?,
+        action_kind: action,
+        decision,
+        principal,
+        reason_contains: search,
+        limit: Some(last.unwrap_or(page_size)),
+        offset: if last.is_some() {
+            None
+        } else {
+            Some((page.saturating_sub(1)) * page_size)
+        },
+        ..Default::default()
+    };
+
+    let (entries, total) = store
+        .query_filtered(&filter)
         .context("failed to query audit entries")?;
 
     if entries.is_empty() {
-        println!("No audit entries found.");
+        println!("No matching audit entries found.");
         return Ok(());
     }
 
     print_table(&entries);
+
+    if total > entries.len() {
+        let showing_start = filter.offset.unwrap_or(0) + 1;
+        let showing_end = filter.offset.unwrap_or(0) + entries.len();
+        println!("Showing {showing_start}-{showing_end} of {total} entries (page {page})");
+    }
+
     Ok(())
 }
 
