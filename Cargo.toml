@@ -6,6 +6,7 @@ members = [
     "crates/aegis-ledger",
     "crates/aegis-sandbox",
     "crates/aegis-proxy",
+    "crates/aegis-observer",
     "crates/aegis-monitor",
     "crates/aegis-cli",
     "tests",
@@ -35,6 +36,7 @@ thiserror = "2"
 anyhow = "1"
 toml = "0.8"
 hex = "0.4"
+notify = { version = "7", features = ["macos_fsevent"] }
 tempfile = "3"
 
 # Types crate (used by all)
@@ -43,4 +45,5 @@ aegis-policy = { path = "crates/aegis-policy" }
 aegis-ledger = { path = "crates/aegis-ledger" }
 aegis-sandbox = { path = "crates/aegis-sandbox" }
 aegis-proxy = { path = "crates/aegis-proxy" }
+aegis-observer = { path = "crates/aegis-observer" }
 aegis-monitor = { path = "crates/aegis-monitor" }
