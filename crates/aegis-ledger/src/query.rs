@@ -246,7 +246,10 @@ impl AuditStore {
 }
 
 /// Map a SQLite row to an AuditEntry.
-pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
+///
+/// Expects columns in order: entry_id, timestamp, action_id, action_kind,
+/// principal, decision, reason, policy_id, prev_hash, entry_hash (indices 0-9).
+pub fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
     Ok(AuditEntry {
         entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
         timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,

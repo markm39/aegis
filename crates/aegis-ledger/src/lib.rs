@@ -18,6 +18,7 @@ pub use entry::AuditEntry;
 pub use filter::AuditFilter;
 pub use integrity::IntegrityReport;
 pub use policy_snapshot::PolicySnapshot;
+pub use query::row_to_entry;
 pub use session::Session;
 pub use stats::AuditStats;
 pub use store::AuditStore;

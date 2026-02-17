@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use rusqlite::{params, Connection};
 use tracing::warn;
 
-use aegis_ledger::parse_helpers::{parse_datetime, parse_uuid};
 use aegis_ledger::AuditEntry;
 
 /// The active view mode of the dashboard.
@@ -148,20 +147,7 @@ impl App {
              FROM audit_log ORDER BY id DESC LIMIT 100",
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok(AuditEntry {
-                entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
-                timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
-                action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
-                action_kind: row.get(3)?,
-                principal: row.get(4)?,
-                decision: row.get(5)?,
-                reason: row.get(6)?,
-                policy_id: row.get(7)?,
-                prev_hash: row.get(8)?,
-                entry_hash: row.get(9)?,
-            })
-        })?;
+        let rows = stmt.query_map([], aegis_ledger::row_to_entry)?;
 
         self.entries = rows.collect::<Result<Vec<_>, _>>()?;
 
@@ -244,20 +230,7 @@ impl App {
             Err(_) => return Vec::new(),
         };
 
-        let rows = match stmt.query_map(params![session_id], |row| {
-            Ok(AuditEntry {
-                entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
-                timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
-                action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
-                action_kind: row.get(3)?,
-                principal: row.get(4)?,
-                decision: row.get(5)?,
-                reason: row.get(6)?,
-                policy_id: row.get(7)?,
-                prev_hash: row.get(8)?,
-                entry_hash: row.get(9)?,
-            })
-        }) {
+        let rows = match stmt.query_map(params![session_id], aegis_ledger::row_to_entry) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };
