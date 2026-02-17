@@ -13,12 +13,16 @@ use aegis_types::{Action, ActionKind, AegisError};
 ///
 /// Creates a `ProcessSpawn` action, evaluates it against the policy engine,
 /// and appends both the action and verdict to the audit store.
+///
+/// If `session_id` is `Some`, the entry is linked to that session and its
+/// action counters are incremented.
 pub fn log_process_spawn(
     store: &Arc<Mutex<AuditStore>>,
     engine: &Arc<Mutex<PolicyEngine>>,
     principal: &str,
     command: &str,
     args: &[String],
+    session_id: Option<&uuid::Uuid>,
 ) -> Result<(), AegisError> {
     let action = Action::new(
         principal,
@@ -33,55 +37,21 @@ pub fn log_process_spawn(
         .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
         .evaluate(&action);
 
-    store
+    let mut guard = store
         .lock()
-        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
-        .append(&action, &verdict)?;
+        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?;
+
+    if let Some(sid) = session_id {
+        guard.append_with_session(&action, &verdict, sid)?;
+    } else {
+        guard.append(&action, &verdict)?;
+    }
 
     tracing::info!(
         command,
+        session_id = session_id.map(|s| s.to_string()),
         decision = %verdict.decision,
         "logged ProcessSpawn"
-    );
-
-    Ok(())
-}
-
-/// Log a process spawn event to the audit ledger, associated with a session.
-///
-/// Like `log_process_spawn`, but uses `append_with_session` to link the
-/// entry to the given session and increment its counters.
-pub fn log_process_spawn_with_session(
-    store: &Arc<Mutex<AuditStore>>,
-    engine: &Arc<Mutex<PolicyEngine>>,
-    principal: &str,
-    command: &str,
-    args: &[String],
-    session_id: &uuid::Uuid,
-) -> Result<(), AegisError> {
-    let action = Action::new(
-        principal,
-        ActionKind::ProcessSpawn {
-            command: command.to_string(),
-            args: args.to_vec(),
-        },
-    );
-
-    let verdict = engine
-        .lock()
-        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
-        .evaluate(&action);
-
-    store
-        .lock()
-        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
-        .append_with_session(&action, &verdict, session_id)?;
-
-    tracing::info!(
-        command,
-        %session_id,
-        decision = %verdict.decision,
-        "logged ProcessSpawn (session)"
     );
 
     Ok(())
@@ -91,12 +61,16 @@ pub fn log_process_spawn_with_session(
 ///
 /// Creates a `ProcessExit` action, evaluates it against the policy engine,
 /// and appends both the action and verdict to the audit store.
+///
+/// If `session_id` is `Some`, the entry is linked to that session and its
+/// action counters are incremented.
 pub fn log_process_exit(
     store: &Arc<Mutex<AuditStore>>,
     engine: &Arc<Mutex<PolicyEngine>>,
     principal: &str,
     command: &str,
     exit_code: i32,
+    session_id: Option<&uuid::Uuid>,
 ) -> Result<(), AegisError> {
     let action = Action::new(
         principal,
@@ -111,57 +85,22 @@ pub fn log_process_exit(
         .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
         .evaluate(&action);
 
-    store
+    let mut guard = store
         .lock()
-        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
-        .append(&action, &verdict)?;
+        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?;
+
+    if let Some(sid) = session_id {
+        guard.append_with_session(&action, &verdict, sid)?;
+    } else {
+        guard.append(&action, &verdict)?;
+    }
 
     tracing::info!(
         command,
         exit_code,
+        session_id = session_id.map(|s| s.to_string()),
         decision = %verdict.decision,
         "logged ProcessExit"
-    );
-
-    Ok(())
-}
-
-/// Log a process exit event to the audit ledger, associated with a session.
-///
-/// Like `log_process_exit`, but uses `append_with_session` to link the
-/// entry to the given session and increment its counters.
-pub fn log_process_exit_with_session(
-    store: &Arc<Mutex<AuditStore>>,
-    engine: &Arc<Mutex<PolicyEngine>>,
-    principal: &str,
-    command: &str,
-    exit_code: i32,
-    session_id: &uuid::Uuid,
-) -> Result<(), AegisError> {
-    let action = Action::new(
-        principal,
-        ActionKind::ProcessExit {
-            command: command.to_string(),
-            exit_code,
-        },
-    );
-
-    let verdict = engine
-        .lock()
-        .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
-        .evaluate(&action);
-
-    store
-        .lock()
-        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?
-        .append_with_session(&action, &verdict, session_id)?;
-
-    tracing::info!(
-        command,
-        exit_code,
-        %session_id,
-        decision = %verdict.decision,
-        "logged ProcessExit (session)"
     );
 
     Ok(())
@@ -300,7 +239,7 @@ mod tests {
         let (store, engine) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
-        log_process_spawn(&store, &engine, "test-agent", "echo", &["hello".into()])
+        log_process_spawn(&store, &engine, "test-agent", "echo", &["hello".into()], None)
             .expect("should log spawn");
 
         let count = store.lock().unwrap().count().unwrap();
@@ -312,7 +251,7 @@ mod tests {
         let (store, engine) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
-        log_process_exit(&store, &engine, "test-agent", "echo", 0)
+        log_process_exit(&store, &engine, "test-agent", "echo", 0, None)
             .expect("should log exit");
 
         let count = store.lock().unwrap().count().unwrap();
@@ -324,9 +263,9 @@ mod tests {
         let (store, engine) =
             make_test_deps(r#"permit(principal, action, resource);"#);
 
-        log_process_spawn(&store, &engine, "test-agent", "cat", &["/tmp/f".into()])
+        log_process_spawn(&store, &engine, "test-agent", "cat", &["/tmp/f".into()], None)
             .expect("should log spawn");
-        log_process_exit(&store, &engine, "test-agent", "cat", 1)
+        log_process_exit(&store, &engine, "test-agent", "cat", 1, None)
             .expect("should log exit");
 
         let count = store.lock().unwrap().count().unwrap();
@@ -338,7 +277,7 @@ mod tests {
         let (store, engine) =
             make_test_deps(r#"forbid(principal, action, resource);"#);
 
-        log_process_spawn(&store, &engine, "test-agent", "rm", &["-rf".into(), "/".into()])
+        log_process_spawn(&store, &engine, "test-agent", "rm", &["-rf".into(), "/".into()], None)
             .expect("should log even when denied");
 
         let count = store.lock().unwrap().count().unwrap();

@@ -80,13 +80,13 @@ pub fn execute(
     let observer_session = start_observer(config, &store_arc, &policy_arc, session_id);
 
     // Log process spawn (linked to session)
-    aegis_proxy::log_process_spawn_with_session(
+    aegis_proxy::log_process_spawn(
         &store_arc,
         &policy_arc,
         &config.name,
         command,
         args,
-        &session_id,
+        Some(&session_id),
     )
     .context("failed to log process spawn")?;
 
@@ -103,13 +103,13 @@ pub fn execute(
     let exit_code = status.code().unwrap_or(-1);
 
     // Log process exit (linked to session)
-    aegis_proxy::log_process_exit_with_session(
+    aegis_proxy::log_process_exit(
         &store_arc,
         &policy_arc,
         &config.name,
         command,
         exit_code,
-        &session_id,
+        Some(&session_id),
     )
     .context("failed to log process exit")?;
 
