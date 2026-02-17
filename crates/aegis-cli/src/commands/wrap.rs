@@ -51,6 +51,9 @@ pub fn run(
 
     let config = ensure_wrap_config(&wrap_dir, &derived_name, policy, &project_dir)?;
 
+    // Auto-set as current config
+    crate::commands::use_config::set_current(&derived_name)?;
+
     // Wrap always uses ProcessBackend (no Seatbelt) and skips violation harvesting
     let backend = Box::new(aegis_sandbox::ProcessBackend);
 

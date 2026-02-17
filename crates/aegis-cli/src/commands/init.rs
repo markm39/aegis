@@ -29,7 +29,10 @@ pub fn run(name: Option<&str>, policy_template: &str, project_dir: Option<&Path>
     };
     ensure_aegis_dir()?;
     let base_dir = aegis_base_dir(name)?;
-    run_in_dir(name, policy_template, &base_dir, project_dir)
+    run_in_dir(name, policy_template, &base_dir, project_dir)?;
+    // Auto-set as current config
+    crate::commands::use_config::set_current(name)?;
+    Ok(())
 }
 
 /// Security mode options for the interactive wizard.
@@ -150,6 +153,9 @@ fn run_wizard() -> Result<()> {
 
     // Use run_in_dir_with_isolation to create with the chosen isolation mode
     run_in_dir_with_isolation(&name, policy, &base_dir, Some(&project_dir), isolation)?;
+
+    // Auto-set as current config
+    crate::commands::use_config::set_current(&name)?;
 
     println!("\nNext steps:");
     println!("  aegis run echo hello          # sandbox a command");

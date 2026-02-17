@@ -62,8 +62,14 @@ enum Commands {
 
     /// Launch the real-time audit monitor TUI
     Monitor {
-        /// Name of the aegis configuration to use
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
+    },
+
+    /// Set or show the active configuration
+    Use {
+        /// Config name to activate (omit to show current or pick interactively)
+        name: Option<String>,
     },
 
     /// Policy management subcommands
@@ -80,8 +86,8 @@ enum Commands {
 
     /// Generate a compliance report
     Report {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Output format (json or text)
         #[arg(long, default_value = "text")]
@@ -90,8 +96,8 @@ enum Commands {
 
     /// Show the health status of an aegis configuration
     Status {
-        /// Name of the aegis configuration to check
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
     },
 
     /// List all Aegis configurations
@@ -109,8 +115,8 @@ enum Commands {
 
     /// Compare two sessions for forensic analysis
     Diff {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// First session UUID
         #[arg(long)]
@@ -164,20 +170,20 @@ enum Commands {
 enum ConfigCommands {
     /// Show the full configuration for a named config
     Show {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
     },
 
     /// Print the path to the config file (for scripting)
     Path {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
     },
 
     /// Open the config file in $EDITOR
     Edit {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
     },
 }
 
@@ -192,8 +198,8 @@ enum PolicyCommands {
 
     /// List all policies in a configuration
     List {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
     },
 
     /// Generate a builtin policy template and print to stdout
@@ -205,8 +211,8 @@ enum PolicyCommands {
 
     /// Import a Cedar policy file into a configuration
     Import {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Path to the .cedar policy file to import
         #[arg(long)]
@@ -215,8 +221,8 @@ enum PolicyCommands {
 
     /// Test a policy against a hypothetical action (dry run)
     Test {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Action to test (FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, NetRequest, ToolCall, ProcessSpawn, ProcessExit)
         #[arg(long)]
@@ -232,8 +238,8 @@ enum PolicyCommands {
 enum AuditCommands {
     /// Query audit entries with optional filters
     Query {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Number of most recent entries to display (shortcut, ignores other filters)
         #[arg(long)]
@@ -274,14 +280,14 @@ enum AuditCommands {
 
     /// Verify the integrity of the audit hash chain
     Verify {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
     },
 
     /// List recent sessions
     Sessions {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Number of sessions to show (default 10)
         #[arg(long, default_value = "10")]
@@ -290,8 +296,8 @@ enum AuditCommands {
 
     /// Show details for a specific session
     Session {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Session UUID
         #[arg(long)]
@@ -300,8 +306,8 @@ enum AuditCommands {
 
     /// Show policy change history
     PolicyHistory {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Number of snapshots to show (default 10)
         #[arg(long, default_value = "10")]
@@ -310,8 +316,8 @@ enum AuditCommands {
 
     /// Tag a session with a human-readable label
     Tag {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Session UUID
         #[arg(long)]
@@ -324,8 +330,8 @@ enum AuditCommands {
 
     /// Purge old audit entries (destructive, requires --confirm)
     Purge {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Delete entries older than this duration (e.g. 30d, 7d, 24h)
         #[arg(long)]
@@ -338,8 +344,8 @@ enum AuditCommands {
 
     /// Watch audit events in real-time (like tail -f)
     Watch {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Filter by decision (Allow or Deny)
         #[arg(long)]
@@ -348,8 +354,8 @@ enum AuditCommands {
 
     /// Export audit entries in a structured format
     Export {
-        /// Name of the aegis configuration
-        config: String,
+        /// Name of the aegis configuration (uses current if omitted)
+        config: Option<String>,
 
         /// Output format (json, jsonl, csv, cef)
         #[arg(long, default_value = "json")]
@@ -363,6 +369,14 @@ enum AuditCommands {
         #[arg(long)]
         follow: bool,
     },
+}
+
+/// Resolve config name: use provided value or fall back to current config.
+fn resolve_config(config: Option<String>) -> anyhow::Result<String> {
+    match config {
+        Some(name) => Ok(name),
+        None => commands::use_config::get_current(),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -404,20 +418,31 @@ fn main() -> anyhow::Result<()> {
             commands::run::run(&config_name, &policy, cmd, args, tag.as_deref())
         }
         Commands::Monitor { config } => {
+            let config = resolve_config(config)?;
             commands::monitor::run(&config)
+        }
+        Commands::Use { name } => {
+            commands::use_config::run(name.as_deref())
         }
         Commands::Policy { action } => match action {
             PolicyCommands::Validate { path } => commands::policy::validate(&path),
             PolicyCommands::Import { config, path } => {
+                let config = resolve_config(config)?;
                 commands::policy::import_policy(&config, &path)
             }
-            PolicyCommands::List { config } => commands::policy::list(&config),
+            PolicyCommands::List { config } => {
+                let config = resolve_config(config)?;
+                commands::policy::list(&config)
+            }
             PolicyCommands::Generate { template } => commands::policy::generate(&template),
             PolicyCommands::Test {
                 config,
                 action,
                 resource,
-            } => commands::policy::test_policy(&config, &action, &resource),
+            } => {
+                let config = resolve_config(config)?;
+                commands::policy::test_policy(&config, &action, &resource)
+            }
         },
         Commands::Audit { action } => match action {
             AuditCommands::Query {
@@ -431,37 +456,53 @@ fn main() -> anyhow::Result<()> {
                 search,
                 page,
                 page_size,
-            } => commands::audit::query(
-                &config,
-                commands::audit::QueryOptions {
-                    last,
-                    from,
-                    to,
-                    action,
-                    decision,
-                    principal,
-                    search,
-                    page,
-                    page_size,
-                },
-            ),
-            AuditCommands::Verify { config } => commands::audit::verify(&config),
+            } => {
+                let config = resolve_config(config)?;
+                commands::audit::query(
+                    &config,
+                    commands::audit::QueryOptions {
+                        last,
+                        from,
+                        to,
+                        action,
+                        decision,
+                        principal,
+                        search,
+                        page,
+                        page_size,
+                    },
+                )
+            }
+            AuditCommands::Verify { config } => {
+                let config = resolve_config(config)?;
+                commands::audit::verify(&config)
+            }
             AuditCommands::Sessions { config, last } => {
+                let config = resolve_config(config)?;
                 commands::audit::list_sessions(&config, last)
             }
-            AuditCommands::Session { config, id } => commands::audit::show_session(&config, &id),
+            AuditCommands::Session { config, id } => {
+                let config = resolve_config(config)?;
+                commands::audit::show_session(&config, &id)
+            }
             AuditCommands::PolicyHistory { config, last } => {
+                let config = resolve_config(config)?;
                 commands::audit::policy_history(&config, last)
             }
             AuditCommands::Tag { config, id, tag } => {
+                let config = resolve_config(config)?;
                 commands::audit::tag_session(&config, &id, &tag)
             }
             AuditCommands::Purge {
                 config,
                 older_than,
                 confirm,
-            } => commands::audit::purge(&config, &older_than, confirm),
+            } => {
+                let config = resolve_config(config)?;
+                commands::audit::purge(&config, &older_than, confirm)
+            }
             AuditCommands::Watch { config, decision } => {
+                let config = resolve_config(config)?;
                 commands::audit::watch(&config, decision.as_deref())
             }
             AuditCommands::Export {
@@ -469,24 +510,26 @@ fn main() -> anyhow::Result<()> {
                 format,
                 limit,
                 follow,
-            } => commands::audit::export(&config, &format, limit, follow),
+            } => {
+                let config = resolve_config(config)?;
+                commands::audit::export(&config, &format, limit, follow)
+            }
         },
         Commands::Report { config, format } => {
+            let config = resolve_config(config)?;
             commands::report::run(&config, &format)
         }
         Commands::Status { config } => {
+            let config = resolve_config(config)?;
             commands::status::run(&config)
         }
         Commands::List => {
             commands::list::run()
         }
         Commands::Log { config, last } => {
-            let config_name = match config {
-                Some(name) => name,
-                None => commands::default_action::most_recent_config()?,
-            };
+            let config = resolve_config(config)?;
             commands::audit::query(
-                &config_name,
+                &config,
                 commands::audit::QueryOptions {
                     last: Some(last),
                     from: None,
@@ -505,12 +548,22 @@ fn main() -> anyhow::Result<()> {
             session1,
             session2,
         } => {
+            let config = resolve_config(config)?;
             commands::diff::run(&config, &session1, &session2)
         }
         Commands::Config { action } => match action {
-            ConfigCommands::Show { config } => commands::config::show(&config),
-            ConfigCommands::Path { config } => commands::config::path(&config),
-            ConfigCommands::Edit { config } => commands::config::edit(&config),
+            ConfigCommands::Show { config } => {
+                let config = resolve_config(config)?;
+                commands::config::show(&config)
+            }
+            ConfigCommands::Path { config } => {
+                let config = resolve_config(config)?;
+                commands::config::path(&config)
+            }
+            ConfigCommands::Edit { config } => {
+                let config = resolve_config(config)?;
+                commands::config::edit(&config)
+            }
         }
         Commands::Completions { shell } => {
             clap_complete::generate(
@@ -705,7 +758,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Query { config, last, .. },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(last, Some(50));
             }
             _ => panic!("expected Audit Query command"),
@@ -742,7 +795,7 @@ mod tests {
                         ..
                     },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(decision, Some("Deny".into()));
                 assert_eq!(action, Some("FileWrite".into()));
                 assert_eq!(principal, Some("agent-1".into()));
@@ -763,7 +816,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Sessions { config, last },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(last, 5);
             }
             _ => panic!("expected Audit Sessions command"),
@@ -786,7 +839,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Session { config, id },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
             }
             _ => panic!("expected Audit Session command"),
@@ -811,7 +864,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Tag { config, id, tag },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
                 assert_eq!(tag, "deploy-v2");
             }
@@ -841,7 +894,7 @@ mod tests {
                         confirm,
                     },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(older_than, "30d");
                 assert!(confirm);
             }
@@ -858,7 +911,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Watch { config, decision },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert!(decision.is_none());
             }
             _ => panic!("expected Audit Watch command"),
@@ -876,7 +929,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Watch { config, decision },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(decision, Some("Deny".to_string()));
             }
             _ => panic!("expected Audit Watch command"),
@@ -899,7 +952,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Export { config, format, follow, .. },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(format, "csv");
                 assert!(!follow);
             }
@@ -924,7 +977,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Export { config, format, follow, .. },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(format, "jsonl");
                 assert!(follow);
             }
@@ -939,7 +992,7 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Status { config } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
             }
             _ => panic!("expected Status command"),
         }
@@ -952,7 +1005,7 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Monitor { config } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
             }
             _ => panic!("expected Monitor command"),
         }
@@ -981,7 +1034,7 @@ mod tests {
             Commands::Policy {
                 action: PolicyCommands::Import { config, path },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(path, PathBuf::from("/tmp/custom.cedar"));
             }
             _ => panic!("expected Policy Import command"),
@@ -1011,7 +1064,7 @@ mod tests {
                         resource,
                     },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(action, "FileRead");
                 assert_eq!(resource, "/tmp/test.txt");
             }
@@ -1050,7 +1103,7 @@ mod tests {
                 session1,
                 session2,
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(session1, "550e8400-e29b-41d4-a716-446655440000");
                 assert_eq!(session2, "550e8400-e29b-41d4-a716-446655440001");
             }
@@ -1067,7 +1120,7 @@ mod tests {
             Commands::Config {
                 action: ConfigCommands::Show { config },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
             }
             _ => panic!("expected Config Show command"),
         }
@@ -1082,7 +1135,7 @@ mod tests {
             Commands::Config {
                 action: ConfigCommands::Path { config },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
             }
             _ => panic!("expected Config Path command"),
         }
@@ -1097,7 +1150,7 @@ mod tests {
             Commands::Config {
                 action: ConfigCommands::Edit { config },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
             }
             _ => panic!("expected Config Edit command"),
         }
@@ -1114,7 +1167,7 @@ mod tests {
             Commands::Audit {
                 action: AuditCommands::Export { config, format, limit, follow },
             } => {
-                assert_eq!(config, "myagent");
+                assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(format, "csv");
                 assert_eq!(limit, 500);
                 assert!(!follow);
@@ -1282,10 +1335,74 @@ mod tests {
         // run without any command should fail
         let result = Cli::try_parse_from(["aegis", "run"]);
         assert!(result.is_err(), "run without command should fail");
+    }
 
-        // status without config should fail
-        let result = Cli::try_parse_from(["aegis", "status"]);
-        assert!(result.is_err(), "status without config should fail");
+    #[test]
+    fn cli_parse_status_no_config() {
+        let cli = Cli::try_parse_from(["aegis", "status"]);
+        assert!(cli.is_ok(), "status without config should parse: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Status { config } => {
+                assert!(config.is_none(), "config should be None when omitted");
+            }
+            _ => panic!("expected Status command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_use_set() {
+        let cli = Cli::try_parse_from(["aegis", "use", "myconfig"]);
+        assert!(cli.is_ok(), "use with name should parse: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Use { name } => {
+                assert_eq!(name, Some("myconfig".to_string()));
+            }
+            _ => panic!("expected Use command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_use_show() {
+        let cli = Cli::try_parse_from(["aegis", "use"]);
+        assert!(cli.is_ok(), "use without name should parse: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Use { name } => {
+                assert!(name.is_none(), "name should be None for bare use");
+            }
+            _ => panic!("expected Use command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_monitor_no_config() {
+        let cli = Cli::try_parse_from(["aegis", "monitor"]);
+        assert!(cli.is_ok(), "monitor without config should parse: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Monitor { config } => {
+                assert!(config.is_none(), "config should be None when omitted");
+            }
+            _ => panic!("expected Monitor command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_audit_query_no_config() {
+        let cli = Cli::try_parse_from(["aegis", "audit", "query", "--last", "50"]);
+        assert!(cli.is_ok(), "audit query without config should parse: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Audit {
+                action: AuditCommands::Query { config, last, .. },
+            } => {
+                assert!(config.is_none(), "config should be None when omitted");
+                assert_eq!(last, Some(50));
+            }
+            _ => panic!("expected Audit Query command"),
+        }
     }
 
     #[test]
