@@ -28,34 +28,61 @@ pub struct QueryOptions {
     pub page_size: usize,
 }
 
+impl QueryOptions {
+    /// Check whether any content filters are active (excluding --last and pagination).
+    fn has_filters(&self) -> bool {
+        self.from.is_some()
+            || self.to.is_some()
+            || self.action.is_some()
+            || self.decision.is_some()
+            || self.principal.is_some()
+            || self.search.is_some()
+    }
+
+    /// Convert CLI options into an `AuditFilter`, parsing timestamp strings.
+    fn into_filter(self) -> Result<AuditFilter> {
+        Ok(AuditFilter {
+            from: self
+                .from
+                .map(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|dt| dt.into())
+                        .context("invalid --from timestamp (expected RFC 3339)")
+                })
+                .transpose()?,
+            to: self
+                .to
+                .map(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|dt| dt.into())
+                        .context("invalid --to timestamp (expected RFC 3339)")
+                })
+                .transpose()?,
+            action_kind: self.action,
+            decision: self.decision,
+            principal: self.principal,
+            reason_contains: self.search,
+            limit: Some(self.last.unwrap_or(self.page_size)),
+            offset: if self.last.is_some() {
+                None
+            } else {
+                Some((self.page.saturating_sub(1)) * self.page_size)
+            },
+            ..Default::default()
+        })
+    }
+}
+
 /// Run `aegis audit query` with optional filters.
 ///
 /// If `--last N` is provided with no other filters, uses the fast-path `query_last`.
 /// Otherwise, builds an `AuditFilter` and uses `query_filtered`.
 pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
-    let QueryOptions {
-        last,
-        from,
-        to,
-        action,
-        decision,
-        principal,
-        search,
-        page,
-        page_size,
-    } = opts;
     let (_config, store) = open_store(config_name)?;
 
     // Fast path: --last with no other filters
-    let has_filters = from.is_some()
-        || to.is_some()
-        || action.is_some()
-        || decision.is_some()
-        || principal.is_some()
-        || search.is_some();
-
-    if let Some(n) = last {
-        if !has_filters {
+    if let Some(n) = opts.last {
+        if !opts.has_filters() {
             let entries = store.query_last(n).context("failed to query audit entries")?;
             if entries.is_empty() {
                 println!("No audit entries found.");
@@ -66,34 +93,8 @@ pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
         }
     }
 
-    // Build filter
-    let filter = AuditFilter {
-        from: from
-            .map(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .map(|dt| dt.into())
-                    .context("invalid --from timestamp (expected RFC 3339)")
-            })
-            .transpose()?,
-        to: to
-            .map(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .map(|dt| dt.into())
-                    .context("invalid --to timestamp (expected RFC 3339)")
-            })
-            .transpose()?,
-        action_kind: action,
-        decision,
-        principal,
-        reason_contains: search,
-        limit: Some(last.unwrap_or(page_size)),
-        offset: if last.is_some() {
-            None
-        } else {
-            Some((page.saturating_sub(1)) * page_size)
-        },
-        ..Default::default()
-    };
+    let page = opts.page;
+    let filter = opts.into_filter()?;
 
     let (entries, total) = store
         .query_filtered(&filter)
