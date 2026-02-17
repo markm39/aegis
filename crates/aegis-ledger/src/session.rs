@@ -12,6 +12,7 @@ use uuid::Uuid;
 use aegis_types::AegisError;
 
 use crate::entry::AuditEntry;
+use crate::parse_helpers::{parse_datetime, parse_uuid};
 use crate::store::AuditStore;
 
 /// A session represents one `aegis run` invocation.
@@ -224,19 +225,18 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     let args_json: String = row.get(3)?;
     let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
 
+    let end_time = match row.get::<_, Option<String>>(5)? {
+        Some(s) => Some(parse_datetime(&s, 5)?),
+        None => None,
+    };
+
     Ok(Session {
-        session_id: row
-            .get::<_, String>(0)
-            .map(|s| Uuid::parse_str(&s).unwrap())?,
+        session_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
         config_name: row.get(1)?,
         command: row.get(2)?,
         args,
-        start_time: row
-            .get::<_, String>(4)
-            .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
-        end_time: row
-            .get::<_, Option<String>>(5)?
-            .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into()),
+        start_time: parse_datetime(&row.get::<_, String>(4)?, 4)?,
+        end_time,
         exit_code: row.get(6)?,
         policy_hash: row.get(7)?,
         total_actions: row.get::<_, i64>(8).map(|v| v as usize)?,

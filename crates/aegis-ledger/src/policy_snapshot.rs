@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use aegis_types::AegisError;
 
+use crate::parse_helpers::{parse_datetime, parse_uuid};
 use crate::store::AuditStore;
 
 /// A point-in-time snapshot of the policy configuration.
@@ -197,18 +198,17 @@ fn row_to_policy_snapshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<PolicySna
     let policy_files: BTreeMap<String, String> =
         serde_json::from_str(&files_json).unwrap_or_default();
 
-    let session_id_str: Option<String> = row.get(4)?;
+    let session_id = match row.get::<_, Option<String>>(4)? {
+        Some(s) => Some(parse_uuid(&s, 4)?),
+        None => None,
+    };
 
     Ok(PolicySnapshot {
-        snapshot_id: row
-            .get::<_, String>(0)
-            .map(|s| Uuid::parse_str(&s).unwrap())?,
-        timestamp: row
-            .get::<_, String>(1)
-            .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
+        snapshot_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
+        timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
         policy_hash: row.get(2)?,
         policy_files,
-        session_id: session_id_str.map(|s| Uuid::parse_str(&s).unwrap()),
+        session_id,
         config_name: row.get(5)?,
     })
 }

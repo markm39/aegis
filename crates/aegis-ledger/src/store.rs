@@ -10,6 +10,7 @@ use aegis_types::{Action, AegisError, Verdict};
 
 use crate::entry::{compute_hash, AuditEntry};
 use crate::integrity::IntegrityReport;
+use crate::parse_helpers::{parse_datetime, parse_uuid};
 
 /// The sentinel value used as prev_hash for the very first entry.
 const GENESIS_HASH: &str = "genesis";
@@ -83,13 +84,17 @@ impl AuditStore {
 
         // Add session_id column if it does not already exist (migration).
         // This is a nullable column for backward compatibility with existing ledgers.
-        let _ = conn.execute_batch(
+        if let Err(e) = conn.execute_batch(
             "ALTER TABLE audit_log ADD COLUMN session_id TEXT;
              CREATE INDEX IF NOT EXISTS idx_session_id ON audit_log(session_id);",
-        );
+        ) {
+            tracing::debug!(error = %e, "session_id migration already applied or not needed");
+        }
 
         // Add tag column to sessions table (migration for existing ledgers).
-        let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN tag TEXT;");
+        if let Err(e) = conn.execute_batch("ALTER TABLE sessions ADD COLUMN tag TEXT;") {
+            tracing::debug!(error = %e, "tag migration already applied or not needed");
+        }
 
         let latest_hash: String = conn
             .query_row(
@@ -156,15 +161,9 @@ impl AuditStore {
         let rows = stmt
             .query_map([], |row| {
                 Ok(AuditEntry {
-                    entry_id: row
-                        .get::<_, String>(0)
-                        .map(|s| Uuid::parse_str(&s).unwrap())?,
-                    timestamp: row
-                        .get::<_, String>(1)
-                        .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
-                    action_id: row
-                        .get::<_, String>(2)
-                        .map(|s| Uuid::parse_str(&s).unwrap())?,
+                    entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
+                    timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
+                    action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
                     action_kind: row.get(3)?,
                     principal: row.get(4)?,
                     decision: row.get(5)?,

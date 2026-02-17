@@ -1,12 +1,11 @@
 /// Query interface for audit records.
-use chrono::DateTime;
 use rusqlite::params;
-use uuid::Uuid;
 
 use aegis_types::AegisError;
 
 use crate::entry::AuditEntry;
 use crate::filter::AuditFilter;
+use crate::parse_helpers::{parse_datetime, parse_uuid};
 use crate::store::AuditStore;
 
 impl AuditStore {
@@ -244,15 +243,9 @@ impl AuditStore {
             .query_map(params![after_id], |row| {
                 let row_id: i64 = row.get(0)?;
                 let entry = AuditEntry {
-                    entry_id: row
-                        .get::<_, String>(1)
-                        .map(|s| Uuid::parse_str(&s).unwrap())?,
-                    timestamp: row
-                        .get::<_, String>(2)
-                        .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
-                    action_id: row
-                        .get::<_, String>(3)
-                        .map(|s| Uuid::parse_str(&s).unwrap())?,
+                    entry_id: parse_uuid(&row.get::<_, String>(1)?, 1)?,
+                    timestamp: parse_datetime(&row.get::<_, String>(2)?, 2)?,
+                    action_id: parse_uuid(&row.get::<_, String>(3)?, 3)?,
                     action_kind: row.get(4)?,
                     principal: row.get(5)?,
                     decision: row.get(6)?,
@@ -273,15 +266,9 @@ impl AuditStore {
 /// Map a SQLite row to an AuditEntry.
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
     Ok(AuditEntry {
-        entry_id: row
-            .get::<_, String>(0)
-            .map(|s| Uuid::parse_str(&s).unwrap())?,
-        timestamp: row
-            .get::<_, String>(1)
-            .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().into())?,
-        action_id: row
-            .get::<_, String>(2)
-            .map(|s| Uuid::parse_str(&s).unwrap())?,
+        entry_id: parse_uuid(&row.get::<_, String>(0)?, 0)?,
+        timestamp: parse_datetime(&row.get::<_, String>(1)?, 1)?,
+        action_id: parse_uuid(&row.get::<_, String>(2)?, 2)?,
         action_kind: row.get(3)?,
         principal: row.get(4)?,
         decision: row.get(5)?,
