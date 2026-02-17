@@ -82,6 +82,9 @@ enum Commands {
         config: String,
     },
 
+    /// List all Aegis configurations
+    List,
+
     /// Wrap a command with Aegis observability (observe-only by default)
     Wrap {
         /// Project directory to observe (defaults to current directory)
@@ -286,6 +289,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Status { config } => {
             commands::status::run(&config)
+        }
+        Commands::List => {
+            commands::list::run()
         }
         Commands::Wrap {
             dir,
@@ -628,6 +634,14 @@ mod tests {
             "default-deny",
         ]);
         assert!(cli.is_ok(), "should parse policy generate: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_list() {
+        let cli = Cli::try_parse_from(["aegis", "list"]);
+        assert!(cli.is_ok(), "should parse list: {cli:?}");
+        let cli = cli.unwrap();
+        assert!(matches!(cli.command, Commands::List));
     }
 
     #[test]
