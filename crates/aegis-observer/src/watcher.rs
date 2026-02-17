@@ -51,11 +51,10 @@ impl FsWatcher {
         let event_count = Arc::new(AtomicUsize::new(0));
 
         // Create the notify watcher, forwarding events to our channel
-        let tx_clone = event_tx.clone();
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
-                    let _ = tx_clone.send(event);
+                    let _ = event_tx.send(event);
                 }
             },
             Config::default(),
