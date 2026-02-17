@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chrono::DateTime;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tracing::info;
 use uuid::Uuid;
 
@@ -116,7 +116,14 @@ impl AuditStore {
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or_else(|_| GENESIS_HASH.to_string());
+            .optional()
+            .map_err(|e| {
+                AegisError::LedgerError(format!(
+                    "failed to read latest hash from '{}': {e}",
+                    path.display()
+                ))
+            })?
+            .unwrap_or_else(|| GENESIS_HASH.to_string());
 
         info!(latest_hash = %latest_hash, "audit store opened");
 
