@@ -222,14 +222,7 @@ use rusqlite::OptionalExtension;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::AuditStore;
-    use tempfile::NamedTempFile;
-
-    fn test_db() -> (NamedTempFile, AuditStore) {
-        let tmp = NamedTempFile::new().unwrap();
-        let store = AuditStore::open(tmp.path()).unwrap();
-        (tmp, store)
-    }
+    use crate::test_helpers::test_db;
 
     fn sample_files() -> BTreeMap<String, String> {
         let mut files = BTreeMap::new();

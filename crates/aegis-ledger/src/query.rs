@@ -257,11 +257,8 @@ mod tests {
     use super::*;
     use aegis_types::{Action, ActionKind, Verdict};
     use std::path::PathBuf;
-    use tempfile::NamedTempFile;
 
-    fn test_db_path() -> NamedTempFile {
-        NamedTempFile::new().expect("failed to create temp file")
-    }
+    use crate::test_helpers::test_db_path;
 
     fn make_action(principal: &str, kind: ActionKind) -> Action {
         Action::new(principal, kind)

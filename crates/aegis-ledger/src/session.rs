@@ -250,13 +250,8 @@ mod tests {
     use super::*;
     use aegis_types::{Action, ActionKind, Verdict};
     use std::path::PathBuf;
-    use tempfile::NamedTempFile;
 
-    fn test_db() -> (NamedTempFile, AuditStore) {
-        let tmp = NamedTempFile::new().expect("failed to create temp file");
-        let store = AuditStore::open(tmp.path()).expect("failed to open store");
-        (tmp, store)
-    }
+    use crate::test_helpers::test_db;
 
     #[test]
     fn begin_and_end_session() {

@@ -22,3 +22,23 @@ pub use query::row_to_entry;
 pub use session::Session;
 pub use stats::AuditStats;
 pub use store::AuditStore;
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use crate::store::AuditStore;
+    use tempfile::NamedTempFile;
+
+    /// Create a temporary database file and open an AuditStore on it.
+    ///
+    /// Returns both the handle (to keep the file alive) and the store.
+    pub fn test_db() -> (NamedTempFile, AuditStore) {
+        let tmp = NamedTempFile::new().expect("failed to create temp file");
+        let store = AuditStore::open(tmp.path()).expect("failed to open store");
+        (tmp, store)
+    }
+
+    /// Create a temporary database file without opening a store.
+    pub fn test_db_path() -> NamedTempFile {
+        NamedTempFile::new().expect("failed to create temp file")
+    }
+}

@@ -156,13 +156,8 @@ mod tests {
     use super::*;
     use aegis_types::{Action, ActionKind, Verdict};
     use std::path::PathBuf;
-    use tempfile::NamedTempFile;
 
-    fn test_db() -> (NamedTempFile, AuditStore) {
-        let tmp = NamedTempFile::new().unwrap();
-        let store = AuditStore::open(tmp.path()).unwrap();
-        (tmp, store)
-    }
+    use crate::test_helpers::test_db;
 
     fn populate(store: &mut AuditStore) {
         let entries = vec![
