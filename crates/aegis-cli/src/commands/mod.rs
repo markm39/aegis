@@ -1,3 +1,5 @@
+//! CLI command implementations for the `aegis` binary.
+
 pub mod audit;
 pub mod config;
 pub mod diff;

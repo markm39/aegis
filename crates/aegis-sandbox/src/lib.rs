@@ -1,3 +1,9 @@
+//! OS-level sandboxing backends for Aegis.
+//!
+//! Provides [`SandboxBackend`] trait with two implementations:
+//! - [`SeatbeltBackend`]: macOS Seatbelt (`sandbox-exec`) with auto-generated SBPL profiles
+//! - [`ProcessBackend`]: simple process execution without OS-level isolation
+
 pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod compiler;

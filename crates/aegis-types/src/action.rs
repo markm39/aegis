@@ -1,3 +1,8 @@
+//! Actions that agents can perform, evaluated against Cedar policies.
+//!
+//! An [`Action`] pairs a principal with an [`ActionKind`] and is the primary
+//! input to policy evaluation and audit logging.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

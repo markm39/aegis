@@ -1,3 +1,8 @@
+//! Authorization verdicts produced by the Cedar policy engine.
+//!
+//! A [`Verdict`] records whether an action was allowed or denied, along with
+//! the reason and which policy matched.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -1,3 +1,9 @@
+//! Configuration types for Aegis agent instances.
+//!
+//! [`AegisConfig`] is the top-level configuration loaded from `aegis.toml`,
+//! controlling sandbox paths, policy locations, network rules, isolation
+//! backend, and observer settings.
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

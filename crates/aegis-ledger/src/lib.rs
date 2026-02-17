@@ -1,3 +1,9 @@
+//! Append-only, SHA-256 hash-chained audit ledger backed by SQLite.
+//!
+//! Every action and its policy verdict are recorded as an [`AuditEntry`] linked
+//! to the previous entry's hash, forming a tamper-evident chain. Supports
+//! sessions, filtered queries, policy snapshots, and compliance statistics.
+
 pub mod entry;
 pub mod filter;
 pub mod integrity;
