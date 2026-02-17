@@ -87,15 +87,7 @@ fn print_ledger_status(config: &aegis_types::AegisConfig) -> Result<()> {
 
     // Disk usage
     if let Ok(meta) = std::fs::metadata(&config.ledger_path) {
-        let size = meta.len();
-        let display = if size < 1024 {
-            format!("{size} B")
-        } else if size < 1024 * 1024 {
-            format!("{:.1} KB", size as f64 / 1024.0)
-        } else {
-            format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
-        };
-        println!("  Ledger size:  {display}");
+        println!("  Ledger size:  {}", format_size(meta.len()));
     }
 
     let store = match AuditStore::open(&config.ledger_path) {
@@ -147,4 +139,47 @@ fn print_ledger_status(config: &aegis_types::AegisConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Format a byte count as a human-readable size string.
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_size_bytes() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_size_kilobytes() {
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(10240), "10.0 KB");
+    }
+
+    #[test]
+    fn format_size_megabytes() {
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(1024 * 1024 * 5), "5.0 MB");
+        assert_eq!(format_size(1024 * 1024 + 512 * 1024), "1.5 MB");
+    }
+
+    #[test]
+    fn format_size_boundary() {
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+    }
 }
