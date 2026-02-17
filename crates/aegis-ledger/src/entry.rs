@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use aegis_types::{Action, Verdict};
+use aegis_types::{Action, AegisError, Verdict};
 
 /// A single entry in the append-only audit ledger.
 #[derive(Debug, Clone)]
@@ -27,11 +27,11 @@ impl AuditEntry {
     /// Create a new audit entry from an action, verdict, and the previous entry's hash.
     ///
     /// Computes `entry_hash = hex(SHA-256(entry_id || timestamp || action_id || action_kind || principal || decision || reason || prev_hash))`.
-    pub fn new(action: &Action, verdict: &Verdict, prev_hash: String) -> Self {
+    pub fn new(action: &Action, verdict: &Verdict, prev_hash: String) -> Result<Self, AegisError> {
         let entry_id = Uuid::new_v4();
         let timestamp = Utc::now();
-        let action_kind =
-            serde_json::to_string(&action.kind).expect("ActionKind serialization cannot fail");
+        let action_kind = serde_json::to_string(&action.kind)
+            .map_err(|e| AegisError::LedgerError(format!("failed to serialize action kind: {e}")))?;
         let decision = verdict.decision.to_string();
 
         let entry_hash = compute_hash(
@@ -45,7 +45,7 @@ impl AuditEntry {
             &prev_hash,
         );
 
-        Self {
+        Ok(Self {
             entry_id,
             timestamp,
             action_id: action.id,
@@ -56,7 +56,7 @@ impl AuditEntry {
             policy_id: verdict.policy_id.clone(),
             prev_hash,
             entry_hash,
-        }
+        })
     }
 }
 
@@ -163,7 +163,7 @@ mod tests {
             },
         );
         let verdict = Verdict::allow(action.id, "ok", None);
-        let entry = AuditEntry::new(&action, &verdict, "genesis".to_string());
+        let entry = AuditEntry::new(&action, &verdict, "genesis".to_string()).unwrap();
 
         assert_eq!(entry.prev_hash, "genesis");
         assert!(!entry.entry_hash.is_empty());
@@ -181,7 +181,7 @@ mod tests {
             },
         );
         let verdict = Verdict::deny(action.id, "blocked by policy", Some("pol-1".into()));
-        let entry = AuditEntry::new(&action, &verdict, "abc123".to_string());
+        let entry = AuditEntry::new(&action, &verdict, "abc123".to_string()).unwrap();
 
         assert_eq!(entry.decision, "Deny");
         assert_eq!(entry.reason, "blocked by policy");
@@ -197,7 +197,7 @@ mod tests {
             },
         );
         let verdict = Verdict::deny(action.id, "forbidden", None);
-        let entry = AuditEntry::new(&action, &verdict, "prev".to_string());
+        let entry = AuditEntry::new(&action, &verdict, "prev".to_string()).unwrap();
 
         let recomputed = compute_hash(
             &entry.entry_id,

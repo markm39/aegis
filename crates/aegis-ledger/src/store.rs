@@ -118,7 +118,7 @@ impl AuditStore {
         action: &Action,
         verdict: &Verdict,
     ) -> Result<AuditEntry, AegisError> {
-        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone());
+        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
 
         self.conn
             .execute(
@@ -249,7 +249,7 @@ impl AuditStore {
         verdict: &Verdict,
         session_id: &Uuid,
     ) -> Result<AuditEntry, AegisError> {
-        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone());
+        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
 
         self.conn
             .execute(
