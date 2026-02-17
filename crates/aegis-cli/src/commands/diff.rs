@@ -249,4 +249,71 @@ mod tests {
         let map = build_resource_map(&entries);
         assert_eq!(map.get("FileRead  /a"), Some(&2));
     }
+
+    #[test]
+    fn extract_resource_key_tool_call() {
+        let json = r#"{"ToolCall":{"tool":"write_file","args":null}}"#;
+        let key = extract_resource_key(json);
+        assert_eq!(key, "ToolCall  write_file");
+    }
+
+    #[test]
+    fn extract_resource_key_empty_object() {
+        let json = r#"{}"#;
+        let key = extract_resource_key(json);
+        // Empty JSON object -> no variant, returns raw string
+        assert_eq!(key, "{}");
+    }
+
+    #[test]
+    fn extract_resource_key_unknown_variant_no_fields() {
+        let json = r#"{"CustomAction":{"unknown":"data"}}"#;
+        let key = extract_resource_key(json);
+        // No recognized field -> just the variant name
+        assert_eq!(key, "CustomAction");
+    }
+
+    #[test]
+    fn extract_resource_key_net_request() {
+        let json = r#"{"NetRequest":{"method":"GET","url":"https://example.com"}}"#;
+        let key = extract_resource_key(json);
+        // NetRequest has no "path", "host", "command", or "tool" field;
+        // falls through to just the variant name
+        assert_eq!(key, "NetRequest");
+    }
+
+    #[test]
+    fn build_resource_map_multiple_actions() {
+        let entries = vec![
+            aegis_ledger::AuditEntry {
+                entry_id: uuid::Uuid::new_v4(),
+                timestamp: chrono::Utc::now(),
+                action_id: uuid::Uuid::new_v4(),
+                action_kind: r#"{"FileRead":{"path":"/a"}}"#.to_string(),
+                principal: "agent".to_string(),
+                decision: "Allow".to_string(),
+                reason: "ok".to_string(),
+                policy_id: None,
+                prev_hash: "genesis".to_string(),
+                entry_hash: "abc".to_string(),
+            },
+            aegis_ledger::AuditEntry {
+                entry_id: uuid::Uuid::new_v4(),
+                timestamp: chrono::Utc::now(),
+                action_id: uuid::Uuid::new_v4(),
+                action_kind: r#"{"FileWrite":{"path":"/b"}}"#.to_string(),
+                principal: "agent".to_string(),
+                decision: "Deny".to_string(),
+                reason: "blocked".to_string(),
+                policy_id: None,
+                prev_hash: "abc".to_string(),
+                entry_hash: "def".to_string(),
+            },
+        ];
+
+        let map = build_resource_map(&entries);
+        assert_eq!(map.get("FileRead  /a"), Some(&1));
+        assert_eq!(map.get("FileWrite  /b"), Some(&1));
+        assert_eq!(map.len(), 2);
+    }
 }

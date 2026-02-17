@@ -716,4 +716,38 @@ mod tests {
     fn cef_escape_equals_and_newlines() {
         assert_eq!(cef_escape("key=val\nnext"), "key\\=val\\nnext");
     }
+
+    #[test]
+    fn parse_duration_whitespace_trimmed() {
+        let d = parse_duration("  7d  ").unwrap();
+        assert_eq!(d.num_days(), 7);
+    }
+
+    #[test]
+    fn parse_duration_single_day() {
+        let d = parse_duration("1d").unwrap();
+        assert_eq!(d.num_days(), 1);
+    }
+
+    #[test]
+    fn parse_duration_large_number() {
+        let d = parse_duration("365d").unwrap();
+        assert_eq!(d.num_days(), 365);
+    }
+
+    #[test]
+    fn parse_duration_multi_char_unit_fails() {
+        // "30dd" -> tries to parse "30d" as number, which fails
+        assert!(parse_duration("30dd").is_err());
+    }
+
+    #[test]
+    fn csv_escape_combined_special_chars() {
+        assert_eq!(csv_escape("a,b\"c\nd"), "\"a,b\"\"c\nd\"");
+    }
+
+    #[test]
+    fn cef_escape_clean_string() {
+        assert_eq!(cef_escape("simple"), "simple");
+    }
 }
