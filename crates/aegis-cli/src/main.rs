@@ -123,6 +123,9 @@ enum Commands {
         shell: clap_complete::Shell,
     },
 
+    /// Generate a man page and print to stdout
+    Manpage,
+
     /// Wrap a command with Aegis observability (observe-only by default)
     Wrap {
         /// Project directory to observe (defaults to current directory)
@@ -482,6 +485,12 @@ fn main() -> anyhow::Result<()> {
                 &mut std::io::stdout(),
             );
             Ok(())
+        }
+        Commands::Manpage => {
+            let cmd = Cli::command();
+            let man = clap_mangen::Man::new(cmd);
+            man.render(&mut std::io::stdout())
+                .map_err(|e| anyhow::anyhow!("failed to render man page: {e}"))
         }
         Commands::Wrap {
             dir,
@@ -1190,6 +1199,14 @@ mod tests {
     fn cli_parse_completions_bash() {
         let cli = Cli::try_parse_from(["aegis", "completions", "bash"]);
         assert!(cli.is_ok(), "should parse completions bash: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_manpage() {
+        let cli = Cli::try_parse_from(["aegis", "manpage"]);
+        assert!(cli.is_ok(), "should parse manpage: {cli:?}");
+        let cli = cli.unwrap();
+        assert!(matches!(cli.command, Commands::Manpage));
     }
 
     #[test]
