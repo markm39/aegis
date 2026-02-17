@@ -358,7 +358,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Run { config, policy, tag, command } => {
             let (cmd, args) = command
                 .split_first()
-                .ok_or_else(|| anyhow::anyhow!("no command provided after --"))?;
+                .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis run -- <command> [args...]"))?;
             let config_name = config
                 .unwrap_or_else(|| commands::wrap::derive_name(cmd));
             commands::run::run(&config_name, &policy, cmd, args, tag.as_deref())
@@ -447,7 +447,7 @@ fn main() -> anyhow::Result<()> {
         } => {
             let (cmd, args) = command
                 .split_first()
-                .ok_or_else(|| anyhow::anyhow!("no command provided after --"))?;
+                .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis wrap -- <command> [args...]"))?;
             commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref())
         }
     }

@@ -174,12 +174,12 @@ pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
 
     let session_id: uuid::Uuid = session_id_str
         .parse()
-        .context("invalid session UUID")?;
+        .with_context(|| format!("invalid session UUID: '{session_id_str}'"))?;
 
     let session = store
         .get_session(&session_id)
         .context("failed to get session")?
-        .context("session not found")?;
+        .with_context(|| format!("session not found: {session_id_str}"))?;
 
     println!("Session:       {}", session.session_id);
     println!("Config:        {}", session.config_name);
@@ -264,7 +264,7 @@ pub fn tag_session(config_name: &str, session_id_str: &str, tag: &str) -> Result
 
     let session_id: uuid::Uuid = session_id_str
         .parse()
-        .context("invalid session UUID")?;
+        .with_context(|| format!("invalid session UUID: '{session_id_str}'"))?;
 
     store
         .update_session_tag(&session_id, tag)
@@ -280,14 +280,28 @@ pub fn tag_session(config_name: &str, session_id_str: &str, tag: &str) -> Result
 /// Deletes audit entries older than the specified duration and rebuilds
 /// the hash chain for remaining entries.
 pub fn purge(config_name: &str, older_than: &str, confirm: bool) -> Result<()> {
+    let duration = parse_duration(older_than)?;
+
     if !confirm {
+        // Show a preview of what would be deleted
+        let cutoff = Utc::now() - duration;
+        let config = load_config(config_name)?;
+        let store =
+            AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+        let total = store.count().unwrap_or(0);
+
+        // Count entries that would be deleted
+        let filter = AuditFilter {
+            to: Some(cutoff),
+            ..Default::default()
+        };
+        let (_, would_delete) = store.query_filtered(&filter).unwrap_or((vec![], 0));
+
         bail!(
-            "purge is destructive and cannot be undone. Add --confirm to proceed.\n\
-             This will delete entries and rebuild the hash chain."
+            "purge would delete {would_delete} of {total} entries older than {older_than}.\n\
+             This is destructive and cannot be undone. Add --confirm to proceed."
         );
     }
-
-    let duration = parse_duration(older_than)?;
     let cutoff = Utc::now() - duration;
 
     let config = load_config(config_name)?;

@@ -17,20 +17,20 @@ pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<
 
     let s1_id: uuid::Uuid = session1_str
         .parse()
-        .context("invalid session1 UUID")?;
+        .with_context(|| format!("invalid --session1 UUID: '{session1_str}'"))?;
     let s2_id: uuid::Uuid = session2_str
         .parse()
-        .context("invalid session2 UUID")?;
+        .with_context(|| format!("invalid --session2 UUID: '{session2_str}'"))?;
 
     // Load session metadata
     let s1_meta = store
         .get_session(&s1_id)
         .context("failed to get session1")?
-        .context("session1 not found")?;
+        .with_context(|| format!("session1 not found: {session1_str}; use 'aegis audit sessions {config_name}' to list sessions"))?;
     let s2_meta = store
         .get_session(&s2_id)
         .context("failed to get session2")?
-        .context("session2 not found")?;
+        .with_context(|| format!("session2 not found: {session2_str}; use 'aegis audit sessions {config_name}' to list sessions"))?;
 
     // Load entries for each session
     let s1_entries = store

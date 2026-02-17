@@ -294,10 +294,15 @@ pub fn load_config_from_dir(base_dir: &Path) -> Result<AegisConfig> {
 
     let content = fs::read_to_string(&config_path).with_context(|| {
         format!(
-            "failed to read config file: {}",
+            "configuration '{}' not found at {}\n  \
+             Hint: run 'aegis init {}' to create it, or 'aegis list' to see existing configs",
+            base_dir.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
             config_path.display(),
+            base_dir.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
         )
     })?;
 
-    AegisConfig::from_toml(&content).context("failed to parse aegis.toml")
+    AegisConfig::from_toml(&content).with_context(|| {
+        format!("failed to parse {}", config_path.display())
+    })
 }
