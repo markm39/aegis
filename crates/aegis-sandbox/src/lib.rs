@@ -66,3 +66,23 @@ pub(crate) fn write_sbpl_base(profile: &mut String) {
     profile.push_str("(allow sysctl-read)\n");
     profile.push_str("(allow mach-lookup)\n");
 }
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use aegis_types::{AegisConfig, IsolationConfig};
+    use std::path::PathBuf;
+
+    /// Create a test AegisConfig with the given sandbox directory and isolation mode.
+    pub fn test_config(sandbox_dir: PathBuf, isolation: IsolationConfig) -> AegisConfig {
+        AegisConfig {
+            name: "test-agent".into(),
+            sandbox_dir,
+            policy_paths: vec![],
+            schema_path: None,
+            ledger_path: PathBuf::from("/tmp/audit.db"),
+            allowed_network: vec![],
+            isolation,
+            observer: aegis_types::ObserverConfig::default(),
+        }
+    }
+}

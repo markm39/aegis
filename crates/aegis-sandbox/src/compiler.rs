@@ -69,18 +69,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn test_config() -> AegisConfig {
-        AegisConfig {
-            name: "test-agent".into(),
-            sandbox_dir: PathBuf::from("/tmp/aegis-test-sandbox"),
-            policy_paths: vec![],
-            schema_path: None,
-            ledger_path: PathBuf::from("/tmp/audit.db"),
-            allowed_network: vec![],
-            isolation: IsolationConfig::Seatbelt {
-                profile_overrides: None,
-            },
-            observer: aegis_types::ObserverConfig::default(),
-        }
+        crate::test_helpers::test_config(
+            PathBuf::from("/tmp/aegis-test-sandbox"),
+            IsolationConfig::Seatbelt { profile_overrides: None },
+        )
     }
 
     #[test]

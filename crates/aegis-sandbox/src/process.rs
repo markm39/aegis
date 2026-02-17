@@ -86,25 +86,11 @@ impl SandboxBackend for ProcessBackend {
 mod tests {
     use super::*;
     use aegis_types::IsolationConfig;
-    use std::path::PathBuf;
-
-    fn test_config(sandbox_dir: PathBuf) -> AegisConfig {
-        AegisConfig {
-            name: "test-agent".into(),
-            sandbox_dir,
-            policy_paths: vec![],
-            schema_path: None,
-            ledger_path: PathBuf::from("/tmp/audit.db"),
-            allowed_network: vec![],
-            isolation: IsolationConfig::Process,
-            observer: aegis_types::ObserverConfig::default(),
-        }
-    }
 
     #[test]
     fn process_backend_runs_command_successfully() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let config = test_config(dir.path().to_path_buf());
+        let config = crate::test_helpers::test_config(dir.path().to_path_buf(), IsolationConfig::Process);
 
         let backend = ProcessBackend;
         backend.prepare(&config).expect("prepare failed");
@@ -119,7 +105,7 @@ mod tests {
     #[test]
     fn process_backend_spawn_and_wait_returns_real_pid() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let config = test_config(dir.path().to_path_buf());
+        let config = crate::test_helpers::test_config(dir.path().to_path_buf(), IsolationConfig::Process);
 
         let backend = ProcessBackend;
         backend.prepare(&config).expect("prepare failed");
@@ -135,7 +121,7 @@ mod tests {
     #[test]
     fn process_backend_spawn_and_wait_passes_env() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let config = test_config(dir.path().to_path_buf());
+        let config = crate::test_helpers::test_config(dir.path().to_path_buf(), IsolationConfig::Process);
         let output_path = dir.path().join("env_output.txt");
 
         let backend = ProcessBackend;
@@ -164,7 +150,7 @@ mod tests {
     fn process_backend_prepare_creates_sandbox_dir() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let sandbox_dir = dir.path().join("nested").join("sandbox");
-        let config = test_config(sandbox_dir.clone());
+        let config = crate::test_helpers::test_config(sandbox_dir.clone(), IsolationConfig::Process);
 
         let backend = ProcessBackend;
         backend.prepare(&config).expect("prepare failed");
