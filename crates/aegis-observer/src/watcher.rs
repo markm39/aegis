@@ -6,7 +6,7 @@
 ///
 /// Events are mapped to `FsEvent`s, evaluated against the Cedar policy engine,
 /// and appended to the audit store.
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -304,16 +304,10 @@ fn map_notify_event(event: &notify::Event, sandbox_dir: &Path) -> Vec<FsEvent> {
         .collect()
 }
 
-/// Convert a path to a relative path within the sandbox, for cleaner logging.
-pub fn relative_to_sandbox(path: &Path, sandbox_dir: &Path) -> PathBuf {
-    path.strip_prefix(sandbox_dir)
-        .unwrap_or(path)
-        .to_path_buf()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn map_create_file_event() {
@@ -370,19 +364,4 @@ mod tests {
         assert!(fs_events.is_empty());
     }
 
-    #[test]
-    fn relative_to_sandbox_strips_prefix() {
-        let sandbox = PathBuf::from("/home/user/.aegis/agent/sandbox");
-        let full = PathBuf::from("/home/user/.aegis/agent/sandbox/subdir/file.txt");
-        let rel = relative_to_sandbox(&full, &sandbox);
-        assert_eq!(rel, PathBuf::from("subdir/file.txt"));
-    }
-
-    #[test]
-    fn relative_to_sandbox_returns_full_if_not_under() {
-        let sandbox = PathBuf::from("/sandbox");
-        let other = PathBuf::from("/other/file.txt");
-        let rel = relative_to_sandbox(&other, &sandbox);
-        assert_eq!(rel, PathBuf::from("/other/file.txt"));
-    }
 }
