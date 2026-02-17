@@ -141,6 +141,20 @@ enum PolicyCommands {
         #[arg(long)]
         template: String,
     },
+
+    /// Test a policy against a hypothetical action (dry run)
+    Test {
+        /// Name of the aegis configuration
+        config: String,
+
+        /// Action to test (FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, ToolCall, ProcessSpawn, ProcessExit)
+        #[arg(long)]
+        action: String,
+
+        /// Resource path or identifier to test against
+        #[arg(long)]
+        resource: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -269,6 +283,11 @@ fn main() -> anyhow::Result<()> {
             PolicyCommands::Validate { path } => commands::policy::validate(&path),
             PolicyCommands::List { config } => commands::policy::list(&config),
             PolicyCommands::Generate { template } => commands::policy::generate(&template),
+            PolicyCommands::Test {
+                config,
+                action,
+                resource,
+            } => commands::policy::test_policy(&config, &action, &resource),
         },
         Commands::Audit { action } => match action {
             AuditCommands::Query {
@@ -640,6 +659,37 @@ mod tests {
         let cli =
             Cli::try_parse_from(["aegis", "policy", "list", "myagent"]);
         assert!(cli.is_ok(), "should parse policy list: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_policy_test() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "policy",
+            "test",
+            "myagent",
+            "--action",
+            "FileRead",
+            "--resource",
+            "/tmp/test.txt",
+        ]);
+        assert!(cli.is_ok(), "should parse policy test: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command {
+            Commands::Policy {
+                action:
+                    PolicyCommands::Test {
+                        config,
+                        action,
+                        resource,
+                    },
+            } => {
+                assert_eq!(config, "myagent");
+                assert_eq!(action, "FileRead");
+                assert_eq!(resource, "/tmp/test.txt");
+            }
+            _ => panic!("expected Policy Test command"),
+        }
     }
 
     #[test]

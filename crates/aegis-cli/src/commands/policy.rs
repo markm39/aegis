@@ -1,11 +1,13 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 
 use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::default_schema;
+use aegis_policy::PolicyEngine;
+use aegis_types::{Action, ActionKind};
 
 use crate::commands::init::load_config;
 
@@ -111,6 +113,130 @@ pub fn generate(template_name: &str) -> Result<()> {
         None => {
             bail!(
                 "unknown policy template '{template_name}'; valid options: default-deny, allow-read-only"
+            );
+        }
+    }
+}
+
+/// Run `aegis policy test NAME --action ACTION --resource RESOURCE`.
+///
+/// Evaluates a Cedar policy against a hypothetical request without running
+/// anything. Shows the decision and reason.
+pub fn test_policy(config_name: &str, action_name: &str, resource: &str) -> Result<()> {
+    let config = load_config(config_name)?;
+
+    let policy_dir = config
+        .policy_paths
+        .first()
+        .context("no policy paths configured")?;
+
+    let engine =
+        PolicyEngine::new(policy_dir, None).context("failed to initialize policy engine")?;
+
+    let action_kind = parse_action_kind(action_name, resource)?;
+    let action = Action::new(&config.name, action_kind);
+    let verdict = engine.evaluate(&action);
+
+    let decision_str = if verdict.decision == aegis_types::Decision::Allow {
+        "ALLOW"
+    } else {
+        "DENY"
+    };
+
+    println!("Policy evaluation:");
+    println!(
+        "  Principal:  Aegis::Agent::\"{}\"",
+        config.name
+    );
+    println!(
+        "  Action:     Aegis::Action::\"{action_name}\""
+    );
+    println!("  Resource:   Aegis::Resource::\"{resource}\"");
+    println!("  Decision:   {decision_str}");
+    println!("  Reason:     {}", verdict.reason);
+
+    Ok(())
+}
+
+/// Parse a CLI action name and resource into an `ActionKind`.
+fn parse_action_kind(action_name: &str, resource: &str) -> Result<ActionKind> {
+    match action_name {
+        "FileRead" => Ok(ActionKind::FileRead {
+            path: PathBuf::from(resource),
+        }),
+        "FileWrite" => Ok(ActionKind::FileWrite {
+            path: PathBuf::from(resource),
+        }),
+        "FileDelete" => Ok(ActionKind::FileDelete {
+            path: PathBuf::from(resource),
+        }),
+        "DirCreate" => Ok(ActionKind::DirCreate {
+            path: PathBuf::from(resource),
+        }),
+        "DirList" => Ok(ActionKind::DirList {
+            path: PathBuf::from(resource),
+        }),
+        "NetConnect" => Ok(ActionKind::NetConnect {
+            host: resource.to_string(),
+            port: 443,
+        }),
+        "ToolCall" => Ok(ActionKind::ToolCall {
+            tool: resource.to_string(),
+            args: serde_json::Value::Null,
+        }),
+        "ProcessSpawn" => Ok(ActionKind::ProcessSpawn {
+            command: resource.to_string(),
+            args: vec![],
+        }),
+        "ProcessExit" => Ok(ActionKind::ProcessExit {
+            command: resource.to_string(),
+            exit_code: 0,
+        }),
+        _ => bail!(
+            "unknown action '{action_name}'; valid actions: FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect, ToolCall, ProcessSpawn, ProcessExit"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_action_kind_file_read() {
+        let kind = parse_action_kind("FileRead", "/tmp/test.txt").unwrap();
+        assert!(matches!(kind, ActionKind::FileRead { .. }));
+    }
+
+    #[test]
+    fn parse_action_kind_net_connect() {
+        let kind = parse_action_kind("NetConnect", "example.com").unwrap();
+        assert!(matches!(kind, ActionKind::NetConnect { .. }));
+    }
+
+    #[test]
+    fn parse_action_kind_unknown_fails() {
+        let result = parse_action_kind("Unknown", "/tmp");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_all_valid_actions() {
+        let actions = [
+            "FileRead",
+            "FileWrite",
+            "FileDelete",
+            "DirCreate",
+            "DirList",
+            "NetConnect",
+            "ToolCall",
+            "ProcessSpawn",
+            "ProcessExit",
+        ];
+        for action in actions {
+            assert!(
+                parse_action_kind(action, "/resource").is_ok(),
+                "should parse {action}"
             );
         }
     }
