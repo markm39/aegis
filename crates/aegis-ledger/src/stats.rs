@@ -117,7 +117,7 @@ impl AuditStore {
         let mut resource_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for (action_kind, count) in &raw {
-            let key = extract_resource_display(action_kind);
+            let key = ActionKind::display_from_json(action_kind);
             *resource_counts.entry(key).or_insert(0) += count;
         }
 
@@ -164,14 +164,6 @@ impl AuditStore {
             .map(|c| c as usize)
             .map_err(|e| AegisError::LedgerError(format!("count_sessions failed: {e}")))
     }
-}
-
-/// Extract a human-readable resource display name from the action_kind JSON.
-///
-/// Delegates to `ActionKind::display_from_json` which deserializes the JSON
-/// and uses the `Display` impl.
-fn extract_resource_display(action_kind: &str) -> String {
-    ActionKind::display_from_json(action_kind)
 }
 
 #[cfg(test)]
@@ -303,20 +295,20 @@ mod tests {
     #[test]
     fn extract_resource_display_file_read() {
         let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
-        let display = extract_resource_display(json);
+        let display = ActionKind::display_from_json(json);
         assert_eq!(display, "FileRead /tmp/test.txt");
     }
 
     #[test]
     fn extract_resource_display_net_connect() {
         let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
-        let display = extract_resource_display(json);
+        let display = ActionKind::display_from_json(json);
         assert_eq!(display, "NetConnect example.com:443");
     }
 
     #[test]
     fn extract_resource_display_invalid_json() {
-        let display = extract_resource_display("not json");
+        let display = ActionKind::display_from_json("not json");
         assert_eq!(display, "not json");
     }
 
@@ -324,7 +316,7 @@ mod tests {
     fn extract_resource_display_unknown_json() {
         // JSON that doesn't match ActionKind falls back to raw string
         let json = r#"{"CustomAction":{}}"#;
-        let display = extract_resource_display(json);
+        let display = ActionKind::display_from_json(json);
         assert_eq!(display, json);
     }
 }
