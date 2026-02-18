@@ -14,6 +14,7 @@ members = [
     "crates/aegis-channel",
     "crates/aegis-daemon",
     "crates/aegis-cli",
+    "crates/aegis-harness",
     "tests",
 ]
 
@@ -80,3 +81,4 @@ axum = { version = "0.8", features = ["json"] }
 nix = { version = "0.29", features = ["fs", "process", "term", "poll", "signal"] }
 libc = "0.2"
 regex = "1"
+vt100 = "0.15"

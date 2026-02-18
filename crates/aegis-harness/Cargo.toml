@@ -1,0 +1,15 @@
+[package]
+name = "aegis-harness"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "PTY-based TUI integration test harness with terminal emulation"
+
+[dependencies]
+aegis-pilot = { path = "../aegis-pilot" }
+aegis-types = { workspace = true }
+vt100 = { workspace = true }
+regex = { workspace = true }
+thiserror = { workspace = true }
+libc = { workspace = true }
