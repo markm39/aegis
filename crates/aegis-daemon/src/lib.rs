@@ -1398,4 +1398,92 @@ mod tests {
         assert!(!resp.ok);
         assert_eq!(runtime.fleet.agent_count(), 1);
     }
+
+    #[test]
+    fn handle_command_update_agent_context() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+
+        let resp = runtime.handle_command(DaemonCommand::UpdateAgentContext {
+            name: "a1".into(),
+            role: Some("UX specialist".into()),
+            agent_goal: Some("Design the landing page".into()),
+            context: Some("Use Tailwind CSS".into()),
+            task: None, // leave unchanged
+        });
+        assert!(resp.ok, "update should succeed: {}", resp.message);
+
+        let slot = runtime.fleet.slot("a1").unwrap();
+        assert_eq!(slot.config.role.as_deref(), Some("UX specialist"));
+        assert_eq!(slot.config.agent_goal.as_deref(), Some("Design the landing page"));
+        assert_eq!(slot.config.context.as_deref(), Some("Use Tailwind CSS"));
+        assert_eq!(slot.config.task.as_deref(), Some("test task"), "task should be unchanged");
+    }
+
+    #[test]
+    fn handle_command_update_context_clear_field() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+
+        // Set a role first
+        runtime.handle_command(DaemonCommand::UpdateAgentContext {
+            name: "a1".into(),
+            role: Some("Backend dev".into()),
+            agent_goal: None,
+            context: None,
+            task: None,
+        });
+        assert_eq!(runtime.fleet.slot("a1").unwrap().config.role.as_deref(), Some("Backend dev"));
+
+        // Clear it with empty string
+        let resp = runtime.handle_command(DaemonCommand::UpdateAgentContext {
+            name: "a1".into(),
+            role: Some("".into()),
+            agent_goal: None,
+            context: None,
+            task: None,
+        });
+        assert!(resp.ok);
+        assert!(runtime.fleet.slot("a1").unwrap().config.role.is_none(), "empty string should clear field");
+    }
+
+    #[test]
+    fn handle_command_update_context_unknown_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::UpdateAgentContext {
+            name: "ghost".into(),
+            role: Some("whatever".into()),
+            agent_goal: None,
+            context: None,
+            task: None,
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_get_agent_context() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+
+        // Set some context
+        runtime.handle_command(DaemonCommand::UpdateAgentContext {
+            name: "a1".into(),
+            role: Some("Frontend dev".into()),
+            agent_goal: Some("Build the dashboard".into()),
+            context: None,
+            task: None,
+        });
+
+        let resp = runtime.handle_command(DaemonCommand::GetAgentContext { name: "a1".into() });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        assert_eq!(data["role"].as_str(), Some("Frontend dev"));
+        assert_eq!(data["agent_goal"].as_str(), Some("Build the dashboard"));
+        assert!(data["context"].is_null());
+        assert_eq!(data["task"].as_str(), Some("test task"));
+    }
+
+    #[test]
+    fn handle_command_get_context_unknown_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::GetAgentContext { name: "ghost".into() });
+        assert!(!resp.ok);
+    }
 }
