@@ -166,6 +166,12 @@ impl Fleet {
                     exit_code: -1,
                     restart_count: slot.restart_count,
                 };
+                // Clear channels and started_at so callers don't think this
+                // agent is reachable (e.g., send_to_agent, approve_request).
+                slot.output_rx = None;
+                slot.command_tx = None;
+                slot.update_rx = None;
+                slot.started_at = None;
             }
         }
     }
@@ -289,6 +295,11 @@ impl Fleet {
         if let Some(slot) = self.slots.get_mut(name) {
             slot.status = AgentStatus::Disabled;
             slot.backoff_until = None;
+            // Clear channels and timing so nothing references the dead thread.
+            slot.output_rx = None;
+            slot.command_tx = None;
+            slot.update_rx = None;
+            slot.started_at = None;
         }
         info!(agent = name, "agent disabled");
         Ok(())
@@ -639,9 +650,26 @@ impl Fleet {
     }
 
     /// Restart a specific agent (stop then start).
-    pub fn restart_agent(&mut self, name: &str) {
+    ///
+    /// Returns an error if the agent is unknown or disabled.
+    /// Clears any backoff timer so the restart happens immediately.
+    pub fn restart_agent(&mut self, name: &str) -> Result<(), String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        if !slot.config.enabled {
+            return Err(format!("agent '{name}' is disabled, enable it first"));
+        }
+
         self.stop_agent(name);
+
+        // Clear backoff so the restart isn't deferred.
+        if let Some(slot) = self.slots.get_mut(name) {
+            slot.backoff_until = None;
+        }
+
         self.start_agent(name);
+        Ok(())
     }
 
     /// Get the tool type name for an agent.

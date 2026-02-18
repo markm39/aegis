@@ -92,7 +92,9 @@ async fn handle_connection(
                 let resp = CommandResponse::error(format!("invalid JSON: {e}"));
                 let mut json = serde_json::to_string(&resp).unwrap_or_default();
                 json.push('\n');
-                let _ = writer.write_all(json.as_bytes()).await;
+                if writer.write_all(json.as_bytes()).await.is_err() {
+                    return Err("client disconnected during error response".into());
+                }
                 continue;
             }
         };

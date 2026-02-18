@@ -417,7 +417,9 @@ impl DaemonRuntime {
                         _ => None,
                     },
                     uptime_secs: slot.started_at.map(|t| t.elapsed().as_secs()),
-                    session_id: slot.session_id.lock().ok().and_then(|g| *g).map(|u| u.to_string()),
+                    session_id: slot.session_id.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .map(|u| u.to_string()),
                     role: slot.config.role.clone(),
                     agent_goal: slot.config.agent_goal.clone(),
                     context: slot.config.context.clone(),
@@ -466,11 +468,10 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::RestartAgent { ref name } => {
-                if self.fleet.agent_status(name).is_none() {
-                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                match self.fleet.restart_agent(name) {
+                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' restarted")),
+                    Err(e) => DaemonResponse::error(e),
                 }
-                self.fleet.restart_agent(name);
-                DaemonResponse::ok(format!("agent '{name}' restarted"))
             }
 
             DaemonCommand::SendToAgent { ref name, ref text } => {
@@ -908,7 +909,8 @@ impl DaemonRuntime {
 
         for name in self.fleet.agent_names() {
             if let Some(slot) = self.fleet.slot(&name) {
-                let sid = slot.session_id.lock().ok().and_then(|g| *g);
+                let sid = *slot.session_id.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 daemon_state.agents.push(state::AgentState {
                     name: name.clone(),
                     was_running: slot.is_thread_alive(),

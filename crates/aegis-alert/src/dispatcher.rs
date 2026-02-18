@@ -69,10 +69,16 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
         return;
     }
 
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
-        .unwrap_or_default();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to build HTTP client (TLS init?): {e}");
+            return;
+        }
+    };
 
     // Per-rule cooldown tracking: rule_name -> last fire time.
     let mut cooldowns: HashMap<String, Instant> = HashMap::new();
@@ -145,7 +151,7 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
                     } else {
                         Some(format!("HTTP {status}"))
                     };
-                    let _ = alert_log::record_dispatch(
+                    if let Err(db_err) = alert_log::record_dispatch(
                         &log_conn,
                         &alert_id,
                         &rule.name,
@@ -155,7 +161,9 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
                         Some(status),
                         success,
                         err_msg.as_deref(),
-                    );
+                    ) {
+                        error!("failed to record alert dispatch to database: {db_err}");
+                    }
                 }
                 Err(e) => {
                     error!(
@@ -163,7 +171,7 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
                         rule.name, event.entry_id
                     );
 
-                    let _ = alert_log::record_dispatch(
+                    if let Err(db_err) = alert_log::record_dispatch(
                         &log_conn,
                         &alert_id,
                         &rule.name,
@@ -173,7 +181,9 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
                         None,
                         false,
                         Some(&e.to_string()),
-                    );
+                    ) {
+                        error!("failed to record alert dispatch failure to database: {db_err}");
+                    }
                 }
             }
         }

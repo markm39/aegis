@@ -51,7 +51,9 @@ impl GenericAdapter {
         for pattern in &self.patterns {
             if let Some(caps) = pattern.regex.captures(line) {
                 let tool = caps.name("tool")
-                    .map(|m| m.as_str().to_string())
+                    .map(|m| m.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "unknown".into());
                 let args = caps.name("args")
                     .map(|m| m.as_str().to_string())
@@ -163,5 +165,28 @@ mod tests {
     fn empty_patterns() {
         let mut adapter = GenericAdapter::new(&[]);
         assert_eq!(adapter.scan_line("anything"), ScanResult::None);
+    }
+
+    #[test]
+    fn empty_tool_capture_defaults_to_unknown() {
+        // A regex where the tool capture group can match empty string
+        let patterns = vec![PromptPatternConfig {
+            regex: r"Run (?P<tool>\w*)\?".into(),
+            approve: "y".into(),
+            deny: "n".into(),
+        }];
+        let mut adapter = GenericAdapter::new(&patterns);
+
+        match adapter.scan_line("Run ?") {
+            ScanResult::Prompt(det) => {
+                match &det.action {
+                    aegis_types::ActionKind::ToolCall { tool, .. } => {
+                        assert_eq!(tool, "unknown", "empty tool capture should default to 'unknown'");
+                    }
+                    other => panic!("expected ToolCall, got {other:?}"),
+                }
+            }
+            other => panic!("expected Prompt, got {other:?}"),
+        }
     }
 }
