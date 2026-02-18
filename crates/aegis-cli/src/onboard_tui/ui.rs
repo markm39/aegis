@@ -229,9 +229,8 @@ fn draw_fleet_goal(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),                // Description
-            Constraint::Length(3),                // Input
+            Constraint::Min(3),                   // Input (grows for wrapped text)
             Constraint::Length(indicator_height),  // Paste indicator
-            Constraint::Min(0),                   // Spacer
         ])
         .split(area);
 
@@ -248,12 +247,14 @@ fn draw_fleet_goal(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     let spans = build_cursor_spans(&app.fleet_goal, app.fleet_goal_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Fleet Goal"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Fleet Goal"),
+        );
     f.render_widget(input, chunks[1]);
 
     draw_paste_indicator(f, app, chunks[2]);
@@ -265,9 +266,8 @@ fn draw_backlog(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(3),
+            Constraint::Min(3),                   // Input (grows for wrapped text)
             Constraint::Length(indicator_height),
-            Constraint::Min(0),
         ])
         .split(area);
 
@@ -284,12 +284,14 @@ fn draw_backlog(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     let spans = build_cursor_spans(&app.backlog_path, app.backlog_path_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Backlog Path"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Backlog Path"),
+        );
     f.render_widget(input, chunks[1]);
 
     draw_paste_indicator(f, app, chunks[2]);
@@ -300,8 +302,7 @@ fn draw_interval(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(0),
+            Constraint::Min(3), // Input (grows for wrapped text)
         ])
         .split(area);
 
@@ -318,12 +319,14 @@ fn draw_interval(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     let spans = build_cursor_spans(&app.review_interval, app.review_interval_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Review Interval (seconds)"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Review Interval (seconds)"),
+        );
     f.render_widget(input, chunks[1]);
 }
 
@@ -430,9 +433,8 @@ fn draw_custom_command(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),                // Description
-            Constraint::Length(3),                // Input
+            Constraint::Min(3),                   // Input (grows for wrapped text)
             Constraint::Length(indicator_height),  // Paste indicator
-            Constraint::Min(0),                   // Spacer
         ])
         .split(area);
 
@@ -443,12 +445,14 @@ fn draw_custom_command(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     let spans = build_cursor_spans(&app.custom_command, app.custom_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Command"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Command"),
+        );
     f.render_widget(input, chunks[1]);
 
     draw_paste_indicator(f, app, chunks[2]);
@@ -461,10 +465,9 @@ fn draw_name(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),                // Description
-            Constraint::Length(3),                // Input
+            Constraint::Min(3),                   // Input (grows for wrapped text)
             Constraint::Length(error_height),     // Error
             Constraint::Length(indicator_height), // Paste indicator
-            Constraint::Min(0),                  // Spacer
         ])
         .split(area);
 
@@ -481,12 +484,14 @@ fn draw_name(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     let spans = build_cursor_spans(&app.name, app.name_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Agent Name"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Agent Name"),
+        );
     f.render_widget(input, chunks[1]);
 
     if let Some(err) = &app.name_error {
@@ -511,10 +516,9 @@ fn draw_working_dir(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),                // Description
-            Constraint::Length(3),                // Input
+            Constraint::Min(3),                   // Input (grows for wrapped text)
             Constraint::Length(error_height),     // Error
             Constraint::Length(indicator_height), // Paste indicator
-            Constraint::Min(0),                  // Spacer
         ])
         .split(area);
 
@@ -525,12 +529,14 @@ fn draw_working_dir(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     let spans = build_cursor_spans(&app.working_dir, app.working_dir_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Working Directory"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Working Directory"),
+        );
     f.render_widget(input, chunks[1]);
 
     if let Some(err) = &app.working_dir_error {
@@ -893,8 +899,7 @@ fn draw_telegram_token(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5), // Instructions
-            Constraint::Length(3), // Input
-            Constraint::Min(0),   // Spacer
+            Constraint::Min(3),   // Input (grows for wrapped text)
         ])
         .split(area);
 
@@ -922,12 +927,14 @@ fn draw_telegram_token(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let masked = mask_token(&app.telegram_token);
     let cursor = app.telegram_token_cursor.min(masked.len());
     let spans = build_cursor_spans(&masked, cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Bot Token"),
-    );
+    let input = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Bot Token"),
+        );
     f.render_widget(input, chunks[1]);
 }
 
