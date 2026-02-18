@@ -33,6 +33,18 @@ pub fn run_dashboard(configs: Vec<DashboardConfig>) -> anyhow::Result<()> {
 
 /// Shared TUI event loop: initialize terminal, run until quit, restore terminal.
 fn run_app(mut app: App) -> anyhow::Result<()> {
+    // Install panic hook to restore terminal on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stderr(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show,
+        );
+        original_hook(info);
+    }));
+
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
@@ -57,6 +69,9 @@ fn run_app(mut app: App) -> anyhow::Result<()> {
         crossterm::terminal::LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
+
+    // Restore original panic hook
+    let _ = std::panic::take_hook();
 
     Ok(())
 }

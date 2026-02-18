@@ -31,6 +31,19 @@ const TICK_RATE_MS: u64 = 50;
 /// Initializes the terminal in raw/alternate-screen mode with bracketed
 /// paste enabled, runs the event loop, and restores the terminal on exit.
 pub fn run_onboard_wizard() -> Result<OnboardResult> {
+    // Install panic hook to restore terminal on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(
+            io::stderr(),
+            LeaveAlternateScreen,
+            DisableBracketedPaste,
+            crossterm::cursor::Show,
+        );
+        original_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -63,6 +76,9 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
         DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
+
+    // Restore original panic hook
+    let _ = std::panic::take_hook();
 
     Ok(app.result())
 }

@@ -1448,6 +1448,19 @@ pub fn run_fleet_tui() -> Result<()> {
 
 /// Run the fleet TUI with a specific client (for testing).
 pub fn run_fleet_tui_with_client(client: DaemonClient) -> Result<()> {
+    // Install panic hook to restore terminal on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stderr(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableBracketedPaste,
+            crossterm::cursor::Show,
+        );
+        original_hook(info);
+    }));
+
     // Set up terminal
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -1472,6 +1485,9 @@ pub fn run_fleet_tui_with_client(client: DaemonClient) -> Result<()> {
         crossterm::event::DisableBracketedPaste,
     )?;
     terminal.show_cursor()?;
+
+    // Restore original panic hook
+    let _ = std::panic::take_hook();
 
     result
 }

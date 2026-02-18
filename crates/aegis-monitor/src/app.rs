@@ -275,8 +275,8 @@ impl App {
                 start_time: row.get(3)?,
                 end_time: row.get(4)?,
                 exit_code: row.get(5)?,
-                total_actions: row.get::<_, i64>(6).map(|v| v as usize)?,
-                denied_actions: row.get::<_, i64>(7).map(|v| v as usize)?,
+                total_actions: row.get::<_, i64>(6).map(|v| usize::try_from(v).unwrap_or(0))?,
+                denied_actions: row.get::<_, i64>(7).map(|v| usize::try_from(v).unwrap_or(0))?,
             })
         }) {
             Ok(r) => r,
