@@ -362,6 +362,13 @@ impl OnboardApp {
         }
     }
 
+    /// Get the selected tool choice (bounds-checked).
+    fn tool_choice(&self) -> ToolChoice {
+        ToolChoice::ALL.get(self.tool_selected)
+            .copied()
+            .unwrap_or(ToolChoice::ClaudeCode)
+    }
+
     fn build_agent_slot(&self) -> AgentSlotConfig {
         let tool = self.build_tool_config();
         let task = if self.task.trim().is_empty() {
@@ -374,13 +381,16 @@ impl OnboardApp {
             tool,
             PathBuf::from(self.working_dir.trim()),
             task,
-            RestartChoice::ALL[self.restart_selected].to_policy(),
+            RestartChoice::ALL.get(self.restart_selected)
+                .copied()
+                .unwrap_or(RestartChoice::OnFailure)
+                .to_policy(),
             5,
         )
     }
 
     fn build_tool_config(&self) -> AgentToolConfig {
-        match ToolChoice::ALL[self.tool_selected] {
+        match ToolChoice::ALL.get(self.tool_selected).copied().unwrap_or(ToolChoice::ClaudeCode) {
             ToolChoice::ClaudeCode => AgentToolConfig::ClaudeCode {
                 skip_permissions: false,
                 one_shot: false,
@@ -436,7 +446,7 @@ impl OnboardApp {
                 self.tool_selected = self.tool_selected.saturating_sub(1);
             }
             KeyCode::Enter => {
-                if ToolChoice::ALL[self.tool_selected] == ToolChoice::Custom {
+                if self.tool_choice() == ToolChoice::Custom {
                     self.custom_cursor = self.custom_command.len();
                     self.step = OnboardStep::CustomCommand;
                 } else {
@@ -470,7 +480,7 @@ impl OnboardApp {
             }
             KeyCode::Esc => {
                 self.name_error = None;
-                if ToolChoice::ALL[self.tool_selected] == ToolChoice::Custom {
+                if self.tool_choice() == ToolChoice::Custom {
                     self.step = OnboardStep::CustomCommand;
                 } else {
                     self.step = OnboardStep::Tool;
@@ -652,6 +662,24 @@ impl OnboardApp {
         };
 
         match key.code {
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match c {
+                    'a' => *cursor = 0,
+                    'e' => *cursor = text.len(),
+                    'u' => {
+                        text.drain(..*cursor);
+                        *cursor = 0;
+                    }
+                    'w' => {
+                        if *cursor > 0 {
+                            let new_pos = delete_word_backward_pos(text, *cursor);
+                            text.drain(new_pos..*cursor);
+                            *cursor = new_pos;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             KeyCode::Char(c) => {
                 text.insert(*cursor, c);
                 *cursor += c.len_utf8();
@@ -784,6 +812,21 @@ async fn run_telegram_worker(token: String, tx: mpsc::Sender<TelegramEvent>) {
             )));
         }
     }
+}
+
+/// Find the position for Ctrl+W (delete word backward).
+///
+/// Walks backward from `cursor` past any whitespace, then past non-whitespace,
+/// and returns the byte position where deletion should start.
+fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
+    text[..cursor]
+        .char_indices()
+        .rev()
+        .skip_while(|(_, c)| c.is_whitespace())
+        .skip_while(|(_, c)| !c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .next()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

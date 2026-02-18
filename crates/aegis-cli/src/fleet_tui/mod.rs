@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{AgentSummary, DaemonClient, DaemonCommand, PendingPromptSummary};
 use aegis_types::AgentStatus;
@@ -327,7 +327,7 @@ impl FleetApp {
 
         // Ctrl+C: cancel modal modes, or quit
         if key.code == KeyCode::Char('c')
-            && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+            && key.modifiers.contains(KeyModifiers::CONTROL)
         {
             if self.command_mode {
                 self.command_mode = false;
@@ -698,6 +698,24 @@ impl FleetApp {
                 self.input_buffer.clear();
                 self.input_cursor = 0;
             }
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match c {
+                    'a' => self.input_cursor = 0,
+                    'e' => self.input_cursor = self.input_buffer.len(),
+                    'u' => {
+                        self.input_buffer.drain(..self.input_cursor);
+                        self.input_cursor = 0;
+                    }
+                    'w' => {
+                        if self.input_cursor > 0 {
+                            let new_pos = delete_word_backward_pos(&self.input_buffer, self.input_cursor);
+                            self.input_buffer.drain(new_pos..self.input_cursor);
+                            self.input_cursor = new_pos;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             KeyCode::Char(c) => {
                 self.input_buffer.insert(self.input_cursor, c);
                 self.input_cursor += c.len_utf8();
@@ -791,6 +809,26 @@ impl FleetApp {
             }
             KeyCode::Down => {
                 self.history_next();
+            }
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match c {
+                    'a' => self.command_cursor = 0,
+                    'e' => self.command_cursor = self.command_buffer.len(),
+                    'u' => {
+                        self.command_buffer.drain(..self.command_cursor);
+                        self.command_cursor = 0;
+                        self.update_completions();
+                    }
+                    'w' => {
+                        if self.command_cursor > 0 {
+                            let new_pos = delete_word_backward_pos(&self.command_buffer, self.command_cursor);
+                            self.command_buffer.drain(new_pos..self.command_cursor);
+                            self.command_cursor = new_pos;
+                            self.update_completions();
+                        }
+                    }
+                    _ => {}
+                }
             }
             KeyCode::Char(c) => {
                 self.command_buffer.insert(self.command_cursor, c);
@@ -1532,6 +1570,21 @@ fn run_event_loop(
         app.poll_daemon();
     }
     Ok(())
+}
+
+/// Find the position for Ctrl+W (delete word backward).
+///
+/// Walks backward from `cursor` past any whitespace, then past non-whitespace,
+/// and returns the byte position where deletion should start.
+fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
+    text[..cursor]
+        .char_indices()
+        .rev()
+        .skip_while(|(_, c)| c.is_whitespace())
+        .skip_while(|(_, c)| !c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .next()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -2393,6 +2446,107 @@ mod tests {
         app.handle_key(press(KeyCode::End));
         app.handle_key(press(KeyCode::Delete));
         assert_eq!(app.command_buffer, "uit");
+    }
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::empty(),
+        }
+    }
+
+    #[test]
+    fn delete_word_backward_pos_basic() {
+        assert_eq!(delete_word_backward_pos("hello world", 11), 6);
+        assert_eq!(delete_word_backward_pos("hello world", 5), 0);
+        assert_eq!(delete_word_backward_pos("hello", 5), 0);
+        assert_eq!(delete_word_backward_pos("hello  world", 12), 7);
+        assert_eq!(delete_word_backward_pos("a b c", 5), 4);
+    }
+
+    #[test]
+    fn input_mode_ctrl_a_e() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+
+        for c in "hello".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        assert_eq!(app.input_cursor, 5);
+
+        app.handle_key(ctrl(KeyCode::Char('a')));
+        assert_eq!(app.input_cursor, 0);
+
+        app.handle_key(ctrl(KeyCode::Char('e')));
+        assert_eq!(app.input_cursor, 5);
+    }
+
+    #[test]
+    fn input_mode_ctrl_u() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+
+        for c in "hello world".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        // Move cursor to position 6 ("world")
+        for _ in 0..5 {
+            app.handle_key(press(KeyCode::Left));
+        }
+        assert_eq!(app.input_cursor, 6);
+
+        app.handle_key(ctrl(KeyCode::Char('u')));
+        assert_eq!(app.input_buffer, "world");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn input_mode_ctrl_w() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+
+        for c in "hello world".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        assert_eq!(app.input_buffer, "hello world");
+
+        app.handle_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.input_buffer, "hello ");
+        assert_eq!(app.input_cursor, 6);
+
+        app.handle_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn command_mode_ctrl_a_e_u_w() {
+        let mut app = make_app();
+        app.command_mode = true;
+
+        for c in "daemon start".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        assert_eq!(app.command_buffer, "daemon start");
+
+        app.handle_key(ctrl(KeyCode::Char('a')));
+        assert_eq!(app.command_cursor, 0);
+
+        app.handle_key(ctrl(KeyCode::Char('e')));
+        assert_eq!(app.command_cursor, 12);
+
+        app.handle_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.command_buffer, "daemon ");
+        assert_eq!(app.command_cursor, 7);
+
+        app.handle_key(ctrl(KeyCode::Char('u')));
+        assert_eq!(app.command_buffer, "");
+        assert_eq!(app.command_cursor, 0);
     }
 
     #[test]

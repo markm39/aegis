@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, RestartPolicy};
 
@@ -219,8 +219,8 @@ impl AddAgentWizard {
             return false;
         }
 
-        // Esc goes back one step, or cancels at the first step
-        if key.code == KeyCode::Esc {
+        // Esc or Shift+Tab goes back one step, or cancels at the first step
+        if key.code == KeyCode::Esc || key.code == KeyCode::BackTab {
             match self.step {
                 WizardStep::Tool => {
                     self.active = false; // First step: cancel wizard
@@ -390,6 +390,24 @@ impl AddAgentWizard {
                     target,
                 );
             }
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match c {
+                    'a' => *cursor = 0,
+                    'e' => *cursor = text.len(),
+                    'u' => {
+                        text.drain(..*cursor);
+                        *cursor = 0;
+                    }
+                    'w' => {
+                        if *cursor > 0 {
+                            let new_pos = super::delete_word_backward_pos(text, *cursor);
+                            text.drain(new_pos..*cursor);
+                            *cursor = new_pos;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             KeyCode::Char(c) => {
                 text.insert(*cursor, c);
                 *cursor += c.len_utf8();
@@ -486,14 +504,18 @@ impl AddAgentWizard {
         }
     }
 
-    /// Get the selected tool choice.
+    /// Get the selected tool choice (bounds-checked).
     pub fn tool_choice(&self) -> ToolChoice {
-        ToolChoice::ALL[self.tool_selected]
+        ToolChoice::ALL.get(self.tool_selected)
+            .copied()
+            .unwrap_or(ToolChoice::ClaudeCode)
     }
 
-    /// Get the selected restart choice.
+    /// Get the selected restart choice (bounds-checked).
     pub fn restart_choice(&self) -> RestartChoice {
-        RestartChoice::ALL[self.restart_selected]
+        RestartChoice::ALL.get(self.restart_selected)
+            .copied()
+            .unwrap_or(RestartChoice::OnFailure)
     }
 
     /// Build the AgentSlotConfig from wizard state.
@@ -1003,5 +1025,74 @@ mod tests {
         wiz.handle_key(press(KeyCode::Backspace));
         assert_eq!(wiz.name, "rs");
         assert_eq!(wiz.name_cursor, 1);
+    }
+
+    #[test]
+    fn wizard_backtab_goes_back() {
+        let mut wiz = AddAgentWizard::new();
+
+        // Name -> Tool
+        wiz.step = WizardStep::Name;
+        wiz.handle_key(press(KeyCode::BackTab));
+        assert_eq!(wiz.step, WizardStep::Tool);
+
+        // WorkingDir -> Name
+        wiz.step = WizardStep::WorkingDir;
+        wiz.handle_key(press(KeyCode::BackTab));
+        assert_eq!(wiz.step, WizardStep::Name);
+
+        // Task -> WorkingDir
+        wiz.step = WizardStep::Task;
+        wiz.handle_key(press(KeyCode::BackTab));
+        assert_eq!(wiz.step, WizardStep::WorkingDir);
+    }
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::empty(),
+        }
+    }
+
+    #[test]
+    fn wizard_ctrl_a_e_u_w() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.step = WizardStep::Name;
+        wiz.name = "hello world".into();
+        wiz.name_cursor = 11;
+
+        // Ctrl+A -> beginning
+        wiz.handle_key(ctrl(KeyCode::Char('a')));
+        assert_eq!(wiz.name_cursor, 0);
+
+        // Ctrl+E -> end
+        wiz.handle_key(ctrl(KeyCode::Char('e')));
+        assert_eq!(wiz.name_cursor, 11);
+
+        // Ctrl+W -> delete word backward
+        wiz.handle_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(wiz.name, "hello ");
+        assert_eq!(wiz.name_cursor, 6);
+
+        // Ctrl+U -> clear to beginning
+        wiz.handle_key(ctrl(KeyCode::Char('u')));
+        assert_eq!(wiz.name, "");
+        assert_eq!(wiz.name_cursor, 0);
+    }
+
+    #[test]
+    fn wizard_tool_choice_bounds_checked() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.tool_selected = 999; // out of bounds
+        assert_eq!(wiz.tool_choice(), ToolChoice::ClaudeCode); // should fallback
+    }
+
+    #[test]
+    fn wizard_restart_choice_bounds_checked() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.restart_selected = 999; // out of bounds
+        assert_eq!(wiz.restart_choice(), RestartChoice::OnFailure); // should fallback
     }
 }

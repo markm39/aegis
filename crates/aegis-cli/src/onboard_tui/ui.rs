@@ -611,8 +611,12 @@ fn draw_telegram_progress(f: &mut Frame, app: &OnboardApp, area: Rect) {
 }
 
 fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
-    let tool_label = ToolChoice::ALL[app.tool_selected].label();
-    let restart_label = RestartChoice::ALL[app.restart_selected].label();
+    let tool_label = ToolChoice::ALL.get(app.tool_selected)
+        .map(|t| t.label())
+        .unwrap_or("Unknown");
+    let restart_label = RestartChoice::ALL.get(app.restart_selected)
+        .map(|r| r.label())
+        .unwrap_or("Unknown");
 
     let task_display = if app.task.trim().is_empty() {
         "(none)".to_string()
@@ -652,7 +656,7 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
         Line::from(""),
     ];
 
-    if ToolChoice::ALL[app.tool_selected] == ToolChoice::Custom {
+    if ToolChoice::ALL.get(app.tool_selected) == Some(&ToolChoice::Custom) {
         // Insert custom command line after Tool
         lines.insert(4, labeled_line("Command:", &app.custom_command, Color::White));
     }
