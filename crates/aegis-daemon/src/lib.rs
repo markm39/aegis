@@ -382,8 +382,14 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::StartAgent { ref name } => {
-                if self.fleet.agent_status(name).is_none() {
-                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                match self.fleet.agent_status(name) {
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                    Some(&AgentStatus::Disabled) => {
+                        return DaemonResponse::error(
+                            format!("agent '{name}' is disabled. Use enable first.")
+                        );
+                    }
+                    _ => {}
                 }
                 self.fleet.start_agent(name);
                 DaemonResponse::ok(format!("agent '{name}' starting"))

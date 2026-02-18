@@ -103,6 +103,11 @@ impl Fleet {
             }
         };
 
+        if !slot.config.enabled {
+            warn!(agent = name, "start_agent: agent is disabled, use enable first");
+            return;
+        }
+
         if slot.is_thread_alive() {
             info!(agent = name, "agent already running, skipping start");
             return;
