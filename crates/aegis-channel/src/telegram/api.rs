@@ -28,7 +28,10 @@ impl TelegramApi {
     /// Create a new API client with a custom base URL (for testing).
     pub fn with_base_url(bot_token: &str, base_url: &str) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             base_url: format!("{}/bot{}", base_url.trim_end_matches('/'), bot_token),
         }
     }
@@ -97,7 +100,10 @@ impl TelegramApi {
             return Err(ChannelError::Api(desc));
         }
 
-        Ok(api_resp.result.map(|m| m.message_id).unwrap_or(0))
+        api_resp
+            .result
+            .map(|m| m.message_id)
+            .ok_or_else(|| ChannelError::Api("sendMessage returned ok but no result".into()))
     }
 
     /// Long-poll for new updates.
