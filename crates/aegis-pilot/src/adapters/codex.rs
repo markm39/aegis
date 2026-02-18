@@ -64,11 +64,16 @@ impl CodexAdapter {
     pub fn new() -> Self {
         Self {
             state: State::Idle,
-            re_shell_command: Regex::new(r"(?i)^\s*shell\s+command:?\s*$").unwrap(),
-            re_file_edit: Regex::new(r"(?i)^\s*file\s+edit:?\s*$").unwrap(),
-            re_dollar_command: Regex::new(r"^\s*\$\s*(.+)$").unwrap(),
-            re_file_path: Regex::new(r"^\s{2,}(\S+\.\w+)").unwrap(),
-            re_proceed: Regex::new(r"(?i)(?:proceed|approve|accept)\?\s*\[y").unwrap(),
+            re_shell_command: Regex::new(r"(?i)^\s*shell\s+command:?\s*$")
+                .expect("hardcoded regex"),
+            re_file_edit: Regex::new(r"(?i)^\s*file\s+edit:?\s*$")
+                .expect("hardcoded regex"),
+            re_dollar_command: Regex::new(r"^\s*\$\s*(.+)$")
+                .expect("hardcoded regex"),
+            re_file_path: Regex::new(r"^\s{2,}(\S+\.\w+)")
+                .expect("hardcoded regex"),
+            re_proceed: Regex::new(r"(?i)(?:proceed|approve|accept)\?\s*\[y")
+                .expect("hardcoded regex"),
         }
     }
 

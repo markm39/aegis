@@ -15,6 +15,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+use anyhow::Context;
 use tracing::info;
 
 use aegis_control::daemon::{DaemonClient, DaemonCommand};
@@ -176,7 +177,9 @@ pub fn run(launchd: bool) -> anyhow::Result<()> {
 
 /// Start the daemon in the background.
 pub fn start() -> anyhow::Result<()> {
-    // Verify daemon.toml exists before spawning background process
+    // Verify daemon.toml exists and is valid before spawning background process.
+    // Parsing here catches malformed configs immediately instead of letting the
+    // background daemon crash silently after fork.
     let config_path = daemon_config_path();
     if !config_path.exists() {
         anyhow::bail!(
@@ -185,6 +188,10 @@ pub fn start() -> anyhow::Result<()> {
             config_path.display()
         );
     }
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let _config = DaemonConfig::from_toml(&content)
+        .map_err(|e| anyhow::anyhow!("invalid daemon config: {e}"))?;
 
     // Check for an existing daemon
     if let Some(pid) = persistence::read_pid() {
@@ -233,6 +240,12 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
             "No daemon config found. Create one with :daemon init."
         );
     }
+    // Validate config before spawning so errors surface in the TUI command bar,
+    // not silently in the background daemon's stderr log.
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let _config = DaemonConfig::from_toml(&content)
+        .map_err(|e| anyhow::anyhow!("invalid daemon config: {e}"))?;
 
     if let Some(pid) = persistence::read_pid() {
         if persistence::is_process_alive(pid) {

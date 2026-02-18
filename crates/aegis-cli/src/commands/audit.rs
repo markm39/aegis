@@ -387,6 +387,9 @@ fn parse_duration(s: &str) -> Result<Duration> {
     if num <= 0 {
         bail!("duration must be positive (e.g. '30d', '24h', '60m')");
     }
+    if num > 365_000 {
+        bail!("duration too large (max ~1000 years)");
+    }
 
     match unit {
         'd' => Ok(Duration::days(num)),
@@ -473,7 +476,7 @@ pub fn export(config_name: &str, format: &str, limit: usize, follow: bool) -> Re
         "jsonl" => export_jsonl(&entries),
         "csv" => export_csv(&entries),
         "cef" => export_cef(&entries),
-        _ => unreachable!(),
+        other => bail!("unsupported export format: '{other}'"),
     }
 
     Ok(())
@@ -501,7 +504,7 @@ fn export_follow(store: &AuditStore, format: &str) -> Result<()> {
                 "csv" => print_csv_entry(entry),
                 "cef" => print_cef_entry(entry),
                 "json" => print_jsonl_entry(entry), // in follow mode, json acts as jsonl
-                _ => unreachable!(),
+                other => bail!("unsupported export format: '{other}'"),
             }
             last_id = *row_id;
         }

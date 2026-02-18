@@ -53,11 +53,16 @@ impl ClaudeCodeAdapter {
     pub fn new() -> Self {
         Self {
             state: State::Idle,
-            re_wants_to_use: Regex::new(r"(?i)wants?\s+to\s+use\s+(\w+)").unwrap(),
-            re_command: Regex::new(r"(?i)^\s*Command:\s*(.+)$").unwrap(),
-            re_file: Regex::new(r"(?i)^\s*(?:File|Path):\s*(.+)$").unwrap(),
-            re_url: Regex::new(r"(?i)^\s*URL:\s*(.+)$").unwrap(),
-            re_allow: Regex::new(r"(?i)Allow\?").unwrap(),
+            re_wants_to_use: Regex::new(r"(?i)wants?\s+to\s+use\s+(\w+)")
+                .expect("hardcoded regex"),
+            re_command: Regex::new(r"(?i)^\s*Command:\s*(.+)$")
+                .expect("hardcoded regex"),
+            re_file: Regex::new(r"(?i)^\s*(?:File|Path):\s*(.+)$")
+                .expect("hardcoded regex"),
+            re_url: Regex::new(r"(?i)^\s*URL:\s*(.+)$")
+                .expect("hardcoded regex"),
+            re_allow: Regex::new(r"(?i)Allow\?")
+                .expect("hardcoded regex"),
         }
     }
 
