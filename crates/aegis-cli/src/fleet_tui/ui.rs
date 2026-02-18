@@ -148,7 +148,7 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             ),
             Span::styled("  Uptime: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format_duration(app.daemon_uptime_secs),
+                super::format_uptime(app.daemon_uptime_secs),
                 Style::default().fg(Color::Cyan),
             ),
         ]);
@@ -439,6 +439,30 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
     let inner_height = area.height.saturating_sub(2) as usize; // borders
     let lines = app.visible_output(inner_height);
 
+    let title = if app.detail_scroll > 0 {
+        format!(" Output (scroll +{}) ", app.detail_scroll)
+    } else {
+        " Output ".to_string()
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    if lines.is_empty() {
+        let hint = if app.connected {
+            "Waiting for output..."
+        } else {
+            "Disconnected. Start daemon with :daemon start"
+        };
+        let empty = Paragraph::new(hint)
+            .style(Style::default().fg(Color::DarkGray))
+            .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
     let items: Vec<ListItem> = lines
         .iter()
         .map(|line| {
@@ -457,17 +481,7 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
         })
         .collect();
 
-    let title = if app.detail_scroll > 0 {
-        format!(" Output (scroll +{}) ", app.detail_scroll)
-    } else {
-        " Output ".to_string()
-    };
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
+    let list = List::new(items).block(block);
     frame.render_widget(list, area);
 }
 
@@ -1138,17 +1152,6 @@ fn status_display(status: &AgentStatus) -> (String, Color) {
     }
 }
 
-/// Format a duration in seconds to a human-readable string.
-fn format_duration(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m {}s", secs / 60, secs % 60)
-    } else {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-    }
-}
-
 /// Truncate a path string, keeping the tail.
 fn truncate_path(path: &str, max: usize) -> String {
     let char_count = path.chars().count();
@@ -1166,18 +1169,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_duration_seconds() {
-        assert_eq!(format_duration(45), "45s");
+    fn format_uptime_seconds() {
+        assert_eq!(super::super::format_uptime(45), "45s");
     }
 
     #[test]
-    fn format_duration_minutes() {
-        assert_eq!(format_duration(125), "2m 5s");
+    fn format_uptime_minutes() {
+        assert_eq!(super::super::format_uptime(125), "2m 5s");
     }
 
     #[test]
-    fn format_duration_hours() {
-        assert_eq!(format_duration(7265), "2h 1m");
+    fn format_uptime_hours() {
+        assert_eq!(super::super::format_uptime(7265), "2h 1m");
     }
 
     #[test]

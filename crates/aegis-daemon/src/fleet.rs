@@ -503,6 +503,11 @@ impl Fleet {
         let run_duration = slot.started_at.map(|t| t.elapsed());
         slot.started_at = None;
 
+        // Clear dead channels (senders dropped when thread exited).
+        slot.output_rx = None;
+        slot.command_tx = None;
+        slot.update_rx = None;
+
         // Never restart a disabled agent.
         if !slot.config.enabled {
             slot.status = AgentStatus::Disabled;

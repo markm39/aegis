@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use tracing::info;
+use tracing::{info, warn};
 
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
@@ -860,7 +860,8 @@ impl DaemonRuntime {
         self.config = new_config;
 
         // Reload policy engine (picks up new/changed .cedar files)
-        let new_policy = self.aegis_config
+        let mut policy_warning: Option<String> = None;
+        let policy_dir = self.aegis_config
             .policy_paths
             .first()
             .filter(|dir| {
@@ -874,16 +875,28 @@ impl DaemonRuntime {
                         })
                         .unwrap_or(false)
             })
-            .and_then(|dir| aegis_policy::PolicyEngine::new(dir, None).ok());
-        if new_policy.is_some() != self.policy_engine.is_some() {
-            info!("policy engine reloaded (active: {})", new_policy.is_some());
+            .cloned();
+        if let Some(ref dir) = policy_dir {
+            match aegis_policy::PolicyEngine::new(dir, None) {
+                Ok(engine) => {
+                    info!(policy_dir = %dir.display(), "policy engine reloaded");
+                    self.policy_engine = Some(engine);
+                }
+                Err(e) => {
+                    warn!(?e, "failed to reload policy engine, keeping previous");
+                    policy_warning = Some(format!(" (policy reload failed: {e})"));
+                }
+            }
+        } else if self.policy_engine.is_some() {
+            info!("no policy directory found, clearing policy engine");
+            self.policy_engine = None;
         }
-        self.policy_engine = new_policy;
 
+        let warning = policy_warning.unwrap_or_default();
         let msg = if started > 0 {
-            format!("config reloaded: {added} added ({started} started), {updated} updated, {removed} removed")
+            format!("config reloaded: {added} added ({started} started), {updated} updated, {removed} removed{warning}")
         } else {
-            format!("config reloaded: {added} added, {updated} updated, {removed} removed")
+            format!("config reloaded: {added} added, {updated} updated, {removed} removed{warning}")
         };
         DaemonResponse::ok(msg)
     }

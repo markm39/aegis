@@ -171,8 +171,21 @@ impl FleetApp {
         }
     }
 
+    /// Clear stale command result messages after timeout.
+    fn clear_stale_result(&mut self) {
+        if let Some(at) = self.command_result_at {
+            if at.elapsed().as_secs() >= 5 {
+                self.command_result = None;
+                self.command_result_at = None;
+            }
+        }
+    }
+
     /// Poll the daemon for updated state (called on each tick).
     pub fn poll_daemon(&mut self) {
+        // Auto-clear stale command results on every tick, not just key events
+        self.clear_stale_result();
+
         if self.last_poll.elapsed().as_millis() < POLL_INTERVAL_MS {
             return;
         }
@@ -381,13 +394,7 @@ impl FleetApp {
             return;
         }
 
-        // Clear stale command results (auto-clear after 5 seconds).
-        if let Some(at) = self.command_result_at {
-            if at.elapsed().as_secs() >= 5 {
-                self.command_result = None;
-                self.command_result_at = None;
-            }
-        }
+        self.clear_stale_result();
 
         // Input mode intercepts all keys
         if self.input_mode {
@@ -1077,14 +1084,18 @@ impl FleetApp {
                 }
             }
             FleetCommand::Pop { agent } => {
-                let cmd = format!("aegis daemon follow {agent}");
-                self.spawn_terminal(&cmd, &format!("Opened '{agent}' in new terminal"));
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    let cmd = format!("aegis daemon follow {agent}");
+                    self.spawn_terminal(&cmd, &format!("Opened '{agent}' in new terminal"));
+                }
             }
             FleetCommand::Monitor => {
                 self.spawn_terminal("aegis monitor", "Opened monitor in new terminal");
             }
             FleetCommand::Follow { agent } => {
-                if !self.agents.iter().any(|a| a.name == agent) && self.connected {
+                if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
                     self.detail_name = agent;
@@ -1174,7 +1185,7 @@ impl FleetApp {
                 );
             }
             FleetCommand::Pending { agent } => {
-                if !self.agents.iter().any(|a| a.name == agent) && self.connected {
+                if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
                     self.detail_name = agent;
@@ -1545,7 +1556,7 @@ impl FleetApp {
 }
 
 /// Format seconds into a human-readable uptime string.
-fn format_uptime(secs: u64) -> String {
+pub(super) fn format_uptime(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
