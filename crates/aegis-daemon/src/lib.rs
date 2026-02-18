@@ -837,12 +837,18 @@ impl DaemonRuntime {
         }
 
         // Add or update agents
+        let mut started = 0;
         for agent_config in &new_config.agents {
             if current_names.contains(&agent_config.name) {
                 self.fleet.update_agent_config(agent_config);
                 updated += 1;
             } else {
                 self.fleet.add_agent(agent_config.clone());
+                // Auto-start newly added enabled agents
+                if agent_config.enabled {
+                    self.fleet.start_agent(&agent_config.name);
+                    started += 1;
+                }
                 added += 1;
             }
         }
@@ -874,9 +880,12 @@ impl DaemonRuntime {
         }
         self.policy_engine = new_policy;
 
-        DaemonResponse::ok(format!(
-            "config reloaded: {added} added, {updated} updated, {removed} removed"
-        ))
+        let msg = if started > 0 {
+            format!("config reloaded: {added} added ({started} started), {updated} updated, {removed} removed")
+        } else {
+            format!("config reloaded: {added} added, {updated} updated, {removed} removed")
+        };
+        DaemonResponse::ok(msg)
     }
 
     /// Persist a config to daemon.toml.

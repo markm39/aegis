@@ -1020,16 +1020,32 @@ impl FleetApp {
                 self.view = FleetView::AddAgent;
             }
             FleetCommand::Start { agent } => {
-                self.send_and_show_result(DaemonCommand::StartAgent { name: agent });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::StartAgent { name: agent });
+                }
             }
             FleetCommand::Stop { agent } => {
-                self.send_and_show_result(DaemonCommand::StopAgent { name: agent });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::StopAgent { name: agent });
+                }
             }
             FleetCommand::Restart { agent } => {
-                self.send_and_show_result(DaemonCommand::RestartAgent { name: agent });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::RestartAgent { name: agent });
+                }
             }
             FleetCommand::Send { agent, text } => {
-                self.send_and_show_result(DaemonCommand::SendToAgent { name: agent, text });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::SendToAgent { name: agent, text });
+                }
             }
             FleetCommand::Approve { agent } => {
                 if let Some(request_id) = self.fetch_first_pending_id(&agent) {
@@ -1054,7 +1070,11 @@ impl FleetApp {
                 }
             }
             FleetCommand::Nudge { agent, message } => {
-                self.send_and_show_result(DaemonCommand::NudgeAgent { name: agent, message });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::NudgeAgent { name: agent, message });
+                }
             }
             FleetCommand::Pop { agent } => {
                 let cmd = format!("aegis daemon follow {agent}");
@@ -1236,10 +1256,18 @@ impl FleetApp {
                 self.spawn_terminal("aegis init", "Opened init wizard in new terminal");
             }
             FleetCommand::Enable { agent } => {
-                self.send_and_show_result(DaemonCommand::EnableAgent { name: agent });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::EnableAgent { name: agent });
+                }
             }
             FleetCommand::Disable { agent } => {
-                self.send_and_show_result(DaemonCommand::DisableAgent { name: agent });
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::DisableAgent { name: agent });
+                }
             }
             FleetCommand::Goal { text } => {
                 self.send_and_show_result(DaemonCommand::FleetGoal { goal: text });
@@ -1387,6 +1415,12 @@ impl FleetApp {
                 self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
         }
+    }
+
+    /// Check if an agent name is known (present in the cached agent list).
+    /// Returns true if we're disconnected (can't validate) or if the agent exists.
+    fn agent_exists(&self, name: &str) -> bool {
+        !self.connected || self.agents.iter().any(|a| a.name == name)
     }
 
     /// Send a command to the daemon and show the response message as command_result.

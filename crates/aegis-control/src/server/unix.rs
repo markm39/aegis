@@ -82,9 +82,10 @@ async fn handle_connection(
     command_tx: CommandTx,
 ) -> Result<(), String> {
     let (reader, mut writer) = stream.into_split();
-    // Cap total readable bytes per connection to prevent next_line() from
-    // accumulating unbounded memory on lines without newlines.
-    let mut lines = BufReader::new(reader.take(MAX_LINE_LENGTH as u64 + 1)).lines();
+    // Cap total readable bytes per connection (10 MB) to prevent next_line()
+    // from accumulating unbounded memory on lines without newlines. Generous
+    // enough for many commands per persistent connection.
+    let mut lines = BufReader::new(reader.take(10 * 1024 * 1024)).lines();
 
     while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
         if line.len() > MAX_LINE_LENGTH {
