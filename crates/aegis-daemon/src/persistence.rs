@@ -180,6 +180,36 @@ mod tests {
     }
 
     #[test]
+    fn escape_xml_clean_string() {
+        assert_eq!(escape_xml("/usr/local/bin/aegis"), "/usr/local/bin/aegis");
+    }
+
+    #[test]
+    fn escape_xml_special_characters() {
+        assert_eq!(escape_xml("a&b"), "a&amp;b");
+        assert_eq!(escape_xml("a<b"), "a&lt;b");
+        assert_eq!(escape_xml("a>b"), "a&gt;b");
+        assert_eq!(escape_xml("a\"b"), "a&quot;b");
+        assert_eq!(escape_xml("a'b"), "a&apos;b");
+    }
+
+    #[test]
+    fn escape_xml_injection_attempt() {
+        let malicious = "</string><string>evil</string>";
+        let escaped = escape_xml(malicious);
+        assert!(!escaped.contains("</string>"));
+        assert!(escaped.contains("&lt;/string&gt;"));
+    }
+
+    #[test]
+    fn generate_plist_escapes_binary_path() {
+        let plist = generate_launchd_plist("/path/with <special> & chars");
+        assert!(plist.contains("&lt;special&gt;"));
+        assert!(plist.contains("&amp;"));
+        assert!(!plist.contains("<special>"));
+    }
+
+    #[test]
     fn plist_path_is_in_launch_agents() {
         let path = plist_path();
         assert!(path.to_string_lossy().contains("LaunchAgents"));

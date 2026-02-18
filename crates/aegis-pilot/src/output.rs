@@ -203,4 +203,16 @@ mod tests {
         buf.feed(b"world\nbye\n");
         assert_eq!(buf.recent(10), vec!["hello world", "bye"]);
     }
+
+    #[test]
+    fn partial_line_force_flushes_at_limit() {
+        let mut buf = OutputBuffer::new(100);
+        // Feed MAX_PARTIAL_SIZE bytes without a newline
+        let chunk = vec![b'x'; MAX_PARTIAL_SIZE];
+        let lines = buf.feed(&chunk);
+        // Should have force-flushed the partial line
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), MAX_PARTIAL_SIZE);
+        assert!(!buf.has_partial());
+    }
 }

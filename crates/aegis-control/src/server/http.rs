@@ -208,3 +208,28 @@ async fn input_handler(
 struct InputBody {
     text: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constant_time_eq_same_bytes() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"\x00\xff", b"\x00\xff"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_bytes() {
+        assert!(!constant_time_eq(b"hello", b"hellp"));
+        assert!(!constant_time_eq(b"hello", b"HELLO"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"hello", b"hell"));
+        assert!(!constant_time_eq(b"hi", b"hello"));
+        assert!(!constant_time_eq(b"", b"x"));
+    }
+}
