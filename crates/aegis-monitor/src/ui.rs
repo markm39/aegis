@@ -456,10 +456,13 @@ fn draw_session_list_view(frame: &mut Frame, app: &App) {
             };
 
             // Truncate session_id to first 8 chars for display
-            let short_id = if session.session_id.len() > 8 {
-                format!("{}...", &session.session_id[..8])
-            } else {
-                session.session_id.clone()
+            let short_id = {
+                let truncated: String = session.session_id.chars().take(8).collect();
+                if session.session_id.chars().count() > 8 {
+                    format!("{truncated}...")
+                } else {
+                    truncated
+                }
             };
 
             // Extract the time portion (HH:MM:SS) from an RFC 3339 timestamp

@@ -93,7 +93,10 @@ impl UsageProxy {
             store: self.store,
             principal: self.principal,
             session_id: self.session_id,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
         };
@@ -269,7 +272,12 @@ async fn handle_non_streaming_response(
     response_headers: &reqwest::header::HeaderMap,
     response: reqwest::Response,
 ) -> Response {
+    // Limit response body to 50 MB to prevent OOM from pathological responses
     let body_bytes = match response.bytes().await {
+        Ok(b) if b.len() > 50 * 1024 * 1024 => {
+            warn!(size = b.len(), "upstream response body exceeds 50 MB limit");
+            return (StatusCode::BAD_GATEWAY, "response too large").into_response();
+        }
         Ok(b) => b,
         Err(e) => {
             warn!(error = %e, "failed to read upstream response body");
