@@ -812,11 +812,7 @@ pub fn config_show() -> anyhow::Result<()> {
             println!("  Chat ID:     {}", tg.chat_id);
             println!("  Poll timeout: {}s", tg.poll_timeout_secs);
             // Don't print the full token for security
-            let token_preview = if tg.bot_token.len() > 10 {
-                format!("{}...", &tg.bot_token[..10])
-            } else {
-                "(set)".to_string()
-            };
+            let token_preview = truncate_str(&tg.bot_token, 13);
             println!("  Bot token:   {token_preview}");
         }
         None => {
