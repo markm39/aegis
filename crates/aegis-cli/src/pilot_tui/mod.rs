@@ -483,15 +483,16 @@ pub fn run_pilot_tui(
     config_name: String,
     command: String,
 ) -> Result<()> {
-    // Install panic hook to restore terminal on crash
+    // Install panic hook to restore terminal on crash.
+    // Uses stderr to avoid conflicting with the ratatui backend on stdout.
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(
-            std::io::stdout(),
+            std::io::stderr(),
             crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture,
             crossterm::event::DisableBracketedPaste,
+            crossterm::cursor::Show,
         );
         original_hook(info);
     }));
@@ -502,7 +503,6 @@ pub fn run_pilot_tui(
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
@@ -525,7 +525,6 @@ pub fn run_pilot_tui(
     crossterm::execute!(
         terminal.backend_mut(),
         crossterm::terminal::LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture,
         crossterm::event::DisableBracketedPaste,
     )?;
     terminal.show_cursor()?;
