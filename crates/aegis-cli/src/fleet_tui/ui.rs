@@ -31,7 +31,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 
 use aegis_types::AgentStatus;
@@ -273,7 +273,8 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-    frame.render_widget(table, area);
+    let mut state = TableState::default().with_selected(Some(app.agent_selected));
+    frame.render_stateful_widget(table, area, &mut state);
 }
 
 /// Render the overview status bar with keybindings.
