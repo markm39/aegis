@@ -351,7 +351,7 @@ fn draw_task(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(desc, chunks[0]);
 
     // Multi-line input with word wrapping
-    let char_count = app.task.len();
+    let char_count = app.task.chars().count();
     let title = if char_count > 0 {
         format!("Task ({char_count} chars)")
     } else {
