@@ -281,6 +281,11 @@ impl FleetApp {
                         for line in lines {
                             self.detail_output.push_back(line);
                         }
+                        // Clamp scroll if output shrank
+                        let max = self.detail_output.len().saturating_sub(1);
+                        if self.detail_scroll > max {
+                            self.detail_scroll = max;
+                        }
                     }
                 }
             }
@@ -583,7 +588,8 @@ impl FleetApp {
                 if self.focus_pending {
                     self.pending_selected = self.pending_selected.saturating_sub(1);
                 } else {
-                    self.detail_scroll += 1;
+                    let max = self.detail_output.len().saturating_sub(1);
+                    self.detail_scroll = (self.detail_scroll + 1).min(max);
                 }
             }
             KeyCode::Char('G') | KeyCode::End => {
@@ -596,7 +602,8 @@ impl FleetApp {
                 if self.focus_pending {
                     self.pending_selected = 0;
                 } else {
-                    self.detail_scroll += 20;
+                    let max = self.detail_output.len().saturating_sub(1);
+                    self.detail_scroll = (self.detail_scroll + 20).min(max);
                 }
             }
             KeyCode::PageDown => {
@@ -907,7 +914,10 @@ impl FleetApp {
     /// Cycle to the previous completion.
     fn cycle_completion_back(&mut self) {
         if self.command_completions.is_empty() {
-            return;
+            self.update_completions();
+            if self.command_completions.is_empty() {
+                return;
+            }
         }
         let idx = match self.completion_idx {
             Some(0) | None => self.command_completions.len() - 1,
@@ -1269,16 +1279,8 @@ impl FleetApp {
             FleetCommand::DaemonReload => {
                 if !self.connected {
                     self.set_result("Daemon is not running.");
-                } else if let Some(client) = &self.client {
-                    match client.send(&DaemonCommand::ReloadConfig) {
-                        Ok(resp) => {
-                            self.set_result(resp.message);
-                            self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
-                        }
-                        Err(e) => {
-                            self.last_error = Some(e);
-                        }
-                    }
+                } else {
+                    self.send_and_show_result(DaemonCommand::ReloadConfig);
                 }
             }
             FleetCommand::DaemonRestart => {
@@ -1430,6 +1432,8 @@ impl FleetApp {
     fn set_result(&mut self, msg: impl Into<String>) {
         self.command_result = Some(msg.into());
         self.command_result_at = Some(Instant::now());
+        // Clear any stale error -- success replaces error visually
+        self.last_error = None;
     }
 
     /// Spawn a command in a new terminal and set the result message.
@@ -2579,5 +2583,42 @@ mod tests {
         app.send_context_query("test-agent");
         assert!(app.last_error.is_some());
         assert!(app.last_error.as_ref().unwrap().contains("Not connected"));
+    }
+
+    #[test]
+    fn set_result_clears_last_error() {
+        let mut app = FleetApp::new(None);
+        app.last_error = Some("old error".into());
+        app.set_result("success");
+        assert!(app.last_error.is_none());
+        assert_eq!(app.command_result.as_deref(), Some("success"));
+    }
+
+    #[test]
+    fn detail_scroll_clamped_on_k() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "alpha".into();
+        // Add 5 lines of output
+        for i in 0..5 {
+            app.detail_output.push_back(format!("line {i}"));
+        }
+        // Press k many times -- should not exceed output length
+        for _ in 0..50 {
+            app.handle_key(press(KeyCode::Char('k')));
+        }
+        assert!(app.detail_scroll <= app.detail_output.len().saturating_sub(1));
+    }
+
+    #[test]
+    fn cycle_completion_back_auto_populates() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "st".into();
+        app.command_cursor = 2;
+        // BackTab should auto-populate and select last completion
+        app.cycle_completion_back();
+        assert!(!app.command_completions.is_empty());
+        assert!(app.completion_idx.is_some());
     }
 }

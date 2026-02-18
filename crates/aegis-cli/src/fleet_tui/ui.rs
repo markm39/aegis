@@ -237,7 +237,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
 
             Row::new(vec![
                 ratatui::widgets::Cell::from(marker).style(Style::default().fg(marker_color)),
-                ratatui::widgets::Cell::from(agent.name.clone()),
+                ratatui::widgets::Cell::from(truncate_str(&agent.name, 16)),
                 ratatui::widgets::Cell::from(truncate_str(&role, 16)),
                 ratatui::widgets::Cell::from(status_text.to_string()),
                 ratatui::widgets::Cell::from(pending).style(if agent.pending_count > 0 {
@@ -816,15 +816,20 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         WizardStep::Confirm => "Enter/y: create agent  n: cancel  Esc: back",
         _ => "Type to edit  Enter: next  Esc: back",
     };
-    let footer = Paragraph::new(Span::styled(
-        format!(" {footer_text}"),
-        Style::default().fg(Color::DarkGray),
-    ))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
+    let footer_spans = if let Some(ref err) = wiz.validation_error {
+        vec![
+            Span::styled(format!(" {err}"), Style::default().fg(Color::Red)),
+            Span::styled(format!("  {footer_text}"), Style::default().fg(Color::DarkGray)),
+        ]
+    } else {
+        vec![Span::styled(format!(" {footer_text}"), Style::default().fg(Color::DarkGray))]
+    };
+    let footer = Paragraph::new(Line::from(footer_spans))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
     frame.render_widget(footer, chunks[2]);
 }
 

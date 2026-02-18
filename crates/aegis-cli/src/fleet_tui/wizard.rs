@@ -175,6 +175,9 @@ pub struct AddAgentWizard {
     // Custom command (only if tool == Custom)
     pub custom_command: String,
     pub custom_command_cursor: usize,
+
+    /// Validation error to display at current step (cleared on advance).
+    pub validation_error: Option<String>,
 }
 
 impl AddAgentWizard {
@@ -210,6 +213,7 @@ impl AddAgentWizard {
             restart_selected: 0,
             custom_command: String::new(),
             custom_command_cursor: 0,
+            validation_error: None,
         }
     }
 
@@ -358,9 +362,18 @@ impl AddAgentWizard {
                         WizardStep::Name
                     }
                     WizardStep::Name => {
-                        if self.name.trim().is_empty() {
-                            return true; // Don't advance with empty name
+                        let trimmed = self.name.trim();
+                        if trimmed.is_empty() {
+                            self.validation_error = Some("Name cannot be empty".into());
+                            return true;
                         }
+                        if !trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                            self.validation_error = Some(
+                                "Name may only contain letters, digits, hyphens, and underscores".into()
+                            );
+                            return true;
+                        }
+                        self.validation_error = None;
                         WizardStep::WorkingDir
                     }
                     WizardStep::WorkingDir => {
@@ -411,6 +424,7 @@ impl AddAgentWizard {
             KeyCode::Char(c) => {
                 text.insert(*cursor, c);
                 *cursor += c.len_utf8();
+                self.validation_error = None;
             }
             KeyCode::Backspace => {
                 if *cursor > 0 {
@@ -1094,5 +1108,38 @@ mod tests {
         let mut wiz = AddAgentWizard::new();
         wiz.restart_selected = 999; // out of bounds
         assert_eq!(wiz.restart_choice(), RestartChoice::OnFailure); // should fallback
+    }
+
+    #[test]
+    fn wizard_name_validation_rejects_special_chars() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.step = WizardStep::Name;
+        wiz.name = "bad name with spaces".into();
+        wiz.name_cursor = wiz.name.len();
+        // Try to advance
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Name); // should NOT advance
+        assert!(wiz.validation_error.is_some());
+
+        // Fix the name
+        wiz.name = "good-name_1".into();
+        wiz.name_cursor = wiz.name.len();
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::WorkingDir); // should advance
+        assert!(wiz.validation_error.is_none());
+    }
+
+    #[test]
+    fn wizard_name_validation_clears_on_typing() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.step = WizardStep::Name;
+        wiz.name = "bad[name".into();
+        wiz.name_cursor = wiz.name.len();
+        wiz.handle_key(press(KeyCode::Enter));
+        assert!(wiz.validation_error.is_some());
+
+        // Typing clears error
+        wiz.handle_key(press(KeyCode::Char('x')));
+        assert!(wiz.validation_error.is_none());
     }
 }
