@@ -166,6 +166,8 @@ pub struct OnboardApp {
     // -- Telegram async --
     pub telegram_evt_rx: Option<mpsc::Receiver<TelegramEvent>>,
     pub telegram_result: Option<(String, i64, String)>, // (token, chat_id, bot_username)
+    /// When Telegram validation started (for elapsed time display).
+    pub telegram_started_at: Option<Instant>,
 
     // -- Summary --
     pub start_daemon: bool,
@@ -215,6 +217,7 @@ impl OnboardApp {
             telegram_status: TelegramStatus::Idle,
             telegram_evt_rx: None,
             telegram_result: None,
+            telegram_started_at: None,
             start_daemon: true,
             paste_indicator: None,
         }
@@ -733,6 +736,7 @@ impl OnboardApp {
     fn start_telegram_validation(&mut self) {
         let token = self.telegram_token.trim().to_string();
         self.telegram_status = TelegramStatus::ValidatingToken;
+        self.telegram_started_at = Some(Instant::now());
 
         let (evt_tx, evt_rx) = mpsc::channel::<TelegramEvent>();
         self.telegram_evt_rx = Some(evt_rx);

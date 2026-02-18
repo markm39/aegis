@@ -1250,7 +1250,7 @@ impl FleetApp {
             }
             FleetCommand::Watch { dir } => {
                 let cmd = match dir {
-                    Some(d) => format!("aegis watch --dir {d}"),
+                    Some(d) => format!("aegis watch --dir {}", crate::terminal::shell_quote(&d)),
                     None => "aegis watch".to_string(),
                 };
                 self.spawn_terminal(&cmd, "Started directory watch in new terminal");

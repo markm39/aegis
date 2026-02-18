@@ -74,15 +74,24 @@ fn spawn_tmux(command: &str) -> Result<(), String> {
     }
 }
 
+/// Shell-quote a string with single quotes so it survives shell expansion.
+///
+/// Wraps the string in single quotes and escapes any embedded single quotes
+/// using the `'\''` idiom (end quote, escaped quote, start quote).
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Escape a string for use inside an AppleScript double-quoted literal.
 ///
-/// Escapes backslashes, double quotes, newlines, and carriage returns.
+/// Escapes backslashes, double quotes, newlines, carriage returns, and tabs.
 /// Order matters: backslashes must be escaped first to avoid double-escaping.
 fn escape_applescript(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 /// Run an AppleScript via osascript, capturing stderr for error messages.
@@ -200,6 +209,14 @@ mod tests {
     }
 
     #[test]
+    fn escape_applescript_tabs() {
+        assert_eq!(
+            escape_applescript("col1\tcol2"),
+            "col1\\tcol2"
+        );
+    }
+
+    #[test]
     fn unsupported_backend_returns_helpful_error() {
         let result = spawn_in_terminal("test command");
         // In CI/test environments, might be unsupported
@@ -208,5 +225,25 @@ mod tests {
                 assert!(msg.contains("test command"));
             }
         }
+    }
+
+    #[test]
+    fn shell_quote_simple() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_quote_spaces() {
+        assert_eq!(shell_quote("/path/with spaces"), "'/path/with spaces'");
+    }
+
+    #[test]
+    fn shell_quote_single_quotes() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_empty() {
+        assert_eq!(shell_quote(""), "''");
     }
 }

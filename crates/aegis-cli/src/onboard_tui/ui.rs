@@ -524,27 +524,39 @@ fn draw_telegram_progress(f: &mut Frame, app: &OnboardApp, area: Rect) {
                 Style::default().fg(Color::Yellow),
             )),
         ],
-        TelegramStatus::WaitingForChat { bot_username } => vec![
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  Connected to bot ", Style::default().fg(Color::Green)),
-                Span::styled(
-                    format!("@{bot_username}"),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Waiting for you to send a message to the bot in Telegram...",
-                Style::default().fg(Color::Yellow),
-            )),
-            Line::from(Span::styled(
-                "  Open Telegram, find your bot, and send any message.",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ],
+        TelegramStatus::WaitingForChat { bot_username } => {
+            let elapsed = app
+                .telegram_started_at
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
+            let remaining = 60u64.saturating_sub(elapsed);
+            let timer = format!("  ({remaining}s remaining, Esc to cancel)");
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Connected to bot ", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!("@{bot_username}"),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Waiting for you to send a message to the bot in Telegram...",
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(Span::styled(
+                    "  Open Telegram, find your bot, and send any message.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    timer,
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        }
         TelegramStatus::SendingConfirmation => vec![
             Line::from(""),
             Line::from(Span::styled(
