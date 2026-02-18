@@ -634,7 +634,7 @@ impl FleetApp {
                     name: self.detail_name.clone(),
                     message: None,
                 };
-                self.send_named_command(cmd);
+                self.send_and_show_result(cmd);
             }
             KeyCode::Tab => {
                 // Toggle focus between output and pending panel
@@ -643,12 +643,12 @@ impl FleetApp {
                 }
             }
             KeyCode::Char('x') => {
-                self.send_named_command(DaemonCommand::StopAgent {
+                self.send_and_show_result(DaemonCommand::StopAgent {
                     name: self.detail_name.clone(),
                 });
             }
             KeyCode::Char('r') => {
-                self.send_named_command(DaemonCommand::RestartAgent {
+                self.send_and_show_result(DaemonCommand::RestartAgent {
                     name: self.detail_name.clone(),
                 });
             }
@@ -1212,7 +1212,7 @@ impl FleetApp {
         if let Some(agent) = self.agents.get(self.agent_selected) {
             let name = agent.name.clone();
             let cmd = make_cmd(name);
-            self.send_named_command(cmd);
+            self.send_and_show_result(cmd);
         }
     }
 
