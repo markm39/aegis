@@ -18,4 +18,4 @@ pub mod runner;
 pub mod telegram;
 
 pub use channel::{Channel, ChannelError, InboundAction, OutboundMessage};
-pub use runner::{run, ChannelInput};
+pub use runner::{run, run_fleet, ChannelInput};

@@ -16,7 +16,7 @@ use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonC
 use aegis_types::AegisConfig;
 
 use crate::lifecycle;
-use crate::slot::{AgentSlot, PendingPromptInfo};
+use crate::slot::{AgentSlot, NotableEvent, PendingPromptInfo};
 
 /// Fleet of managed agent slots.
 pub struct Fleet {
@@ -237,8 +237,12 @@ impl Fleet {
 
     /// Periodic tick: check for exited threads, apply restart policies,
     /// drain output channels, and process supervisor updates.
-    pub fn tick(&mut self) {
+    ///
+    /// Returns notable events tagged with agent names. These should be forwarded
+    /// to the notification channel (Telegram) if one is configured.
+    pub fn tick(&mut self) -> Vec<(String, NotableEvent)> {
         let names: Vec<String> = self.slots.keys().cloned().collect();
+        let mut all_events = Vec::new();
 
         for name in names {
             if let Some(slot) = self.slots.get(&name) {
@@ -248,7 +252,10 @@ impl Fleet {
 
             // Drain rich updates (pending prompts, stats, attention flags)
             if let Some(slot) = self.slots.get_mut(&name) {
-                slot.drain_updates();
+                let events = slot.drain_updates();
+                for event in events {
+                    all_events.push((name.clone(), event));
+                }
             }
 
             // Check if the thread has finished
@@ -263,6 +270,8 @@ impl Fleet {
                 self.tick_slot(&name);
             }
         }
+
+        all_events
     }
 
     /// Handle a finished agent thread: join it and apply restart policy.

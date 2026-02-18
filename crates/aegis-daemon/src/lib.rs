@@ -21,20 +21,23 @@ pub mod slot;
 pub mod state;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use tracing::info;
 
+use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
     PendingPromptSummary,
 };
+use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
 
 use crate::control::DaemonCmdRx;
 use crate::fleet::Fleet;
+use crate::slot::NotableEvent;
 use crate::state::DaemonState;
 
 /// The daemon runtime: main loop managing the fleet and control plane.
@@ -47,6 +50,10 @@ pub struct DaemonRuntime {
     pub shutdown: Arc<AtomicBool>,
     /// When the daemon started.
     pub started_at: Instant,
+    /// Sender for outbound events to the notification channel (Telegram).
+    channel_tx: Option<mpsc::Sender<ChannelInput>>,
+    /// Receiver for inbound commands from the notification channel.
+    channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
 }
 
 impl DaemonRuntime {
@@ -59,6 +66,8 @@ impl DaemonRuntime {
             config,
             shutdown: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
+            channel_tx: None,
+            channel_cmd_rx: None,
         }
     }
 
@@ -92,6 +101,24 @@ impl DaemonRuntime {
             Arc::clone(&self.shutdown),
         );
 
+        // Start notification channel (Telegram) if configured
+        if let Some(ref channel_config) = self.config.channel {
+            let (input_tx, input_rx) = mpsc::channel();
+            let (feedback_tx, feedback_rx) = mpsc::channel();
+            let config = channel_config.clone();
+
+            std::thread::Builder::new()
+                .name("channel".to_string())
+                .spawn(move || {
+                    aegis_channel::run_fleet(config, input_rx, Some(feedback_tx));
+                })
+                .ok();
+
+            self.channel_tx = Some(input_tx);
+            self.channel_cmd_rx = Some(feedback_rx);
+            info!("notification channel started");
+        }
+
         info!(
             agents = self.fleet.agent_count(),
             socket = %self.config.control.socket_path.display(),
@@ -110,8 +137,14 @@ impl DaemonRuntime {
             // Drain pending control commands (non-blocking)
             self.drain_commands(&mut cmd_rx);
 
+            // Drain inbound commands from the notification channel
+            self.drain_channel_commands();
+
             // Tick the fleet (check for exits, apply restart policies)
-            self.fleet.tick();
+            let notable_events = self.fleet.tick();
+
+            // Forward notable events to the notification channel
+            self.forward_to_channel(notable_events);
 
             // Periodically save state
             if last_state_save.elapsed() >= state_save_interval {
@@ -141,6 +174,86 @@ impl DaemonRuntime {
         while let Ok((cmd, reply_tx)) = cmd_rx.try_recv() {
             let response = self.handle_command(cmd);
             let _ = reply_tx.send(response);
+        }
+    }
+
+    /// Drain inbound commands from the notification channel (Telegram).
+    ///
+    /// These commands were parsed from Telegram messages and converted to
+    /// `DaemonCommand`s by the channel runner. We process them the same as
+    /// control socket commands, but discard the response (no reply channel).
+    fn drain_channel_commands(&mut self) {
+        let cmds: Vec<DaemonCommand> = match &self.channel_cmd_rx {
+            Some(rx) => rx.try_iter().collect(),
+            None => return,
+        };
+
+        for cmd in cmds {
+            info!(?cmd, "processing command from notification channel");
+            let _response = self.handle_command(cmd);
+            // Response is discarded -- the channel runner doesn't wait for replies.
+            // In the future, we could send the response back as a Telegram message.
+        }
+    }
+
+    /// Forward notable fleet events to the notification channel.
+    ///
+    /// Converts `NotableEvent`s (from `drain_updates`) into `PilotWebhookEvent`s
+    /// and sends them through the channel for Telegram delivery.
+    fn forward_to_channel(&self, events: Vec<(String, NotableEvent)>) {
+        let tx = match &self.channel_tx {
+            Some(tx) => tx,
+            None => return,
+        };
+
+        for (agent_name, event) in events {
+            let kind = match event {
+                NotableEvent::PendingPrompt { request_id, raw_prompt } => {
+                    PilotEventKind::PendingApproval { request_id, raw_prompt }
+                }
+                NotableEvent::AttentionNeeded { nudge_count } => {
+                    PilotEventKind::AttentionNeeded { nudge_count }
+                }
+                NotableEvent::StallNudge { nudge_count } => {
+                    PilotEventKind::StallDetected { nudge_count, idle_secs: 0 }
+                }
+                NotableEvent::ChildExited { exit_code } => {
+                    PilotEventKind::AgentExited { exit_code }
+                }
+            };
+
+            // Build stats from the slot if available
+            let stats = self
+                .fleet
+                .slot(&agent_name)
+                .and_then(|s| s.pilot_stats.as_ref())
+                .map(|ps| EventStats {
+                    approved: ps.approved,
+                    denied: ps.denied,
+                    uncertain: ps.uncertain,
+                    nudges: ps.nudges,
+                    uptime_secs: self
+                        .fleet
+                        .slot(&agent_name)
+                        .and_then(|s| s.uptime_secs())
+                        .unwrap_or(0),
+                })
+                .unwrap_or_default();
+
+            let webhook_event = PilotWebhookEvent::new(
+                kind,
+                &agent_name,
+                0,    // PID not easily available from slot
+                vec![],
+                None,
+                stats,
+            );
+
+            let input = ChannelInput::PilotEvent(webhook_event);
+            if tx.send(input).is_err() {
+                info!("notification channel closed, stopping event forwarding");
+                break;
+            }
         }
     }
 

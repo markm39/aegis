@@ -6,6 +6,7 @@
 
 use aegis_alert::AlertEvent;
 use aegis_control::command::Command;
+use aegis_control::daemon::DaemonCommand;
 use aegis_control::event::{PilotEventKind, PilotWebhookEvent};
 use uuid::Uuid;
 
@@ -296,6 +297,101 @@ pub fn help_text() -> String {
     .join("\n")
 }
 
+/// Parse a fleet-aware command from Telegram into a `DaemonCommand`.
+///
+/// Fleet commands include the agent name:
+/// - `/status` -> list all agents
+/// - `/approve <agent> <id>` -> approve a pending request
+/// - `/deny <agent> <id> [reason]` -> deny a pending request
+/// - `/stop <agent>` -> stop an agent
+/// - `/nudge <agent> [msg]` -> nudge a stalled agent
+/// - `/input <agent> <text>` -> send text to agent stdin
+///
+/// Returns `None` for unrecognized commands or `/help`.
+pub fn parse_fleet_command(text: &str) -> Option<DaemonCommand> {
+    let text = text.trim();
+    let (cmd, rest) = match text.split_once(' ') {
+        Some((c, r)) => (c, r.trim()),
+        None => (text, ""),
+    };
+
+    let cmd = cmd.split('@').next().unwrap_or(cmd);
+
+    match cmd.to_lowercase().as_str() {
+        "/status" => Some(DaemonCommand::ListAgents),
+
+        "/approve" => {
+            let (agent, id_str) = rest.split_once(' ')?;
+            let id = Uuid::parse_str(id_str.trim()).ok()?;
+            Some(DaemonCommand::ApproveRequest {
+                name: agent.trim().to_string(),
+                request_id: id.to_string(),
+            })
+        }
+
+        "/deny" => {
+            let mut parts = rest.splitn(3, ' ');
+            let agent = parts.next()?.trim();
+            let id_str = parts.next()?.trim();
+            let _id = Uuid::parse_str(id_str).ok()?;
+            Some(DaemonCommand::DenyRequest {
+                name: agent.to_string(),
+                request_id: id_str.to_string(),
+            })
+        }
+
+        "/stop" => {
+            if rest.is_empty() {
+                return None;
+            }
+            Some(DaemonCommand::StopAgent {
+                name: rest.to_string(),
+            })
+        }
+
+        "/nudge" => {
+            let (agent, msg) = match rest.split_once(' ') {
+                Some((a, m)) => (a.trim(), Some(m.trim().to_string())),
+                None => {
+                    if rest.is_empty() {
+                        return None;
+                    }
+                    (rest, None)
+                }
+            };
+            Some(DaemonCommand::NudgeAgent {
+                name: agent.to_string(),
+                message: msg,
+            })
+        }
+
+        "/input" => {
+            let (agent, text) = rest.split_once(' ')?;
+            Some(DaemonCommand::SendToAgent {
+                name: agent.trim().to_string(),
+                text: text.trim().to_string(),
+            })
+        }
+
+        _ => None,
+    }
+}
+
+/// Help text for fleet commands (Telegram MarkdownV2).
+pub fn fleet_help_text() -> String {
+    [
+        "*Aegis Fleet Commands*\n",
+        "/status \\- List all agents",
+        "/approve <agent> <id> \\- Approve pending request",
+        "/deny <agent> <id> \\- Deny pending request",
+        "/stop <agent> \\- Stop an agent",
+        "/nudge <agent> \\[msg\\] \\- Nudge stalled agent",
+        "/input <agent> <text> \\- Send text to agent",
+        "/help \\- Show this message",
+    ]
+    .join("\n")
+}
+
 fn parse_uuid(s: &str) -> Option<Uuid> {
     Uuid::parse_str(s.trim()).ok()
 }
@@ -556,5 +652,113 @@ mod tests {
         assert!(help.contains("/nudge"));
         assert!(help.contains("/stop"));
         assert!(help.contains("/help"));
+    }
+
+    // Fleet command parsing tests
+
+    #[test]
+    fn fleet_status() {
+        let cmd = parse_fleet_command("/status").unwrap();
+        assert!(matches!(cmd, DaemonCommand::ListAgents));
+    }
+
+    #[test]
+    fn fleet_approve() {
+        let id = Uuid::new_v4();
+        let cmd = parse_fleet_command(&format!("/approve claude-1 {id}")).unwrap();
+        match cmd {
+            DaemonCommand::ApproveRequest { name, request_id } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(request_id, id.to_string());
+            }
+            other => panic!("expected ApproveRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_approve_missing_id() {
+        assert!(parse_fleet_command("/approve claude-1").is_none());
+    }
+
+    #[test]
+    fn fleet_approve_invalid_id() {
+        assert!(parse_fleet_command("/approve claude-1 not-a-uuid").is_none());
+    }
+
+    #[test]
+    fn fleet_deny() {
+        let id = Uuid::new_v4();
+        let cmd = parse_fleet_command(&format!("/deny agent-2 {id}")).unwrap();
+        match cmd {
+            DaemonCommand::DenyRequest { name, request_id } => {
+                assert_eq!(name, "agent-2");
+                assert_eq!(request_id, id.to_string());
+            }
+            other => panic!("expected DenyRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_stop() {
+        let cmd = parse_fleet_command("/stop claude-1").unwrap();
+        match cmd {
+            DaemonCommand::StopAgent { name } => assert_eq!(name, "claude-1"),
+            other => panic!("expected StopAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_stop_missing_agent() {
+        assert!(parse_fleet_command("/stop").is_none());
+    }
+
+    #[test]
+    fn fleet_nudge_with_message() {
+        let cmd = parse_fleet_command("/nudge agent-1 wake up").unwrap();
+        match cmd {
+            DaemonCommand::NudgeAgent { name, message } => {
+                assert_eq!(name, "agent-1");
+                assert_eq!(message, Some("wake up".to_string()));
+            }
+            other => panic!("expected NudgeAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_nudge_without_message() {
+        let cmd = parse_fleet_command("/nudge agent-1").unwrap();
+        match cmd {
+            DaemonCommand::NudgeAgent { name, message } => {
+                assert_eq!(name, "agent-1");
+                assert!(message.is_none());
+            }
+            other => panic!("expected NudgeAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_input() {
+        let cmd = parse_fleet_command("/input claude-1 fix the bug please").unwrap();
+        match cmd {
+            DaemonCommand::SendToAgent { name, text } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(text, "fix the bug please");
+            }
+            other => panic!("expected SendToAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fleet_unknown() {
+        assert!(parse_fleet_command("/bogus").is_none());
+    }
+
+    #[test]
+    fn fleet_help_text_contains_commands() {
+        let help = fleet_help_text();
+        assert!(help.contains("/status"));
+        assert!(help.contains("/approve"));
+        assert!(help.contains("/stop"));
+        assert!(help.contains("/nudge"));
     }
 }

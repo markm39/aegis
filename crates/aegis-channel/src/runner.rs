@@ -4,11 +4,12 @@
 //! Telegram API. Runs a single-threaded tokio runtime on a dedicated thread,
 //! following the same pattern as the alert dispatcher.
 
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 
 use tracing::{info, warn};
 
 use aegis_alert::AlertEvent;
+use aegis_control::daemon::DaemonCommand;
 use aegis_control::event::PilotWebhookEvent;
 use aegis_types::ChannelConfig;
 
@@ -38,6 +39,21 @@ pub enum ChannelInput {
 ///
 /// Call this from a dedicated `std::thread::spawn`.
 pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
+    run_fleet(config, input_rx, None);
+}
+
+/// Run the channel with fleet-aware inbound command forwarding.
+///
+/// Like `run()`, but inbound Telegram commands are parsed as fleet commands
+/// and forwarded as `DaemonCommand`s through the `feedback_tx` channel.
+/// The daemon drains this channel alongside its control socket commands.
+///
+/// Call this from a dedicated `std::thread::spawn`.
+pub fn run_fleet(
+    config: ChannelConfig,
+    input_rx: Receiver<ChannelInput>,
+    feedback_tx: Option<Sender<DaemonCommand>>,
+) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -52,7 +68,7 @@ pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
     rt.block_on(async move {
         match config {
             ChannelConfig::Telegram(tg_config) => {
-                run_telegram(tg_config, input_rx).await;
+                run_telegram(tg_config, input_rx, feedback_tx).await;
             }
         }
     });
@@ -61,6 +77,7 @@ pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
 async fn run_telegram(
     config: aegis_types::TelegramConfig,
     input_rx: Receiver<ChannelInput>,
+    feedback_tx: Option<Sender<DaemonCommand>>,
 ) {
     use crate::channel::Channel;
 
@@ -106,7 +123,7 @@ async fn run_telegram(
                 // Poll for inbound actions
                 match channel.recv().await {
                     Ok(Some(action)) => {
-                        handle_inbound_action(action);
+                        handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
                     }
                     Ok(None) => {} // No pending action
                     Err(crate::channel::ChannelError::Shutdown) => {
@@ -126,15 +143,52 @@ async fn run_telegram(
     info!("Telegram channel stopped");
 }
 
-fn handle_inbound_action(action: InboundAction) {
-    // For now, log the action. Full integration requires wiring CommandTx
-    // into the supervisor, which the daemon agent is working on.
+/// Handle an inbound action from Telegram.
+///
+/// If a `feedback_tx` is provided (fleet mode), attempts to parse the input
+/// as a fleet command and forward it to the daemon. Falls back to legacy
+/// single-agent command handling, and sends help text for unrecognized input.
+async fn handle_inbound_action(
+    channel: &impl crate::channel::Channel,
+    action: InboundAction,
+    feedback_tx: Option<&Sender<DaemonCommand>>,
+) {
     match action {
-        InboundAction::Command(cmd) => {
-            info!(?cmd, "received inbound command from Telegram (not yet forwarded)");
+        InboundAction::Command(ref cmd) => {
+            // Legacy single-agent command -- log it
+            info!(?cmd, "received inbound command from Telegram");
+
+            // If in fleet mode, try to convert to a DaemonCommand
+            // (single-agent commands don't have agent names, so they
+            // can't be forwarded directly -- just log for now)
         }
-        InboundAction::Unknown(text) => {
-            info!(text, "received unknown input from Telegram");
+        InboundAction::Unknown(ref text) => {
+            if text.is_empty() {
+                // /help command -- send help text
+                let help = if feedback_tx.is_some() {
+                    format::fleet_help_text()
+                } else {
+                    format::help_text()
+                };
+                let msg = crate::channel::OutboundMessage::text(help);
+                if let Err(e) = channel.send(msg).await {
+                    warn!("failed to send help text: {e}");
+                }
+                return;
+            }
+
+            // Try fleet command parsing if feedback channel is available
+            if let Some(tx) = feedback_tx {
+                if let Some(daemon_cmd) = format::parse_fleet_command(text) {
+                    info!(?daemon_cmd, "forwarding fleet command from Telegram");
+                    if tx.send(daemon_cmd).is_err() {
+                        warn!("failed to forward fleet command (daemon feedback channel closed)");
+                    }
+                    return;
+                }
+            }
+
+            info!(text, "unrecognized input from Telegram");
         }
     }
 }

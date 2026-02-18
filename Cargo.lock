@@ -99,6 +99,7 @@ name = "aegis-daemon"
 version = "0.1.0"
 dependencies = [
  "aegis-alert",
+ "aegis-channel",
  "aegis-control",
  "aegis-ledger",
  "aegis-observer",
