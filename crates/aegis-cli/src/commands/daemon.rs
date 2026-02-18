@@ -552,11 +552,7 @@ pub fn pending(name: &str) -> anyhow::Result<()> {
                     "{:<38} {:<8} {}",
                     p.request_id,
                     format!("{}s", p.age_secs),
-                    if p.raw_prompt.len() > 40 {
-                        format!("{}...", &p.raw_prompt[..37])
-                    } else {
-                        p.raw_prompt.clone()
-                    }
+                    truncate_str(&p.raw_prompt, 40)
                 );
             }
         }
@@ -950,4 +946,16 @@ pub fn follow(name: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Truncate a string to `max_chars` characters, appending "..." if truncated.
+/// Safe for multi-byte UTF-8 (truncates at char boundaries, not bytes).
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{truncated}...")
+    }
 }

@@ -233,11 +233,7 @@ fn draw_pending(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) 
         .enumerate()
         .map(|(i, info)| {
             let ts = info.received_at.format("%H:%M:%S");
-            let truncated = if info.raw_prompt.len() > 40 {
-                format!("{}...", &info.raw_prompt[..37])
-            } else {
-                info.raw_prompt.clone()
-            };
+            let truncated = truncate_str(&info.raw_prompt, 40);
 
             let line = Line::from(vec![
                 Span::styled(
@@ -439,5 +435,17 @@ mod tests {
         terminal
             .draw(|f| draw(f, &app))
             .expect("draw should not panic with small terminal");
+    }
+}
+
+/// Truncate a string to `max_chars` characters, appending "..." if truncated.
+/// Safe for multi-byte UTF-8 (truncates at char boundaries, not bytes).
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{truncated}...")
     }
 }
