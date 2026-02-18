@@ -1,67 +1,43 @@
 //! Unified first-run onboarding wizard.
 //!
-//! When `aegis` is invoked with nothing configured, this module runs a single
-//! plain stdin/stdout wizard that configures an agent, optionally sets up
-//! Telegram notifications, writes `daemon.toml`, starts the daemon, and opens
-//! the fleet dashboard.
+//! When `aegis` is invoked with nothing configured, this module launches a
+//! ratatui TUI wizard that configures an agent, optionally sets up Telegram
+//! notifications, writes `daemon.toml`, starts the daemon, and opens the
+//! fleet dashboard.
+//!
+//! The `prompt_*` helpers below are still used by `daemon.rs::add_agent()`
+//! for the CLI `aegis daemon add` command.
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context};
 
-use aegis_channel::telegram::api::TelegramApi;
-use aegis_types::config::{ChannelConfig, TelegramConfig};
 use aegis_types::daemon::{
     daemon_config_path, daemon_dir, AgentToolConfig, DaemonConfig,
-    DaemonControlConfig, PersistenceConfig, RestartPolicy,
+    DaemonControlConfig, PersistenceConfig,
 };
 
 /// Run the unified onboarding wizard.
+///
+/// Launches a full ratatui TUI wizard, then writes `daemon.toml` and
+/// optionally starts the daemon + fleet dashboard.
 pub fn run() -> anyhow::Result<()> {
-    println!("Welcome to Aegis -- zero-trust runtime for AI agents.");
-    println!();
+    let result = crate::onboard_tui::run_onboard_wizard()?;
 
-    // Step 1: system check
-    println!("Step 1: System check");
-    let aegis_dir = crate::commands::init::ensure_aegis_dir()?;
-    println!("  {} ... ok", aegis_dir.display());
-    println!();
+    if result.cancelled {
+        println!("Onboarding cancelled.");
+        return Ok(());
+    }
 
-    // Step 2: agent configuration
-    println!("Step 2: Add your first agent");
-    let tool = prompt_tool()?;
-    let name = prompt_agent_name()?;
-    let working_dir = prompt_working_dir()?;
-    let task = prompt_task()?;
-
-    let slot = super::build_agent_slot(
-        name.clone(),
-        tool.clone(),
-        working_dir.clone(),
-        task.clone(),
-        RestartPolicy::OnFailure,
-        5,
-    );
-    println!();
-
-    // Step 3: Telegram (optional)
-    let channel = if confirm("Step 3: Set up Telegram notifications?", true)? {
-        println!();
-        Some(run_telegram_setup()?)
-    } else {
-        println!();
-        None
-    };
-
-    // Write config
+    // Write daemon.toml (after TUI closes, back in normal terminal mode)
     let config = DaemonConfig {
         goal: None,
         persistence: PersistenceConfig::default(),
         control: DaemonControlConfig::default(),
         alerts: vec![],
-        agents: vec![slot],
-        channel,
+        agents: vec![result.agent_slot.clone()],
+        channel: result.channel,
     };
 
     let dir = daemon_dir();
@@ -73,35 +49,27 @@ pub fn run() -> anyhow::Result<()> {
     std::fs::write(&config_path, &toml_str)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
     println!("Wrote config to {}", config_path.display());
-    println!();
-
-    // Step 4: Start daemon
-    let started = if confirm("Start the daemon now?", true)? {
-        crate::commands::daemon::start()?;
-        true
-    } else {
-        println!("Run `aegis daemon start` when ready.");
-        false
-    };
-    println!();
 
     // Summary
-    println!("Setup complete!");
-    println!("  Agent: {} ({})", name, super::daemon::tool_display_name(&tool));
-    println!("  Dir:   {}", working_dir.display());
-    if let Some(t) = &task {
+    let tool_name = super::daemon::tool_display_name(&result.agent_slot.tool);
+    println!(
+        "  Agent: {} ({})",
+        result.agent_slot.name, tool_name
+    );
+    println!("  Dir:   {}", result.agent_slot.working_dir.display());
+    if let Some(t) = &result.agent_slot.task {
         println!("  Task:  {t}");
     }
-    println!("  Config: {}", config_path.display());
     println!();
-    println!("Next: use the fleet dashboard to manage your agents.");
-    println!("  aegis              # open dashboard");
-    println!("  aegis daemon stop  # stop the daemon");
 
-    // Open fleet dashboard if daemon started
-    if started {
+    // Optionally start daemon + fleet TUI
+    if result.start_daemon {
+        crate::commands::daemon::start()?;
         println!();
         crate::fleet_tui::run_fleet_tui()?;
+    } else {
+        println!("Run `aegis daemon start` when ready.");
+        println!("Then `aegis` to open the fleet dashboard.");
     }
 
     Ok(())
@@ -194,52 +162,6 @@ pub(crate) fn prompt_task() -> anyhow::Result<Option<String>> {
     }
 }
 
-/// Run the Telegram setup flow, returning a `ChannelConfig`.
-///
-/// Creates a tokio runtime to call the async Telegram API functions
-/// that are shared with the standalone `aegis telegram setup` command.
-fn run_telegram_setup() -> anyhow::Result<ChannelConfig> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to create tokio runtime")?;
-
-    rt.block_on(async {
-        println!("  1. Open Telegram and search for @BotFather");
-        println!("  2. Send /newbot and follow the prompts");
-        println!("  3. Copy the bot token (looks like 123456:ABC-DEF...)");
-        println!();
-
-        let token = super::telegram::prompt_token()?;
-        let user = super::telegram::validate_token(&token).await?;
-
-        let bot_username = user.username.as_deref().unwrap_or("your_bot");
-        println!("  Connected to bot @{bot_username} ({})", user.first_name);
-        println!();
-
-        let api = TelegramApi::new(&token);
-        let chat_id = super::telegram::discover_chat_id(&api, bot_username).await?;
-
-        // Send confirmation
-        let confirm_text = format!(
-            "Aegis connected! This chat will receive agent notifications.\n\
-             Chat ID: {chat_id}"
-        );
-        api.send_message(chat_id, &confirm_text, None, None, false)
-            .await
-            .context("failed to send confirmation message")?;
-        println!("  Sent confirmation message to Telegram");
-        println!();
-
-        Ok(ChannelConfig::Telegram(TelegramConfig {
-            bot_token: token,
-            chat_id,
-            poll_timeout_secs: 30,
-            allow_group_commands: false,
-        }))
-    })
-}
-
 /// Read a line from stdin, returning `default` if the user presses Enter.
 fn prompt(label: &str, default: &str) -> anyhow::Result<String> {
     print!("{label}: ");
@@ -254,25 +176,11 @@ fn prompt(label: &str, default: &str) -> anyhow::Result<String> {
     }
 }
 
-/// Y/n confirmation prompt.
-fn confirm(label: &str, default: bool) -> anyhow::Result<bool> {
-    let hint = if default { "[Y/n]" } else { "[y/N]" };
-    print!("{label} {hint} ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().lock().read_line(&mut input)?;
-    let input = input.trim().to_lowercase();
-    if input.is_empty() {
-        Ok(default)
-    } else {
-        Ok(input == "y" || input == "yes")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aegis_types::daemon::AgentSlotConfig;
+    use aegis_types::config::{ChannelConfig, TelegramConfig};
+    use aegis_types::daemon::{AgentSlotConfig, RestartPolicy};
     use crate::commands::daemon::tool_display_name;
 
     #[test]

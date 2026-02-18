@@ -1,0 +1,60 @@
+//! TUI onboarding wizard for first-run `aegis`.
+//!
+//! When `aegis` is invoked with nothing configured, this module provides a
+//! proper ratatui-based wizard (replacing the old plain stdin/stdout prompts).
+//! It configures an agent, optionally sets up Telegram, and returns an
+//! `OnboardResult` that the caller uses to write daemon.toml and start the daemon.
+
+pub mod app;
+mod ui;
+
+use std::io;
+use std::time::Duration;
+
+use anyhow::Result;
+use crossterm::event::{self, Event as CrosstermEvent};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+
+pub use app::OnboardResult;
+
+/// Tick rate for the wizard event loop (milliseconds).
+const TICK_RATE_MS: u64 = 50;
+
+/// Run the onboarding wizard TUI and return the result.
+///
+/// Initializes the terminal in raw/alternate-screen mode, runs the event
+/// loop, and restores the terminal on exit (including on error).
+pub fn run_onboard_wizard() -> Result<OnboardResult> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = app::OnboardApp::new();
+    let tick_rate = Duration::from_millis(TICK_RATE_MS);
+
+    while app.running {
+        terminal.draw(|f| ui::draw(f, &app))?;
+
+        if event::poll(tick_rate)? {
+            if let CrosstermEvent::Key(key) = event::read()? {
+                app.handle_key(key);
+            }
+        }
+
+        // Check for async Telegram events each tick
+        app.poll_telegram();
+    }
+
+    // Restore terminal
+    disable_raw_mode()?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    Ok(app.result())
+}

@@ -1,5 +1,6 @@
 mod commands;
 mod fleet_tui;
+mod onboard_tui;
 mod pilot_tui;
 mod terminal;
 mod wizard;
