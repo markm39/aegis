@@ -688,7 +688,7 @@ pub fn config_edit() -> anyhow::Result<()> {
     match DaemonConfig::from_toml(&content) {
         Ok(cfg) => {
             println!("Configuration saved and validated ({} agent(s)).", cfg.agents.len());
-            println!("Restart the daemon for changes to take effect: aegis daemon stop && aegis daemon start");
+            println!("Run 'aegis daemon reload' to apply changes without restarting.");
         }
         Err(e) => {
             println!("WARNING: config may be invalid after editing: {e}");
@@ -765,7 +765,7 @@ pub fn add_agent() -> anyhow::Result<()> {
         match resp {
             Ok(r) if r.ok => println!("Agent '{name}' started in running daemon."),
             Ok(r) => println!("Daemon responded: {}", r.message),
-            Err(e) => println!("Could not notify running daemon: {e}\nRestart the daemon to pick up the new agent."),
+            Err(e) => println!("Could not notify running daemon: {e}\nRun 'aegis daemon reload' to pick up the new agent."),
         }
     } else {
         println!("Daemon is not running. Start it with: aegis daemon start");
@@ -807,7 +807,7 @@ pub fn remove_agent(name: &str) -> anyhow::Result<()> {
         }
     }
 
-    println!("Restart the daemon to fully apply: aegis daemon stop && aegis daemon start");
+    println!("Run 'aegis daemon reload' to apply changes, or 'aegis daemon restart' to fully restart.");
 
     Ok(())
 }

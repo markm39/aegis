@@ -224,7 +224,7 @@ pub fn disable() -> anyhow::Result<()> {
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
     println!("Telegram notifications disabled.");
-    println!("Restart the daemon for changes to take effect.");
+    println!("Run 'aegis daemon reload' to apply changes.");
 
     Ok(())
 }

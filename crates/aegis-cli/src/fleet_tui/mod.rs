@@ -461,7 +461,7 @@ impl FleetApp {
                 config: Box::new(config),
                 start: true,
             };
-            self.send_named_command(cmd);
+            self.send_and_show_result(cmd);
         } else {
             // Offline: write directly to daemon.toml
             match self.add_agent_to_config(config) {
@@ -905,7 +905,7 @@ impl FleetApp {
             FleetCommand::Remove { agent } => {
                 match crate::commands::daemon::remove_agent(&agent) {
                     Ok(()) => {
-                        self.command_result = Some(format!("Removed '{agent}' from config. Restart daemon to fully apply."));
+                        self.command_result = Some(format!("Removed '{agent}' from config and stopped in daemon."));
                         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                     }
                     Err(e) => {

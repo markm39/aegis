@@ -175,7 +175,7 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
 fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
     if app.agents.is_empty() {
         let msg = if app.connected {
-            "No agents configured. Add agents to daemon.toml and restart the daemon."
+            "No agents configured. Type :add to create one, or :help for commands."
         } else if let Some(ref err) = app.last_error {
             err.as_str()
         } else {
