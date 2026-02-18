@@ -408,6 +408,10 @@ impl Fleet {
         for name in backoff_ready {
             if let Some(slot) = self.slots.get_mut(&name) {
                 slot.backoff_until = None;
+                // Don't restart disabled agents
+                if !slot.config.enabled {
+                    continue;
+                }
             }
             info!(agent = %name, "backoff expired, restarting agent");
             self.start_agent(&name);
