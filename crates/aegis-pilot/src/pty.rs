@@ -41,55 +41,64 @@ impl PtySession {
         // The child immediately exec's, so async-signal-safety is maintained.
         match unsafe { unistd::fork() } {
             Ok(ForkResult::Child) => {
-                // Child process: set up the slave PTY as stdin/stdout/stderr
-                drop(pty.master);
+                // Child process: set up the slave PTY as stdin/stdout/stderr.
+                // IMPORTANT: errors must call _exit(), not return via ?, because
+                // returning would propagate back to the caller in the child process,
+                // causing two processes to run the same parent code path.
+                // Run child setup in a closure so ? collects errors without
+                // returning to the caller (which would be the child process
+                // running the parent's code path -- a classic fork bug).
+                let err = (|| -> Result<(), String> {
+                    drop(pty.master);
 
-                // Create a new session and set the slave as the controlling terminal
-                unistd::setsid()
-                    .map_err(|e| AegisError::PilotError(format!("setsid failed: {e}")))?;
+                    unistd::setsid()
+                        .map_err(|e| format!("setsid failed: {e}"))?;
 
-                // Set controlling terminal via ioctl TIOCSCTTY
-                unsafe {
-                    if libc::ioctl(pty.slave.as_raw_fd(), libc::TIOCSCTTY as _, 0) < 0 {
-                        let err = std::io::Error::last_os_error();
-                        eprintln!("aegis-pilot: TIOCSCTTY failed: {err}");
+                    // Set controlling terminal via ioctl TIOCSCTTY
+                    unsafe {
+                        if libc::ioctl(pty.slave.as_raw_fd(), libc::TIOCSCTTY as _, 0) < 0 {
+                            let err = std::io::Error::last_os_error();
+                            eprintln!("aegis-pilot: TIOCSCTTY failed: {err}");
+                        }
                     }
+
+                    unistd::dup2(pty.slave.as_raw_fd(), libc::STDIN_FILENO)
+                        .map_err(|e| format!("dup2 stdin: {e}"))?;
+                    unistd::dup2(pty.slave.as_raw_fd(), libc::STDOUT_FILENO)
+                        .map_err(|e| format!("dup2 stdout: {e}"))?;
+                    unistd::dup2(pty.slave.as_raw_fd(), libc::STDERR_FILENO)
+                        .map_err(|e| format!("dup2 stderr: {e}"))?;
+
+                    drop(pty.slave);
+
+                    unistd::chdir(working_dir)
+                        .map_err(|e| format!("chdir: {e}"))?;
+
+                    for (key, value) in env {
+                        std::env::set_var(key, value);
+                    }
+
+                    let c_command = CString::new(command.to_string())
+                        .map_err(|e| format!("invalid command: {e}"))?;
+                    let mut c_args: Vec<CString> = vec![c_command.clone()];
+                    for arg in args {
+                        c_args.push(
+                            CString::new(arg.as_str())
+                                .map_err(|e| format!("invalid arg: {e}"))?
+                        );
+                    }
+
+                    unistd::execvp(&c_command, &c_args)
+                        .map_err(|e| format!("exec failed: {e}"))?;
+
+                    Ok(()) // unreachable: execvp replaces the process
+                })();
+
+                // If we get here, something failed before exec replaced the process.
+                if let Err(e) = err {
+                    eprintln!("aegis-pilot: child setup failed: {e}");
                 }
-
-                // Redirect stdio to the slave PTY
-                unistd::dup2(pty.slave.as_raw_fd(), libc::STDIN_FILENO)
-                    .map_err(|e| AegisError::PilotError(format!("dup2 stdin: {e}")))?;
-                unistd::dup2(pty.slave.as_raw_fd(), libc::STDOUT_FILENO)
-                    .map_err(|e| AegisError::PilotError(format!("dup2 stdout: {e}")))?;
-                unistd::dup2(pty.slave.as_raw_fd(), libc::STDERR_FILENO)
-                    .map_err(|e| AegisError::PilotError(format!("dup2 stderr: {e}")))?;
-
-                drop(pty.slave);
-
-                // Set working directory
-                unistd::chdir(working_dir)
-                    .map_err(|e| AegisError::PilotError(format!("chdir: {e}")))?;
-
-                // Set environment
-                for (key, value) in env {
-                    std::env::set_var(key, value);
-                }
-
-                // Exec the command
-                let c_command = CString::new(command.to_string())
-                    .map_err(|e| AegisError::PilotError(format!("invalid command: {e}")))?;
-                let mut c_args: Vec<CString> = vec![c_command.clone()];
-                for arg in args {
-                    c_args.push(
-                        CString::new(arg.as_str())
-                            .map_err(|e| AegisError::PilotError(format!("invalid arg: {e}")))?
-                    );
-                }
-
-                unistd::execvp(&c_command, &c_args)
-                    .map_err(|e| AegisError::PilotError(format!("exec failed: {e}")))?;
-
-                unreachable!("execvp returned Ok");
+                unsafe { libc::_exit(1) };
             }
             Ok(ForkResult::Parent { child }) => {
                 // Parent: close the slave, keep the master

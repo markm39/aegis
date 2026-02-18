@@ -174,7 +174,7 @@ pub fn run(
     let mut pending: HashMap<Uuid, PendingInfo> = HashMap::new();
 
     let poll_timeout_ms = std::cmp::min(
-        config.pilot_config.stall.timeout_secs * 1000,
+        config.pilot_config.stall.timeout_secs.saturating_mul(1000),
         5000, // Check at least every 5 seconds
     ) as i32;
 
