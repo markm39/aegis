@@ -199,10 +199,14 @@ impl FleetApp {
             }
             Ok(resp) => {
                 self.connected = false;
+                self.daemon_pid = 0;
+                self.daemon_uptime_secs = 0;
                 self.last_error = Some(resp.message);
             }
             Err(e) => {
                 self.connected = false;
+                self.daemon_pid = 0;
+                self.daemon_uptime_secs = 0;
                 self.last_error = Some(e);
             }
         }
@@ -232,11 +236,19 @@ impl FleetApp {
         match client.send(&DaemonCommand::ListAgents) {
             Ok(resp) if resp.ok => {
                 if let Some(data) = resp.data {
-                    if let Ok(agents) = serde_json::from_value::<Vec<AgentSummary>>(data) {
-                        self.agents = agents;
-                        // Clamp selection
-                        if self.agent_selected >= self.agents.len() && !self.agents.is_empty() {
-                            self.agent_selected = self.agents.len() - 1;
+                    match serde_json::from_value::<Vec<AgentSummary>>(data) {
+                        Ok(agents) => {
+                            self.agents = agents;
+                            // Clamp selection
+                            if self.agent_selected >= self.agents.len()
+                                && !self.agents.is_empty()
+                            {
+                                self.agent_selected = self.agents.len() - 1;
+                            }
+                        }
+                        Err(e) => {
+                            self.last_error =
+                                Some(format!("failed to parse agent list: {e}"));
                         }
                     }
                 }
@@ -276,15 +288,21 @@ impl FleetApp {
         match client.send(&cmd) {
             Ok(resp) if resp.ok => {
                 if let Some(data) = resp.data {
-                    if let Ok(lines) = serde_json::from_value::<Vec<String>>(data) {
-                        self.detail_output.clear();
-                        for line in lines {
-                            self.detail_output.push_back(line);
+                    match serde_json::from_value::<Vec<String>>(data) {
+                        Ok(lines) => {
+                            self.detail_output.clear();
+                            for line in lines {
+                                self.detail_output.push_back(line);
+                            }
+                            // Clamp scroll if output shrank
+                            let max = self.detail_output.len().saturating_sub(1);
+                            if self.detail_scroll > max {
+                                self.detail_scroll = max;
+                            }
                         }
-                        // Clamp scroll if output shrank
-                        let max = self.detail_output.len().saturating_sub(1);
-                        if self.detail_scroll > max {
-                            self.detail_scroll = max;
+                        Err(e) => {
+                            self.last_error =
+                                Some(format!("failed to parse agent output: {e}"));
                         }
                     }
                 }
@@ -299,17 +317,23 @@ impl FleetApp {
         match client.send(&pending_cmd) {
             Ok(resp) if resp.ok => {
                 if let Some(data) = resp.data {
-                    if let Ok(pending) = serde_json::from_value::<Vec<PendingPromptSummary>>(data) {
-                        self.detail_pending = pending;
-                        // Clamp selection
-                        if self.pending_selected >= self.detail_pending.len()
-                            && !self.detail_pending.is_empty()
-                        {
-                            self.pending_selected = self.detail_pending.len() - 1;
+                    match serde_json::from_value::<Vec<PendingPromptSummary>>(data) {
+                        Ok(pending) => {
+                            self.detail_pending = pending;
+                            // Clamp selection
+                            if self.pending_selected >= self.detail_pending.len()
+                                && !self.detail_pending.is_empty()
+                            {
+                                self.pending_selected = self.detail_pending.len() - 1;
+                            }
+                            // If pending list became empty, unfocus it
+                            if self.detail_pending.is_empty() {
+                                self.focus_pending = false;
+                            }
                         }
-                        // If pending list became empty, unfocus it
-                        if self.detail_pending.is_empty() {
-                            self.focus_pending = false;
+                        Err(e) => {
+                            self.last_error =
+                                Some(format!("failed to parse pending prompts: {e}"));
                         }
                     }
                 }
@@ -1185,8 +1209,12 @@ impl FleetApp {
                     ),
                 }
             }
-            FleetCommand::Watch => {
-                self.spawn_terminal("aegis watch", "Started directory watch in new terminal");
+            FleetCommand::Watch { dir } => {
+                let cmd = match dir {
+                    Some(d) => format!("aegis watch --dir {d}"),
+                    None => "aegis watch".to_string(),
+                };
+                self.spawn_terminal(&cmd, "Started directory watch in new terminal");
             }
             FleetCommand::Diff { session1, session2 } => {
                 self.spawn_terminal(

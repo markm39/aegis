@@ -67,7 +67,7 @@ pub enum FleetCommand {
     /// Switch active aegis configuration.
     Use { name: Option<String> },
     /// Watch a directory for filesystem changes.
-    Watch,
+    Watch { dir: Option<String> },
     /// Compare two audit sessions.
     Diff { session1: String, session2: String },
     /// Show alert rules.
@@ -276,7 +276,10 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             let name = if arg1.is_empty() { None } else { Some(arg1.into()) };
             Ok(Some(FleetCommand::Use { name }))
         }
-        "watch" => Ok(Some(FleetCommand::Watch)),
+        "watch" => {
+            let dir = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
+            Ok(Some(FleetCommand::Watch { dir }))
+        }
         "diff" => {
             if arg1.is_empty() || arg2.is_empty() {
                 Err("usage: diff <session1> <session2>".into())
@@ -485,7 +488,7 @@ pub fn help_text() -> &'static str {
      :telegram setup           Run Telegram setup wizard\n\
      :telegram disable         Disable Telegram notifications\n\
      :use [name]              Switch active config\n\
-     :watch                   Watch directory for changes\n\
+     :watch [dir]             Watch directory for changes\n\
      :wrap <cmd...>           Wrap command in terminal"
 }
 
@@ -826,7 +829,14 @@ mod tests {
 
     #[test]
     fn parse_watch_cmd() {
-        assert_eq!(parse("watch").unwrap(), Some(FleetCommand::Watch));
+        assert_eq!(
+            parse("watch").unwrap(),
+            Some(FleetCommand::Watch { dir: None })
+        );
+        assert_eq!(
+            parse("watch /tmp/project").unwrap(),
+            Some(FleetCommand::Watch { dir: Some("/tmp/project".into()) })
+        );
     }
 
     #[test]
