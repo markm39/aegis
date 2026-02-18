@@ -58,164 +58,191 @@ See [Building from Source](#building-from-source) below.
 
 ## Quick Start
 
+One command:
+
 ```bash
-# Interactive setup wizard
-aegis init
-
-# Or just go -- zero config needed
-aegis wrap -- claude
-aegis run -- echo hello
-
-# View what happened
-aegis log claude
-aegis report claude
-aegis status claude
+aegis
 ```
 
-Three commands. Full audit trail.
+First run launches a setup wizard that walks you through configuring your first agent. After that, you land in the hub -- a full-screen TUI where everything is managed. You never need to leave it.
+
+For a quick one-off without the hub:
+
+```bash
+aegis wrap -- claude
+```
+
+This wraps Claude Code with full observability (audit trail, file monitoring, session tracking) and zero config. When it's done, check what happened with `:log` from the hub, or `aegis log claude` from the shell.
 
 ## The Hub
 
-Running `aegis` opens the fleet dashboard -- a full-screen TUI where you manage all your agents:
+The hub is the primary interface. Run `aegis` and you're in. Everything else in this README is accessible from inside the hub via the `:` command bar -- you don't need to memorize any subcommands.
 
-- See every agent's status, output, pending count, and attention indicators
-- Approve or deny permission prompts with a single keystroke
-- Send input to agents, nudge stalled ones, start/stop/restart/enable/disable
-- Set fleet goals and per-agent context (role, goal, task) at runtime
-- Type `:` for a command palette with tab completion (30+ commands)
-- Pop agent output into separate terminal windows
-- Tab to jump to the next agent needing attention
+Type `:` and start typing. Tab completion and 30+ commands are available. Here's what you can do without ever leaving the hub:
 
-When you're away from the terminal, configure [Telegram notifications](#telegram-remote-control) to approve requests from your phone. The Telegram bot sends notifications for pending prompts, stall nudges, and agent exits.
+### Manage agents
 
-The hub is the primary interface. Individual subcommands (`aegis pilot`, `aegis wrap`, `aegis daemon`) work standalone for scripting and automation.
-
-## Pilot: Autonomous Agent Supervision
-
-`aegis pilot` is the main way to run an agent autonomously. It spawns the agent in a PTY, monitors its output for permission prompts, auto-approves or denies them based on Cedar policy, detects stalls, and presents everything in an interactive TUI dashboard.
-
-```bash
-# Supervise Claude Code with auto-approval
-aegis pilot -- claude
-
-# Use a read-only policy (deny writes, approve reads)
-aegis pilot --policy allow-read-only -- claude
-
-# Point at a specific project
-aegis pilot --dir ~/my-project -- claude
-
-# Enable remote HTTP control
-aegis pilot --listen 0.0.0.0:8443 --api-key secret -- claude
+```
+:add                  Add a new agent (interactive wizard)
+:remove claude-1      Remove an agent
+:start claude-1       Start an agent
+:stop claude-1        Stop an agent
+:restart claude-1     Restart an agent
+:enable claude-1      Re-enable a disabled agent
+:disable claude-2     Disable (stops + prevents restart)
 ```
 
-The TUI shows live agent output, pilot decisions (approved/denied), statistics, and pending permission requests. Keybindings:
+### Interact with agents
+
+```
+:send claude-1 fix the login bug     Send input to an agent
+:approve claude-1                    Approve pending permission request
+:deny claude-1                       Deny pending permission request
+:nudge claude-1                      Nudge a stalled agent
+:follow claude-1                     Stream output in a new terminal
+:pop claude-1                        Pop agent into a separate terminal window
+:pending                             Show all pending prompts across the fleet
+```
+
+### Fleet coordination
+
+```
+:goal Ship v2 by Friday              Set fleet-wide goal
+:context claude-1                    View/edit agent role, goal, and task
+:status                              Fleet health overview
+```
+
+### Audit and compliance
+
+```
+:log claude-1                        View audit log
+:monitor claude-1                    Open audit TUI dashboard in new terminal
+:report claude-1                     Generate compliance report
+:diff UUID1 UUID2                    Compare two sessions
+```
+
+### Configuration
+
+```
+:config                              Edit daemon.toml in your editor
+:telegram                            Configure Telegram notifications
+:daemon start                        Start/stop the background daemon
+:help                                Full command reference
+```
+
+### Keybindings
 
 | Key | Action |
 |---|---|
+| `j`/`k` | Navigate agent list |
+| `Enter` | View agent detail / output |
+| `Tab` | Jump to next agent needing attention |
+| `i` | Send input to selected agent |
+| `a` | Approve pending request |
+| `d` | Deny pending request |
+| `n` | Nudge stalled agent |
+| `?` | Help |
 | `q` | Quit |
-| `j`/`k` | Scroll output up/down |
-| `G`/`g` | Jump to bottom/top |
-| `i` | Enter input mode (type text to send to agent) |
-| `n` | Send nudge to stalled agent |
-| `Tab` | Switch focus between output and pending panels |
-| `a` | Approve selected pending request |
-| `d` | Deny selected pending request |
 
-A Unix socket server starts automatically at `~/.aegis/pilot/<session-id>.sock` for programmatic control. If `--listen` is specified, an HTTP REST API is also available:
+### Remote control
+
+When you're away from the terminal, Aegis forwards pending prompts, stall alerts, and agent exits to Telegram with inline [Approve] / [Deny] buttons. See [Telegram](#telegram-remote-control) below.
+
+## How It Works
+
+Under the hood, Aegis has three modes of running agents. You choose the mode when adding an agent (or the hub picks the right one for you).
+
+### Pilot supervision
+
+The most common mode. Aegis spawns your agent in a PTY, monitors output for permission prompts, auto-approves or denies them based on Cedar policy, detects stalls, and logs everything to the audit ledger.
+
+From the hub: `:add` walks you through this. Or from the shell:
 
 ```bash
-# Query status
-curl http://localhost:8443/v1/status -H "Authorization: Bearer secret"
-
-# Get recent output
-curl http://localhost:8443/v1/output?lines=50 -H "Authorization: Bearer secret"
-
-# Send input to the agent
-curl -X POST http://localhost:8443/v1/input \
-  -H "Authorization: Bearer secret" \
-  -d '{"text": "yes"}'
-
-# Approve a pending request
-curl -X POST http://localhost:8443/v1/pending/<uuid>/approve \
-  -H "Authorization: Bearer secret"
+aegis pilot -- claude
+aegis pilot --policy allow-read-only -- claude
+aegis pilot --dir ~/my-project -- claude
 ```
 
-## Wrapping Agent Tools
+### Wrap (observe-only)
 
-`aegis wrap` is the fastest way to add observability to any agent without supervision:
+Lightweight observability without prompt supervision. Wraps any command with file monitoring and audit logging:
 
 ```bash
-# Observe Claude Code (permit-all policy = log everything, block nothing)
 aegis wrap -- claude
-
-# Observe with a specific project directory
-aegis wrap --dir ~/my-project -- claude
-
-# Observe OpenClaw
-aegis wrap -- openclaw run task.md
-
-# Use a read-only policy (block writes, log everything)
-aegis wrap --policy allow-read-only -- python3 agent.py
+aegis wrap --dir ~/my-project -- python3 agent.py
 ```
 
-Config is stored at `~/.aegis/wraps/<name>/` and reused across invocations, so sessions accumulate in the same ledger.
+### Full sandbox
 
-## Full Sandbox Mode
-
-For maximum control, use `init` + `run` with Cedar policies and Seatbelt enforcement:
+Maximum isolation. Cedar policies compiled to macOS Seatbelt profiles for kernel-level enforcement:
 
 ```bash
-# Interactive setup wizard (choose security mode, directory, etc.)
-aegis init
-
-# Or quick init with a name
-aegis init my-agent --policy allow-read-only
-
-# Point at an existing project directory
 aegis init my-agent --policy allow-read-only --dir ~/my-project
-
-# Run a command inside the sandbox
 aegis run --config my-agent -- python3 agent.py
-
-# Or just run -- config auto-created from command name
-aegis run -- python3 agent.py
-
-# Query the audit log
-aegis audit query my-agent --last 20
-
-# Verify audit log integrity
-aegis audit verify my-agent
-
-# Launch the real-time TUI dashboard
-aegis monitor my-agent
-
-# Check health
-aegis status my-agent
 ```
 
-## Webhook Alerts
+## Fleet Management
 
-Configure webhook-based alerts that fire on policy violations, stalls, or other events:
+The daemon runs in the background and manages your agents as a fleet -- starting them, restarting on crash, coordinating context. The hub connects to it automatically.
 
-```bash
-# List configured alert rules
-aegis alerts list
+### Fleet goals and agent context
 
-# Test webhook connectivity
-aegis alerts test
+Give agents roles and direction so they coordinate without stepping on each other:
 
-# View dispatch history
-aegis alerts history --last 10
+```toml
+# ~/.aegis/daemon/daemon.toml
+fleet_goal = "Ship the v2 auth system by Friday"
+
+[agents.claude-1]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Backend engineer"
+agent_goal = "Implement OAuth2 provider"
+task = "Add token refresh endpoint"
+
+[agents.claude-2]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Frontend engineer"
+agent_goal = "Build the settings UI"
+task = "Add OAuth callback page"
 ```
 
-Alert rules are defined in the config TOML and can target Slack, PagerDuty, or arbitrary HTTP endpoints.
+These fields are persisted and included in autonomy prompts when agents request interactive input. Update them at runtime from the hub (`:goal`, `:context`) or the shell (`aegis daemon goal`, `aegis daemon context`).
+
+### Orchestrator agents
+
+An orchestrator is a special agent that periodically reviews the fleet and directs other agents:
+
+```toml
+[agents.lead]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Tech lead"
+
+[agents.lead.orchestrator]
+review_interval_secs = 300
+managed_agents = []  # empty = manage all non-orchestrator agents
+```
+
+The orchestrator receives a fleet snapshot (agent status, recent output, attention flags, pending counts) at each review interval and can issue commands to redirect the team.
+
+### Crash recovery
+
+The daemon is resilient to crashes and restarts:
+
+- **Exponential backoff** for crash loops -- agents that crash within 30 seconds get increasing delays (2, 4, 8... up to 60s) before restart
+- **State persistence** -- session IDs and restart counts survive daemon restarts via `~/.aegis/daemon/state.json`
+- **Graceful shutdown** -- SIGTERM with 5-second timeout, escalating to SIGKILL
+- **Atomic config writes** -- temp file + fsync + rename prevents corruption on power loss
 
 ## Telegram Remote Control
 
-Connect Aegis to a Telegram bot for bidirectional remote control:
+Connect Aegis to a Telegram bot for bidirectional remote control when you're away from the terminal:
 
 ```toml
-# In aegis.toml or daemon.toml
+# In daemon.toml
 [channel]
 type = "telegram"
 bot_token = "123456:ABC..."
@@ -231,209 +258,19 @@ Available Telegram commands:
 | `/status` | Check fleet/agent status |
 | `/approve <id>` | Approve a pending request |
 | `/deny <id>` | Deny a pending request |
-| `/output [N]` | View recent agent output (default 20 lines) |
+| `/output [N]` | View recent agent output |
 | `/input <text>` | Send text to agent stdin |
 | `/nudge` | Nudge a stalled agent |
 | `/goal [text]` | Get or set fleet-wide goal |
 | `/context <agent>` | View agent context |
-| `/stop` | Stop the agent |
+| `/stop` | Stop an agent |
 | `/help` | List all commands |
 
-## Background Watching
+## Cedar Policies
 
-`aegis watch` runs a persistent filesystem observer in the background:
+Aegis uses [Cedar](https://www.cedarpolicy.com/) for authorization. Policies are `.cedar` files in `~/.aegis/NAME/policies/`. Default-deny: anything not explicitly permitted is blocked.
 
-```bash
-# Watch the current directory
-aegis watch --dir ~/my-project
-
-# Stop a running watch
-aegis watch --name my-project --stop
-```
-
-Sessions rotate automatically after idle periods. Events flow to the same audit ledger.
-
-## Daemon: Multi-Agent Fleet Management
-
-The daemon manages multiple agent processes as a fleet, with restart policies, per-agent configuration, and centralized control:
-
-```bash
-# Create a default daemon config
-aegis daemon init
-# Edit ~/.aegis/daemon/daemon.toml to define your agent fleet
-
-# Start the daemon
-aegis daemon start
-
-# Check status
-aegis daemon status
-
-# List agents and their state
-aegis daemon agents
-
-# View agent output
-aegis daemon output claude-1 --lines 50
-
-# Stream agent output in real time (like tail -f)
-aegis daemon follow claude-1
-
-# Send input to an agent
-aegis daemon send claude-1 "implement the login page"
-
-# Enable/disable agents without removing them
-aegis daemon enable claude-1
-aegis daemon disable claude-2
-
-# Restart a specific agent
-aegis daemon restart claude-1
-
-# Stop a specific agent
-aegis daemon stop-agent claude-1
-
-# Stop the daemon
-aegis daemon stop
-```
-
-### Fleet Goals and Agent Context
-
-Assign a fleet-wide goal and per-agent context to coordinate multi-agent workflows:
-
-```bash
-# Set a fleet-wide goal
-aegis daemon goal "Ship the v2 auth system by Friday"
-
-# Set agent role, goal, context, and task
-aegis daemon context claude-1 --role "Backend engineer" \
-  --goal "Implement OAuth2 provider" \
-  --task "Add token refresh endpoint"
-
-# View agent context
-aegis daemon context claude-1
-```
-
-These fields are persisted to `daemon.toml` and included in autonomy prompts when agents request interactive input. They're also available to orchestrator agents (see below).
-
-### Orchestrator Agents
-
-An orchestrator is a special agent that periodically reviews the fleet and directs other agents. Configure one by adding an `[agents.<name>.orchestrator]` section:
-
-```toml
-[agents.lead]
-tool = "ClaudeCode"
-working_dir = "~/my-project"
-role = "Tech lead"
-
-[agents.lead.orchestrator]
-review_interval_secs = 300
-managed_agents = []  # empty = manage all non-orchestrator agents
-```
-
-The orchestrator receives a fleet snapshot (agent status, recent output, attention flags, pending counts) at each review interval and can issue commands to redirect the team.
-
-### Crash Recovery
-
-The daemon is resilient to crashes and restarts:
-
-- **Exponential backoff** for crash loops -- agents that crash within 30 seconds get increasing delays (2, 4, 8... up to 60s) before restart
-- **State persistence** -- session IDs and restart counts survive daemon restarts via `~/.aegis/daemon/state.json`
-- **Graceful shutdown** -- SIGTERM with 5-second timeout, escalating to SIGKILL
-- **Atomic config writes** -- temp file + fsync + rename prevents corruption on power loss
-
-## Architecture
-
-```
-Cedar Policies (.cedar files)
-        |
-        v
-Cedar-to-SBPL Compiler -----> Seatbelt Profile (kernel-level)
-        |
-        v
-aegis pilot -- CMD                aegis run -- CMD
-        |                                 |
-        +---> PTY spawn + supervisor      +---> sandbox-exec (macOS kernel sandbox)
-        |         |                       |         |
-        |         +--> Prompt detection   |         +--> Process spawn/exit audit
-        |         +--> Auto-approve/deny  |         +--> Seatbelt violation harvesting
-        |         +--> Stall nudging      |
-        |         +--> TUI dashboard      +---> FSEvents observer (per-file monitoring)
-        |                                 |         |
-        +---> Control plane               |         +--> Real-time file event logging
-        |         |                       |         +--> Pre/post snapshot diffing
-        |         +--> Unix socket        |
-        |         +--> HTTP REST API      v
-        |                           Audit Ledger (SQLite, SHA-256 hash-chained)
-        +---> FSEvents observer           |
-                  |                       +--> Session tracking
-                  v                       +--> Policy snapshots
-            Audit Ledger                  +--> SIEM export (JSON, JSONL, CSV, CEF)
-                                          +--> Compliance reporting
-                                          +--> Webhook alerts
-                                          +--> TUI dashboard (ratatui)
-```
-
-Seven layers:
-1. **Policy Engine** -- Cedar 4.x policies define what agents can do (default-deny)
-2. **Cedar-to-SBPL Compiler** -- Translates Cedar policies into macOS Seatbelt profiles at launch
-3. **Isolation Boundary** -- macOS Seatbelt (`sandbox-exec`) enforces at the kernel level
-4. **Pilot Supervisor** -- PTY-based agent supervision with prompt detection, auto-approval, and stall nudging
-5. **Fleet Daemon** -- Multi-agent orchestration with crash recovery, exponential backoff, and orchestrator agents
-6. **Observer** -- FSEvents filesystem monitoring with snapshot diffing for complete coverage
-7. **Audit Ledger** -- Append-only, SHA-256 hash-chained SQLite log with session tracking
-
-## CLI Reference
-
-| Command | Description |
-|---|---|
-| `aegis setup` | Check system requirements, prepare environment |
-| `aegis init [NAME] [--policy TPL] [--dir PATH]` | Create config (omit NAME for wizard) |
-| `aegis run [--config NAME] [--policy TPL] -- CMD [ARGS]` | Run command in sandboxed environment |
-| `aegis wrap [--dir PATH] [--policy TPL] [--name NAME] -- CMD [ARGS]` | Wrap command with observability |
-| `aegis pilot [--dir PATH] [--policy TPL] [--listen ADDR] -- CMD [ARGS]` | Supervise agent with TUI dashboard |
-| `aegis watch [--dir PATH] [--name NAME] [--stop]` | Background filesystem watcher |
-| `aegis monitor [NAME]` | Launch real-time TUI dashboard |
-| `aegis log [NAME] [--last N]` | Show recent audit entries |
-| `aegis diff SESSION1 SESSION2` | Compare two sessions for forensic analysis |
-| `aegis status [NAME]` | Show health status |
-| `aegis list` | List all configurations |
-| `aegis use [NAME]` | Set or show the active configuration |
-| `aegis report [NAME] [--format text\|json]` | Generate compliance report |
-| `aegis policy validate --path FILE` | Validate a Cedar policy file |
-| `aegis policy list [NAME]` | List active policies |
-| `aegis policy generate --template NAME` | Print built-in policy template |
-| `aegis audit query NAME [--last N] [--action KIND] [--decision D]` | Query audit entries |
-| `aegis audit verify NAME` | Verify hash chain integrity |
-| `aegis audit sessions NAME` | List recent sessions |
-| `aegis audit session NAME --id UUID` | Show session details |
-| `aegis audit policy-history NAME` | Show policy change history |
-| `aegis audit export NAME --format FMT [--follow]` | Export (json/jsonl/csv/cef) |
-| `aegis alerts list` | List configured alert rules |
-| `aegis alerts test` | Test webhook connectivity |
-| `aegis alerts history [--last N]` | Show alert dispatch history |
-| `aegis config show [NAME]` | Show full configuration |
-| `aegis daemon init` | Create default daemon config |
-| `aegis daemon start` | Start the daemon in background |
-| `aegis daemon stop` | Stop the daemon |
-| `aegis daemon status` | Show daemon health |
-| `aegis daemon agents` | List agent slots and status |
-| `aegis daemon output <name> [--lines N]` | View agent output |
-| `aegis daemon send <name> <text>` | Send input to agent |
-| `aegis daemon approve <name> <request-id>` | Approve pending prompt |
-| `aegis daemon deny <name> <request-id>` | Deny pending prompt |
-| `aegis daemon nudge <name> [message]` | Nudge stalled agent |
-| `aegis daemon pending <name>` | List pending prompts |
-| `aegis daemon follow <name>` | Stream agent output in real time |
-| `aegis daemon enable <name>` | Enable a disabled agent |
-| `aegis daemon disable <name>` | Disable an agent (stops if running) |
-| `aegis daemon restart <name>` | Restart a specific agent |
-| `aegis daemon stop-agent <name>` | Stop a specific agent |
-| `aegis daemon goal [text]` | Get or set fleet-wide goal |
-| `aegis daemon context <name> [--role R] [--goal G] [--context C] [--task T]` | Get or set agent context |
-
-## Cedar Policy Reference
-
-Aegis uses [Cedar](https://www.cedarpolicy.com/) for authorization. Policies are `.cedar` files in `~/.aegis/NAME/policies/`.
-
-### Entity Types
+### Entity types
 
 - **Principal**: `Aegis::Agent` -- the agent identity (derived from config name)
 - **Actions**: `Aegis::Action::` followed by one of:
@@ -443,7 +280,7 @@ Aegis uses [Cedar](https://www.cedarpolicy.com/) for authorization. Policies are
   - `ProcessSpawn`, `ProcessExit`
 - **Resource**: `Aegis::Resource` -- the target path or resource
 
-### Built-in Policy Templates
+### Built-in templates
 
 | Template | Description |
 |---|---|
@@ -451,7 +288,7 @@ Aegis uses [Cedar](https://www.cedarpolicy.com/) for authorization. Policies are
 | `allow-read-only` | Permits `FileRead`, `DirList`, `ProcessSpawn`, `ProcessExit` |
 | `permit-all` | `permit(principal, action, resource);` -- allows everything (observe-only) |
 
-### Example Policy
+### Example policy
 
 ```cedar
 // Allow reading files and listing directories
@@ -469,6 +306,19 @@ permit(
 
 // Deny everything else (implicit -- Aegis is default-deny)
 ```
+
+## Webhook Alerts
+
+Alert rules are defined in the agent config TOML and can target Slack, PagerDuty, or arbitrary HTTP endpoints:
+
+```toml
+[[alerts]]
+name = "deny-alert"
+event = "deny"
+webhook_url = "https://hooks.slack.com/services/..."
+```
+
+Manage from the hub with `:alerts` or from the shell with `aegis alerts list`, `aegis alerts test`, `aegis alerts history`.
 
 ## Configuration Reference
 
@@ -551,6 +401,47 @@ bot_token = "123456:ABC-DEF..."
 chat_id = 987654321
 ```
 
+## Architecture
+
+```
+Cedar Policies (.cedar files)
+        |
+        v
+Cedar-to-SBPL Compiler -----> Seatbelt Profile (kernel-level)
+        |
+        v
+aegis pilot -- CMD                aegis run -- CMD
+        |                                 |
+        +---> PTY spawn + supervisor      +---> sandbox-exec (macOS kernel sandbox)
+        |         |                       |         |
+        |         +--> Prompt detection   |         +--> Process spawn/exit audit
+        |         +--> Auto-approve/deny  |         +--> Seatbelt violation harvesting
+        |         +--> Stall nudging      |
+        |         +--> TUI dashboard      +---> FSEvents observer (per-file monitoring)
+        |                                 |         |
+        +---> Control plane               |         +--> Real-time file event logging
+        |         |                       |         +--> Pre/post snapshot diffing
+        |         +--> Unix socket        |
+        |         +--> HTTP REST API      v
+        |                           Audit Ledger (SQLite, SHA-256 hash-chained)
+        +---> FSEvents observer           |
+                  |                       +--> Session tracking
+                  v                       +--> Policy snapshots
+            Audit Ledger                  +--> SIEM export (JSON, JSONL, CSV, CEF)
+                                          +--> Compliance reporting
+                                          +--> Webhook alerts
+                                          +--> TUI dashboard (ratatui)
+```
+
+Seven layers:
+1. **Policy Engine** -- Cedar 4.x policies define what agents can do (default-deny)
+2. **Cedar-to-SBPL Compiler** -- Translates Cedar policies into macOS Seatbelt profiles at launch
+3. **Isolation Boundary** -- macOS Seatbelt (`sandbox-exec`) enforces at the kernel level
+4. **Pilot Supervisor** -- PTY-based agent supervision with prompt detection, auto-approval, and stall nudging
+5. **Fleet Daemon** -- Multi-agent orchestration with crash recovery, exponential backoff, and orchestrator agents
+6. **Observer** -- FSEvents filesystem monitoring with snapshot diffing for complete coverage
+7. **Audit Ledger** -- Append-only, SHA-256 hash-chained SQLite log with session tracking
+
 ## Crate Structure
 
 | Crate | Description |
@@ -569,6 +460,63 @@ chat_id = 987654321
 | `aegis-monitor` | Real-time ratatui TUI dashboard |
 | `aegis-harness` | PTY-based TUI integration test harness |
 | `aegis-cli` | Binary entry point, all CLI commands, pilot TUI |
+
+## CLI Reference
+
+Every command below is also available from the hub's `:` command bar. The CLI exists for scripting and automation.
+
+<details>
+<summary>Full CLI reference (click to expand)</summary>
+
+| Command | Description |
+|---|---|
+| `aegis` | Open the hub (primary interface) |
+| `aegis init [NAME] [--policy TPL] [--dir PATH]` | Create config (omit NAME for wizard) |
+| `aegis setup` | Check system requirements |
+| `aegis wrap [--dir PATH] [--policy TPL] [--name NAME] -- CMD` | Wrap command with observability |
+| `aegis pilot [--dir PATH] [--policy TPL] [--listen ADDR] -- CMD` | Supervise agent in standalone mode |
+| `aegis run [--config NAME] [--policy TPL] -- CMD` | Run in sandboxed environment |
+| `aegis watch [--dir PATH] [--name NAME] [--stop]` | Background filesystem watcher |
+| `aegis monitor [NAME]` | Standalone audit TUI dashboard |
+| `aegis log [NAME] [--last N]` | Show recent audit entries |
+| `aegis diff SESSION1 SESSION2` | Compare two sessions |
+| `aegis status [NAME]` | Show health status |
+| `aegis list` | List all configurations |
+| `aegis use [NAME]` | Set or show active configuration |
+| `aegis report [NAME] [--format text\|json]` | Generate compliance report |
+| `aegis policy validate --path FILE` | Validate a Cedar policy file |
+| `aegis policy list [NAME]` | List active policies |
+| `aegis policy generate --template NAME` | Print built-in policy template |
+| `aegis audit query NAME [--last N] [--action KIND] [--decision D]` | Query audit entries |
+| `aegis audit verify NAME` | Verify hash chain integrity |
+| `aegis audit sessions NAME` | List recent sessions |
+| `aegis audit session NAME --id UUID` | Show session details |
+| `aegis audit policy-history NAME` | Show policy change history |
+| `aegis audit export NAME --format FMT [--follow]` | Export (json/jsonl/csv/cef) |
+| `aegis alerts list` | List configured alert rules |
+| `aegis alerts test` | Test webhook connectivity |
+| `aegis alerts history [--last N]` | Show alert dispatch history |
+| `aegis config show [NAME]` | Show full configuration |
+| `aegis daemon init` | Create default daemon config |
+| `aegis daemon start` | Start the daemon |
+| `aegis daemon stop` | Stop the daemon |
+| `aegis daemon status` | Show daemon health |
+| `aegis daemon agents` | List agent slots and status |
+| `aegis daemon output <name> [--lines N]` | View agent output |
+| `aegis daemon follow <name>` | Stream agent output in real time |
+| `aegis daemon send <name> <text>` | Send input to agent |
+| `aegis daemon approve <name> <request-id>` | Approve pending prompt |
+| `aegis daemon deny <name> <request-id>` | Deny pending prompt |
+| `aegis daemon nudge <name> [message]` | Nudge stalled agent |
+| `aegis daemon pending <name>` | List pending prompts |
+| `aegis daemon enable <name>` | Enable a disabled agent |
+| `aegis daemon disable <name>` | Disable an agent (stops if running) |
+| `aegis daemon restart <name>` | Restart a specific agent |
+| `aegis daemon stop-agent <name>` | Stop a specific agent |
+| `aegis daemon goal [text]` | Get or set fleet-wide goal |
+| `aegis daemon context <name> [--role R] [--goal G] [--context C] [--task T]` | Get or set agent context |
+
+</details>
 
 ## Building from Source
 
