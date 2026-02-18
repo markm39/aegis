@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_types::config::ChannelConfig;
 use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig};
@@ -222,6 +222,15 @@ impl OnboardApp {
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
+            return;
+        }
+
+        // Ctrl+C always cancels the wizard (raw mode captures the signal).
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.step = OnboardStep::Cancelled;
+            self.running = false;
             return;
         }
 
@@ -1174,5 +1183,41 @@ mod tests {
         app.handle_key(press(KeyCode::Enter));
         assert_eq!(app.step, OnboardStep::Done);
         assert!(!app.running);
+    }
+
+    fn ctrl_c() -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    #[test]
+    fn ctrl_c_cancels_from_welcome() {
+        let mut app = OnboardApp::new();
+        app.handle_key(ctrl_c());
+        assert_eq!(app.step, OnboardStep::Cancelled);
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn ctrl_c_cancels_from_any_step() {
+        for step in [
+            OnboardStep::Tool,
+            OnboardStep::Name,
+            OnboardStep::WorkingDir,
+            OnboardStep::Task,
+            OnboardStep::RestartPolicy,
+            OnboardStep::TelegramOffer,
+            OnboardStep::Summary,
+        ] {
+            let mut app = OnboardApp::new();
+            app.step = step;
+            app.handle_key(ctrl_c());
+            assert_eq!(app.step, OnboardStep::Cancelled, "Ctrl+C should cancel at {:?}", step);
+            assert!(!app.running);
+        }
     }
 }
