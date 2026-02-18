@@ -1076,21 +1076,26 @@ fn format_duration(secs: u64) -> String {
 
 /// Truncate a path string, keeping the tail.
 fn truncate_path(path: &str, max: usize) -> String {
-    if path.len() <= max {
+    let char_count = path.chars().count();
+    if char_count <= max {
         path.to_string()
     } else {
-        format!("...{}", &path[path.len() - (max - 3)..])
+        let skip = char_count - (max.saturating_sub(3));
+        let tail: String = path.chars().skip(skip).collect();
+        format!("...{tail}")
     }
 }
 
-/// Truncate a string with ellipsis.
+/// Truncate a string with ellipsis. Safe for multi-byte UTF-8.
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         s.to_string()
     } else if max <= 3 {
-        s[..max].to_string()
+        s.chars().take(max).collect()
     } else {
-        format!("{}...", &s[..max - 3])
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{truncated}...")
     }
 }
 
