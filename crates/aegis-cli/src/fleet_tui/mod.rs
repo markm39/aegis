@@ -1351,18 +1351,20 @@ impl FleetApp {
 
     /// Send a command to the daemon.
     fn send_named_command(&mut self, cmd: DaemonCommand) {
-        if let Some(client) = &self.client {
-            match client.send(&cmd) {
-                Ok(resp) if !resp.ok => {
-                    self.last_error = Some(resp.message);
-                }
-                Err(e) => {
-                    self.last_error = Some(e);
-                }
-                _ => {
-                    // Force immediate re-poll after action
-                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
-                }
+        let Some(client) = &self.client else {
+            self.last_error = Some("Not connected to daemon. Use :daemon start".into());
+            return;
+        };
+        match client.send(&cmd) {
+            Ok(resp) if !resp.ok => {
+                self.last_error = Some(resp.message);
+            }
+            Err(e) => {
+                self.last_error = Some(e);
+            }
+            _ => {
+                // Force immediate re-poll after action
+                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
         }
     }
@@ -1371,28 +1373,30 @@ impl FleetApp {
     ///
     /// Unlike `send_named_command`, this captures the success message for display.
     fn send_and_show_result(&mut self, cmd: DaemonCommand) {
-        if let Some(client) = &self.client {
-            match client.send(&cmd) {
-                Ok(resp) => {
-                    if resp.ok {
-                        self.set_result(resp.message);
-                    } else {
-                        self.last_error = Some(resp.message);
-                    }
-                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+        let Some(client) = &self.client else {
+            self.last_error = Some("Not connected to daemon. Use :daemon start".into());
+            return;
+        };
+        match client.send(&cmd) {
+            Ok(resp) => {
+                if resp.ok {
+                    self.set_result(resp.message);
+                } else {
+                    self.last_error = Some(resp.message);
                 }
-                Err(e) => {
-                    self.last_error = Some(e);
-                }
+                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+            }
+            Err(e) => {
+                self.last_error = Some(e);
             }
         }
     }
 
     /// Query and display an agent's context fields.
     fn send_context_query(&mut self, agent: &str) {
-        let client = match &self.client {
-            Some(c) => c,
-            None => return,
+        let Some(client) = &self.client else {
+            self.last_error = Some("Not connected to daemon. Use :daemon start".into());
+            return;
         };
         match client.send(&DaemonCommand::GetAgentContext { name: agent.to_string() }) {
             Ok(resp) if resp.ok => {
@@ -2566,5 +2570,30 @@ mod tests {
         app.handle_key(press(KeyCode::End));
         let help_lines = command::help_text().lines().count();
         assert_eq!(app.help_scroll, help_lines.saturating_sub(1));
+    }
+
+    #[test]
+    fn send_named_command_shows_error_when_disconnected() {
+        let mut app = FleetApp::new(None);
+        // client is None since FleetApp::new(None) has no daemon client
+        app.send_named_command(DaemonCommand::StopAgent { name: "test".into() });
+        assert!(app.last_error.is_some());
+        assert!(app.last_error.as_ref().unwrap().contains("Not connected"));
+    }
+
+    #[test]
+    fn send_and_show_result_shows_error_when_disconnected() {
+        let mut app = FleetApp::new(None);
+        app.send_and_show_result(DaemonCommand::StopAgent { name: "test".into() });
+        assert!(app.last_error.is_some());
+        assert!(app.last_error.as_ref().unwrap().contains("Not connected"));
+    }
+
+    #[test]
+    fn send_context_query_shows_error_when_disconnected() {
+        let mut app = FleetApp::new(None);
+        app.send_context_query("test-agent");
+        assert!(app.last_error.is_some());
+        assert!(app.last_error.as_ref().unwrap().contains("Not connected"));
     }
 }

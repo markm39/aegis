@@ -370,11 +370,28 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         ));
     }
 
+    // Build status bracket with PID or exit code detail
+    let status_detail = agent_summary
+        .map(|a| match &a.status {
+            AgentStatus::Running { pid } => format!("  pid:{pid}"),
+            AgentStatus::Stopped { exit_code } => format!("  exit:{exit_code}"),
+            AgentStatus::Crashed { exit_code, .. } => format!("  exit:{exit_code}"),
+            AgentStatus::Failed { exit_code, .. } => format!("  exit:{exit_code}"),
+            _ => String::new(),
+        })
+        .unwrap_or_default();
+
+    let restart_count = agent_summary.map(|a| a.restart_count).unwrap_or(0);
+
     header_spans.extend([
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         Span::styled(
             status_text,
             Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            status_detail,
+            Style::default().fg(Color::DarkGray),
         ),
         Span::styled("]  ", Style::default().fg(Color::DarkGray)),
         Span::styled(tool, Style::default().fg(Color::Cyan)),
@@ -383,6 +400,13 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             Style::default().fg(Color::DarkGray),
         ),
     ]);
+
+    if restart_count > 0 {
+        header_spans.push(Span::styled(
+            format!("  restarts:{restart_count}"),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
 
     if !app.detail_pending.is_empty() {
         header_spans.push(Span::styled(
