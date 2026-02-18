@@ -290,16 +290,29 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
 
     let pid = child.id();
 
-    // Brief poll to verify the daemon didn't crash immediately after fork.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    if !persistence::is_process_alive(pid) {
-        anyhow::bail!(
-            "Daemon exited immediately. Check {}/stderr.log",
-            log_dir.display()
-        );
+    // Poll to verify the daemon started and is accepting connections.
+    // The daemon needs time to parse config, bind socket, and start the
+    // control server. We try for up to 3 seconds with 200ms intervals.
+    let client = DaemonClient::default_path();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !persistence::is_process_alive(pid) {
+            anyhow::bail!(
+                "Daemon exited immediately. Check {}/stderr.log",
+                log_dir.display()
+            );
+        }
+        if client.is_running() {
+            return Ok(format!("Daemon started (PID {pid})."));
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
     }
 
-    Ok(format!("Daemon started (PID {pid})."))
+    // Process alive but socket not responding -- could still be initializing
+    Ok(format!("Daemon started (PID {pid}), socket not yet ready."))
 }
 
 /// Stop a running daemon via the control socket.
