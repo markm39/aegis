@@ -68,18 +68,26 @@ fn spawn_tmux(command: &str) -> Result<(), String> {
     }
 }
 
+/// Escape a string for use inside an AppleScript double-quoted literal.
+///
+/// AppleScript string literals require escaping backslashes first, then
+/// double quotes. Order matters to avoid double-escaping.
+fn escape_applescript(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Spawn in an iTerm2 tab via osascript.
 fn spawn_iterm2(command: &str) -> Result<(), String> {
+    let escaped = escape_applescript(command);
     let script = format!(
         r#"tell application "iTerm2"
             tell current window
                 create tab with default profile
                 tell current session
-                    write text "{}"
+                    write text "{escaped}"
                 end tell
             end tell
         end tell"#,
-        command.replace('"', r#"\""#)
     );
 
     let status = Command::new("osascript")
@@ -96,12 +104,12 @@ fn spawn_iterm2(command: &str) -> Result<(), String> {
 
 /// Spawn in a Terminal.app window via osascript.
 fn spawn_terminal_app(command: &str) -> Result<(), String> {
+    let escaped = escape_applescript(command);
     let script = format!(
         r#"tell application "Terminal"
-            do script "{}"
+            do script "{escaped}"
             activate
         end tell"#,
-        command.replace('"', r#"\""#)
     );
 
     let status = Command::new("osascript")
@@ -132,5 +140,46 @@ mod tests {
         assert_ne!(TerminalBackend::Tmux, TerminalBackend::ITerm2);
         assert_ne!(TerminalBackend::ITerm2, TerminalBackend::TerminalApp);
         assert_ne!(TerminalBackend::TerminalApp, TerminalBackend::Unsupported);
+    }
+
+    #[test]
+    fn escape_applescript_no_special_chars() {
+        assert_eq!(escape_applescript("aegis daemon status"), "aegis daemon status");
+    }
+
+    #[test]
+    fn escape_applescript_double_quotes() {
+        assert_eq!(
+            escape_applescript(r#"aegis wrap -- echo "hello""#),
+            r#"aegis wrap -- echo \"hello\""#
+        );
+    }
+
+    #[test]
+    fn escape_applescript_backslashes() {
+        assert_eq!(
+            escape_applescript(r"aegis wrap -- echo path\to\file"),
+            r"aegis wrap -- echo path\\to\\file"
+        );
+    }
+
+    #[test]
+    fn escape_applescript_mixed() {
+        // Both backslashes and quotes
+        assert_eq!(
+            escape_applescript(r#"echo "back\slash""#),
+            r#"echo \"back\\slash\""#
+        );
+    }
+
+    #[test]
+    fn unsupported_backend_returns_helpful_error() {
+        let result = spawn_in_terminal("test command");
+        // In CI/test environments, might be unsupported
+        if let Err(msg) = result {
+            if msg.contains("No supported terminal") {
+                assert!(msg.contains("test command"));
+            }
+        }
     }
 }
