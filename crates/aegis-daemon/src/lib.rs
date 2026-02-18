@@ -1486,4 +1486,68 @@ mod tests {
         let resp = runtime.handle_command(DaemonCommand::GetAgentContext { name: "ghost".into() });
         assert!(!resp.ok);
     }
+
+    #[test]
+    fn handle_command_fleet_goal_set_and_get() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+
+        // Get when no goal set
+        let resp = runtime.handle_command(DaemonCommand::FleetGoal { goal: None });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        assert_eq!(data["goal"].as_str(), Some("(none)"));
+
+        // Set a goal
+        let resp = runtime.handle_command(DaemonCommand::FleetGoal {
+            goal: Some("Build a chess app".into()),
+        });
+        assert!(resp.ok);
+        assert!(resp.message.contains("Build a chess app"));
+
+        // Get the goal back
+        let resp = runtime.handle_command(DaemonCommand::FleetGoal { goal: None });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        assert_eq!(data["goal"].as_str(), Some("Build a chess app"));
+    }
+
+    #[test]
+    fn handle_command_fleet_goal_clear() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+
+        // Set then clear
+        runtime.handle_command(DaemonCommand::FleetGoal {
+            goal: Some("Build something".into()),
+        });
+        let resp = runtime.handle_command(DaemonCommand::FleetGoal {
+            goal: Some("".into()),
+        });
+        assert!(resp.ok);
+        assert!(resp.message.contains("(cleared)"));
+
+        // Verify it's cleared
+        let resp = runtime.handle_command(DaemonCommand::FleetGoal { goal: None });
+        let data = resp.data.unwrap();
+        assert_eq!(data["goal"].as_str(), Some("(none)"));
+    }
+
+    #[test]
+    fn handle_command_send_to_agent_not_running() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::SendToAgent {
+            name: "a1".into(),
+            text: "hello".into(),
+        });
+        assert!(!resp.ok, "send to non-running agent should fail");
+    }
+
+    #[test]
+    fn handle_command_send_to_unknown_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::SendToAgent {
+            name: "ghost".into(),
+            text: "hello".into(),
+        });
+        assert!(!resp.ok);
+    }
 }
