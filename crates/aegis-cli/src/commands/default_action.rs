@@ -44,13 +44,11 @@ pub fn run() -> Result<()> {
     crate::commands::onboard::run()
 }
 
-/// Check whether any aegis configurations exist.
+/// Check whether any legacy aegis configurations exist (init/wrap configs).
+///
+/// NOTE: Called only after daemon config check already returned false in `run()`,
+/// so we skip the daemon_config_path check here.
 fn has_configs(aegis_dir: &std::path::Path) -> bool {
-    // Check for daemon config first (created by `aegis` onboard wizard)
-    if aegis_types::daemon::daemon_config_path().exists() {
-        return true;
-    }
-
     if !aegis_dir.exists() {
         return false;
     }
@@ -61,7 +59,7 @@ fn has_configs(aegis_dir: &std::path::Path) -> bool {
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().unwrap_or_default();
-                if name != "wraps" && name != "current" && path.join(aegis_types::CONFIG_FILENAME).exists() {
+                if name != "wraps" && name != "current" && name != "daemon" && path.join(aegis_types::CONFIG_FILENAME).exists() {
                     return true;
                 }
             }
@@ -88,7 +86,7 @@ fn build_dashboard_configs(aegis_dir: &std::path::Path) -> Vec<DashboardConfig> 
 
     // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" and "current")
     scan_dashboard_configs(aegis_dir, &mut configs, |name| {
-        name != "wraps" && name != "current"
+        name != "wraps" && name != "current" && name != "daemon"
     });
 
     // Scan wrap configs: ~/.aegis/wraps/*/aegis.toml
@@ -147,7 +145,7 @@ pub fn most_recent_config() -> Result<String> {
 
     // Scan init configs
     scan_for_recent(&aegis_dir, &mut best, |name| {
-        name != "wraps" && name != "current"
+        name != "wraps" && name != "current" && name != "daemon"
     });
 
     // Scan wrap configs

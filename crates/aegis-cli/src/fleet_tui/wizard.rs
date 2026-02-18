@@ -341,6 +341,8 @@ impl AddAgentWizard {
                 if self.is_valid() {
                     self.completed = true;
                     self.active = false;
+                } else {
+                    self.validation_error = Some("invalid configuration -- please review all fields".into());
                 }
                 true
             }
@@ -370,8 +372,10 @@ impl AddAgentWizard {
                 self.step = match self.step {
                     WizardStep::CustomCommand => {
                         if self.custom_command.trim().is_empty() {
-                            return true; // Don't advance with empty command
+                            self.validation_error = Some("command cannot be empty".into());
+                            return true;
                         }
+                        self.validation_error = None;
                         self.name_cursor = self.name.len();
                         WizardStep::Name
                     }
@@ -382,18 +386,34 @@ impl AddAgentWizard {
                             return true;
                         }
                         self.validation_error = None;
+                        self.working_dir_cursor = self.working_dir.len();
                         WizardStep::WorkingDir
                     }
                     WizardStep::WorkingDir => {
-                        self.working_dir_cursor = self.working_dir.len();
+                        let trimmed = self.working_dir.trim();
+                        if trimmed.is_empty() {
+                            self.validation_error = Some("working directory cannot be empty".into());
+                            return true;
+                        }
+                        let path = std::path::Path::new(trimmed);
+                        if !path.exists() {
+                            self.validation_error = Some(format!("path does not exist: {trimmed}"));
+                            return true;
+                        }
+                        if !path.is_dir() {
+                            self.validation_error = Some(format!("not a directory: {trimmed}"));
+                            return true;
+                        }
+                        self.validation_error = None;
+                        self.task_cursor = self.task.len();
                         WizardStep::Task
                     }
                     WizardStep::Task => {
-                        self.task_cursor = self.task.len();
+                        self.role_cursor = self.role.len();
                         WizardStep::Role
                     }
                     WizardStep::Role => {
-                        self.role_cursor = self.role.len();
+                        self.agent_goal_cursor = self.agent_goal.len();
                         WizardStep::AgentGoal
                     }
                     WizardStep::AgentGoal => {
@@ -401,7 +421,6 @@ impl AddAgentWizard {
                         WizardStep::Context
                     }
                     WizardStep::Context => {
-                        self.context_cursor = self.context.len();
                         WizardStep::RestartPolicy
                     }
                     _ => return true,
@@ -523,7 +542,10 @@ impl AddAgentWizard {
 
     /// Check if the wizard has enough data to produce a valid config.
     pub fn is_valid(&self) -> bool {
-        let base = !self.name.trim().is_empty() && !self.working_dir.trim().is_empty();
+        let wd = self.working_dir.trim();
+        let base = !self.name.trim().is_empty()
+            && !wd.is_empty()
+            && std::path::Path::new(wd).is_dir();
         if self.is_custom_tool() {
             base && !self.custom_command.trim().is_empty()
         } else {

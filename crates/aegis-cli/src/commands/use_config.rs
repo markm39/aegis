@@ -115,6 +115,7 @@ fn list_config_names() -> Result<Vec<String>> {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 if name != "wraps"
+                    && name != "daemon"
                     && name != CURRENT_FILE
                     && path.join(aegis_types::CONFIG_FILENAME).exists()
                 {

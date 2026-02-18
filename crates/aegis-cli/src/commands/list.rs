@@ -42,7 +42,7 @@ pub fn run() -> Result<()> {
 
     // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" and "current")
     scan_configs(&aegis_dir, "init", &mut entries, |name| {
-        name != "wraps" && name != "current"
+        name != "wraps" && name != "current" && name != "daemon"
     });
 
     // Scan wrap configs: ~/.aegis/wraps/*/aegis.toml
