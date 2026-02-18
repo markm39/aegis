@@ -12,6 +12,7 @@
 //! 7. Return the result to the fleet manager
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -58,10 +59,11 @@ pub fn run_agent_slot(
     output_tx: mpsc::Sender<String>,
     update_tx: Option<mpsc::Sender<PilotUpdate>>,
     command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
+    child_pid: Arc<AtomicU32>,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
-    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, &output_tx, update_tx.as_ref(), command_rx.as_ref()) {
+    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, &output_tx, update_tx.as_ref(), command_rx.as_ref(), &child_pid) {
         Ok(result) => result,
         Err(e) => {
             error!(agent = name, error = %e, "agent lifecycle failed");
@@ -83,6 +85,7 @@ fn run_agent_slot_inner(
     output_tx: &mpsc::Sender<String>,
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
+    child_pid: &AtomicU32,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
     info!(agent = name, "agent lifecycle starting");
@@ -315,6 +318,9 @@ fn run_agent_slot_inner(
         principal: name.clone(),
         interactive: false, // daemon agents are non-interactive
     };
+
+    // Publish the child PID so stop_agent() can send SIGTERM.
+    child_pid.store(pty.pid(), Ordering::Release);
 
     info!(agent = name, pid = pty.pid(), "running supervisor loop");
 

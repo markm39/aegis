@@ -5,6 +5,7 @@
 //! uses slots to monitor agent health and apply restart policies.
 
 use std::collections::VecDeque;
+use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -74,6 +75,10 @@ pub struct AgentSlot {
     /// If set, the agent is in backoff and should not be restarted until this
     /// instant. Used to prevent crash loops from spinning hot.
     pub backoff_until: Option<Instant>,
+    /// Shared child PID. The lifecycle thread writes this after spawning the
+    /// PTY so that `stop_agent()` can send SIGTERM without blocking on join.
+    /// A value of 0 means the child hasn't been spawned yet.
+    pub child_pid: Arc<AtomicU32>,
 }
 
 impl AgentSlot {
@@ -100,6 +105,7 @@ impl AgentSlot {
             pilot_stats: None,
             attention_needed: false,
             backoff_until: None,
+            child_pid: Arc::new(AtomicU32::new(0)),
         }
     }
 

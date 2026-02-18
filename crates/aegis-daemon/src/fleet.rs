@@ -5,9 +5,12 @@
 //! periodic health checks (tick).
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
 
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -46,17 +49,32 @@ impl Fleet {
 
     /// Stop all running agents. Used during daemon shutdown to prevent
     /// orphaned processes.
+    ///
+    /// Sends SIGTERM to all agents first (parallel), then waits for each.
+    /// This is faster than stopping one-at-a-time since all agents get
+    /// the signal simultaneously.
     pub fn stop_all(&mut self) {
-        let names: Vec<String> = self
+        // Phase 1: send SIGTERM to all running agents.
+        let running: Vec<String> = self
             .slots
-            .keys()
-            .cloned()
+            .iter()
+            .filter(|(_, s)| s.is_thread_alive())
+            .map(|(name, _)| name.clone())
             .collect();
 
-        for name in names {
-            if self.slots.get(&name).is_some_and(|s| s.is_thread_alive()) {
-                self.stop_agent(&name);
+        for name in &running {
+            if let Some(slot) = self.slots.get(name) {
+                let pid = slot.child_pid.load(Ordering::Acquire);
+                if pid > 0 {
+                    info!(agent = name, pid, "stop_all: sending SIGTERM");
+                    let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+                }
             }
+        }
+
+        // Phase 2: wait for each to finish (stop_agent handles escalation).
+        for name in running {
+            self.stop_agent(&name);
         }
     }
 
@@ -105,14 +123,16 @@ impl Fleet {
         slot.pending_prompts.clear();
         slot.attention_needed = false;
         slot.backoff_until = None;
+        slot.child_pid.store(0, Ordering::Release);
         slot.started_at = Some(std::time::Instant::now());
 
         let fleet_goal = self.fleet_goal.clone();
+        let child_pid = slot.child_pid.clone();
 
         let handle = thread::Builder::new()
             .name(format!("agent-{name}"))
             .spawn(move || {
-                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx))
+                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx), child_pid)
             });
 
         match handle {
@@ -136,8 +156,9 @@ impl Fleet {
 
     /// Stop a specific agent by name.
     ///
-    /// Currently waits for the thread to finish. In the future, this could
-    /// send SIGTERM to the child process first.
+    /// Sends SIGTERM to the child process, waits up to 5 seconds for
+    /// graceful exit, then escalates to SIGKILL. This prevents
+    /// `handle.join()` from blocking indefinitely on hung processes.
     pub fn stop_agent(&mut self, name: &str) {
         let slot = match self.slots.get_mut(name) {
             Some(s) => s,
@@ -147,29 +168,61 @@ impl Fleet {
             }
         };
 
-        if let Some(handle) = slot.thread_handle.take() {
-            info!(agent = name, "stopping agent (waiting for thread)");
+        // Send SIGTERM to the child process if we know the PID.
+        let pid = slot.child_pid.load(Ordering::Acquire);
+        if pid > 0 {
+            info!(agent = name, pid, "sending SIGTERM to child");
+            let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+        }
 
-            // The thread will eventually exit when the child process does.
-            // For now, we just mark it and wait.
-            match handle.join() {
-                Ok(result) => {
-                    info!(
-                        agent = name,
-                        exit_code = ?result.exit_code,
-                        "agent stopped"
-                    );
-                    slot.status = AgentStatus::Stopped {
-                        exit_code: result.exit_code.unwrap_or(-1),
-                    };
+        if let Some(handle) = slot.thread_handle.take() {
+            info!(agent = name, "waiting for agent thread (5s timeout)");
+
+            // Poll is_finished() with a 5-second timeout for graceful shutdown.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline && !handle.is_finished() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            if !handle.is_finished() && pid > 0 {
+                warn!(agent = name, pid, "SIGTERM timeout, sending SIGKILL");
+                let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+
+                // Give it another 2 seconds after SIGKILL.
+                let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while std::time::Instant::now() < kill_deadline && !handle.is_finished() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                Err(_) => {
-                    error!(agent = name, "agent thread panicked");
-                    slot.status = AgentStatus::Failed {
-                        exit_code: -1,
-                        restart_count: slot.restart_count,
-                    };
+            }
+
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(result) => {
+                        info!(
+                            agent = name,
+                            exit_code = ?result.exit_code,
+                            "agent stopped"
+                        );
+                        slot.status = AgentStatus::Stopped {
+                            exit_code: result.exit_code.unwrap_or(-1),
+                        };
+                    }
+                    Err(_) => {
+                        error!(agent = name, "agent thread panicked");
+                        slot.status = AgentStatus::Failed {
+                            exit_code: -1,
+                            restart_count: slot.restart_count,
+                        };
+                    }
                 }
+            } else {
+                // Thread is truly stuck (shouldn't happen after SIGKILL).
+                // Leak the handle rather than blocking the daemon forever.
+                error!(agent = name, "agent thread did not exit after SIGKILL, detaching");
+                slot.status = AgentStatus::Failed {
+                    exit_code: -1,
+                    restart_count: slot.restart_count,
+                };
             }
         }
 
