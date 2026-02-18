@@ -1394,6 +1394,25 @@ impl FleetApp {
                     "Uninstalling launchd plist in new terminal",
                 );
             }
+            FleetCommand::Sessions => {
+                self.spawn_terminal(
+                    "aegis audit sessions",
+                    "Opened audit sessions in new terminal",
+                );
+            }
+            FleetCommand::Verify => {
+                self.spawn_terminal(
+                    "aegis audit verify",
+                    "Running audit verification in new terminal",
+                );
+            }
+            FleetCommand::Export { format } => {
+                let cmd = match format {
+                    Some(f) => format!("aegis audit export --format {f}"),
+                    None => "aegis audit export".to_string(),
+                };
+                self.spawn_terminal(&cmd, "Exporting audit data in new terminal");
+            }
         }
     }
 
@@ -1615,9 +1634,6 @@ pub fn run_fleet_tui_with_client(client: DaemonClient) -> Result<()> {
         crossterm::event::DisableBracketedPaste,
     )?;
     terminal.show_cursor()?;
-
-    // Restore original panic hook
-    let _ = std::panic::take_hook();
 
     result
 }

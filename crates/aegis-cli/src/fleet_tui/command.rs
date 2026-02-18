@@ -100,14 +100,21 @@ pub enum FleetCommand {
     DaemonInstall,
     /// Uninstall launchd plist.
     DaemonUninstall,
+    /// List recent audit sessions.
+    Sessions,
+    /// Verify audit hash chain integrity.
+    Verify,
+    /// Export audit entries in structured format.
+    Export { format: Option<String> },
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
     "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "disable",
-    "enable", "follow", "goal", "help", "hook", "init", "list", "log", "logs", "monitor",
-    "nudge", "pending", "pilot", "policy", "pop", "q", "quit", "remove", "report", "restart",
-    "run", "send", "setup", "start", "status", "stop", "telegram", "use", "watch", "wrap",
+    "enable", "export", "follow", "goal", "help", "hook", "init", "list", "log", "logs",
+    "monitor", "nudge", "pending", "pilot", "policy", "pop", "q", "quit", "remove", "report",
+    "restart", "run", "send", "sessions", "setup", "start", "status", "stop", "telegram",
+    "use", "verify", "watch", "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
@@ -291,6 +298,12 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "alerts" => Ok(Some(FleetCommand::Alerts)),
+        "sessions" => Ok(Some(FleetCommand::Sessions)),
+        "verify" => Ok(Some(FleetCommand::Verify)),
+        "export" => {
+            let format = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
+            Ok(Some(FleetCommand::Export { format }))
+        }
         "setup" => Ok(Some(FleetCommand::Setup)),
         "init" => Ok(Some(FleetCommand::Init)),
         "enable" => {
@@ -459,6 +472,7 @@ pub fn help_text() -> &'static str {
      :diff <s1> <s2>          Compare two audit sessions\n\
      :disable <agent>         Disable agent (stop + prevent restart)\n\
      :enable <agent>          Enable agent (allow starting)\n\
+     :export [format]         Export audit data (json/csv/cef)\n\
      :follow <agent>          Drill into agent output\n\
      :goal                    View fleet goal\n\
      :goal <text>             Set fleet goal\n\
@@ -480,6 +494,7 @@ pub fn help_text() -> &'static str {
      :restart <agent>         Restart agent\n\
      :run <cmd...>            Run sandboxed in terminal\n\
      :send <agent> <text>     Send text to agent stdin\n\
+     :sessions                List recent audit sessions\n\
      :setup                   Verify system requirements\n\
      :start <agent>           Start agent\n\
      :status                  Daemon status summary\n\
@@ -488,6 +503,7 @@ pub fn help_text() -> &'static str {
      :telegram setup           Run Telegram setup wizard\n\
      :telegram disable         Disable Telegram notifications\n\
      :use [name]              Switch active config\n\
+     :verify                  Verify audit hash chain integrity\n\
      :watch [dir]             Watch directory for changes\n\
      :wrap <cmd...>           Wrap command in terminal"
 }
@@ -1059,5 +1075,46 @@ mod tests {
             apply_completion("context claude-1 ro", "role"),
             "context claude-1 role "
         );
+    }
+
+    #[test]
+    fn parse_sessions() {
+        assert_eq!(parse("sessions").unwrap(), Some(FleetCommand::Sessions));
+    }
+
+    #[test]
+    fn parse_verify() {
+        assert_eq!(parse("verify").unwrap(), Some(FleetCommand::Verify));
+    }
+
+    #[test]
+    fn parse_export_no_format() {
+        assert_eq!(
+            parse("export").unwrap(),
+            Some(FleetCommand::Export { format: None })
+        );
+    }
+
+    #[test]
+    fn parse_export_with_format() {
+        assert_eq!(
+            parse("export csv").unwrap(),
+            Some(FleetCommand::Export { format: Some("csv".into()) })
+        );
+    }
+
+    #[test]
+    fn completions_new_audit_commands() {
+        let agents = vec![];
+        let c = completions("se", &agents);
+        assert!(c.contains(&"send".to_string()));
+        assert!(c.contains(&"sessions".to_string()));
+        assert!(c.contains(&"setup".to_string()));
+
+        let c = completions("ver", &agents);
+        assert_eq!(c, vec!["verify"]);
+
+        let c = completions("exp", &agents);
+        assert_eq!(c, vec!["export"]);
     }
 }

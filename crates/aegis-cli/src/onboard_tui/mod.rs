@@ -77,8 +77,5 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
     )?;
     terminal.show_cursor()?;
 
-    // Restore original panic hook
-    let _ = std::panic::take_hook();
-
     Ok(app.result())
 }
