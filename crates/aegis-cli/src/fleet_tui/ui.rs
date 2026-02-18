@@ -430,10 +430,15 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
         })
         .collect();
 
+    let title = if app.detail_scroll > 0 {
+        format!(" Output (scroll +{}) ", app.detail_scroll)
+    } else {
+        " Output ".to_string()
+    };
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Output ")
+            .title(title)
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(list, area);
@@ -491,10 +496,16 @@ fn draw_pending_panel(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     };
 
     let title = format!(" Pending ({}) ", app.detail_pending.len());
+    let hints = if app.focus_pending {
+        " a:approve d:deny "
+    } else {
+        " Tab:focus "
+    };
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
             .title(title)
+            .title_bottom(Line::from(hints).right_aligned())
             .border_style(Style::default().fg(border_color)),
     );
     frame.render_widget(list, area);
