@@ -205,6 +205,12 @@ impl PilotApp {
                     Some(LineAnnotation::Attention),
                 );
             }
+            PilotUpdate::StallResolved => {
+                self.push_output(
+                    "[RESOLVED] agent resumed output, stall cleared".to_string(),
+                    None,
+                );
+            }
             PilotUpdate::ChildExited { exit_code } => {
                 self.sync_shared(|s| s.child_alive = false);
                 self.child_alive = false;

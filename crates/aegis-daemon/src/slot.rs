@@ -198,6 +198,12 @@ impl AgentSlot {
                 PilotUpdate::StallNudge { nudge_count } => {
                     notable.push(NotableEvent::StallNudge { nudge_count });
                 }
+                PilotUpdate::StallResolved => {
+                    self.stall_attention = false;
+                    if self.pending_prompts.is_empty() {
+                        self.attention_needed = false;
+                    }
+                }
                 PilotUpdate::ChildExited { exit_code } => {
                     notable.push(NotableEvent::ChildExited { exit_code });
                 }
@@ -473,5 +479,49 @@ mod tests {
         slot.drain_updates();
         assert!(slot.attention_needed, "stall-based attention should persist");
         assert!(slot.pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn stall_resolved_clears_attention() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        // Stall sets attention
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        slot.drain_updates();
+        assert!(slot.attention_needed);
+        assert!(slot.stall_attention);
+
+        // Agent resumes output -> stall resolved
+        tx.send(PilotUpdate::StallResolved).unwrap();
+        slot.drain_updates();
+        assert!(!slot.stall_attention);
+        assert!(!slot.attention_needed);
+    }
+
+    #[test]
+    fn stall_resolved_keeps_attention_if_pending_prompts() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        // Pending prompt + stall both set attention
+        let id = Uuid::new_v4();
+        tx.send(PilotUpdate::PendingPrompt {
+            request_id: id,
+            raw_prompt: "Allow write?".into(),
+        }).unwrap();
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        slot.drain_updates();
+        assert!(slot.attention_needed);
+        assert!(slot.stall_attention);
+        assert_eq!(slot.pending_prompts.len(), 1);
+
+        // Stall resolved, but pending prompt remains
+        tx.send(PilotUpdate::StallResolved).unwrap();
+        slot.drain_updates();
+        assert!(!slot.stall_attention);
+        assert!(slot.attention_needed, "pending prompt still needs attention");
     }
 }

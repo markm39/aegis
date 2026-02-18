@@ -101,6 +101,8 @@ pub enum PilotUpdate {
     AttentionNeeded {
         nudge_count: u32,
     },
+    /// Agent resumed output after being stalled; attention no longer needed.
+    StallResolved,
     /// The child process exited.
     ChildExited {
         exit_code: i32,
@@ -173,10 +175,13 @@ pub fn run(
     let mut read_buf = [0u8; 8192];
     let mut pending: HashMap<Uuid, PendingInfo> = HashMap::new();
 
-    let poll_timeout_ms = std::cmp::min(
-        config.pilot_config.stall.timeout_secs.saturating_mul(1000),
-        5000, // Check at least every 5 seconds
-    ) as i32;
+    let poll_timeout_ms = std::cmp::max(
+        std::cmp::min(
+            config.pilot_config.stall.timeout_secs.saturating_mul(1000),
+            5000, // Check at least every 5 seconds
+        ) as i32,
+        50, // Never busy-loop: minimum 50ms poll interval
+    );
 
     // When TUI is driving, use a shorter poll timeout for responsiveness
     let poll_timeout_ms = if update_tx.is_some() {
@@ -211,6 +216,10 @@ pub fn run(
                 let _ = std::io::stdout().flush();
             }
 
+            // If agent was stalled, signal resolution before resetting
+            if stall.nudge_count() > 0 {
+                send_update(update_tx, PilotUpdate::StallResolved);
+            }
             // Record activity for stall detection
             stall.activity();
 
@@ -312,6 +321,9 @@ pub fn run(
                 }
                 let lines = output_buf.feed(&read_buf[..n]);
                 for line in &lines {
+                    if let Some(tx) = output_tx {
+                        let _ = tx.send(line.clone());
+                    }
                     send_update(update_tx, PilotUpdate::OutputLine(line.clone()));
                 }
                 stats.lines_processed += lines.len() as u64;
