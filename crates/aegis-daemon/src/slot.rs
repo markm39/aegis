@@ -72,6 +72,9 @@ pub struct AgentSlot {
     pub pilot_stats: Option<PilotStats>,
     /// Whether this agent needs human attention (max nudges exceeded).
     pub attention_needed: bool,
+    /// Whether attention was triggered by stall detection (vs pending prompts).
+    /// Prevents PendingResolved from clearing stall-based attention.
+    pub stall_attention: bool,
     /// If set, the agent is in backoff and should not be restarted until this
     /// instant. Used to prevent crash loops from spinning hot.
     pub backoff_until: Option<Instant>,
@@ -104,6 +107,7 @@ impl AgentSlot {
             pending_prompts: Vec::new(),
             pilot_stats: None,
             attention_needed: false,
+            stall_attention: false,
             backoff_until: None,
             child_pid: Arc::new(AtomicU32::new(0)),
         }
@@ -177,13 +181,14 @@ impl AgentSlot {
                 }
                 PilotUpdate::PendingResolved { request_id, .. } => {
                     self.pending_prompts.retain(|p| p.request_id != request_id);
-                    // Clear attention if no more pending prompts
-                    if self.pending_prompts.is_empty() {
+                    // Clear attention only if no more pending AND not stall-based
+                    if self.pending_prompts.is_empty() && !self.stall_attention {
                         self.attention_needed = false;
                     }
                 }
                 PilotUpdate::AttentionNeeded { nudge_count } => {
                     self.attention_needed = true;
+                    self.stall_attention = true;
                     notable.push(NotableEvent::AttentionNeeded { nudge_count });
                 }
                 PilotUpdate::StallNudge { nudge_count } => {
@@ -417,7 +422,31 @@ mod tests {
     }
 
     #[test]
-    fn attention_clears_when_prompts_resolved() {
+    fn attention_clears_when_prompts_resolved_no_stall() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        // Set attention via pending prompt only (no stall)
+        let id = Uuid::new_v4();
+        tx.send(PilotUpdate::PendingPrompt {
+            request_id: id,
+            raw_prompt: "prompt".into(),
+        }).unwrap();
+        slot.drain_updates();
+        slot.attention_needed = true; // set by pending
+
+        tx.send(PilotUpdate::PendingResolved {
+            request_id: id,
+            approved: true,
+        }).unwrap();
+        slot.drain_updates();
+        assert!(!slot.attention_needed);
+        assert!(slot.pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn stall_attention_persists_after_prompt_resolved() {
         let (tx, rx) = mpsc::channel();
         let mut slot = AgentSlot::new(test_config("test"));
         slot.update_rx = Some(rx);
@@ -430,13 +459,15 @@ mod tests {
         tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
         slot.drain_updates();
         assert!(slot.attention_needed);
+        assert!(slot.stall_attention);
 
+        // Resolving pending should NOT clear attention because stall caused it
         tx.send(PilotUpdate::PendingResolved {
             request_id: id,
             approved: true,
         }).unwrap();
         slot.drain_updates();
-        assert!(!slot.attention_needed);
+        assert!(slot.attention_needed, "stall-based attention should persist");
         assert!(slot.pending_prompts.is_empty());
     }
 }

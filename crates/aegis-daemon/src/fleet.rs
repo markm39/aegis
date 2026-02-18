@@ -127,6 +127,7 @@ impl Fleet {
         slot.update_rx = Some(upd_rx);
         slot.pending_prompts.clear();
         slot.attention_needed = false;
+        slot.stall_attention = false;
         slot.backoff_until = None;
         slot.child_pid.store(0, Ordering::Release);
         slot.started_at = Some(std::time::Instant::now());
