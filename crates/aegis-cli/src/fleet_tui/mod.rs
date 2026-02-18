@@ -648,6 +648,11 @@ impl FleetApp {
                     self.focus_pending = !self.focus_pending;
                 }
             }
+            KeyCode::Char('s') => {
+                self.send_and_show_result(DaemonCommand::StartAgent {
+                    name: self.detail_name.clone(),
+                });
+            }
             KeyCode::Char('x') => {
                 self.send_and_show_result(DaemonCommand::StopAgent {
                     name: self.detail_name.clone(),
@@ -662,14 +667,7 @@ impl FleetApp {
                 // Pop agent output into new terminal
                 let agent = self.detail_name.clone();
                 let cmd = format!("aegis daemon follow {agent}");
-                match crate::terminal::spawn_in_terminal(&cmd) {
-                    Ok(()) => {
-                        self.set_result(format!("Opened '{agent}' in new terminal"));
-                    }
-                    Err(e) => {
-                        self.set_result(e);
-                    }
-                }
+                self.spawn_terminal(&cmd, &format!("Opened '{agent}' in new terminal"));
             }
             KeyCode::Char(':') => {
                 self.enter_command_mode();
@@ -1012,24 +1010,10 @@ impl FleetApp {
             }
             FleetCommand::Pop { agent } => {
                 let cmd = format!("aegis daemon follow {agent}");
-                match crate::terminal::spawn_in_terminal(&cmd) {
-                    Ok(()) => {
-                        self.set_result(format!("Opened '{agent}' in new terminal"));
-                    }
-                    Err(e) => {
-                        self.set_result(e);
-                    }
-                }
+                self.spawn_terminal(&cmd, &format!("Opened '{agent}' in new terminal"));
             }
             FleetCommand::Monitor => {
-                match crate::terminal::spawn_in_terminal("aegis monitor") {
-                    Ok(()) => {
-                        self.set_result("Opened monitor in new terminal");
-                    }
-                    Err(e) => {
-                        self.set_result(e);
-                    }
-                }
+                self.spawn_terminal("aegis monitor", "Opened monitor in new terminal");
             }
             FleetCommand::Follow { agent } => {
                 if !self.agents.iter().any(|a| a.name == agent) && self.connected {
@@ -1058,7 +1042,7 @@ impl FleetApp {
                             self.set_result(msg);
                         }
                         Err(e) => {
-                            self.set_result(format!("Failed to remove '{agent}': {e}"));
+                            self.last_error = Some(format!("Failed to remove '{agent}': {e}"));
                         }
                     }
                 }
@@ -1105,7 +1089,7 @@ impl FleetApp {
             FleetCommand::TelegramDisable => {
                 match crate::commands::telegram::disable_quiet() {
                     Ok(msg) => self.set_result(msg),
-                    Err(e) => self.set_result(format!("Failed to disable Telegram: {e}")),
+                    Err(e) => { self.last_error = Some(format!("Failed to disable Telegram: {e}")); }
                 }
             }
             FleetCommand::Status => {
@@ -1253,7 +1237,7 @@ impl FleetApp {
                         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                     }
                     Err(e) => {
-                        self.set_result(format!("Failed to start daemon: {e}"));
+                        self.last_error = Some(format!("Failed to start daemon: {e}"));
                     }
                 }
             }
@@ -1267,7 +1251,7 @@ impl FleetApp {
                             self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
-                            self.set_result(format!("Failed to stop daemon: {e}"));
+                            self.last_error = Some(format!("Failed to stop daemon: {e}"));
                         }
                     }
                 }
@@ -1278,7 +1262,7 @@ impl FleetApp {
                         self.set_result(msg);
                     }
                     Err(e) => {
-                        self.set_result(format!("{e}"));
+                        self.last_error = Some(format!("{e}"));
                     }
                 }
             }
@@ -1307,7 +1291,7 @@ impl FleetApp {
                             self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
-                            self.set_result(format!("Failed to restart daemon: {e}"));
+                            self.last_error = Some(format!("Failed to restart daemon: {e}"));
                         }
                     }
                 }
@@ -1452,7 +1436,7 @@ impl FleetApp {
     fn spawn_terminal(&mut self, cmd: &str, msg: &str) {
         match crate::terminal::spawn_in_terminal(cmd) {
             Ok(()) => self.set_result(msg),
-            Err(e) => self.set_result(e),
+            Err(e) => { self.last_error = Some(e); }
         }
     }
 

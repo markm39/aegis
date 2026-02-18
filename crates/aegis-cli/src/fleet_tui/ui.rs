@@ -597,6 +597,8 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         Span::styled(": scroll  ", Style::default().fg(Color::DarkGray)),
         Span::styled("p", Style::default().fg(Color::Yellow)),
         Span::styled(": pop  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("s", Style::default().fg(Color::Green)),
+        Span::styled(": start  ", Style::default().fg(Color::DarkGray)),
         Span::styled("x", Style::default().fg(Color::Red)),
         Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
