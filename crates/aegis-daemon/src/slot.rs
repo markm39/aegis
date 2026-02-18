@@ -71,6 +71,9 @@ pub struct AgentSlot {
     pub pilot_stats: Option<PilotStats>,
     /// Whether this agent needs human attention (max nudges exceeded).
     pub attention_needed: bool,
+    /// If set, the agent is in backoff and should not be restarted until this
+    /// instant. Used to prevent crash loops from spinning hot.
+    pub backoff_until: Option<Instant>,
 }
 
 impl AgentSlot {
@@ -96,6 +99,7 @@ impl AgentSlot {
             pending_prompts: Vec::new(),
             pilot_stats: None,
             attention_needed: false,
+            backoff_until: None,
         }
     }
 

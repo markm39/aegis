@@ -44,6 +44,22 @@ impl Fleet {
         }
     }
 
+    /// Stop all running agents. Used during daemon shutdown to prevent
+    /// orphaned processes.
+    pub fn stop_all(&mut self) {
+        let names: Vec<String> = self
+            .slots
+            .keys()
+            .cloned()
+            .collect();
+
+        for name in names {
+            if self.slots.get(&name).is_some_and(|s| s.is_thread_alive()) {
+                self.stop_agent(&name);
+            }
+        }
+    }
+
     /// Start all enabled agents.
     pub fn start_all(&mut self) {
         let names: Vec<String> = self
@@ -88,6 +104,7 @@ impl Fleet {
         slot.update_rx = Some(upd_rx);
         slot.pending_prompts.clear();
         slot.attention_needed = false;
+        slot.backoff_until = None;
         slot.started_at = Some(std::time::Instant::now());
 
         let fleet_goal = self.fleet_goal.clone();
@@ -241,22 +258,24 @@ impl Fleet {
     }
 
     /// Periodic tick: check for exited threads, apply restart policies,
-    /// drain output channels, and process supervisor updates.
+    /// drain output channels, process supervisor updates, and restart
+    /// agents whose backoff period has expired.
     ///
     /// Returns notable events tagged with agent names. These should be forwarded
     /// to the notification channel (Telegram) if one is configured.
     pub fn tick(&mut self) -> Vec<(String, NotableEvent)> {
         let names: Vec<String> = self.slots.keys().cloned().collect();
         let mut all_events = Vec::new();
+        let mut backoff_ready: Vec<String> = Vec::new();
 
-        for name in names {
-            if let Some(slot) = self.slots.get(&name) {
+        for name in &names {
+            if let Some(slot) = self.slots.get(name) {
                 // Drain output for all agents
                 slot.drain_output();
             }
 
             // Drain rich updates (pending prompts, stats, attention flags)
-            if let Some(slot) = self.slots.get_mut(&name) {
+            if let Some(slot) = self.slots.get_mut(name) {
                 let events = slot.drain_updates();
                 for event in events {
                     all_events.push((name.clone(), event));
@@ -266,14 +285,35 @@ impl Fleet {
             // Check if the thread has finished
             let needs_join = self
                 .slots
-                .get(&name)
+                .get(name)
                 .is_some_and(|s| {
                     s.thread_handle.as_ref().is_some_and(|h| h.is_finished())
                 });
 
             if needs_join {
-                self.tick_slot(&name);
+                self.tick_slot(name);
             }
+
+            // Check if backoff has expired and agent should be restarted
+            let ready = self
+                .slots
+                .get(name)
+                .is_some_and(|s| {
+                    s.backoff_until.is_some_and(|t| std::time::Instant::now() >= t)
+                });
+
+            if ready {
+                backoff_ready.push(name.clone());
+            }
+        }
+
+        // Restart agents whose backoff has expired (outside the borrow loop)
+        for name in backoff_ready {
+            if let Some(slot) = self.slots.get_mut(&name) {
+                slot.backoff_until = None;
+            }
+            info!(agent = %name, "backoff expired, restarting agent");
+            self.start_agent(&name);
         }
 
         all_events
@@ -311,12 +351,19 @@ impl Fleet {
     }
 
     /// Apply restart policy after an agent exits.
+    ///
+    /// If the agent crashed quickly (ran less than 30 seconds), applies
+    /// exponential backoff to prevent tight crash loops. The backoff delay
+    /// is 2^restart_count seconds, capped at 60 seconds. The agent enters
+    /// `Crashed` status and `tick()` will start it once the backoff expires.
     fn handle_agent_exit(&mut self, name: &str, exit_code: i32) {
         let slot = match self.slots.get_mut(name) {
             Some(s) => s,
             None => return,
         };
 
+        // How long did the agent actually run?
+        let run_duration = slot.started_at.map(|t| t.elapsed());
         slot.started_at = None;
 
         let should_restart = match &slot.config.restart {
@@ -346,6 +393,28 @@ impl Fleet {
         }
 
         slot.restart_count += 1;
+
+        // If the agent ran for less than 30 seconds, apply exponential backoff
+        // to prevent crash loops from spinning hot.
+        let ran_briefly = run_duration.is_some_and(|d| d.as_secs() < 30);
+        if ran_briefly {
+            let delay_secs = std::cmp::min(1u64 << slot.restart_count, 60);
+            let backoff_until = std::time::Instant::now()
+                + std::time::Duration::from_secs(delay_secs);
+            info!(
+                agent = name,
+                restart_count = slot.restart_count,
+                delay_secs,
+                "agent crashed quickly, backing off before restart"
+            );
+            slot.backoff_until = Some(backoff_until);
+            slot.status = AgentStatus::Crashed {
+                exit_code,
+                restart_in_secs: delay_secs,
+            };
+            return;
+        }
+
         info!(
             agent = name,
             restart_count = slot.restart_count,
@@ -740,5 +809,81 @@ mod tests {
 
         assert_eq!(fleet.agent_tool_name("claude"), Some("ClaudeCode".to_string()));
         assert_eq!(fleet.agent_tool_name("nonexistent"), None);
+    }
+
+    #[test]
+    fn stop_all_is_safe_on_idle_fleet() {
+        let config = test_daemon_config(vec![
+            test_slot_config("a"),
+            test_slot_config("b"),
+        ]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        // stop_all on a fleet with no running agents should not panic
+        fleet.stop_all();
+        assert_eq!(fleet.agent_count(), 2);
+    }
+
+    #[test]
+    fn handle_agent_exit_applies_backoff_for_quick_crash() {
+        let mut slot_config = test_slot_config("crasher");
+        slot_config.restart = RestartPolicy::Always;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        // Simulate a very brief run (started just now)
+        fleet.slots.get_mut("crasher").unwrap().started_at =
+            Some(std::time::Instant::now());
+
+        fleet.handle_agent_exit("crasher", 1);
+
+        let slot = fleet.slot("crasher").unwrap();
+        // Should be in Crashed state with backoff, not immediately restarted
+        assert!(matches!(slot.status, AgentStatus::Crashed { .. }));
+        assert!(slot.backoff_until.is_some());
+        assert_eq!(slot.restart_count, 1);
+    }
+
+    #[test]
+    fn handle_agent_exit_no_backoff_for_long_run() {
+        let mut slot_config = test_slot_config("stable");
+        slot_config.restart = RestartPolicy::Always;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        // Simulate an agent that ran for a long time (started 60 seconds ago)
+        fleet.slots.get_mut("stable").unwrap().started_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+
+        fleet.handle_agent_exit("stable", 1);
+
+        let slot = fleet.slot("stable").unwrap();
+        // Should restart immediately (Running status from start_agent),
+        // no backoff applied
+        assert!(slot.backoff_until.is_none());
+        assert_eq!(slot.restart_count, 1);
+    }
+
+    #[test]
+    fn handle_agent_exit_respects_max_restarts() {
+        let mut slot_config = test_slot_config("limited");
+        slot_config.restart = RestartPolicy::Always;
+        slot_config.max_restarts = 2;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        // Set restart count to max
+        fleet.slots.get_mut("limited").unwrap().restart_count = 2;
+        fleet.slots.get_mut("limited").unwrap().started_at =
+            Some(std::time::Instant::now());
+
+        fleet.handle_agent_exit("limited", 1);
+
+        let slot = fleet.slot("limited").unwrap();
+        assert!(matches!(slot.status, AgentStatus::Failed { .. }));
     }
 }

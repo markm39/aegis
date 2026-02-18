@@ -191,6 +191,9 @@ impl DaemonRuntime {
 
         info!("daemon shutting down");
 
+        // Stop all running agents to prevent orphaned processes
+        self.fleet.stop_all();
+
         // Save final state
         self.save_state();
 
