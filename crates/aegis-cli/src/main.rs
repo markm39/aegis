@@ -213,6 +213,12 @@ enum Commands {
         command: Vec<String>,
     },
 
+    /// Set up notification channels (Telegram)
+    Telegram {
+        #[command(subcommand)]
+        action: TelegramCommands,
+    },
+
     /// Open the fleet dashboard (live agent management TUI)
     Fleet,
 
@@ -478,6 +484,12 @@ enum AlertCommands {
         #[arg(long, default_value = "20")]
         last: u32,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum TelegramCommands {
+    /// Interactive setup wizard for the Telegram bot
+    Setup,
 }
 
 #[derive(Subcommand, Debug)]
@@ -860,6 +872,9 @@ fn main() -> anyhow::Result<()> {
                 args,
             )
         }
+        Commands::Telegram { action } => match action {
+            TelegramCommands::Setup => commands::telegram::run(),
+        },
         Commands::Fleet => {
             fleet_tui::run_fleet_tui()
         }
@@ -2118,6 +2133,17 @@ mod tests {
                 assert_eq!(name, "claude-1");
             }
             _ => panic!("expected Daemon Pending command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_telegram_setup() {
+        let cli = Cli::try_parse_from(["aegis", "telegram", "setup"]);
+        assert!(cli.is_ok(), "should parse telegram setup: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Telegram { action: TelegramCommands::Setup } => {}
+            _ => panic!("expected Telegram Setup command"),
         }
     }
 }

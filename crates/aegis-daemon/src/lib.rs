@@ -29,8 +29,9 @@ use tracing::info;
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
-    PendingPromptSummary,
+    PendingPromptSummary, ToolUseVerdict,
 };
+use aegis_types::{Action, ActionKind, Decision};
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
@@ -54,12 +55,30 @@ pub struct DaemonRuntime {
     channel_tx: Option<mpsc::Sender<ChannelInput>>,
     /// Receiver for inbound commands from the notification channel.
     channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
+    /// Cedar policy engine for evaluating tool use requests from hooks.
+    policy_engine: Option<aegis_policy::PolicyEngine>,
 }
 
 impl DaemonRuntime {
     /// Create a new daemon runtime from configuration.
     pub fn new(config: DaemonConfig, aegis_config: AegisConfig) -> Self {
-        let fleet = Fleet::new(&config, aegis_config);
+        let fleet = Fleet::new(&config, aegis_config.clone());
+
+        // Load Cedar policy engine for hook-based tool use evaluation.
+        // Falls back to None if no policy paths are configured.
+        let policy_engine = aegis_config
+            .policy_paths
+            .first()
+            .and_then(|dir| match aegis_policy::PolicyEngine::new(dir, None) {
+                Ok(engine) => {
+                    info!(policy_dir = %dir.display(), "loaded Cedar policy engine for hooks");
+                    Some(engine)
+                }
+                Err(e) => {
+                    info!(?e, "no Cedar policy engine loaded (hooks will default to allow)");
+                    None
+                }
+            });
 
         Self {
             fleet,
@@ -68,6 +87,7 @@ impl DaemonRuntime {
             started_at: Instant::now(),
             channel_tx: None,
             channel_cmd_rx: None,
+            policy_engine,
         }
     }
 
@@ -439,6 +459,35 @@ impl DaemonRuntime {
                 }
             }
 
+            DaemonCommand::EvaluateToolUse { ref agent, ref tool_name, ref tool_input } => {
+                let action_kind = map_tool_use_to_action(tool_name, tool_input);
+                let action = Action::new(agent.clone(), action_kind);
+
+                let (decision_str, reason) = match &self.policy_engine {
+                    Some(engine) => {
+                        let verdict = engine.evaluate(&action);
+                        let d = match verdict.decision {
+                            Decision::Allow => "allow",
+                            Decision::Deny => "deny",
+                        };
+                        (d.to_string(), verdict.reason)
+                    }
+                    None => {
+                        // No policy engine loaded; default to allow
+                        ("allow".to_string(), "no policy engine loaded".to_string())
+                    }
+                };
+
+                let tool_verdict = ToolUseVerdict {
+                    decision: decision_str.clone(),
+                    reason,
+                };
+                match serde_json::to_value(&tool_verdict) {
+                    Ok(data) => DaemonResponse::ok_with_data(&decision_str, data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
             DaemonCommand::Shutdown => {
                 self.request_shutdown();
                 DaemonResponse::ok("shutdown initiated")
@@ -488,6 +537,94 @@ impl DaemonRuntime {
         if let Err(e) = daemon_state.save() {
             tracing::warn!(error = e, "failed to save daemon state");
         }
+    }
+}
+
+/// Map a Claude Code tool use into an Aegis `ActionKind` for Cedar policy evaluation.
+///
+/// Claude Code hooks provide `tool_name` (e.g., "Bash", "Read", "Write") and
+/// `tool_input` (JSON with tool-specific parameters). We map these to the
+/// corresponding `ActionKind` so Cedar policies can make fine-grained decisions
+/// about file paths, commands, URLs, etc.
+fn map_tool_use_to_action(tool_name: &str, tool_input: &serde_json::Value) -> ActionKind {
+    match tool_name {
+        "Bash" => {
+            let command = tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            ActionKind::ProcessSpawn {
+                command,
+                args: vec![],
+            }
+        }
+        "Read" | "NotebookRead" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into();
+            ActionKind::FileRead { path }
+        }
+        "Write" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into();
+            ActionKind::FileWrite { path }
+        }
+        "Edit" => {
+            let path = tool_input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into();
+            ActionKind::FileWrite { path }
+        }
+        "NotebookEdit" => {
+            let path = tool_input
+                .get("notebook_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into();
+            ActionKind::FileWrite { path }
+        }
+        "Glob" | "Grep" | "LS" => {
+            let path = tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".")
+                .into();
+            ActionKind::DirList { path }
+        }
+        "WebFetch" => {
+            let url = tool_input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            ActionKind::NetRequest {
+                method: "GET".to_string(),
+                url,
+            }
+        }
+        "WebSearch" => {
+            let query = tool_input
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            ActionKind::NetRequest {
+                method: "GET".to_string(),
+                url: query,
+            }
+        }
+        _ => ActionKind::ToolCall {
+            tool: tool_name.to_string(),
+            args: tool_input.clone(),
+        },
     }
 }
 
@@ -702,5 +839,90 @@ mod tests {
             name: "ghost".into(),
         });
         assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_evaluate_tool_use_no_policy() {
+        let mut runtime = test_runtime(vec![]);
+        let resp = runtime.handle_command(DaemonCommand::EvaluateToolUse {
+            agent: "claude-1".into(),
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({"command": "ls -la"}),
+        });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let verdict: ToolUseVerdict = serde_json::from_value(data).unwrap();
+        assert_eq!(verdict.decision, "allow");
+        assert!(verdict.reason.contains("no policy engine"));
+    }
+
+    #[test]
+    fn map_tool_use_bash() {
+        let kind = map_tool_use_to_action("Bash", &serde_json::json!({"command": "ls -la"}));
+        match kind {
+            ActionKind::ProcessSpawn { command, .. } => assert_eq!(command, "ls -la"),
+            other => panic!("expected ProcessSpawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_use_read() {
+        let kind = map_tool_use_to_action("Read", &serde_json::json!({"file_path": "/tmp/f.txt"}));
+        match kind {
+            ActionKind::FileRead { path } => assert_eq!(path, PathBuf::from("/tmp/f.txt")),
+            other => panic!("expected FileRead, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_use_write() {
+        let kind = map_tool_use_to_action("Write", &serde_json::json!({"file_path": "/tmp/out.txt"}));
+        match kind {
+            ActionKind::FileWrite { path } => assert_eq!(path, PathBuf::from("/tmp/out.txt")),
+            other => panic!("expected FileWrite, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_use_edit() {
+        let kind = map_tool_use_to_action("Edit", &serde_json::json!({"file_path": "/src/main.rs"}));
+        match kind {
+            ActionKind::FileWrite { path } => assert_eq!(path, PathBuf::from("/src/main.rs")),
+            other => panic!("expected FileWrite, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_use_glob() {
+        let kind = map_tool_use_to_action("Glob", &serde_json::json!({"path": "/src"}));
+        match kind {
+            ActionKind::DirList { path } => assert_eq!(path, PathBuf::from("/src")),
+            other => panic!("expected DirList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_use_web_fetch() {
+        let kind = map_tool_use_to_action(
+            "WebFetch",
+            &serde_json::json!({"url": "https://example.com"}),
+        );
+        match kind {
+            ActionKind::NetRequest { url, .. } => assert_eq!(url, "https://example.com"),
+            other => panic!("expected NetRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_use_unknown_falls_back_to_tool_call() {
+        let input = serde_json::json!({"foo": "bar"});
+        let kind = map_tool_use_to_action("CustomTool", &input);
+        match kind {
+            ActionKind::ToolCall { tool, args } => {
+                assert_eq!(tool, "CustomTool");
+                assert_eq!(args, input);
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 }

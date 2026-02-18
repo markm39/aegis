@@ -33,6 +33,27 @@ impl TelegramApi {
         }
     }
 
+    /// Validate the bot token by calling the `getMe` endpoint.
+    ///
+    /// Returns the bot's `User` on success, or an API error if the token is invalid.
+    pub async fn get_me(&self) -> Result<super::types::User, ChannelError> {
+        let resp = self
+            .client
+            .post(format!("{}/getMe", self.base_url))
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<super::types::User> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            return Err(ChannelError::Api(desc));
+        }
+
+        api_resp
+            .result
+            .ok_or_else(|| ChannelError::Api("getMe returned no result".into()))
+    }
+
     /// Send a text message to a chat.
     ///
     /// Returns the sent message's ID on success.

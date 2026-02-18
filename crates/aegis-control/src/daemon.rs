@@ -45,6 +45,18 @@ pub enum DaemonCommand {
     NudgeAgent { name: String, message: Option<String> },
     /// List pending permission prompts for an agent.
     ListPending { name: String },
+    /// Evaluate a tool use against Cedar policy (used by hooks).
+    ///
+    /// The hook client sends this when Claude Code fires a `PreToolUse` hook.
+    /// The daemon evaluates Cedar policy and returns allow/deny.
+    EvaluateToolUse {
+        /// Agent name (from AEGIS_AGENT_NAME env var).
+        agent: String,
+        /// Tool name (e.g., "Bash", "Read", "Write").
+        tool_name: String,
+        /// Full tool input as JSON.
+        tool_input: serde_json::Value,
+    },
     /// Request graceful daemon shutdown (stops all agents first).
     Shutdown,
 }
@@ -157,6 +169,15 @@ pub struct PendingPromptSummary {
     pub age_secs: u64,
 }
 
+/// Result of a Cedar policy evaluation for a tool use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolUseVerdict {
+    /// "allow", "deny", or "ask" (fall through to interactive prompt).
+    pub decision: String,
+    /// Human-readable reason for the decision.
+    pub reason: String,
+}
+
 /// Daemon health/ping response data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonPing {
@@ -267,6 +288,11 @@ mod tests {
                 message: Some("wake up".into()),
             },
             DaemonCommand::ListPending { name: "claude-1".into() },
+            DaemonCommand::EvaluateToolUse {
+                agent: "claude-1".into(),
+                tool_name: "Bash".into(),
+                tool_input: serde_json::json!({"command": "ls -la"}),
+            },
             DaemonCommand::Shutdown,
         ];
 

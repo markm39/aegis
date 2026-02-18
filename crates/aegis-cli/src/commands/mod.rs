@@ -22,6 +22,7 @@ pub mod report;
 pub mod run;
 pub mod setup;
 pub mod status;
+pub mod telegram;
 pub mod use_config;
 pub mod watch;
 pub mod wrap;
