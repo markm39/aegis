@@ -76,6 +76,10 @@ pub enum DaemonCommand {
     GetAgentContext {
         name: String,
     },
+    /// Enable an agent slot (allows it to be started).
+    EnableAgent { name: String },
+    /// Disable an agent slot (stops it if running, prevents restart).
+    DisableAgent { name: String },
     /// Reload daemon configuration from daemon.toml.
     ///
     /// Re-reads daemon.toml and applies changes: adds new agents, updates

@@ -1085,6 +1085,12 @@ impl FleetApp {
             FleetCommand::Init => {
                 self.spawn_terminal("aegis init", "Opened init wizard in new terminal");
             }
+            FleetCommand::Enable { agent } => {
+                self.send_and_show_result(DaemonCommand::EnableAgent { name: agent });
+            }
+            FleetCommand::Disable { agent } => {
+                self.send_and_show_result(DaemonCommand::DisableAgent { name: agent });
+            }
             FleetCommand::Goal { text } => {
                 self.send_and_show_result(DaemonCommand::FleetGoal { goal: text });
             }

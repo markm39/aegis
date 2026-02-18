@@ -229,6 +229,50 @@ impl Fleet {
         slot.started_at = None;
     }
 
+    /// Enable an agent slot so it can be started.
+    pub fn enable_agent(&mut self, name: &str) -> Result<(), String> {
+        let slot = self.slots.get_mut(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        if slot.config.enabled {
+            return Err(format!("agent '{name}' is already enabled"));
+        }
+
+        slot.config.enabled = true;
+        if matches!(slot.status, AgentStatus::Disabled) {
+            slot.status = AgentStatus::Pending;
+        }
+        info!(agent = name, "agent enabled");
+        Ok(())
+    }
+
+    /// Disable an agent slot. Stops it if running and prevents restart.
+    pub fn disable_agent(&mut self, name: &str) -> Result<(), String> {
+        let slot = self.slots.get(name)
+            .ok_or_else(|| format!("unknown agent: {name}"))?;
+
+        if !slot.config.enabled {
+            return Err(format!("agent '{name}' is already disabled"));
+        }
+
+        let is_alive = slot.is_thread_alive();
+
+        // Mark disabled first
+        self.slots.get_mut(name).unwrap().config.enabled = false;
+
+        // Stop if currently running
+        if is_alive {
+            self.stop_agent(name);
+        }
+
+        if let Some(slot) = self.slots.get_mut(name) {
+            slot.status = AgentStatus::Disabled;
+            slot.backoff_until = None;
+        }
+        info!(agent = name, "agent disabled");
+        Ok(())
+    }
+
     /// Send text to an agent's PTY stdin via the supervisor command channel.
     pub fn send_to_agent(&self, name: &str, text: &str) -> Result<(), String> {
         let slot = self.slots.get(name)
@@ -938,5 +982,62 @@ mod tests {
 
         let slot = fleet.slot("limited").unwrap();
         assert!(matches!(slot.status, AgentStatus::Failed { .. }));
+    }
+
+    #[test]
+    fn enable_agent_transitions_from_disabled() {
+        let mut slot_config = test_slot_config("off-agent");
+        slot_config.enabled = false;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        assert_eq!(fleet.agent_status("off-agent"), Some(&AgentStatus::Disabled));
+
+        fleet.enable_agent("off-agent").unwrap();
+
+        assert!(fleet.slot("off-agent").unwrap().config.enabled);
+        assert_eq!(fleet.agent_status("off-agent"), Some(&AgentStatus::Pending));
+    }
+
+    #[test]
+    fn enable_already_enabled_is_error() {
+        let config = test_daemon_config(vec![test_slot_config("running-agent")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        assert!(fleet.enable_agent("running-agent").is_err());
+    }
+
+    #[test]
+    fn disable_agent_sets_disabled_status() {
+        let config = test_daemon_config(vec![test_slot_config("active")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        fleet.disable_agent("active").unwrap();
+
+        assert!(!fleet.slot("active").unwrap().config.enabled);
+        assert_eq!(fleet.agent_status("active"), Some(&AgentStatus::Disabled));
+    }
+
+    #[test]
+    fn disable_already_disabled_is_error() {
+        let mut slot_config = test_slot_config("off");
+        slot_config.enabled = false;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        assert!(fleet.disable_agent("off").is_err());
+    }
+
+    #[test]
+    fn enable_unknown_agent_is_error() {
+        let config = test_daemon_config(vec![]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        assert!(fleet.enable_agent("ghost").is_err());
     }
 }

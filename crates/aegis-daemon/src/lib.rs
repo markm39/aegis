@@ -594,6 +594,20 @@ impl DaemonRuntime {
                 DaemonResponse::ok_with_data("agent context", data)
             }
 
+            DaemonCommand::EnableAgent { name } => {
+                match self.fleet.enable_agent(&name) {
+                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' enabled")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::DisableAgent { name } => {
+                match self.fleet.disable_agent(&name) {
+                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' disabled")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
             DaemonCommand::ReloadConfig => {
                 self.reload_config()
             }
@@ -1268,5 +1282,30 @@ mod tests {
         // May succeed or fail depending on whether daemon.toml exists on disk
         // The important thing is it doesn't panic
         let _ = resp;
+    }
+
+    #[test]
+    fn handle_command_enable_agent() {
+        let mut config = test_agent("a1");
+        config.enabled = false;
+        let mut runtime = test_runtime(vec![config]);
+        let resp = runtime.handle_command(DaemonCommand::EnableAgent { name: "a1".into() });
+        assert!(resp.ok);
+        assert!(resp.message.contains("enabled"));
+    }
+
+    #[test]
+    fn handle_command_disable_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::DisableAgent { name: "a1".into() });
+        assert!(resp.ok);
+        assert!(resp.message.contains("disabled"));
+    }
+
+    #[test]
+    fn handle_command_enable_unknown_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::EnableAgent { name: "ghost".into() });
+        assert!(!resp.ok);
     }
 }

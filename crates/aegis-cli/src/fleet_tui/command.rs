@@ -88,20 +88,24 @@ pub enum FleetCommand {
     Setup,
     /// Create an aegis project config (init wizard).
     Init,
+    /// Enable an agent slot (allow starting/restarting).
+    Enable { agent: String },
+    /// Disable an agent slot (stop and prevent restart).
+    Disable { agent: String },
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "follow",
-    "goal", "help", "hook", "init", "list", "log", "logs", "monitor", "nudge", "pending",
-    "pilot", "policy", "pop", "quit", "remove", "report", "restart", "run", "send", "setup",
-    "start", "status", "stop", "telegram", "use", "watch", "wrap",
+    "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "disable",
+    "enable", "follow", "goal", "help", "hook", "init", "list", "log", "logs", "monitor",
+    "nudge", "pending", "pilot", "policy", "pop", "quit", "remove", "report", "restart",
+    "run", "send", "setup", "start", "status", "stop", "telegram", "use", "watch", "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
-    "approve", "context", "deny", "follow", "nudge", "pending", "pop", "remove", "restart",
-    "send", "start", "stop",
+    "approve", "context", "deny", "disable", "enable", "follow", "nudge", "pending", "pop",
+    "remove", "restart", "send", "start", "stop",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -271,6 +275,20 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         "alerts" => Ok(Some(FleetCommand::Alerts)),
         "setup" => Ok(Some(FleetCommand::Setup)),
         "init" => Ok(Some(FleetCommand::Init)),
+        "enable" => {
+            if arg1.is_empty() {
+                Err("usage: enable <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Enable { agent: arg1.into() }))
+            }
+        }
+        "disable" => {
+            if arg1.is_empty() {
+                Err("usage: disable <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Disable { agent: arg1.into() }))
+            }
+        }
         "goal" => {
             let text = if arg1.is_empty() { None } else {
                 let full = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
@@ -378,6 +396,8 @@ pub fn help_text() -> &'static str {
      :daemon stop             Stop running daemon\n\
      :deny <agent>            Deny first pending prompt\n\
      :diff <s1> <s2>          Compare two audit sessions\n\
+     :disable <agent>         Disable agent (stop + prevent restart)\n\
+     :enable <agent>          Enable agent (allow starting)\n\
      :follow <agent>          Drill into agent output\n\
      :goal                    View fleet goal\n\
      :goal <text>             Set fleet goal\n\
@@ -869,5 +889,40 @@ mod tests {
         let agents = vec![];
         let c = completions("da", &agents);
         assert!(c.contains(&"daemon".to_string()));
+    }
+
+    #[test]
+    fn parse_enable() {
+        assert_eq!(
+            parse("enable claude-1").unwrap(),
+            Some(FleetCommand::Enable { agent: "claude-1".into() })
+        );
+    }
+
+    #[test]
+    fn parse_enable_missing_agent() {
+        assert!(parse("enable").is_err());
+    }
+
+    #[test]
+    fn parse_disable() {
+        assert_eq!(
+            parse("disable claude-1").unwrap(),
+            Some(FleetCommand::Disable { agent: "claude-1".into() })
+        );
+    }
+
+    #[test]
+    fn parse_disable_missing_agent() {
+        assert!(parse("disable").is_err());
+    }
+
+    #[test]
+    fn completions_enable_disable_agent() {
+        let agents = vec!["claude-1".to_string(), "codex-1".to_string()];
+        let c = completions("enable cl", &agents);
+        assert_eq!(c, vec!["claude-1"]);
+        let c = completions("disable co", &agents);
+        assert_eq!(c, vec!["codex-1"]);
     }
 }
