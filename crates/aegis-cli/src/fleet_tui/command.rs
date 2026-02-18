@@ -82,6 +82,8 @@ pub enum FleetCommand {
     DaemonReload,
     /// Show daemon status in the command result bar.
     DaemonStatus,
+    /// Restart the daemon (stop + start).
+    DaemonRestart,
     /// Run system checks (verify sandbox, tools, etc.).
     Setup,
     /// Create an aegis project config (init wizard).
@@ -172,9 +174,10 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "stop" => Ok(Some(FleetCommand::DaemonStop)),
                 "init" => Ok(Some(FleetCommand::DaemonInit)),
                 "reload" => Ok(Some(FleetCommand::DaemonReload)),
+                "restart" => Ok(Some(FleetCommand::DaemonRestart)),
                 "status" => Ok(Some(FleetCommand::DaemonStatus)),
-                "" => Err("usage: daemon start|stop|init|reload|status".into()),
-                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init, reload, status")),
+                "" => Err("usage: daemon start|stop|init|reload|restart|status".into()),
+                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init, reload, restart, status")),
             }
         }
         "deny" => {
@@ -298,7 +301,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 }
 
 /// Subcommands for `:daemon`.
-const DAEMON_SUBCOMMANDS: &[&str] = &["init", "reload", "start", "status", "stop"];
+const DAEMON_SUBCOMMANDS: &[&str] = &["init", "reload", "restart", "start", "status", "stop"];
 
 /// Complete the current command buffer, returning possible completions.
 ///
@@ -369,6 +372,7 @@ pub fn help_text() -> &'static str {
      :context <a> <f> <val>   Set context field (role/goal/context)\n\
      :daemon init             Create daemon.toml\n\
      :daemon reload           Reload config from daemon.toml\n\
+     :daemon restart          Stop and restart daemon\n\
      :daemon start            Start daemon in background\n\
      :daemon status           Show daemon status\n\
      :daemon stop             Stop running daemon\n\
@@ -824,6 +828,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_daemon_restart() {
+        assert_eq!(
+            parse("daemon restart").unwrap(),
+            Some(FleetCommand::DaemonRestart)
+        );
+    }
+
+    #[test]
     fn parse_daemon_missing_sub() {
         assert!(parse("daemon").is_err());
     }
@@ -839,6 +851,7 @@ mod tests {
         let c = completions("daemon ", &agents);
         assert!(c.contains(&"init".to_string()));
         assert!(c.contains(&"reload".to_string()));
+        assert!(c.contains(&"restart".to_string()));
         assert!(c.contains(&"start".to_string()));
         assert!(c.contains(&"status".to_string()));
         assert!(c.contains(&"stop".to_string()));

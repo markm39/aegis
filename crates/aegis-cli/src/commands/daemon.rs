@@ -206,6 +206,30 @@ pub fn reload() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Stop and restart the daemon.
+pub fn restart() -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running. Use `aegis daemon start` instead.");
+    }
+
+    // Stop
+    client
+        .send(&DaemonCommand::Shutdown)
+        .map_err(|e| anyhow::anyhow!("failed to send shutdown: {e}"))?;
+
+    println!("Daemon stopped. Restarting...");
+
+    // Brief pause for socket cleanup
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Start
+    start()?;
+
+    Ok(())
+}
+
 /// Query daemon status.
 pub fn status() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();

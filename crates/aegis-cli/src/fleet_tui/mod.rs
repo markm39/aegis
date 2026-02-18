@@ -209,7 +209,11 @@ impl FleetApp {
 
         match self.view {
             FleetView::Overview => self.poll_agent_list(),
-            FleetView::AgentDetail => self.poll_agent_output(),
+            FleetView::AgentDetail => {
+                // Also refresh agent list so attention_needed stays current
+                self.poll_agent_list();
+                self.poll_agent_output();
+            }
             FleetView::AddAgent | FleetView::Help => {} // No daemon polling needed
         }
     }
@@ -958,8 +962,8 @@ impl FleetApp {
             }
             FleetCommand::Run { cmd } => {
                 self.spawn_terminal(
-                    &format!("aegis wrap -- {cmd}"),
-                    "Launched wrap in new terminal",
+                    &format!("aegis run -- {cmd}"),
+                    "Launched sandboxed command in new terminal",
                 );
             }
             FleetCommand::Pilot { cmd } => {
@@ -1089,6 +1093,32 @@ impl FleetApp {
                         }
                         Err(e) => {
                             self.last_error = Some(e);
+                        }
+                    }
+                }
+            }
+            FleetCommand::DaemonRestart => {
+                if !self.connected {
+                    self.command_result = Some("Daemon is not running. Use :daemon start.".into());
+                } else {
+                    // Stop first, then start
+                    let stop_result = crate::commands::daemon::stop();
+                    match stop_result {
+                        Ok(()) => {
+                            // Brief pause for socket cleanup
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            match crate::commands::daemon::start() {
+                                Ok(()) => {
+                                    self.command_result = Some("Daemon restarting...".into());
+                                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                                }
+                                Err(e) => {
+                                    self.command_result = Some(format!("Stopped, but failed to restart: {e}"));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.command_result = Some(format!("Failed to stop daemon: {e}"));
                         }
                     }
                 }

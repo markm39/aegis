@@ -544,6 +544,9 @@ enum DaemonCommands {
     /// Reload daemon configuration from daemon.toml (no restart)
     Reload,
 
+    /// Stop and restart the daemon
+    Restart,
+
     /// Show daemon status (uptime, agent count)
     Status,
 
@@ -945,6 +948,7 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Start => commands::daemon::start(),
             DaemonCommands::Stop => commands::daemon::stop(),
             DaemonCommands::Reload => commands::daemon::reload(),
+            DaemonCommands::Restart => commands::daemon::restart(),
             DaemonCommands::Status => commands::daemon::status(),
             DaemonCommands::Agents => commands::daemon::agents(),
             DaemonCommands::Config { action } => match action {
