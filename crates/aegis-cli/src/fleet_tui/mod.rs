@@ -840,8 +840,8 @@ impl FleetApp {
             }
             FleetCommand::Run { cmd } => {
                 self.spawn_terminal(
-                    &format!("aegis run -- {cmd}"),
-                    "Launched sandboxed run in new terminal",
+                    &format!("aegis wrap -- {cmd}"),
+                    "Launched wrap in new terminal",
                 );
             }
             FleetCommand::Pilot { cmd } => {

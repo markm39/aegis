@@ -13,7 +13,6 @@ publish = false
 aegis-types = { workspace = true }
 aegis-policy = { workspace = true }
 aegis-ledger = { workspace = true }
-aegis-sandbox = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }

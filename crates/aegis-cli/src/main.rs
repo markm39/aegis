@@ -169,6 +169,10 @@ enum Commands {
         #[arg(long)]
         tag: Option<String>,
 
+        /// Enable Seatbelt kernel sandbox enforcement (macOS only)
+        #[arg(long)]
+        seatbelt: bool,
+
         /// Command and arguments to execute
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
@@ -700,12 +704,11 @@ fn main() -> anyhow::Result<()> {
             commands::init::run(name.as_deref(), &policy, dir.as_deref())
         }
         Commands::Run { config, policy, tag, command } => {
+            eprintln!("Note: `aegis run` is deprecated. Use `aegis wrap` instead (add --seatbelt for sandbox enforcement).");
             let (cmd, args) = command
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis run -- <command> [args...]"))?;
-            let config_name = config
-                .unwrap_or_else(|| commands::wrap::derive_name(cmd));
-            commands::run::run(&config_name, &policy, cmd, args, tag.as_deref())
+            commands::wrap::run(None, &policy, config.as_deref(), cmd, args, tag.as_deref(), false)
         }
         Commands::Monitor { config } => {
             let config = resolve_config(config)?;
@@ -889,12 +892,13 @@ fn main() -> anyhow::Result<()> {
             policy,
             name,
             tag,
+            seatbelt,
             command,
         } => {
             let (cmd, args) = command
                 .split_first()
                 .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis wrap -- <command> [args...]"))?;
-            commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref())
+            commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref(), seatbelt)
         }
         Commands::Pilot {
             dir,
@@ -1787,12 +1791,14 @@ mod tests {
                 policy,
                 name,
                 tag,
+                seatbelt,
                 command,
             } => {
                 assert!(dir.is_none());
                 assert_eq!(policy, "permit-all");
                 assert!(name.is_none());
                 assert!(tag.is_none());
+                assert!(!seatbelt);
                 assert_eq!(command, vec!["claude", "--help"]);
             }
             _ => panic!("expected Wrap command"),

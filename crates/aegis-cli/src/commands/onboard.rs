@@ -13,7 +13,7 @@ use anyhow::{bail, Context};
 use aegis_channel::telegram::api::TelegramApi;
 use aegis_types::config::{ChannelConfig, TelegramConfig};
 use aegis_types::daemon::{
-    daemon_config_path, daemon_dir, AgentSlotConfig, AgentToolConfig, DaemonConfig,
+    daemon_config_path, daemon_dir, AgentToolConfig, DaemonConfig,
     DaemonControlConfig, PersistenceConfig, RestartPolicy,
 };
 
@@ -35,16 +35,14 @@ pub fn run() -> anyhow::Result<()> {
     let working_dir = prompt_working_dir()?;
     let task = prompt_task()?;
 
-    let slot = AgentSlotConfig {
-        name: name.clone(),
-        tool: tool.clone(),
-        working_dir: working_dir.clone(),
-        task: task.clone(),
-        pilot: None,
-        restart: RestartPolicy::OnFailure,
-        max_restarts: 5,
-        enabled: true,
-    };
+    let slot = super::build_agent_slot(
+        name.clone(),
+        tool.clone(),
+        working_dir.clone(),
+        task.clone(),
+        RestartPolicy::OnFailure,
+        5,
+    );
     println!();
 
     // Step 3: Telegram (optional)
@@ -114,7 +112,8 @@ pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
     println!("    [1] Claude Code");
     println!("    [2] Codex");
     println!("    [3] OpenClaw");
-    println!("    [4] Custom");
+    println!("    [4] Cursor (observe-only)");
+    println!("    [5] Custom");
 
     let choice = prompt("  Choice", "1")?;
     let tool = match choice.as_str() {
@@ -132,7 +131,10 @@ pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
             agent_name: None,
             extra_args: vec![],
         },
-        "4" => {
+        "4" => AgentToolConfig::Cursor {
+            assume_running: false,
+        },
+        "5" => {
             let command = prompt("  Command (e.g., /usr/local/bin/my-agent)", "")?;
             if command.is_empty() {
                 bail!("command cannot be empty for custom tool");
@@ -269,6 +271,7 @@ fn confirm(label: &str, default: bool) -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aegis_types::daemon::AgentSlotConfig;
     use crate::commands::daemon::tool_display_name;
 
     #[test]

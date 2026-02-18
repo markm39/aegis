@@ -670,16 +670,14 @@ pub fn add_agent() -> anyhow::Result<()> {
     let working_dir = crate::commands::onboard::prompt_working_dir()?;
     let task = crate::commands::onboard::prompt_task()?;
 
-    let slot = AgentSlotConfig {
-        name: name.clone(),
-        tool: tool.clone(),
-        working_dir: working_dir.clone(),
-        task: task.clone(),
-        pilot: None,
-        restart: RestartPolicy::OnFailure,
-        max_restarts: 5,
-        enabled: true,
-    };
+    let slot = super::build_agent_slot(
+        name.clone(),
+        tool.clone(),
+        working_dir.clone(),
+        task.clone(),
+        RestartPolicy::OnFailure,
+        5,
+    );
 
     // Load existing config, append agent, save
     let content = std::fs::read_to_string(&config_path)?;

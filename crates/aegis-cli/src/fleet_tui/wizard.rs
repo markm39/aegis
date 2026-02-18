@@ -54,6 +54,7 @@ pub enum ToolChoice {
     ClaudeCode,
     Codex,
     OpenClaw,
+    Cursor,
     Custom,
 }
 
@@ -62,6 +63,7 @@ impl ToolChoice {
         ToolChoice::ClaudeCode,
         ToolChoice::Codex,
         ToolChoice::OpenClaw,
+        ToolChoice::Cursor,
         ToolChoice::Custom,
     ];
 
@@ -70,6 +72,7 @@ impl ToolChoice {
             ToolChoice::ClaudeCode => "Claude Code",
             ToolChoice::Codex => "Codex",
             ToolChoice::OpenClaw => "OpenClaw",
+            ToolChoice::Cursor => "Cursor",
             ToolChoice::Custom => "Custom command",
         }
     }
@@ -79,6 +82,7 @@ impl ToolChoice {
             ToolChoice::ClaudeCode => "Anthropic Claude Code CLI agent",
             ToolChoice::Codex => "OpenAI Codex CLI agent",
             ToolChoice::OpenClaw => "OpenClaw autonomous agent",
+            ToolChoice::Cursor => "Cursor editor (observe-only monitoring)",
             ToolChoice::Custom => "Run a custom command with Aegis supervision",
         }
     }
@@ -345,13 +349,16 @@ impl AddAgentWizard {
                 extra_args: vec![],
             },
             ToolChoice::Codex => AgentToolConfig::Codex {
-                approval_mode: "auto-edit".into(),
+                approval_mode: "suggest".into(),
                 one_shot: false,
                 extra_args: vec![],
             },
             ToolChoice::OpenClaw => AgentToolConfig::OpenClaw {
                 agent_name: None,
                 extra_args: vec![],
+            },
+            ToolChoice::Cursor => AgentToolConfig::Cursor {
+                assume_running: false,
             },
             ToolChoice::Custom => AgentToolConfig::Custom {
                 command: self.custom_command.clone(),
@@ -367,16 +374,14 @@ impl AddAgentWizard {
             Some(self.task.clone())
         };
 
-        AgentSlotConfig {
-            name: self.name.trim().to_string(),
+        crate::commands::build_agent_slot(
+            self.name.trim().to_string(),
             tool,
-            working_dir: PathBuf::from(self.working_dir.trim()),
+            PathBuf::from(self.working_dir.trim()),
             task,
-            pilot: None,
-            restart: self.restart_choice().to_policy(),
-            max_restarts: 5,
-            enabled: true,
-        }
+            self.restart_choice().to_policy(),
+            5,
+        )
     }
 }
 

@@ -254,18 +254,19 @@ fn smoke_test_run_auto_init() {
     // Setup first
     aegis_cmd(home).args(["setup"]).assert().success();
 
-    // Run without prior init -- should auto-create config
+    // `aegis run` is deprecated and delegates to `aegis wrap`.
+    // Verify it still works and prints deprecation notice.
     aegis_cmd(home)
         .args(["run", "--", "echo", "auto-init-works"])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("Auto-initialized")
-                .and(predicate::str::contains("auto-init-works"))
+            predicate::str::contains("auto-init-works")
                 .and(predicate::str::contains("Session:")),
-        );
+        )
+        .stderr(predicate::str::contains("deprecated"));
 
-    // Status should find the auto-created config
+    // Status should find the auto-created config (now in wraps namespace)
     aegis_cmd(home)
         .args(["status", "echo"])
         .assert()

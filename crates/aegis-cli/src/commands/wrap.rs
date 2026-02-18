@@ -14,6 +14,8 @@ use anyhow::{bail, Context, Result};
 use tracing::info;
 
 use aegis_policy::builtin::get_builtin_policy;
+use aegis_policy::PolicyEngine;
+use aegis_sandbox::SandboxBackend;
 use aegis_types::{
     AegisConfig, IsolationConfig, ObserverConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME,
     LEDGER_FILENAME,
@@ -30,6 +32,7 @@ pub fn run(
     command: &str,
     args: &[String],
     tag: Option<&str>,
+    seatbelt: bool,
 ) -> Result<()> {
     let project_dir = match dir {
         Some(d) => d
@@ -51,13 +54,19 @@ pub fn run(
         .with_context(|| format!("invalid config name: {derived_name:?}"))?;
     let wrap_dir = wraps_base_dir()?.join(&derived_name);
 
-    let config = ensure_wrap_config(&wrap_dir, &derived_name, policy, &project_dir)?;
+    let mut config = ensure_wrap_config(&wrap_dir, &derived_name, policy, &project_dir)?;
+
+    // When --seatbelt is requested, upgrade isolation to Seatbelt
+    if seatbelt {
+        config.isolation = IsolationConfig::Seatbelt {
+            profile_overrides: None,
+        };
+    }
 
     // Auto-set as current config
     crate::commands::use_config::set_current(&derived_name)?;
 
-    // Wrap always uses ProcessBackend (no Seatbelt) and skips violation harvesting
-    let backend = Box::new(aegis_sandbox::ProcessBackend);
+    let (backend, harvest_violations) = create_backend(&config)?;
 
     pipeline::execute(
         &config,
@@ -65,12 +74,39 @@ pub fn run(
         args,
         PipelineOptions {
             backend,
-            harvest_violations: false,
+            harvest_violations,
             tag,
         },
     )?;
 
     Ok(())
+}
+
+/// Create the sandbox backend based on config isolation mode.
+fn create_backend(config: &AegisConfig) -> Result<(Box<dyn SandboxBackend>, bool)> {
+    match &config.isolation {
+        #[cfg(target_os = "macos")]
+        IsolationConfig::Seatbelt { .. } => {
+            let policy_dir = config
+                .policy_paths
+                .first()
+                .context("no policy paths configured")?;
+            let policy_engine = PolicyEngine::new(policy_dir, None)
+                .context("failed to initialize policy engine")?;
+            let sbpl = aegis_sandbox::compile_cedar_to_sbpl(config, &policy_engine)
+                .context("failed to compile Cedar policies to SBPL")?;
+            tracing::info!("compiled Cedar policies to SBPL profile");
+            Ok((Box::new(aegis_sandbox::SeatbeltBackend::with_profile(sbpl)), true))
+        }
+        #[cfg(not(target_os = "macos"))]
+        IsolationConfig::Seatbelt { .. } => {
+            eprintln!("Warning: Seatbelt is only available on macOS; falling back to Process isolation");
+            Ok((Box::new(aegis_sandbox::ProcessBackend), false))
+        }
+        IsolationConfig::Process | IsolationConfig::None => {
+            Ok((Box::new(aegis_sandbox::ProcessBackend), false))
+        }
+    }
 }
 
 /// Derive a config name from a command path.

@@ -126,7 +126,6 @@ version = "0.1.0"
 dependencies = [
  "aegis-ledger",
  "aegis-policy",
- "aegis-sandbox",
  "aegis-types",
  "assert_cmd",
  "chrono",

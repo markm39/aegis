@@ -143,7 +143,7 @@ fn run_watch(
     info!(%session_id, "watch session started");
 
     // Record policy snapshot
-    record_policy_snapshot(&mut store, &config, &session_id);
+    super::pipeline::record_policy_snapshot(&mut store, &config, &session_id);
 
     let policy_arc = Arc::new(Mutex::new(policy_engine));
     let store_arc = Arc::new(Mutex::new(store));
@@ -323,33 +323,7 @@ extern "C" fn sigterm_handler(_sig: libc::c_int) {
     }
 }
 
-/// Record a policy snapshot (same logic as pipeline.rs).
-fn record_policy_snapshot(
-    store: &mut AuditStore,
-    config: &aegis_types::AegisConfig,
-    session_id: &uuid::Uuid,
-) {
-    if let Some(policy_dir) = config.policy_paths.first() {
-        match aegis_ledger::policy_snapshot::read_policy_files(policy_dir) {
-            Ok(policy_files) => {
-                match store.record_policy_snapshot(&config.name, &policy_files, Some(session_id)) {
-                    Ok(Some(snap)) => {
-                        info!(hash = %snap.policy_hash, "new policy snapshot recorded");
-                    }
-                    Ok(None) => {
-                        info!("policy unchanged since last snapshot");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to record policy snapshot");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to read policy files for snapshot");
-            }
-        }
-    }
-}
+// record_policy_snapshot is reused from pipeline module -- see super::pipeline::record_policy_snapshot
 
 /// Print the post-watch summary.
 fn print_summary(

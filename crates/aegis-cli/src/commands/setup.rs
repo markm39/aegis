@@ -18,6 +18,9 @@ const MIN_MACOS_VERSION: u32 = 12;
 /// 3. Creates the ~/.aegis/ base directory
 /// 4. Runs a self-test to confirm sandboxing works
 pub fn run() -> Result<()> {
+    eprintln!("Note: `aegis setup` is deprecated. Use `aegis` to launch the onboarding wizard instead.");
+    eprintln!();
+
     println!("Aegis Setup");
     println!("===========\n");
 
@@ -37,11 +40,7 @@ pub fn run() -> Result<()> {
 
     println!("\nSetup complete.");
     println!("Aegis data directory: {}", aegis_dir.display());
-    println!("\nNext steps:");
-    println!("  aegis init                        # interactive setup wizard");
-    println!("  aegis init my-agent               # quick init with defaults");
-    println!("  aegis wrap claude                  # observe any command");
-    println!("  aegis run echo hello               # sandbox a command");
+    println!("\nNext: run `aegis` to launch the onboarding wizard.");
 
     Ok(())
 }
