@@ -467,6 +467,12 @@ impl Fleet {
         let run_duration = slot.started_at.map(|t| t.elapsed());
         slot.started_at = None;
 
+        // Never restart a disabled agent.
+        if !slot.config.enabled {
+            slot.status = AgentStatus::Disabled;
+            return;
+        }
+
         let should_restart = match &slot.config.restart {
             RestartPolicy::Never => false,
             RestartPolicy::OnFailure => exit_code != 0,
