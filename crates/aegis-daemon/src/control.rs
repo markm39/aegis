@@ -14,6 +14,10 @@ use tracing::{debug, info, warn};
 
 use aegis_control::daemon::{DaemonCommand, DaemonResponse};
 
+/// Maximum allowed line length for incoming NDJSON commands (1 MB).
+/// Prevents memory exhaustion from malicious or buggy clients.
+const MAX_LINE_LENGTH: usize = 1024 * 1024;
+
 /// Channel type for sending commands from the socket server to the daemon loop.
 ///
 /// Each command includes a oneshot sender for the response. The daemon main
@@ -130,6 +134,15 @@ async fn handle_connection(
     let mut lines = BufReader::new(reader).lines();
 
     while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+        if line.len() > MAX_LINE_LENGTH {
+            let resp = DaemonResponse::error("command too large");
+            let mut json = serde_json::to_string(&resp).unwrap_or_default();
+            json.push('\n');
+            let _ = writer.write_all(json.as_bytes()).await;
+            let _ = writer.flush().await;
+            return Err("oversized command".into());
+        }
+
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
@@ -144,6 +157,7 @@ async fn handle_connection(
                 if let Err(write_err) = writer.write_all(json.as_bytes()).await {
                     warn!(error = %write_err, "failed to write error response to control client");
                 }
+                let _ = writer.flush().await;
                 continue;
             }
         };
@@ -156,6 +170,7 @@ async fn handle_connection(
             if let Err(write_err) = writer.write_all(json.as_bytes()).await {
                 warn!(error = %write_err, "failed to write disconnect response to control client");
             }
+            let _ = writer.flush().await;
             break;
         }
 
@@ -170,6 +185,7 @@ async fn handle_connection(
             .write_all(json.as_bytes())
             .await
             .map_err(|e| e.to_string())?;
+        writer.flush().await.map_err(|e| e.to_string())?;
     }
 
     Ok(())

@@ -109,6 +109,10 @@ pub fn edit(config_name: &str) -> Result<()> {
         );
     }
 
+    // Save original content so we can restore on validation failure
+    let original = fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
 
     let status = std::process::Command::new(&editor)
@@ -127,8 +131,15 @@ pub fn edit(config_name: &str) -> Result<()> {
     match AegisConfig::from_toml(&content) {
         Ok(_) => println!("Configuration saved and validated."),
         Err(e) => {
-            println!("WARNING: config may be invalid after editing: {e}");
-            println!("Run 'aegis config show {config_name}' to inspect.");
+            // Restore the original valid config. Save the invalid edit to .bak.
+            let bak_path = config_path.with_extension("toml.bak");
+            let _ = fs::write(&bak_path, &content);
+            fs::write(&config_path, &original)?;
+            bail!(
+                "Invalid config: {e}\n\
+                 Original config restored. Your edit saved to {}.",
+                bak_path.display()
+            );
         }
     }
 

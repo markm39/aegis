@@ -225,7 +225,21 @@ pub fn start() -> anyhow::Result<()> {
         .stdin(std::process::Stdio::null())
         .spawn()?;
 
-    println!("Daemon started (PID {}).", child.id());
+    let pid = child.id();
+
+    // Brief poll to verify the daemon didn't crash immediately after fork.
+    // The daemon creates its socket within ~100ms. If the process dies before
+    // that, we catch it here instead of leaving the user with a false success.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if !persistence::is_process_alive(pid) {
+        anyhow::bail!(
+            "Daemon exited immediately after starting.\n\
+             Check {}/stderr.log for details.",
+            log_dir.display()
+        );
+    }
+
+    println!("Daemon started (PID {pid}).");
     println!("Logs: {}/stdout.log", log_dir.display());
     Ok(())
 }
@@ -274,7 +288,18 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
         .stdin(std::process::Stdio::null())
         .spawn()?;
 
-    Ok(format!("Daemon started (PID {}).", child.id()))
+    let pid = child.id();
+
+    // Brief poll to verify the daemon didn't crash immediately after fork.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if !persistence::is_process_alive(pid) {
+        anyhow::bail!(
+            "Daemon exited immediately. Check {}/stderr.log",
+            log_dir.display()
+        );
+    }
+
+    Ok(format!("Daemon started (PID {pid})."))
 }
 
 /// Stop a running daemon via the control socket.
@@ -837,6 +862,9 @@ pub fn config_edit() -> anyhow::Result<()> {
         );
     }
 
+    // Save original content so we can restore on validation failure
+    let original = std::fs::read_to_string(&config_path)?;
+
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
 
     let status = std::process::Command::new(&editor)
@@ -856,8 +884,16 @@ pub fn config_edit() -> anyhow::Result<()> {
             println!("Run 'aegis daemon reload' to apply changes without restarting.");
         }
         Err(e) => {
-            println!("WARNING: config may be invalid after editing: {e}");
-            println!("Run 'aegis daemon config show' to inspect.");
+            // Restore the original valid config to prevent breaking daemon operations.
+            // Save the user's invalid edit to a .bak file so their work isn't lost.
+            let bak_path = config_path.with_extension("toml.bak");
+            let _ = std::fs::write(&bak_path, &content);
+            std::fs::write(&config_path, &original)?;
+            anyhow::bail!(
+                "Invalid config: {e}\n\
+                 Original config restored. Your edit saved to {}.",
+                bak_path.display()
+            );
         }
     }
 
