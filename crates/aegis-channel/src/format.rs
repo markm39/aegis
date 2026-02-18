@@ -14,13 +14,16 @@ use crate::channel::{InboundAction, OutboundMessage};
 
 /// Escape special characters for Telegram MarkdownV2.
 ///
-/// Telegram requires escaping 18 characters: `_*[]()~>#+\-=|{}.!`
+/// Telegram requires escaping these characters: `_*[]()~>#+\-=|{}.!`
+/// The backslash itself must also be escaped (and must be handled first
+/// to avoid double-escaping the backslashes we insert for other characters).
 pub fn escape_md(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + s.len() / 4);
     for c in s.chars() {
         if matches!(
             c,
-            '_' | '*'
+            '\\' | '_'
+                | '*'
                 | '['
                 | ']'
                 | '('
