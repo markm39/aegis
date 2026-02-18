@@ -194,7 +194,7 @@ impl PtySession {
 
     /// The child's process ID.
     pub fn pid(&self) -> u32 {
-        self.child_pid.as_raw() as u32
+        u32::try_from(self.child_pid.as_raw()).unwrap_or(0)
     }
 
     /// Poll the master fd for readability with a timeout.

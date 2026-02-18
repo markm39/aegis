@@ -193,7 +193,8 @@ impl FleetApp {
                 self.last_error = None;
                 if let Some(data) = resp.data {
                     self.daemon_uptime_secs = data["uptime_secs"].as_u64().unwrap_or(0);
-                    self.daemon_pid = data["daemon_pid"].as_u64().unwrap_or(0) as u32;
+                    self.daemon_pid = data["daemon_pid"].as_u64().unwrap_or(0)
+                        .try_into().unwrap_or(0);
                 }
             }
             Ok(resp) => {
@@ -1030,7 +1031,13 @@ impl FleetApp {
                         Some(cfg) => match cfg.channel {
                             Some(aegis_types::config::ChannelConfig::Telegram(tg)) => {
                                 let token_preview = if tg.bot_token.len() > 10 {
-                                    format!("{}...", &tg.bot_token[..10])
+                                    // Find a char boundary at or before byte 10
+                                    let end = tg.bot_token.char_indices()
+                                        .take_while(|(i, _)| *i < 10)
+                                        .last()
+                                        .map(|(i, c)| i + c.len_utf8())
+                                        .unwrap_or(0);
+                                    format!("{}...", &tg.bot_token[..end])
                                 } else {
                                     "(set)".to_string()
                                 };

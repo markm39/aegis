@@ -199,11 +199,11 @@ impl OnboardApp {
             tool_selected: 0,
             custom_command: String::new(),
             custom_cursor: 0,
+            name_cursor: default_name.len(),
             name: default_name,
-            name_cursor: 0,
             name_error: None,
+            working_dir_cursor: cwd.len(),
             working_dir: cwd,
-            working_dir_cursor: 0,
             working_dir_error: None,
             task: String::new(),
             task_cursor: 0,
@@ -685,6 +685,11 @@ impl OnboardApp {
                         .unwrap_or(text.len());
                 }
             }
+            KeyCode::Delete => {
+                if *cursor < text.len() {
+                    text.remove(*cursor);
+                }
+            }
             KeyCode::Home => {
                 *cursor = 0;
             }
@@ -754,8 +759,8 @@ async fn run_telegram_worker(token: String, tx: mpsc::Sender<TelegramEvent>) {
         bot_username: bot_username.clone(),
     });
 
-    // Discover chat ID
-    let chat_id = match crate::commands::telegram::discover_chat_id(&api, &bot_username).await {
+    // Discover chat ID (use poll_for_chat_id to avoid println in raw mode)
+    let chat_id = match crate::commands::telegram::poll_for_chat_id(&api, 60).await {
         Ok(id) => id,
         Err(e) => {
             let _ = tx.send(TelegramEvent::Error(e.to_string()));

@@ -616,9 +616,9 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
 
     let task_display = if app.task.trim().is_empty() {
         "(none)".to_string()
-    } else if app.task.len() > 60 {
+    } else if app.task.chars().count() > 60 {
         let preview: String = app.task.chars().take(57).collect();
-        format!("{preview}... [{} chars]", app.task.len())
+        format!("{preview}... [{} chars]", app.task.chars().count())
     } else {
         app.task.replace('\n', " ")
     };

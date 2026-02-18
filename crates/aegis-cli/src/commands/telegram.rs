@@ -124,12 +124,10 @@ pub(crate) async fn validate_token(token: &str) -> anyhow::Result<aegis_channel:
 
 /// Poll `getUpdates` until a message arrives, then return the chat ID.
 ///
-/// Uses 5-second long-poll intervals with a 60-second total timeout.
-pub(crate) async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> anyhow::Result<i64> {
-    println!("Step 2: Send any message to @{bot_username} on Telegram");
-    println!("  Waiting for your message (60s timeout)...");
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+/// Pure polling logic with no I/O. Safe to call from both CLI and TUI contexts.
+/// Uses 5-second long-poll intervals with the given timeout.
+pub(crate) async fn poll_for_chat_id(api: &TelegramApi, timeout_secs: u64) -> anyhow::Result<i64> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
     let mut offset: Option<i64> = None;
 
     // Drain any old updates first so we only detect fresh messages
@@ -149,15 +147,25 @@ pub(crate) async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> a
             offset = Some(update.update_id + 1);
 
             if let Some(ref msg) = update.message {
-                let chat_id = msg.chat.id;
-                let chat_type = msg.chat.chat_type.as_deref().unwrap_or("unknown");
-                println!("  Found chat: {chat_id} ({chat_type})");
-                return Ok(chat_id);
+                return Ok(msg.chat.id);
             }
         }
     }
 
-    bail!("timed out waiting for a message -- send a message to @{bot_username} and try again");
+    bail!("timed out waiting for a Telegram message");
+}
+
+/// Poll `getUpdates` until a message arrives, then return the chat ID.
+///
+/// CLI wrapper that prints progress to stdout.
+/// Uses 5-second long-poll intervals with a 60-second total timeout.
+pub(crate) async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> anyhow::Result<i64> {
+    println!("Step 2: Send any message to @{bot_username} on Telegram");
+    println!("  Waiting for your message (60s timeout)...");
+
+    let chat_id = poll_for_chat_id(api, 60).await?;
+    println!("  Found chat: {chat_id}");
+    Ok(chat_id)
 }
 
 /// Show current Telegram configuration status.

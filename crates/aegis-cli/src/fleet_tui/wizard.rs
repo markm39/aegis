@@ -420,6 +420,11 @@ impl AddAgentWizard {
                         .unwrap_or(text.len());
                 }
             }
+            KeyCode::Delete => {
+                if *cursor < text.len() {
+                    text.remove(*cursor);
+                }
+            }
             KeyCode::Home => {
                 *cursor = 0;
             }
