@@ -373,6 +373,43 @@ pub fn parse_fleet_command(text: &str) -> Option<DaemonCommand> {
             })
         }
 
+        "/goal" => {
+            if rest.is_empty() {
+                Some(DaemonCommand::FleetGoal { goal: None })
+            } else {
+                Some(DaemonCommand::FleetGoal { goal: Some(rest.to_string()) })
+            }
+        }
+
+        "/context" => {
+            if rest.is_empty() {
+                return None;
+            }
+            let mut parts = rest.splitn(3, ' ');
+            let agent = parts.next()?.trim();
+            match parts.next() {
+                None => {
+                    // View mode: /context <agent>
+                    Some(DaemonCommand::GetAgentContext { name: agent.to_string() })
+                }
+                Some(field) => {
+                    let value = parts.next().unwrap_or("").trim().to_string();
+                    let (role, agent_goal, context) = match field.trim() {
+                        "role" => (Some(value), None, None),
+                        "goal" => (None, Some(value), None),
+                        "context" => (None, None, Some(value)),
+                        _ => return None,
+                    };
+                    Some(DaemonCommand::UpdateAgentContext {
+                        name: agent.to_string(),
+                        role,
+                        agent_goal,
+                        context,
+                    })
+                }
+            }
+        }
+
         _ => None,
     }
 }
@@ -387,6 +424,10 @@ pub fn fleet_help_text() -> String {
         "/stop <agent> \\- Stop an agent",
         "/nudge <agent> \\[msg\\] \\- Nudge stalled agent",
         "/input <agent> <text> \\- Send text to agent",
+        "/goal \\- View fleet goal",
+        "/goal <text> \\- Set fleet goal",
+        "/context <agent> \\- View agent context",
+        "/context <agent> <field> <value> \\- Set context field",
         "/help \\- Show this message",
     ]
     .join("\n")
