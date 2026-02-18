@@ -1550,4 +1550,51 @@ mod tests {
         });
         assert!(!resp.ok);
     }
+
+    #[test]
+    fn handle_command_add_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        assert_eq!(runtime.fleet.agent_count(), 1);
+
+        let new_agent = test_agent("a2");
+        let resp = runtime.handle_command(DaemonCommand::AddAgent {
+            config: Box::new(new_agent),
+            start: false,
+        });
+        assert!(resp.ok, "add should succeed: {}", resp.message);
+        assert_eq!(runtime.fleet.agent_count(), 2);
+        assert!(runtime.fleet.agent_status("a2").is_some());
+    }
+
+    #[test]
+    fn handle_command_add_duplicate_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let dup = test_agent("a1");
+        let resp = runtime.handle_command(DaemonCommand::AddAgent {
+            config: Box::new(dup),
+            start: false,
+        });
+        assert!(!resp.ok, "duplicate should fail");
+        assert!(resp.message.contains("already exists"));
+    }
+
+    #[test]
+    fn handle_command_remove_agent_success() {
+        let mut runtime = test_runtime(vec![test_agent("a1"), test_agent("a2")]);
+        assert_eq!(runtime.fleet.agent_count(), 2);
+
+        let resp = runtime.handle_command(DaemonCommand::RemoveAgent { name: "a1".into() });
+        assert!(resp.ok, "remove should succeed: {}", resp.message);
+        assert_eq!(runtime.fleet.agent_count(), 1);
+        assert!(runtime.fleet.agent_status("a1").is_none());
+        assert!(runtime.fleet.agent_status("a2").is_some());
+    }
+
+    #[test]
+    fn handle_command_restart_agent_not_running() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::RestartAgent { name: "a1".into() });
+        // RestartAgent stops + starts; stop on a non-running agent is fine
+        assert!(resp.ok);
+    }
 }
