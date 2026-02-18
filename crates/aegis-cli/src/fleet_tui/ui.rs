@@ -303,7 +303,9 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
         ]
     } else {
         vec![
-            Span::styled(" :daemon start", Style::default().fg(Color::Green)),
+            Span::styled(" :", Style::default().fg(Color::Yellow)),
+            Span::styled(": commands  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(":daemon start", Style::default().fg(Color::Green)),
             Span::styled("  ", Style::default()),
             Span::styled(":pilot", Style::default().fg(Color::Yellow)),
             Span::styled("  ", Style::default()),
@@ -1063,16 +1065,26 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
         truncate_str(&wiz.context, 60)
     };
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("  Tool:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(tool_label, Style::default().fg(Color::Cyan)),
         ]),
-        Line::from(vec![
+    ];
+
+    if wiz.is_custom_tool() {
+        lines.push(Line::from(vec![
+            Span::styled("  Command:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(truncate_str(&wiz.custom_command, 60), Style::default().fg(Color::White)),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
             Span::styled("  Name:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(&wiz.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        ]),
+        ]));
+    lines.extend([
         Line::from(vec![
             Span::styled("  Dir:       ", Style::default().fg(Color::DarkGray)),
             Span::styled(&wiz.working_dir, Style::default().fg(Color::White)),
@@ -1102,7 +1114,7 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
             "  Press Enter or 'y' to create, 'n' or Esc to cancel",
             Style::default().fg(Color::Yellow),
         )),
-    ];
+    ]);
 
     let content = Paragraph::new(lines).block(
         Block::default()
@@ -1318,6 +1330,22 @@ mod tests {
         let mut wiz = crate::fleet_tui::wizard::AddAgentWizard::new();
         wiz.step = crate::fleet_tui::wizard::WizardStep::Confirm;
         wiz.name = "test-agent".into();
+        wiz.working_dir = "/tmp/test".into();
+        app.wizard = Some(wiz);
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_wizard_confirm_custom_tool() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AddAgent;
+        let mut wiz = crate::fleet_tui::wizard::AddAgentWizard::new();
+        wiz.tool_selected = 4; // Custom
+        wiz.custom_command = "my-tool --verbose --timeout 30".into();
+        wiz.step = crate::fleet_tui::wizard::WizardStep::Confirm;
+        wiz.name = "custom-agent".into();
         wiz.working_dir = "/tmp/test".into();
         app.wizard = Some(wiz);
         let backend = ratatui::backend::TestBackend::new(80, 24);
