@@ -1014,7 +1014,7 @@ impl FleetApp {
                 self.spawn_terminal("aegis init", "Opened init wizard in new terminal");
             }
             FleetCommand::Goal { text } => {
-                self.send_named_command(DaemonCommand::FleetGoal { goal: text });
+                self.send_and_show_result(DaemonCommand::FleetGoal { goal: text });
             }
             FleetCommand::Context { agent, field, value } => {
                 match (field, value) {
@@ -1030,7 +1030,7 @@ impl FleetApp {
                                 return;
                             }
                         };
-                        self.send_named_command(DaemonCommand::UpdateAgentContext {
+                        self.send_and_show_result(DaemonCommand::UpdateAgentContext {
                             name: agent,
                             role,
                             agent_goal,
@@ -1038,7 +1038,7 @@ impl FleetApp {
                         });
                     }
                     _ => {
-                        self.send_named_command(DaemonCommand::GetAgentContext { name: agent });
+                        self.send_context_query(&agent);
                     }
                 }
             }
@@ -1081,8 +1081,16 @@ impl FleetApp {
             FleetCommand::DaemonReload => {
                 if !self.connected {
                     self.command_result = Some("Daemon is not running.".into());
-                } else {
-                    self.send_named_command(DaemonCommand::ReloadConfig);
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::ReloadConfig) {
+                        Ok(resp) => {
+                            self.command_result = Some(resp.message);
+                            self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                        }
+                        Err(e) => {
+                            self.last_error = Some(e);
+                        }
+                    }
                 }
             }
             FleetCommand::DaemonStatus => {
@@ -1124,6 +1132,54 @@ impl FleetApp {
                     // Force immediate re-poll after action
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                 }
+            }
+        }
+    }
+
+    /// Send a command to the daemon and show the response message as command_result.
+    ///
+    /// Unlike `send_named_command`, this captures the success message for display.
+    fn send_and_show_result(&mut self, cmd: DaemonCommand) {
+        if let Some(client) = &self.client {
+            match client.send(&cmd) {
+                Ok(resp) => {
+                    if resp.ok {
+                        self.command_result = Some(resp.message);
+                    } else {
+                        self.last_error = Some(resp.message);
+                    }
+                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                }
+                Err(e) => {
+                    self.last_error = Some(e);
+                }
+            }
+        }
+    }
+
+    /// Query and display an agent's context fields.
+    fn send_context_query(&mut self, agent: &str) {
+        let client = match &self.client {
+            Some(c) => c,
+            None => return,
+        };
+        match client.send(&DaemonCommand::GetAgentContext { name: agent.to_string() }) {
+            Ok(resp) if resp.ok => {
+                if let Some(data) = resp.data {
+                    let role = data["role"].as_str().unwrap_or("(none)");
+                    let goal = data["agent_goal"].as_str().unwrap_or("(none)");
+                    let context = data["context"].as_str().unwrap_or("(none)");
+                    let task = data["task"].as_str().unwrap_or("(none)");
+                    self.command_result = Some(format!(
+                        "role={role}  goal={goal}  context={context}  task={task}"
+                    ));
+                }
+            }
+            Ok(resp) => {
+                self.last_error = Some(resp.message);
+            }
+            Err(e) => {
+                self.last_error = Some(e);
             }
         }
     }
