@@ -216,12 +216,12 @@ pub fn run(
                 let _ = std::io::stdout().flush();
             }
 
-            // If agent was stalled, signal resolution before resetting
-            if stall.nudge_count() > 0 {
+            // Check stall state before resetting, then record activity.
+            let was_stalled = stall.nudge_count() > 0;
+            stall.activity();
+            if was_stalled {
                 send_update(update_tx, PilotUpdate::StallResolved);
             }
-            // Record activity for stall detection
-            stall.activity();
 
             // Feed into output buffer, get completed lines
             let lines = output_buf.feed(chunk);

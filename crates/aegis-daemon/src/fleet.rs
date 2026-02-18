@@ -468,11 +468,12 @@ impl Fleet {
             Ok(r) => r,
             Err(_) => {
                 error!(agent = name, "agent thread panicked");
-                slot.status = AgentStatus::Failed {
-                    exit_code: -1,
-                    restart_count: slot.restart_count,
-                };
-                slot.started_at = None;
+                // Clear disconnected channels so callers don't send into void.
+                slot.output_rx = None;
+                slot.command_tx = None;
+                slot.update_rx = None;
+                // Treat as a crash: apply restart policy with backoff.
+                self.handle_agent_exit(name, -1);
                 return;
             }
         };
@@ -543,10 +544,10 @@ impl Fleet {
         // If the agent ran for less than 30 seconds, apply exponential backoff
         // to prevent crash loops from spinning hot.
         if ran_briefly {
-            let delay_secs = 1u64
-                .checked_shl(slot.restart_count)
-                .map(|d| std::cmp::min(d, 60))
-                .unwrap_or(60);
+            // Exponential backoff: 2, 4, 8, 16, 32, 60, 60, ...
+            // Cap shift at 6 to avoid overflow (2^6 = 64 > 60 cap).
+            let shift = std::cmp::min(slot.restart_count, 6);
+            let delay_secs = std::cmp::min(1u64 << shift, 60);
             let backoff_until = std::time::Instant::now()
                 + std::time::Duration::from_secs(delay_secs);
             info!(
@@ -1140,5 +1141,42 @@ mod tests {
 
         let err = fleet.restart_agent("ghost").unwrap_err();
         assert!(err.contains("unknown"), "expected unknown error, got: {err}");
+    }
+
+    #[test]
+    fn tick_slot_panicked_thread_triggers_restart_policy() {
+        let mut slot_config = test_slot_config("panicker");
+        slot_config.restart = RestartPolicy::Always;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        // Spawn a thread that panics immediately
+        let handle = std::thread::Builder::new()
+            .name("panicker".into())
+            .spawn(|| -> lifecycle::SlotResult {
+                panic!("deliberate panic for testing");
+            })
+            .unwrap();
+
+        // Wait for thread to finish panicking
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let slot = fleet.slots.get_mut("panicker").unwrap();
+        slot.thread_handle = Some(handle);
+        slot.started_at = Some(std::time::Instant::now());
+
+        // tick_slot should detect the panic and route through handle_agent_exit
+        fleet.tick_slot("panicker");
+
+        let slot = fleet.slot("panicker").unwrap();
+        // With restart=Always and a brief run, should be in Crashed (backoff) state
+        assert!(
+            matches!(slot.status, AgentStatus::Crashed { .. }),
+            "expected Crashed after panic, got {:?}",
+            slot.status
+        );
+        assert!(slot.backoff_until.is_some(), "should have backoff after crash");
+        assert_eq!(slot.restart_count, 1);
     }
 }
