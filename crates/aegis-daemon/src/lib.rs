@@ -323,12 +323,26 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::ListAgents => {
+                let now = std::time::Instant::now();
                 let summaries: Vec<AgentSummary> = self
                     .fleet
                     .agent_names_sorted()
                     .iter()
                     .filter_map(|name| {
-                        let status = self.fleet.agent_status(name)?.clone();
+                        let slot = self.fleet.slot(name)?;
+                        // Compute live remaining backoff for Crashed status
+                        let status = match &slot.status {
+                            AgentStatus::Crashed { exit_code, .. } => {
+                                let remaining = slot.backoff_until
+                                    .map(|t| t.saturating_duration_since(now).as_secs())
+                                    .unwrap_or(0);
+                                AgentStatus::Crashed {
+                                    exit_code: *exit_code,
+                                    restart_in_secs: remaining,
+                                }
+                            }
+                            other => other.clone(),
+                        };
                         let tool = self.fleet.agent_tool_name(name).unwrap_or_default();
                         let config = self.fleet.agent_config(name)?;
                         Some(AgentSummary {
@@ -337,11 +351,7 @@ impl DaemonRuntime {
                             tool,
                             working_dir: config.working_dir.to_string_lossy().into_owned(),
                             role: config.role.clone(),
-                            restart_count: self
-                                .fleet
-                                .slot(name)
-                                .map(|s| s.restart_count)
-                                .unwrap_or(0),
+                            restart_count: slot.restart_count,
                             pending_count: self.fleet.agent_pending_count(name),
                             attention_needed: self.fleet.agent_attention_needed(name),
                         })
@@ -357,9 +367,22 @@ impl DaemonRuntime {
                 let Some(slot) = self.fleet.slot(name) else {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
                 };
+                let now = std::time::Instant::now();
+                let status = match &slot.status {
+                    AgentStatus::Crashed { exit_code, .. } => {
+                        let remaining = slot.backoff_until
+                            .map(|t| t.saturating_duration_since(now).as_secs())
+                            .unwrap_or(0);
+                        AgentStatus::Crashed {
+                            exit_code: *exit_code,
+                            restart_in_secs: remaining,
+                        }
+                    }
+                    other => other.clone(),
+                };
                 let detail = AgentDetail {
                     name: name.clone(),
-                    status: slot.status.clone(),
+                    status,
                     tool: self.fleet.agent_tool_name(name).unwrap_or_default(),
                     working_dir: slot.config.working_dir.to_string_lossy().into_owned(),
                     restart_count: slot.restart_count,
