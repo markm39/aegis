@@ -320,6 +320,7 @@ impl DaemonRuntime {
                             status,
                             tool,
                             working_dir: config.working_dir.to_string_lossy().into_owned(),
+                            role: config.role.clone(),
                             restart_count: self
                                 .fleet
                                 .slot(name)
@@ -352,6 +353,9 @@ impl DaemonRuntime {
                     },
                     uptime_secs: slot.started_at.map(|t| t.elapsed().as_secs()),
                     session_id: None,
+                    role: slot.config.role.clone(),
+                    agent_goal: slot.config.agent_goal.clone(),
+                    context: slot.config.context.clone(),
                     task: slot.config.task.clone(),
                     enabled: slot.config.enabled,
                     pending_count: slot.pending_prompts.len(),
@@ -473,6 +477,25 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::EvaluateToolUse { ref agent, ref tool_name, ref tool_input } => {
+                // Interactive tools (AskUserQuestion, EnterPlanMode) would stall
+                // a headless daemon-managed agent. Deny them with a contextual
+                // prompt so the model proceeds autonomously.
+                if is_interactive_tool(tool_name) {
+                    let reason = compose_autonomy_prompt(
+                        tool_name,
+                        self.config.goal.as_deref(),
+                        self.fleet.slot(agent).map(|s| &s.config),
+                    );
+                    let tool_verdict = ToolUseVerdict {
+                        decision: "deny".to_string(),
+                        reason,
+                    };
+                    return match serde_json::to_value(&tool_verdict) {
+                        Ok(data) => DaemonResponse::ok_with_data("deny", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    };
+                }
+
                 let action_kind = map_tool_use_to_action(tool_name, tool_input);
                 let action = Action::new(agent.clone(), action_kind);
 
@@ -499,6 +522,73 @@ impl DaemonRuntime {
                     Ok(data) => DaemonResponse::ok_with_data(&decision_str, data),
                     Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                 }
+            }
+
+            DaemonCommand::FleetGoal { ref goal } => {
+                match goal {
+                    Some(new_goal) => {
+                        let display = if new_goal.is_empty() {
+                            self.config.goal = None;
+                            self.fleet.fleet_goal = None;
+                            "(cleared)".to_string()
+                        } else {
+                            self.config.goal = Some(new_goal.clone());
+                            self.fleet.fleet_goal = Some(new_goal.clone());
+                            new_goal.clone()
+                        };
+                        if let Err(e) = self.persist_config() {
+                            return DaemonResponse::error(format!("goal set but failed to persist: {e}"));
+                        }
+                        DaemonResponse::ok(format!("fleet goal set: {display}"))
+                    }
+                    None => {
+                        let current = self.config.goal.as_deref().unwrap_or("(none)");
+                        DaemonResponse::ok_with_data(
+                            "fleet goal",
+                            serde_json::json!({ "goal": current }),
+                        )
+                    }
+                }
+            }
+
+            DaemonCommand::UpdateAgentContext { ref name, ref role, ref agent_goal, ref context } => {
+                let slot = match self.fleet.slot_mut(name) {
+                    Some(s) => s,
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                };
+                if let Some(r) = role {
+                    slot.config.role = if r.is_empty() { None } else { Some(r.clone()) };
+                }
+                if let Some(g) = agent_goal {
+                    slot.config.agent_goal = if g.is_empty() { None } else { Some(g.clone()) };
+                }
+                if let Some(c) = context {
+                    slot.config.context = if c.is_empty() { None } else { Some(c.clone()) };
+                }
+                // Sync to persisted config
+                if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == *name) {
+                    cfg.role.clone_from(&slot.config.role);
+                    cfg.agent_goal.clone_from(&slot.config.agent_goal);
+                    cfg.context.clone_from(&slot.config.context);
+                }
+                if let Err(e) = self.persist_config() {
+                    return DaemonResponse::error(format!("context updated but failed to persist: {e}"));
+                }
+                DaemonResponse::ok(format!("context updated for '{name}' (takes effect on next restart)"))
+            }
+
+            DaemonCommand::GetAgentContext { ref name } => {
+                let slot = match self.fleet.slot(name) {
+                    Some(s) => s,
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                };
+                let data = serde_json::json!({
+                    "role": slot.config.role,
+                    "agent_goal": slot.config.agent_goal,
+                    "context": slot.config.context,
+                    "task": slot.config.task,
+                });
+                DaemonResponse::ok_with_data("agent context", data)
             }
 
             DaemonCommand::Shutdown => {
@@ -641,6 +731,84 @@ fn map_tool_use_to_action(tool_name: &str, tool_input: &serde_json::Value) -> Ac
     }
 }
 
+/// Tools that require human interaction and would stall a headless agent.
+///
+/// When a daemon-managed agent tries to use these, we deny with a contextual
+/// prompt so the model proceeds autonomously instead of blocking forever.
+fn is_interactive_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode"
+    )
+}
+
+/// Compose a denial reason that guides the model to proceed autonomously.
+///
+/// Includes the agent's role, goal, context, and task (if configured) so the
+/// model has enough information to make decisions without human input. Also
+/// includes the fleet-wide goal if set.
+fn compose_autonomy_prompt(
+    tool_name: &str,
+    fleet_goal: Option<&str>,
+    agent_config: Option<&AgentSlotConfig>,
+) -> String {
+    let mut sections = Vec::new();
+
+    sections.push(format!(
+        "You are running as an autonomous agent managed by Aegis. \
+         {tool_name} is not available in headless mode -- proceed without it."
+    ));
+
+    if let Some(goal) = fleet_goal {
+        if !goal.is_empty() {
+            sections.push(format!("Fleet mission: {goal}"));
+        }
+    }
+
+    if let Some(config) = agent_config {
+        if let Some(ref role) = config.role {
+            if !role.is_empty() {
+                sections.push(format!("Your role: {role}"));
+            }
+        }
+        if let Some(ref goal) = config.agent_goal {
+            if !goal.is_empty() {
+                sections.push(format!("Your goal: {goal}"));
+            }
+        }
+        if let Some(ref ctx) = config.context {
+            if !ctx.is_empty() {
+                sections.push(format!("Context: {ctx}"));
+            }
+        }
+        if let Some(ref task) = config.task {
+            if !task.is_empty() {
+                sections.push(format!("Your task: {task}"));
+            }
+        }
+    }
+
+    match tool_name {
+        "AskUserQuestion" => {
+            sections.push(
+                "Make decisions autonomously based on your role and context. \
+                 Do not ask clarifying questions -- use your best judgment and proceed."
+                    .to_string(),
+            );
+        }
+        "EnterPlanMode" | "ExitPlanMode" => {
+            sections.push(
+                "Execute directly without seeking plan approval. \
+                 You have full authority to implement within your role."
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+
+    sections.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -651,6 +819,7 @@ mod tests {
 
     fn test_runtime(agents: Vec<AgentSlotConfig>) -> DaemonRuntime {
         let config = DaemonConfig {
+            goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
@@ -670,6 +839,9 @@ mod tests {
                 extra_args: vec![],
             },
             working_dir: PathBuf::from("/tmp"),
+            role: None,
+            agent_goal: None,
+            context: None,
             task: Some("test task".into()),
             pilot: None,
             restart: RestartPolicy::OnFailure,
@@ -937,5 +1109,96 @@ mod tests {
             }
             other => panic!("expected ToolCall, got {other:?}"),
         }
+    }
+
+    // ── Interactive tool interception tests ───────────────────────────
+
+    #[test]
+    fn is_interactive_tool_detects_ask_user() {
+        assert!(is_interactive_tool("AskUserQuestion"));
+        assert!(is_interactive_tool("EnterPlanMode"));
+        assert!(is_interactive_tool("ExitPlanMode"));
+        assert!(!is_interactive_tool("Bash"));
+        assert!(!is_interactive_tool("Read"));
+        assert!(!is_interactive_tool("Write"));
+    }
+
+    #[test]
+    fn compose_autonomy_prompt_minimal() {
+        let prompt = compose_autonomy_prompt("AskUserQuestion", None, None);
+        assert!(prompt.contains("autonomous agent"));
+        assert!(prompt.contains("AskUserQuestion"));
+        assert!(prompt.contains("best judgment"));
+    }
+
+    #[test]
+    fn compose_autonomy_prompt_with_context() {
+        let config = AgentSlotConfig {
+            name: "ux-agent".into(),
+            tool: AgentToolConfig::ClaudeCode {
+                skip_permissions: false,
+                one_shot: false,
+                extra_args: vec![],
+            },
+            working_dir: PathBuf::from("/tmp"),
+            role: Some("UX specialist".into()),
+            agent_goal: Some("Build the homepage".into()),
+            context: Some("React + TypeScript stack".into()),
+            task: Some("Create a responsive nav bar".into()),
+            pilot: None,
+            restart: RestartPolicy::OnFailure,
+            max_restarts: 5,
+            enabled: true,
+        };
+
+        let prompt = compose_autonomy_prompt(
+            "AskUserQuestion",
+            Some("Build a production chess app"),
+            Some(&config),
+        );
+
+        assert!(prompt.contains("Fleet mission: Build a production chess app"));
+        assert!(prompt.contains("Your role: UX specialist"));
+        assert!(prompt.contains("Your goal: Build the homepage"));
+        assert!(prompt.contains("Context: React + TypeScript"));
+        assert!(prompt.contains("Your task: Create a responsive nav bar"));
+        assert!(prompt.contains("best judgment"));
+    }
+
+    #[test]
+    fn compose_autonomy_prompt_plan_mode() {
+        let prompt = compose_autonomy_prompt("EnterPlanMode", None, None);
+        assert!(prompt.contains("Execute directly"));
+        assert!(prompt.contains("full authority"));
+    }
+
+    #[test]
+    fn evaluate_tool_use_denies_interactive_tools() {
+        let agent = test_agent("agent-1");
+        let mut runtime = test_runtime(vec![agent]);
+        let resp = runtime.handle_command(DaemonCommand::EvaluateToolUse {
+            agent: "agent-1".into(),
+            tool_name: "AskUserQuestion".into(),
+            tool_input: serde_json::json!({"question": "what approach?"}),
+        });
+        assert!(resp.ok);
+        let verdict: ToolUseVerdict =
+            serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(verdict.decision, "deny");
+        assert!(verdict.reason.contains("autonomous"));
+    }
+
+    #[test]
+    fn evaluate_tool_use_allows_normal_tools() {
+        let mut runtime = test_runtime(vec![test_agent("agent-1")]);
+        let resp = runtime.handle_command(DaemonCommand::EvaluateToolUse {
+            agent: "agent-1".into(),
+            tool_name: "Read".into(),
+            tool_input: serde_json::json!({"file_path": "/tmp/test.txt"}),
+        });
+        assert!(resp.ok);
+        let verdict: ToolUseVerdict =
+            serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(verdict.decision, "allow");
     }
 }

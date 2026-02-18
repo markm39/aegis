@@ -68,20 +68,24 @@ pub enum FleetCommand {
     Diff { session1: String, session2: String },
     /// Show alert rules.
     Alerts,
+    /// View or set the fleet-wide goal.
+    Goal { text: Option<String> },
+    /// View or set agent context fields (role, goal, context).
+    Context { agent: String, field: Option<String>, value: Option<String> },
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "alerts", "approve", "config", "deny", "diff", "follow", "help", "hook",
-    "list", "log", "logs", "monitor", "nudge", "pending", "pilot", "policy", "pop",
-    "quit", "remove", "report", "restart", "run", "send", "start", "status", "stop",
-    "telegram", "use", "watch", "wrap",
+    "add", "alerts", "approve", "config", "context", "deny", "diff", "follow", "goal",
+    "help", "hook", "list", "log", "logs", "monitor", "nudge", "pending", "pilot",
+    "policy", "pop", "quit", "remove", "report", "restart", "run", "send", "start",
+    "status", "stop", "telegram", "use", "watch", "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
-    "approve", "deny", "follow", "nudge", "pending", "pop", "remove", "restart", "send",
-    "start", "stop",
+    "approve", "context", "deny", "follow", "nudge", "pending", "pop", "remove", "restart",
+    "send", "start", "stop",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -237,6 +241,31 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "alerts" => Ok(Some(FleetCommand::Alerts)),
+        "goal" => {
+            let text = if arg1.is_empty() { None } else {
+                let full = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                Some(full)
+            };
+            Ok(Some(FleetCommand::Goal { text }))
+        }
+        "context" => {
+            if arg1.is_empty() {
+                Err("usage: context <agent> [role|goal|context <value>]".into())
+            } else if arg2.is_empty() {
+                // View mode: :context <agent>
+                Ok(Some(FleetCommand::Context { agent: arg1.into(), field: None, value: None }))
+            } else {
+                // Set mode: :context <agent> <field> <value>
+                // arg2 contains "field value..." since we did splitn(3, ' ')
+                let (field, value) = match arg2.split_once(' ') {
+                    Some((f, v)) => (Some(f.to_string()), Some(v.to_string())),
+                    None => {
+                        return Err("usage: context <agent> <field> <value>".into());
+                    }
+                };
+                Ok(Some(FleetCommand::Context { agent: arg1.into(), field, value }))
+            }
+        }
         _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
     }
 }
@@ -296,9 +325,13 @@ pub fn help_text() -> &'static str {
      :alerts                  Show alert rules\n\
      :approve <agent>         Approve first pending prompt\n\
      :config                  Edit daemon.toml in $EDITOR\n\
+     :context <agent>         View agent context\n\
+     :context <a> <f> <val>   Set context field (role/goal/context)\n\
      :deny <agent>            Deny first pending prompt\n\
      :diff <s1> <s2>          Compare two audit sessions\n\
      :follow <agent>          Drill into agent output\n\
+     :goal                    View fleet goal\n\
+     :goal <text>             Set fleet goal\n\
      :help                    Show this help\n\
      :hook                    Install aegis hooks (CWD)\n\
      :list                    List all aegis configs\n\

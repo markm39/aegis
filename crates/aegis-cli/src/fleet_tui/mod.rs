@@ -108,6 +108,10 @@ pub struct FleetApp {
     /// Error/result message from last command execution.
     pub command_result: Option<String>,
 
+    // -- Fleet goal --
+    /// Fleet-wide goal (fetched from daemon).
+    pub fleet_goal: Option<String>,
+
     // -- Wizard --
     /// Add-agent wizard (active when view == AddAgent).
     pub wizard: Option<AddAgentWizard>,
@@ -149,6 +153,7 @@ impl FleetApp {
             command_completions: Vec::new(),
             completion_idx: None,
             command_result: None,
+            fleet_goal: None,
             wizard: None,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
@@ -202,7 +207,7 @@ impl FleetApp {
         }
     }
 
-    /// Fetch agent list from daemon.
+    /// Fetch agent list and fleet goal from daemon.
     fn poll_agent_list(&mut self) {
         let client = match &self.client {
             Some(c) => c,
@@ -227,6 +232,16 @@ impl FleetApp {
             Err(e) => {
                 self.last_error = Some(e);
             }
+        }
+
+        // Fetch fleet goal
+        match client.send(&DaemonCommand::FleetGoal { goal: None }) {
+            Ok(resp) if resp.ok => {
+                self.fleet_goal = resp.data
+                    .and_then(|d| d["goal"].as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty());
+            }
+            _ => {} // Non-critical, don't overwrite errors
         }
     }
 
@@ -889,6 +904,35 @@ impl FleetApp {
             FleetCommand::Alerts => {
                 self.spawn_terminal("aegis alerts list", "Opened alerts in new terminal");
             }
+            FleetCommand::Goal { text } => {
+                self.send_named_command(DaemonCommand::FleetGoal { goal: text });
+            }
+            FleetCommand::Context { agent, field, value } => {
+                match (field, value) {
+                    (Some(f), Some(v)) => {
+                        let (role, agent_goal, context) = match f.as_str() {
+                            "role" => (Some(v), None, None),
+                            "goal" => (None, Some(v), None),
+                            "context" => (None, None, Some(v)),
+                            _ => {
+                                self.command_result = Some(format!(
+                                    "unknown field '{f}'. Use: role, goal, or context"
+                                ));
+                                return;
+                            }
+                        };
+                        self.send_named_command(DaemonCommand::UpdateAgentContext {
+                            name: agent,
+                            role,
+                            agent_goal,
+                            context,
+                        });
+                    }
+                    _ => {
+                        self.send_named_command(DaemonCommand::GetAgentContext { name: agent });
+                    }
+                }
+            }
         }
     }
 
@@ -1054,6 +1098,7 @@ mod tests {
                 status: AgentStatus::Running { pid: 100 },
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/alpha".into(),
+                role: None,
                 restart_count: 0,
                 pending_count: 0,
                 attention_needed: false,
@@ -1063,6 +1108,7 @@ mod tests {
                 status: AgentStatus::Stopped { exit_code: 0 },
                 tool: "Codex".into(),
                 working_dir: "/tmp/beta".into(),
+                role: None,
                 restart_count: 1,
                 pending_count: 0,
                 attention_needed: false,
@@ -1072,6 +1118,7 @@ mod tests {
                 status: AgentStatus::Failed { exit_code: 1, restart_count: 5 },
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/gamma".into(),
+                role: None,
                 restart_count: 5,
                 pending_count: 0,
                 attention_needed: false,

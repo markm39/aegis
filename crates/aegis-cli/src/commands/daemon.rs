@@ -40,6 +40,7 @@ pub fn init() -> anyhow::Result<()> {
 
     // Create an example config with one commented-out agent slot
     let example = DaemonConfig {
+        goal: None,
         persistence: PersistenceConfig::default(),
         control: DaemonControlConfig::default(),
         alerts: vec![],
@@ -51,6 +52,9 @@ pub fn init() -> anyhow::Result<()> {
                 extra_args: vec![],
             },
             working_dir: PathBuf::from("/path/to/your/project"),
+            role: None,
+            agent_goal: None,
+            context: None,
             task: Some("Implement the feature described in TODO.md".into()),
             pilot: None,
             restart: RestartPolicy::OnFailure,

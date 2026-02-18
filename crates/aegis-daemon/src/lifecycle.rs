@@ -45,6 +45,7 @@ pub struct SlotResult {
 /// # Arguments
 /// - `slot_config`: configuration for this agent slot
 /// - `aegis_config`: base Aegis configuration (for policy paths, ledger, etc.)
+/// - `fleet_goal`: optional fleet-wide goal to compose into the agent's prompt
 /// - `output_tx`: channel for sending output lines to the fleet manager
 /// - `update_tx`: optional channel for sending rich updates (pending prompts, stats)
 /// - `command_rx`: optional channel for receiving commands (approve, deny, input)
@@ -53,13 +54,14 @@ pub struct SlotResult {
 pub fn run_agent_slot(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
+    fleet_goal: Option<&str>,
     output_tx: mpsc::Sender<String>,
     update_tx: Option<mpsc::Sender<PilotUpdate>>,
     command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
-    match run_agent_slot_inner(slot_config, aegis_config, &output_tx, update_tx.as_ref(), command_rx.as_ref()) {
+    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, &output_tx, update_tx.as_ref(), command_rx.as_ref()) {
         Ok(result) => result,
         Err(e) => {
             error!(agent = name, error = %e, "agent lifecycle failed");
@@ -77,6 +79,7 @@ pub fn run_agent_slot(
 fn run_agent_slot_inner(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
+    fleet_goal: Option<&str>,
     output_tx: &mpsc::Sender<String>,
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
@@ -262,22 +265,29 @@ fn run_agent_slot_inner(
         }
     };
 
-    // 5. Inject initial task if configured
-    if let Some(ref task) = slot_config.task {
-        let injection = driver.task_injection(task);
+    // 5. Inject composed prompt (fleet goal + agent context + task)
+    let composed = compose_prompt(
+        fleet_goal,
+        slot_config.role.as_deref(),
+        slot_config.agent_goal.as_deref(),
+        slot_config.context.as_deref(),
+        slot_config.task.as_deref(),
+    );
+    if let Some(ref prompt) = composed {
+        let injection = driver.task_injection(prompt);
         match injection {
             TaskInjection::Stdin { text } => {
                 // Wait a moment for the agent to be ready
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 if let Err(e) = pty.send_line(&text) {
-                    warn!(agent = name, error = %e, "failed to inject task via stdin");
+                    warn!(agent = name, error = %e, "failed to inject prompt via stdin");
                 } else {
-                    info!(agent = name, "task injected via stdin");
+                    info!(agent = name, "composed prompt injected via stdin");
                 }
             }
             TaskInjection::CliArg { .. } => {
                 // CLI args are already included in the spawn strategy
-                info!(agent = name, "task provided via CLI arg");
+                info!(agent = name, "composed prompt provided via CLI arg");
             }
             TaskInjection::None => {}
         }
@@ -356,6 +366,42 @@ fn run_agent_slot_inner(
     })
 }
 
+/// Compose a structured prompt from fleet goal, agent identity, and task.
+///
+/// Builds markdown sections for each non-empty input. Returns `None` if all
+/// inputs are empty/absent, which means no prompt injection is needed.
+fn compose_prompt(
+    fleet_goal: Option<&str>,
+    role: Option<&str>,
+    agent_goal: Option<&str>,
+    context: Option<&str>,
+    task: Option<&str>,
+) -> Option<String> {
+    let mut sections = Vec::new();
+
+    if let Some(g) = fleet_goal.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Fleet Mission\n{g}"));
+    }
+    if let Some(r) = role.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Your Role\n{r}"));
+    }
+    if let Some(ag) = agent_goal.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Your Goal\n{ag}"));
+    }
+    if let Some(c) = context.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Context\n{c}"));
+    }
+    if let Some(t) = task.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Task\n{t}"));
+    }
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
+}
+
 /// End an audit session in the store.
 fn end_session(store: &Arc<Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_code: i32) {
     match store.lock() {
@@ -373,6 +419,45 @@ fn end_session(store: &Arc<Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_cod
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_prompt_all_sections() {
+        let result = compose_prompt(
+            Some("Build a chess app"),
+            Some("UX specialist"),
+            Some("Build the UI"),
+            Some("Use React and TypeScript"),
+            Some("Start with the homepage"),
+        );
+        let text = result.unwrap();
+        assert!(text.contains("## Fleet Mission\nBuild a chess app"));
+        assert!(text.contains("## Your Role\nUX specialist"));
+        assert!(text.contains("## Your Goal\nBuild the UI"));
+        assert!(text.contains("## Context\nUse React and TypeScript"));
+        assert!(text.contains("## Task\nStart with the homepage"));
+    }
+
+    #[test]
+    fn compose_prompt_task_only() {
+        let result = compose_prompt(None, None, None, None, Some("Do the thing"));
+        let text = result.unwrap();
+        assert_eq!(text, "## Task\nDo the thing");
+    }
+
+    #[test]
+    fn compose_prompt_all_empty_returns_none() {
+        assert!(compose_prompt(None, None, None, None, None).is_none());
+        assert!(compose_prompt(Some(""), Some(""), None, None, None).is_none());
+    }
+
+    #[test]
+    fn compose_prompt_skips_empty_strings() {
+        let result = compose_prompt(Some("Mission"), None, Some(""), None, Some("Task"));
+        let text = result.unwrap();
+        assert!(text.contains("## Fleet Mission\nMission"));
+        assert!(!text.contains("Goal"));
+        assert!(text.contains("## Task\nTask"));
+    }
 
     #[test]
     fn slot_result_default_on_error() {

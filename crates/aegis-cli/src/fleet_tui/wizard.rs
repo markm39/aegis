@@ -6,8 +6,10 @@
 //! 2. Agent name (text input, auto-derived from working dir)
 //! 3. Working directory (text input, defaults to CWD)
 //! 4. Task / initial prompt (text input, optional)
-//! 5. Restart policy (select: Never, OnFailure, Always)
-//! 6. Confirm summary
+//! 5. Role (text input, optional, e.g. "UX specialist")
+//! 6. Agent goal (text input, optional, what the agent should achieve)
+//! 7. Restart policy (select: Never, OnFailure, Always)
+//! 8. Confirm summary
 
 use std::path::PathBuf;
 
@@ -22,6 +24,8 @@ pub enum WizardStep {
     Name,
     WorkingDir,
     Task,
+    Role,
+    AgentGoal,
     RestartPolicy,
     Confirm,
 }
@@ -33,6 +37,8 @@ impl WizardStep {
         WizardStep::Name,
         WizardStep::WorkingDir,
         WizardStep::Task,
+        WizardStep::Role,
+        WizardStep::AgentGoal,
         WizardStep::RestartPolicy,
         WizardStep::Confirm,
     ];
@@ -144,7 +150,15 @@ pub struct AddAgentWizard {
     pub task: String,
     pub task_cursor: usize,
 
-    // Step 5: Restart policy
+    // Step 5: Role
+    pub role: String,
+    pub role_cursor: usize,
+
+    // Step 6: Agent goal
+    pub agent_goal: String,
+    pub agent_goal_cursor: usize,
+
+    // Step 7: Restart policy
     pub restart_selected: usize,
 
     // Custom command (only if tool == Custom)
@@ -174,6 +188,10 @@ impl AddAgentWizard {
             working_dir_cursor: 0,
             task: String::new(),
             task_cursor: 0,
+            role: String::new(),
+            role_cursor: 0,
+            agent_goal: String::new(),
+            agent_goal_cursor: 0,
             restart_selected: 0,
             custom_command: String::new(),
         }
@@ -196,6 +214,8 @@ impl AddAgentWizard {
             WizardStep::Name => self.handle_text_key(key, TextTarget::Name),
             WizardStep::WorkingDir => self.handle_text_key(key, TextTarget::WorkingDir),
             WizardStep::Task => self.handle_text_key(key, TextTarget::Task),
+            WizardStep::Role => self.handle_text_key(key, TextTarget::Role),
+            WizardStep::AgentGoal => self.handle_text_key(key, TextTarget::AgentGoal),
             WizardStep::RestartPolicy => self.handle_restart_key(key),
             WizardStep::Confirm => self.handle_confirm_key(key),
         }
@@ -266,6 +286,8 @@ impl AddAgentWizard {
             TextTarget::Name => (&mut self.name, &mut self.name_cursor),
             TextTarget::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor),
             TextTarget::Task => (&mut self.task, &mut self.task_cursor),
+            TextTarget::Role => (&mut self.role, &mut self.role_cursor),
+            TextTarget::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor),
         };
 
         match key.code {
@@ -284,6 +306,14 @@ impl AddAgentWizard {
                     }
                     WizardStep::Task => {
                         self.task_cursor = self.task.len();
+                        WizardStep::Role
+                    }
+                    WizardStep::Role => {
+                        self.role_cursor = self.role.len();
+                        WizardStep::AgentGoal
+                    }
+                    WizardStep::AgentGoal => {
+                        self.agent_goal_cursor = self.agent_goal.len();
                         WizardStep::RestartPolicy
                     }
                     _ => return true,
@@ -374,14 +404,29 @@ impl AddAgentWizard {
             Some(self.task.clone())
         };
 
-        crate::commands::build_agent_slot(
+        let role = if self.role.trim().is_empty() {
+            None
+        } else {
+            Some(self.role.clone())
+        };
+
+        let agent_goal = if self.agent_goal.trim().is_empty() {
+            None
+        } else {
+            Some(self.agent_goal.clone())
+        };
+
+        let mut config = crate::commands::build_agent_slot(
             self.name.trim().to_string(),
             tool,
             PathBuf::from(self.working_dir.trim()),
             task,
             self.restart_choice().to_policy(),
             5,
-        )
+        );
+        config.role = role;
+        config.agent_goal = agent_goal;
+        config
     }
 }
 
@@ -390,6 +435,8 @@ enum TextTarget {
     Name,
     WorkingDir,
     Task,
+    Role,
+    AgentGoal,
 }
 
 #[cfg(test)]
@@ -419,8 +466,10 @@ mod tests {
     fn wizard_step_numbers() {
         assert_eq!(WizardStep::Tool.number(), 1);
         assert_eq!(WizardStep::Name.number(), 2);
-        assert_eq!(WizardStep::Confirm.number(), 6);
-        assert_eq!(WizardStep::total(), 6);
+        assert_eq!(WizardStep::Role.number(), 5);
+        assert_eq!(WizardStep::AgentGoal.number(), 6);
+        assert_eq!(WizardStep::Confirm.number(), 8);
+        assert_eq!(WizardStep::total(), 8);
     }
 
     #[test]
@@ -539,13 +588,21 @@ mod tests {
 
         // Step 4: Task (optional, enter to skip)
         wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Role);
+
+        // Step 5: Role (optional, enter to skip)
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::AgentGoal);
+
+        // Step 6: Agent goal (optional, enter to skip)
+        wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::RestartPolicy);
 
-        // Step 5: Restart policy
+        // Step 7: Restart policy
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Confirm);
 
-        // Step 6: Confirm
+        // Step 8: Confirm
         wiz.handle_key(press(KeyCode::Enter));
         assert!(!wiz.active);
         assert!(wiz.completed);

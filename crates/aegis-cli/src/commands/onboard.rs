@@ -56,6 +56,7 @@ pub fn run() -> anyhow::Result<()> {
 
     // Write config
     let config = DaemonConfig {
+        goal: None,
         persistence: PersistenceConfig::default(),
         control: DaemonControlConfig::default(),
         alerts: vec![],
@@ -308,6 +309,7 @@ mod tests {
     #[test]
     fn daemon_config_roundtrip_with_agent() {
         let config = DaemonConfig {
+            goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
@@ -319,6 +321,9 @@ mod tests {
                     extra_args: vec![],
                 },
                 working_dir: PathBuf::from("/tmp/test"),
+                role: None,
+                agent_goal: None,
+                context: None,
                 task: Some("do stuff".into()),
                 pilot: None,
                 restart: RestartPolicy::OnFailure,
@@ -338,6 +343,7 @@ mod tests {
     #[test]
     fn daemon_config_roundtrip_with_telegram() {
         let config = DaemonConfig {
+            goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
@@ -349,6 +355,9 @@ mod tests {
                     extra_args: vec![],
                 },
                 working_dir: PathBuf::from("/tmp/project"),
+                role: None,
+                agent_goal: None,
+                context: None,
                 task: None,
                 pilot: None,
                 restart: RestartPolicy::OnFailure,

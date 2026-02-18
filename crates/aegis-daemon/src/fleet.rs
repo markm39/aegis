@@ -24,6 +24,8 @@ pub struct Fleet {
     slots: HashMap<String, AgentSlot>,
     /// Default Aegis configuration (shared across agents that don't override).
     default_aegis_config: AegisConfig,
+    /// Fleet-wide goal that gets composed into every agent's prompt.
+    pub fleet_goal: Option<String>,
 }
 
 impl Fleet {
@@ -38,6 +40,7 @@ impl Fleet {
         Self {
             slots,
             default_aegis_config: aegis_config,
+            fleet_goal: config.goal.clone(),
         }
     }
 
@@ -87,10 +90,12 @@ impl Fleet {
         slot.attention_needed = false;
         slot.started_at = Some(std::time::Instant::now());
 
+        let fleet_goal = self.fleet_goal.clone();
+
         let handle = thread::Builder::new()
             .name(format!("agent-{name}"))
             .spawn(move || {
-                lifecycle::run_agent_slot(&slot_config, &aegis_config, output_tx, Some(upd_tx), Some(cmd_rx))
+                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx))
             });
 
         match handle {
@@ -367,6 +372,11 @@ impl Fleet {
         self.slots.get(name)
     }
 
+    /// Get a mutable reference to a slot.
+    pub fn slot_mut(&mut self, name: &str) -> Option<&mut AgentSlot> {
+        self.slots.get_mut(name)
+    }
+
     /// Get all agent names.
     pub fn agent_names(&self) -> Vec<String> {
         self.slots.keys().cloned().collect()
@@ -426,6 +436,7 @@ mod tests {
 
     fn test_daemon_config(agents: Vec<AgentSlotConfig>) -> DaemonConfig {
         DaemonConfig {
+            goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
@@ -443,6 +454,9 @@ mod tests {
                 extra_args: vec![],
             },
             working_dir: PathBuf::from("/tmp"),
+            role: None,
+            agent_goal: None,
+            context: None,
             task: None,
             pilot: None,
             restart: RestartPolicy::OnFailure,

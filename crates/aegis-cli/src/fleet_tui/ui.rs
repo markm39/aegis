@@ -118,7 +118,7 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
         )
     };
 
-    let header_line = Line::from(vec![
+    let mut header_spans = vec![
         Span::styled(" Aegis Fleet ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         connection_span,
@@ -142,7 +142,17 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             format_duration(app.daemon_uptime_secs),
             Style::default().fg(Color::Cyan),
         ),
-    ]);
+    ];
+
+    if let Some(ref goal) = app.fleet_goal {
+        header_spans.push(Span::styled("  Goal: ", Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(
+            truncate_str(goal, 40),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    let header_line = Line::from(header_spans);
 
     let header = Paragraph::new(header_line).block(
         Block::default()
@@ -175,7 +185,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         return;
     }
 
-    let header = Row::new(vec!["", "NAME", "STATUS", "TOOL", "RESTARTS", "DIR"])
+    let header = Row::new(vec!["", "NAME", "ROLE", "STATUS", "TOOL", "RESTARTS", "DIR"])
         .style(
             Style::default()
                 .fg(Color::DarkGray)
@@ -190,6 +200,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
             let selected = if i == app.agent_selected { ">" } else { " " };
             let (status_text, status_color) = status_display(&agent.status);
             let dir = truncate_path(&agent.working_dir, 30);
+            let role = agent.role.as_deref().unwrap_or("-").to_string();
 
             let style = if i == app.agent_selected {
                 Style::default().add_modifier(Modifier::BOLD)
@@ -200,6 +211,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
             Row::new(vec![
                 selected.to_string(),
                 agent.name.clone(),
+                truncate_str(&role, 16),
                 status_text.to_string(),
                 agent.tool.clone(),
                 agent.restart_count.to_string(),
@@ -213,6 +225,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
     let widths = [
         Constraint::Length(2),
         Constraint::Length(16),
+        Constraint::Length(18),
         Constraint::Length(12),
         Constraint::Length(14),
         Constraint::Length(10),
@@ -277,12 +290,17 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         .map(|a| status_display(&a.status))
         .unwrap_or(("Unknown", Color::DarkGray));
 
-    let tool = app
+    let agent_summary = app
         .agents
         .iter()
-        .find(|a| a.name == app.detail_name)
+        .find(|a| a.name == app.detail_name);
+
+    let tool = agent_summary
         .map(|a| a.tool.as_str())
         .unwrap_or("?");
+
+    let role = agent_summary
+        .and_then(|a| a.role.as_deref());
 
     let mut header_spans = vec![
         Span::styled(" ", Style::default()),
@@ -290,6 +308,16 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             &app.detail_name,
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         ),
+    ];
+
+    if let Some(r) = role {
+        header_spans.push(Span::styled(
+            format!("  [{r}]"),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    header_spans.extend([
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         Span::styled(
             status_text,
@@ -301,7 +329,7 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             format!("  {} lines", app.detail_output.len()),
             Style::default().fg(Color::DarkGray),
         ),
-    ];
+    ]);
 
     if !app.detail_pending.is_empty() {
         header_spans.push(Span::styled(
@@ -581,6 +609,8 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         WizardStep::Name => draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1]),
         WizardStep::WorkingDir => draw_wizard_text(frame, "Working Directory", &wiz.working_dir, wiz.working_dir_cursor, chunks[1]),
         WizardStep::Task => draw_wizard_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
+        WizardStep::Role => draw_wizard_text(frame, "Role (optional, e.g. \"UX specialist\")", &wiz.role, wiz.role_cursor, chunks[1]),
+        WizardStep::AgentGoal => draw_wizard_text(frame, "Goal (optional, what this agent should achieve)", &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]),
         WizardStep::RestartPolicy => draw_wizard_restart(frame, wiz, chunks[1]),
         WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
     }
@@ -711,6 +741,16 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
     } else {
         truncate_str(&wiz.task, 60)
     };
+    let role_display = if wiz.role.trim().is_empty() {
+        "(none)".to_string()
+    } else {
+        truncate_str(&wiz.role, 60)
+    };
+    let goal_display = if wiz.agent_goal.trim().is_empty() {
+        "(none)".to_string()
+    } else {
+        truncate_str(&wiz.agent_goal, 60)
+    };
 
     let lines = vec![
         Line::from(""),
@@ -729,6 +769,14 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
         Line::from(vec![
             Span::styled("  Task:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(task_display, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Role:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(role_display, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Goal:      ", Style::default().fg(Color::DarkGray)),
+            Span::styled(goal_display, Style::default().fg(Color::White)),
         ]),
         Line::from(vec![
             Span::styled("  Restart:   ", Style::default().fg(Color::DarkGray)),
@@ -863,6 +911,7 @@ mod tests {
                 status: AgentStatus::Running { pid: 42 },
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/test".into(),
+                role: None,
                 restart_count: 0,
                 pending_count: 0,
                 attention_needed: false,

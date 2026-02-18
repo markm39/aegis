@@ -13,6 +13,9 @@ use crate::config::{AdapterConfig, AlertRule, ChannelConfig, PilotConfig};
 /// Top-level daemon configuration, loaded from `~/.aegis/daemon/daemon.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
+    /// Optional fleet-wide goal/mission shared by all agents.
+    #[serde(default)]
+    pub goal: Option<String>,
     /// Persistence and OS integration settings.
     #[serde(default)]
     pub persistence: PersistenceConfig,
@@ -39,6 +42,15 @@ pub struct AgentSlotConfig {
     pub tool: AgentToolConfig,
     /// Working directory for the agent process.
     pub working_dir: PathBuf,
+    /// Short description of this agent's role (e.g., "UX specialist", "Backend engineer").
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Strategic goal for this agent (what it should achieve, distinct from `task`).
+    #[serde(default)]
+    pub agent_goal: Option<String>,
+    /// Additional context, constraints, or knowledge for this agent.
+    #[serde(default)]
+    pub context: Option<String>,
     /// Initial task/prompt to inject into the agent after spawn.
     #[serde(default)]
     pub task: Option<String>,
@@ -278,6 +290,7 @@ mod tests {
     #[test]
     fn daemon_config_toml_roundtrip() {
         let config = DaemonConfig {
+            goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
             alerts: vec![],
@@ -290,6 +303,9 @@ mod tests {
                     extra_args: vec![],
                 },
                 working_dir: PathBuf::from("/home/user/project"),
+                role: None,
+                agent_goal: None,
+                context: None,
                 task: Some("implement the login page".into()),
                 pilot: None,
                 restart: RestartPolicy::OnFailure,

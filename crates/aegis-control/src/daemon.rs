@@ -57,6 +57,25 @@ pub enum DaemonCommand {
         /// Full tool input as JSON.
         tool_input: serde_json::Value,
     },
+    /// Get or set the fleet-wide goal.
+    FleetGoal {
+        /// If Some, sets the fleet goal. If None, returns the current goal.
+        goal: Option<String>,
+    },
+    /// Update an agent's context fields (role, goal, context) at runtime.
+    UpdateAgentContext {
+        name: String,
+        /// New role (None = leave unchanged, Some("") = clear).
+        role: Option<String>,
+        /// New agent goal (None = leave unchanged, Some("") = clear).
+        agent_goal: Option<String>,
+        /// New context (None = leave unchanged, Some("") = clear).
+        context: Option<String>,
+    },
+    /// Get an agent's full context (role, goal, context, task).
+    GetAgentContext {
+        name: String,
+    },
     /// Request graceful daemon shutdown (stops all agents first).
     Shutdown,
 }
@@ -117,6 +136,9 @@ pub struct AgentSummary {
     pub tool: String,
     /// Working directory.
     pub working_dir: String,
+    /// Agent's role (short description).
+    #[serde(default)]
+    pub role: Option<String>,
     /// Number of restarts so far.
     pub restart_count: u32,
     /// Number of pending permission prompts.
@@ -146,6 +168,15 @@ pub struct AgentDetail {
     pub uptime_secs: Option<u64>,
     /// Audit session ID (if active).
     pub session_id: Option<String>,
+    /// Agent's role.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Agent's strategic goal.
+    #[serde(default)]
+    pub agent_goal: Option<String>,
+    /// Agent's additional context.
+    #[serde(default)]
+    pub context: Option<String>,
     /// Initial task/prompt configured for this agent.
     pub task: Option<String>,
     /// Whether the slot is enabled.
@@ -267,6 +298,9 @@ mod tests {
                         extra_args: vec![],
                     },
                     working_dir: std::path::PathBuf::from("/tmp"),
+                    role: None,
+                    agent_goal: None,
+                    context: None,
                     task: None,
                     pilot: None,
                     restart: aegis_types::daemon::RestartPolicy::OnFailure,
@@ -293,6 +327,15 @@ mod tests {
                 tool_name: "Bash".into(),
                 tool_input: serde_json::json!({"command": "ls -la"}),
             },
+            DaemonCommand::FleetGoal { goal: None },
+            DaemonCommand::FleetGoal { goal: Some("Build a chess app".into()) },
+            DaemonCommand::UpdateAgentContext {
+                name: "claude-1".into(),
+                role: Some("UX specialist".into()),
+                agent_goal: None,
+                context: Some("Use Tailwind CSS".into()),
+            },
+            DaemonCommand::GetAgentContext { name: "claude-1".into() },
             DaemonCommand::Shutdown,
         ];
 
@@ -332,6 +375,7 @@ mod tests {
             status: AgentStatus::Running { pid: 1234 },
             tool: "ClaudeCode".into(),
             working_dir: "/home/user/project".into(),
+            role: Some("UX specialist".into()),
             restart_count: 0,
             pending_count: 2,
             attention_needed: true,
