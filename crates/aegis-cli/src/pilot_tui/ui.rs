@@ -291,21 +291,40 @@ fn draw_status_bar(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rec
             Line::from(hints)
         }
         PilotMode::InputMode => {
-            Line::from(vec![
+            let cursor_style = Style::default().fg(Color::Black).bg(Color::Yellow);
+            let text_style = Style::default().fg(Color::White);
+            let mut spans = vec![
                 Span::styled(" INPUT> ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    &app.input_buffer,
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    "_",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::SLOW_BLINK),
-                ),
-                Span::styled(
-                    "  (Enter:send  Esc:cancel)",
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ])
+            ];
+            let buf = &app.input_buffer;
+            let pos = app.input_cursor;
+            if pos < buf.len() {
+                // Cursor in the middle of text
+                let mut safe_pos = pos;
+                while safe_pos > 0 && !buf.is_char_boundary(safe_pos) {
+                    safe_pos -= 1;
+                }
+                if safe_pos > 0 {
+                    spans.push(Span::styled(&buf[..safe_pos], text_style));
+                }
+                let ch = buf[safe_pos..].chars().next().unwrap_or(' ');
+                let ch_end = safe_pos + ch.len_utf8();
+                spans.push(Span::styled(buf[safe_pos..ch_end].to_string(), cursor_style));
+                if ch_end < buf.len() {
+                    spans.push(Span::styled(&buf[ch_end..], text_style));
+                }
+            } else {
+                // Cursor at end of text
+                if !buf.is_empty() {
+                    spans.push(Span::styled(buf.as_str(), text_style));
+                }
+                spans.push(Span::styled(" ", cursor_style));
+            }
+            spans.push(Span::styled(
+                "  (Enter:send  Esc:cancel)",
+                Style::default().fg(Color::DarkGray),
+            ));
+            Line::from(spans)
         }
     };
 

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use uuid::Uuid;
 
 use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
@@ -79,6 +79,8 @@ pub struct PilotApp {
     pub mode: PilotMode,
     /// Text being typed in InputMode.
     pub input_buffer: String,
+    /// Cursor position in the input buffer (byte offset).
+    pub input_cursor: usize,
     /// Whether the main loop should keep running.
     pub running: bool,
     /// The session ID for display.
@@ -117,6 +119,7 @@ impl PilotApp {
             pending_selected: 0,
             mode: PilotMode::Normal,
             input_buffer: String::new(),
+            input_cursor: 0,
             running: true,
             session_id,
             config_name,
@@ -235,7 +238,7 @@ impl PilotApp {
 
         // Ctrl+C always exits (raw mode captures the signal).
         if key.code == KeyCode::Char('c')
-            && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+            && key.modifiers.contains(KeyModifiers::CONTROL)
         {
             self.running = false;
             return;
@@ -305,10 +308,25 @@ impl PilotApp {
             KeyCode::Char('i') => {
                 self.mode = PilotMode::InputMode;
                 self.input_buffer.clear();
+                self.input_cursor = 0;
             }
             KeyCode::Char('n') => {
                 // Send nudge
                 let _ = self.command_tx.send(SupervisorCommand::Nudge { message: None });
+            }
+            KeyCode::Home => {
+                self.scroll_offset = self.output_lines.len().saturating_sub(1);
+            }
+            KeyCode::End => {
+                self.scroll_offset = 0;
+            }
+            KeyCode::PageUp => {
+                self.scroll_offset = (self.scroll_offset + 20).min(
+                    self.output_lines.len().saturating_sub(1),
+                );
+            }
+            KeyCode::PageDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(20);
             }
             _ => {}
         }
@@ -319,10 +337,12 @@ impl PilotApp {
             KeyCode::Esc => {
                 self.mode = PilotMode::Normal;
                 self.input_buffer.clear();
+                self.input_cursor = 0;
             }
             KeyCode::Enter => {
                 if !self.input_buffer.is_empty() {
                     let text = std::mem::take(&mut self.input_buffer);
+                    self.input_cursor = 0;
                     let _ = self.command_tx.send(SupervisorCommand::SendInput {
                         text: text.clone(),
                     });
@@ -330,11 +350,67 @@ impl PilotApp {
                 }
                 self.mode = PilotMode::Normal;
             }
-            KeyCode::Backspace => {
-                self.input_buffer.pop();
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match c {
+                    'a' => self.input_cursor = 0,
+                    'e' => self.input_cursor = self.input_buffer.len(),
+                    'u' => {
+                        self.input_buffer.drain(..self.input_cursor);
+                        self.input_cursor = 0;
+                    }
+                    'w' => {
+                        if self.input_cursor > 0 {
+                            let new_pos = delete_word_backward_pos(&self.input_buffer, self.input_cursor);
+                            self.input_buffer.drain(new_pos..self.input_cursor);
+                            self.input_cursor = new_pos;
+                        }
+                    }
+                    _ => {}
+                }
             }
             KeyCode::Char(c) => {
-                self.input_buffer.push(c);
+                self.input_buffer.insert(self.input_cursor, c);
+                self.input_cursor += c.len_utf8();
+            }
+            KeyCode::Backspace => {
+                if self.input_cursor > 0 {
+                    let prev = self.input_buffer[..self.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.input_buffer.remove(prev);
+                    self.input_cursor = prev;
+                }
+            }
+            KeyCode::Delete => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_buffer.remove(self.input_cursor);
+                }
+            }
+            KeyCode::Left => {
+                if self.input_cursor > 0 {
+                    self.input_cursor = self.input_buffer[..self.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_cursor = self.input_buffer[self.input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.input_cursor + i)
+                        .unwrap_or(self.input_buffer.len());
+                }
+            }
+            KeyCode::Home => {
+                self.input_cursor = 0;
+            }
+            KeyCode::End => {
+                self.input_cursor = self.input_buffer.len();
             }
             _ => {}
         }
@@ -392,6 +468,18 @@ pub fn run_pilot_tui(
     config_name: String,
     command: String,
 ) -> Result<()> {
+    // Install panic hook to restore terminal on crash
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
+        );
+        original_hook(info);
+    }));
+
     // Set up terminal
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -454,6 +542,18 @@ fn run_event_loop(
         }
     }
     Ok(())
+}
+
+/// Find the position for Ctrl+W (delete word backward).
+fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
+    text[..cursor]
+        .char_indices()
+        .rev()
+        .skip_while(|(_, c)| c.is_whitespace())
+        .skip_while(|(_, c)| !c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .next()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -815,5 +915,98 @@ mod tests {
         };
         app.handle_key(ctrl_c);
         assert!(!app.running);
+    }
+
+    #[test]
+    fn input_mode_cursor_movement() {
+        let mut app = make_app();
+        app.handle_key(make_key(KeyCode::Char('i')));
+
+        // Type "hello"
+        for c in "hello".chars() {
+            app.handle_key(make_key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.input_buffer, "hello");
+        assert_eq!(app.input_cursor, 5);
+
+        // Left moves cursor back
+        app.handle_key(make_key(KeyCode::Left));
+        assert_eq!(app.input_cursor, 4);
+
+        // Home goes to start
+        app.handle_key(make_key(KeyCode::Home));
+        assert_eq!(app.input_cursor, 0);
+
+        // End goes to end
+        app.handle_key(make_key(KeyCode::End));
+        assert_eq!(app.input_cursor, 5);
+
+        // Delete at start removes first char
+        app.handle_key(make_key(KeyCode::Home));
+        app.handle_key(make_key(KeyCode::Delete));
+        assert_eq!(app.input_buffer, "ello");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    fn make_ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn input_mode_readline_shortcuts() {
+        let mut app = make_app();
+        app.handle_key(make_key(KeyCode::Char('i')));
+
+        for c in "hello world".chars() {
+            app.handle_key(make_key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.input_buffer, "hello world");
+
+        // Ctrl+W deletes word backward
+        app.handle_key(make_ctrl(KeyCode::Char('w')));
+        assert_eq!(app.input_buffer, "hello ");
+        assert_eq!(app.input_cursor, 6);
+
+        // Ctrl+A goes to beginning
+        app.handle_key(make_ctrl(KeyCode::Char('a')));
+        assert_eq!(app.input_cursor, 0);
+
+        // Ctrl+E goes to end
+        app.handle_key(make_ctrl(KeyCode::Char('e')));
+        assert_eq!(app.input_cursor, 6);
+
+        // Ctrl+U clears to start
+        app.handle_key(make_ctrl(KeyCode::Char('u')));
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.input_cursor, 0);
+    }
+
+    #[test]
+    fn normal_mode_page_and_home_end() {
+        let mut app = make_app();
+        for i in 0..100 {
+            app.apply_update(PilotUpdate::OutputLine(format!("line {i}")));
+        }
+
+        // Home scrolls to top (oldest)
+        app.handle_key(make_key(KeyCode::Home));
+        assert_eq!(app.scroll_offset, 99);
+
+        // End scrolls to bottom (latest)
+        app.handle_key(make_key(KeyCode::End));
+        assert_eq!(app.scroll_offset, 0);
+
+        // PageUp scrolls up by 20
+        app.handle_key(make_key(KeyCode::PageUp));
+        assert_eq!(app.scroll_offset, 20);
+
+        // PageDown scrolls down by 20
+        app.handle_key(make_key(KeyCode::PageDown));
+        assert_eq!(app.scroll_offset, 0);
     }
 }
