@@ -119,9 +119,9 @@ impl DaemonRuntime {
         // Write PID file
         let _pid_path = persistence::write_pid_file()?;
 
-        // Check for previous state and recover
+        // Check for previous state and recover (close orphaned audit sessions)
         if let Some(prev_state) = DaemonState::load() {
-            state::recover_from_crash(&prev_state);
+            state::recover_from_crash(&prev_state, &self.aegis_config.ledger_path);
         }
 
         // Optionally start caffeinate
@@ -143,16 +143,21 @@ impl DaemonRuntime {
             let (feedback_tx, feedback_rx) = mpsc::channel();
             let config = channel_config.clone();
 
-            std::thread::Builder::new()
+            match std::thread::Builder::new()
                 .name("channel".to_string())
                 .spawn(move || {
                     aegis_channel::run_fleet(config, input_rx, Some(feedback_tx));
                 })
-                .ok();
-
-            self.channel_tx = Some(input_tx);
-            self.channel_cmd_rx = Some(feedback_rx);
-            info!("notification channel started");
+            {
+                Ok(_) => {
+                    self.channel_tx = Some(input_tx);
+                    self.channel_cmd_rx = Some(feedback_rx);
+                    info!("notification channel started");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to spawn notification channel thread");
+                }
+            }
         }
 
         info!(

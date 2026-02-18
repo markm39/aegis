@@ -256,12 +256,22 @@ impl DaemonClient {
     }
 
     /// Send a command and receive the response (blocking).
+    ///
+    /// Uses a 5-second read/write timeout to prevent the caller from blocking
+    /// indefinitely if the daemon hangs. This is critical for the fleet TUI,
+    /// which polls every second -- a hanging read would freeze the entire UI.
     pub fn send(&self, command: &DaemonCommand) -> Result<DaemonResponse, String> {
         use std::io::{BufRead, BufReader, Read, Write};
         use std::os::unix::net::UnixStream;
 
         let stream = UnixStream::connect(&self.socket_path)
             .map_err(|e| format!("failed to connect to daemon at {}: {e}", self.socket_path.display()))?;
+
+        let timeout = Some(std::time::Duration::from_secs(5));
+        stream.set_read_timeout(timeout)
+            .map_err(|e| format!("failed to set read timeout: {e}"))?;
+        stream.set_write_timeout(timeout)
+            .map_err(|e| format!("failed to set write timeout: {e}"))?;
 
         let mut writer = stream.try_clone()
             .map_err(|e| format!("failed to clone stream: {e}"))?;

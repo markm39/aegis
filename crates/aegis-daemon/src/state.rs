@@ -83,15 +83,25 @@ impl DaemonState {
 
 /// Recover from a previous daemon crash.
 ///
-/// Logs which agents were running when the previous daemon died. The fleet
-/// manager will restart agents based on their configuration; this function
-/// handles any cleanup of orphaned audit sessions.
-pub fn recover_from_crash(prev_state: &DaemonState) {
+/// Logs which agents were running when the previous daemon died and closes
+/// any orphaned audit sessions in the ledger. Orphaned sessions (from agents
+/// that were running when the daemon crashed) are closed with exit code -1
+/// to indicate an abnormal termination.
+pub fn recover_from_crash(prev_state: &DaemonState, ledger_path: &std::path::Path) {
     tracing::warn!(
         daemon_pid = prev_state.daemon_pid,
         agents = prev_state.agents.len(),
         "recovering from previous daemon crash"
     );
+
+    // Open the audit store to close orphaned sessions
+    let mut store = match aegis_ledger::AuditStore::open(ledger_path) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not open audit store for crash recovery");
+            None
+        }
+    };
 
     for agent in &prev_state.agents {
         if agent.was_running {
@@ -101,6 +111,21 @@ pub fn recover_from_crash(prev_state: &DaemonState) {
                 restart_count = agent.restart_count,
                 "agent was running at crash time, will be restarted"
             );
+
+            // Close orphaned audit session with exit code -1 (crash)
+            if let (Some(ref mut s), Some(ref session_id)) = (&mut store, &agent.session_id) {
+                if let Err(e) = s.end_session(session_id, -1) {
+                    tracing::warn!(
+                        session_id = %session_id, error = %e,
+                        "failed to close orphaned audit session"
+                    );
+                } else {
+                    tracing::info!(
+                        session_id = %session_id, agent = agent.name,
+                        "closed orphaned audit session (exit_code=-1)"
+                    );
+                }
+            }
         }
     }
 }
