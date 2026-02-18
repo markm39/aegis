@@ -48,26 +48,12 @@ pub fn run() -> anyhow::Result<()> {
     let toml_str = config.to_toml().context("failed to serialize config")?;
     std::fs::write(&config_path, &toml_str)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
-    println!("Wrote config to {}", config_path.display());
-
-    // Summary
-    let tool_name = super::daemon::tool_display_name(&result.agent_slot.tool);
-    println!(
-        "  Agent: {} ({})",
-        result.agent_slot.name, tool_name
-    );
-    println!("  Dir:   {}", result.agent_slot.working_dir.display());
-    if let Some(t) = &result.agent_slot.task {
-        println!("  Task:  {t}");
-    }
-    println!();
 
     // Start daemon if requested, then always open fleet TUI hub.
-    // The fleet TUI works in offline mode and auto-connects when daemon starts.
+    // No println! here: the fleet TUI enters alternate screen immediately,
+    // so any output would be invisible. The TUI shows agent info on its own.
     if result.start_daemon {
-        if let Err(e) = crate::commands::daemon::start() {
-            eprintln!("Warning: failed to start daemon: {e}");
-        }
+        let _ = crate::commands::daemon::start();
     }
 
     crate::fleet_tui::run_fleet_tui()
