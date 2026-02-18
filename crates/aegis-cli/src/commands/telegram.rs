@@ -204,8 +204,7 @@ pub fn status() -> anyhow::Result<()> {
 pub fn disable() -> anyhow::Result<()> {
     let config_path = daemon_config_path();
     if !config_path.exists() {
-        println!("No daemon config found. Nothing to disable.");
-        return Ok(());
+        anyhow::bail!("no daemon config found -- nothing to disable");
     }
 
     let content = std::fs::read_to_string(&config_path)
@@ -214,8 +213,7 @@ pub fn disable() -> anyhow::Result<()> {
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
 
     if config.channel.is_none() {
-        println!("Telegram is not configured. Nothing to disable.");
-        return Ok(());
+        anyhow::bail!("Telegram is not configured -- nothing to disable");
     }
 
     config.channel = None;
