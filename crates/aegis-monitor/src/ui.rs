@@ -51,6 +51,15 @@ fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
         Color::Red
     };
 
+    // Truncate the reason to prevent very long paths/JSON from breaking the UI.
+    // The prefix columns ([HH:MM:SS] [Allow] principal action) take ~50 chars,
+    // leaving plenty of room for the reason in a standard 120+ col terminal.
+    let reason = if entry.reason.len() > 120 {
+        format!("{}...", &entry.reason[..117])
+    } else {
+        entry.reason.clone()
+    };
+
     let line = Line::from(vec![
         Span::styled(
             format!("[{ts}] "),
@@ -71,7 +80,7 @@ fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
             Style::default().fg(Color::White),
         ),
         Span::styled(
-            entry.reason.clone(),
+            reason,
             Style::default().fg(Color::DarkGray),
         ),
     ]);

@@ -57,9 +57,13 @@ impl TelegramApi {
             .ok_or_else(|| ChannelError::Api("getMe returned no result".into()))
     }
 
+    /// Telegram's maximum message length.
+    const MAX_MESSAGE_LENGTH: usize = 4096;
+
     /// Send a text message to a chat.
     ///
-    /// Returns the sent message's ID on success.
+    /// Truncates messages exceeding Telegram's 4096-character limit to prevent
+    /// silent API rejections. Returns the sent message's ID on success.
     pub async fn send_message(
         &self,
         chat_id: i64,
@@ -68,6 +72,19 @@ impl TelegramApi {
         reply_markup: Option<InlineKeyboardMarkup>,
         disable_notification: bool,
     ) -> Result<i64, ChannelError> {
+        let text = if text.len() > Self::MAX_MESSAGE_LENGTH {
+            warn!(
+                len = text.len(),
+                "truncating Telegram message to {} chars",
+                Self::MAX_MESSAGE_LENGTH
+            );
+            let mut truncated = text[..Self::MAX_MESSAGE_LENGTH - 15].to_string();
+            truncated.push_str("\n...(truncated)");
+            truncated
+        } else {
+            text.to_string()
+        };
+
         let mut body = json!({
             "chat_id": chat_id,
             "text": text,

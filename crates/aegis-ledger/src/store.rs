@@ -5,7 +5,7 @@ use std::sync::mpsc::SyncSender;
 
 use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension};
-use tracing::{debug, info};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use aegis_alert::AlertEvent;
@@ -319,7 +319,7 @@ impl AuditStore {
                 pilot_context: None,
             };
             if tx.try_send(alert_event).is_err() {
-                debug!("alert channel full or disconnected, dropping alert event");
+                warn!("alert channel full or disconnected, dropping alert event");
             }
         }
 
