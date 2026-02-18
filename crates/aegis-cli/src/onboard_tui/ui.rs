@@ -498,7 +498,10 @@ fn draw_telegram_token(f: &mut Frame, app: &OnboardApp, area: Rect) {
     ]);
     f.render_widget(instructions, chunks[0]);
 
-    let spans = build_cursor_spans(&app.telegram_token, app.telegram_token_cursor);
+    // Mask the token: show first 6 chars, mask the rest with dots
+    let masked = mask_token(&app.telegram_token);
+    let cursor = app.telegram_token_cursor.min(masked.len());
+    let spans = build_cursor_spans(&masked, cursor);
     let input = Paragraph::new(Line::from(spans)).block(
         Block::default()
             .borders(Borders::ALL)
@@ -801,6 +804,21 @@ fn draw_paste_indicator(f: &mut Frame, app: &OnboardApp, area: Rect) {
             ));
             f.render_widget(indicator, area);
         }
+    }
+}
+
+/// Mask a Telegram bot token for display: show first 6 chars, mask the rest.
+///
+/// Tokens look like "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11". Showing
+/// the prefix helps the user confirm they pasted the right token without
+/// exposing the full secret on screen.
+fn mask_token(token: &str) -> String {
+    if token.len() <= 6 {
+        token.to_string()
+    } else {
+        let visible = &token[..6];
+        let dots: String = token[6..].chars().map(|_| '.').collect();
+        format!("{visible}{dots}")
     }
 }
 
