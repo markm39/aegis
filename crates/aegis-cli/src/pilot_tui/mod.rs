@@ -49,7 +49,10 @@ pub struct OutputLine {
 }
 
 /// Decoration on an output line indicating a pilot decision.
+///
+/// Fields on Approved/Denied carry context for future detail views.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub enum LineAnnotation {
     Approved { action: String, reason: String },
     Denied { action: String, reason: String },
@@ -144,25 +147,17 @@ impl PilotApp {
                 self.push_output(text.clone(), None);
             }
             PilotUpdate::PromptDecided { action, decision, reason } => {
-                let annotation = match decision {
-                    Decision::Allow => LineAnnotation::Approved {
+                let (label, annotation) = match decision {
+                    Decision::Allow => ("APPROVED", LineAnnotation::Approved {
                         action: action.clone(),
                         reason: reason.clone(),
-                    },
-                    Decision::Deny => LineAnnotation::Denied {
+                    }),
+                    Decision::Deny => ("DENIED", LineAnnotation::Denied {
                         action: action.clone(),
                         reason: reason.clone(),
-                    },
+                    }),
                 };
-                let text = match &annotation {
-                    LineAnnotation::Approved { action, reason } => {
-                        format!("[APPROVED] {action} -- {reason}")
-                    }
-                    LineAnnotation::Denied { action, reason } => {
-                        format!("[DENIED] {action} -- {reason}")
-                    }
-                    _ => unreachable!(),
-                };
+                let text = format!("[{label}] {action} -- {reason}");
                 self.sync_shared(|s| s.push_output(text.clone()));
                 self.push_output(text, Some(annotation));
             }

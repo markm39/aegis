@@ -29,10 +29,11 @@ pub async fn serve(
             .map_err(|e| format!("failed to create socket dir: {e}"))?;
     }
 
-    // Remove stale socket file
-    if socket_path.exists() {
-        std::fs::remove_file(socket_path)
-            .map_err(|e| format!("failed to remove stale socket: {e}"))?;
+    // Remove stale socket file (ignore NotFound to avoid TOCTOU race)
+    match std::fs::remove_file(socket_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("failed to remove stale socket: {e}")),
     }
 
     let listener = UnixListener::bind(socket_path)
