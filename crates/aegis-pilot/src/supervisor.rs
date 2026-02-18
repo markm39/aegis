@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use aegis_policy::PolicyEngine;
 use aegis_types::{Action, AegisError, Decision, PilotConfig, UncertainAction};
@@ -363,6 +364,14 @@ fn handle_scan_result(
                 Decision::Deny => {
                     pty.send_line(&detection.deny_response)?;
                     stats.denied += 1;
+
+                    // Brief delay, then tell the agent why so it can adjust
+                    std::thread::sleep(Duration::from_millis(500));
+                    let guidance = format!(
+                        "[aegis] Action denied by policy: {} -- {}. Continue working on the task, but avoid this type of action.",
+                        detection.action, verdict.reason
+                    );
+                    pty.send_line(&guidance)?;
                 }
             }
 
@@ -384,6 +393,9 @@ fn handle_scan_result(
                 UncertainAction::Deny => {
                     pty.send_line("n")?;
                     stats.denied += 1;
+
+                    std::thread::sleep(Duration::from_millis(500));
+                    pty.send_line("[aegis] Action denied (unrecognized prompt, default-deny policy). Continue working on the task.")?;
                     "denied"
                 }
                 UncertainAction::Allow => {
@@ -446,6 +458,10 @@ fn handle_command(
             if let Some(info) = pending.remove(&request_id) {
                 pty.send_line(&info.deny_response)?;
                 stats.denied += 1;
+
+                std::thread::sleep(Duration::from_millis(500));
+                pty.send_line("[aegis] Action denied by operator. Continue working on the task.")?;
+
                 send_update(update_tx, PilotUpdate::PendingResolved {
                     request_id,
                     approved: false,
