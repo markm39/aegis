@@ -39,6 +39,8 @@ pub enum FleetView {
     AgentDetail,
     /// Add-agent wizard is open.
     AddAgent,
+    /// Scrollable help text.
+    Help,
 }
 
 /// Top-level application state for the fleet TUI.
@@ -116,6 +118,10 @@ pub struct FleetApp {
     /// Add-agent wizard (active when view == AddAgent).
     pub wizard: Option<AddAgentWizard>,
 
+    // -- Help view --
+    /// Scroll offset for help text.
+    pub help_scroll: usize,
+
     // -- Internal --
     /// Daemon client for sending commands.
     client: Option<DaemonClient>,
@@ -155,6 +161,7 @@ impl FleetApp {
             command_result: None,
             fleet_goal: None,
             wizard: None,
+            help_scroll: 0,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
         }
@@ -203,7 +210,7 @@ impl FleetApp {
         match self.view {
             FleetView::Overview => self.poll_agent_list(),
             FleetView::AgentDetail => self.poll_agent_output(),
-            FleetView::AddAgent => {} // Wizard doesn't need daemon polling
+            FleetView::AddAgent | FleetView::Help => {} // No daemon polling needed
         }
     }
 
@@ -329,6 +336,7 @@ impl FleetApp {
             FleetView::Overview => self.handle_overview_key(key),
             FleetView::AgentDetail => self.handle_detail_key(key),
             FleetView::AddAgent => self.handle_wizard_key(key),
+            FleetView::Help => self.handle_help_key(key),
         }
     }
 
@@ -414,6 +422,31 @@ impl FleetApp {
                 self.view = FleetView::Overview;
                 self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
+        }
+    }
+
+    /// Handle keys in the help view (scrollable help text).
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        let help_lines = command::help_text().lines().count();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.view = FleetView::Overview;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.help_scroll + 1 < help_lines {
+                    self.help_scroll += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.help_scroll = self.help_scroll.saturating_sub(1);
+            }
+            KeyCode::Char('G') => {
+                self.help_scroll = help_lines.saturating_sub(1);
+            }
+            KeyCode::Char('g') => {
+                self.help_scroll = 0;
+            }
+            _ => {}
         }
     }
 
@@ -843,7 +876,8 @@ impl FleetApp {
                 ));
             }
             FleetCommand::Help => {
-                self.command_result = Some(command::help_text().to_string());
+                self.help_scroll = 0;
+                self.view = FleetView::Help;
             }
             FleetCommand::Quit => {
                 self.running = false;

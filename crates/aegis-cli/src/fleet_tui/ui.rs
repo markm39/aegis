@@ -93,6 +93,9 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
                 draw_wizard(frame, wiz, frame.area());
             }
         }
+        FleetView::Help => {
+            draw_help_view(frame, app, frame.area());
+        }
     }
 
     // Draw command bar / result overlay if active
@@ -593,6 +596,79 @@ fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         );
         frame.render_widget(bar, area);
     }
+}
+
+/// Draw the scrollable help view.
+fn draw_help_view(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(0),   // Help text
+            Constraint::Length(3), // Footer
+        ])
+        .split(area);
+
+    // Header
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(" Aegis Fleet ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled("  Help", Style::default().fg(Color::Cyan)),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    // Help text with scroll
+    let help = super::command::help_text();
+    let lines: Vec<Line> = help
+        .lines()
+        .skip(app.help_scroll)
+        .map(|l| {
+            if l.starts_with("  :") {
+                // Command lines: highlight the command name
+                let parts: Vec<&str> = l.splitn(2, "  ").collect();
+                if parts.len() == 2 {
+                    Line::from(vec![
+                        Span::styled(parts[0], Style::default().fg(Color::Yellow)),
+                        Span::styled(format!("  {}", parts[1]), Style::default().fg(Color::DarkGray)),
+                    ])
+                } else {
+                    Line::styled(l, Style::default().fg(Color::Yellow))
+                }
+            } else {
+                Line::styled(l, Style::default().fg(Color::White))
+            }
+        })
+        .collect();
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Commands ")
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(content, chunks[1]);
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(" j/k", Style::default().fg(Color::Yellow)),
+        Span::styled(": scroll  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("g/G", Style::default().fg(Color::Yellow)),
+        Span::styled(": top/bottom  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc/q", Style::default().fg(Color::Yellow)),
+        Span::styled(": back", Style::default().fg(Color::DarkGray)),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(footer, chunks[2]);
 }
 
 /// Draw the add-agent wizard.
