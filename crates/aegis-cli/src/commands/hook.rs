@@ -368,9 +368,13 @@ mod tests {
         let pre = hooks.get("PreToolUse").expect("should have PreToolUse");
         let arr = pre.as_array().expect("PreToolUse should be array");
         assert_eq!(arr.len(), 1);
-        let entry = &arr[0];
-        assert_eq!(entry.get("type").unwrap().as_str().unwrap(), "command");
-        assert!(entry.get("command").unwrap().as_str().unwrap().contains("aegis hook"));
+        // Nested: matcher group -> hooks array -> handler
+        let group = &arr[0];
+        let inner = group.get("hooks").expect("matcher group should have hooks array");
+        let handlers = inner.as_array().expect("should be array");
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0]["type"].as_str().unwrap(), "command");
+        assert!(handlers[0]["command"].as_str().unwrap().contains("aegis hook"));
     }
 
     #[test]

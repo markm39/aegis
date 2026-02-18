@@ -14,13 +14,19 @@ use std::path::Path;
 /// Generate the Claude Code settings JSON fragment that registers the aegis hook.
 ///
 /// Returns a JSON object suitable for merging into `.claude/settings.json` or
-/// `.claude/settings.local.json`:
+/// `.claude/settings.local.json`. The `PreToolUse` array contains matcher groups,
+/// each with an inner `hooks` array of handlers -- this is the three-level
+/// nesting that Claude Code requires (event -> matcher group -> handler).
 ///
 /// ```json
 /// {
 ///   "hooks": {
 ///     "PreToolUse": [
-///       { "type": "command", "command": "aegis hook pre-tool-use" }
+///       {
+///         "hooks": [
+///           { "type": "command", "command": "aegis hook pre-tool-use" }
+///         ]
+///       }
 ///     ]
 ///   }
 /// }
@@ -29,26 +35,42 @@ pub fn generate_hook_settings() -> serde_json::Value {
     serde_json::json!({
         "hooks": {
             "PreToolUse": [
-                {
-                    "type": "command",
-                    "command": "aegis hook pre-tool-use"
-                }
+                matcher_group()
             ]
         }
     })
 }
 
-/// The hook entry that gets registered in settings files.
-fn hook_entry() -> serde_json::Value {
+/// A matcher group entry for the PreToolUse array.
+///
+/// No `matcher` field means "match all tools." The inner `hooks` array
+/// contains one handler that calls `aegis hook pre-tool-use`.
+fn matcher_group() -> serde_json::Value {
     serde_json::json!({
-        "type": "command",
-        "command": "aegis hook pre-tool-use"
+        "hooks": [
+            {
+                "type": "command",
+                "command": "aegis hook pre-tool-use"
+            }
+        ]
     })
 }
 
-/// Check if the aegis hook is already registered in a hooks array.
-fn is_aegis_hook_installed(hooks_array: &[serde_json::Value]) -> bool {
-    hooks_array.iter().any(|entry| {
+/// Check if the aegis hook is already registered in a PreToolUse array.
+///
+/// Handles both the correct nested format (matcher groups with inner `hooks`)
+/// and the legacy flat format (bare handler objects) for robustness.
+fn is_aegis_hook_installed(pre_tool_use_array: &[serde_json::Value]) -> bool {
+    pre_tool_use_array.iter().any(|entry| {
+        // Check nested format: entry.hooks[].command
+        if let Some(inner_hooks) = entry.get("hooks").and_then(|v| v.as_array()) {
+            return inner_hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|cmd| cmd.contains("aegis hook"))
+            });
+        }
+        // Check legacy flat format: entry.command
         entry
             .get("command")
             .and_then(|v| v.as_str())
@@ -107,7 +129,7 @@ pub fn install_daemon_hooks(working_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    hooks_array.push(hook_entry());
+    hooks_array.push(matcher_group());
 
     // Write back
     let output = serde_json::to_string_pretty(&settings)
@@ -255,7 +277,7 @@ pub fn install_project_hooks(project_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    hooks_array.push(hook_entry());
+    hooks_array.push(matcher_group());
 
     let output = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("failed to serialize settings: {e}"))?;
@@ -276,9 +298,13 @@ mod tests {
         let pre = hooks.get("PreToolUse").expect("should have PreToolUse");
         let arr = pre.as_array().expect("PreToolUse should be array");
         assert_eq!(arr.len(), 1);
-        let entry = &arr[0];
-        assert_eq!(entry.get("type").unwrap().as_str().unwrap(), "command");
-        assert!(entry
+        // Each entry is a matcher group with inner "hooks" array
+        let group = &arr[0];
+        let inner = group.get("hooks").expect("matcher group should have hooks array");
+        let handlers = inner.as_array().expect("hooks should be array");
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].get("type").unwrap().as_str().unwrap(), "command");
+        assert!(handlers[0]
             .get("command")
             .unwrap()
             .as_str()
@@ -296,12 +322,12 @@ mod tests {
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let hooks = settings.get("hooks").unwrap();
-        let pre = hooks.get("PreToolUse").unwrap().as_array().unwrap();
+        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 1);
-        assert!(pre[0]
-            .get("command")
-            .unwrap()
+        // Nested: matcher group -> hooks array -> handler
+        let handlers = pre[0]["hooks"].as_array().unwrap();
+        assert_eq!(handlers.len(), 1);
+        assert!(handlers[0]["command"]
             .as_str()
             .unwrap()
             .contains("aegis hook"));
@@ -397,18 +423,30 @@ mod tests {
 
     #[test]
     fn is_aegis_hook_installed_detection() {
+        // Nested format (correct)
         let hooks = vec![serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": "aegis hook pre-tool-use"
+            }]
+        })];
+        assert!(is_aegis_hook_installed(&hooks));
+
+        // Legacy flat format (still detected for robustness)
+        let flat = vec![serde_json::json!({
             "type": "command",
             "command": "aegis hook pre-tool-use"
         })];
-        assert!(is_aegis_hook_installed(&hooks));
+        assert!(is_aegis_hook_installed(&flat));
 
         let empty: Vec<serde_json::Value> = vec![];
         assert!(!is_aegis_hook_installed(&empty));
 
         let other = vec![serde_json::json!({
-            "type": "command",
-            "command": "echo hello"
+            "hooks": [{
+                "type": "command",
+                "command": "echo hello"
+            }]
         })];
         assert!(!is_aegis_hook_installed(&other));
     }
