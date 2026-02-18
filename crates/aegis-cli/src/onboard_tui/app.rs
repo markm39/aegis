@@ -389,12 +389,18 @@ impl OnboardApp {
             ToolChoice::Cursor => AgentToolConfig::Cursor {
                 assume_running: false,
             },
-            ToolChoice::Custom => AgentToolConfig::Custom {
-                command: self.custom_command.clone(),
-                args: vec![],
-                adapter: Default::default(),
-                env: vec![],
-            },
+            ToolChoice::Custom => {
+                // Split "command --flag1 --flag2" into command + args
+                let parts: Vec<&str> = self.custom_command.split_whitespace().collect();
+                let command = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
+                AgentToolConfig::Custom {
+                    command,
+                    args,
+                    adapter: Default::default(),
+                    env: vec![],
+                }
+            }
         }
     }
 

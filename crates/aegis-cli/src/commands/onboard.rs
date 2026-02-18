@@ -88,13 +88,17 @@ pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
             assume_running: false,
         },
         "5" => {
-            let command = prompt("  Command (e.g., /usr/local/bin/my-agent)", "")?;
-            if command.is_empty() {
+            let input = prompt("  Command (e.g., /usr/local/bin/my-agent --flag)", "")?;
+            if input.is_empty() {
                 bail!("command cannot be empty for custom tool");
             }
+            // Split "command --flag1 --flag2" into command + args
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            let command = parts[0].to_string();
+            let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
             AgentToolConfig::Custom {
                 command,
-                args: vec![],
+                args,
                 adapter: Default::default(),
                 env: vec![],
             }

@@ -418,12 +418,18 @@ impl AddAgentWizard {
             ToolChoice::Cursor => AgentToolConfig::Cursor {
                 assume_running: false,
             },
-            ToolChoice::Custom => AgentToolConfig::Custom {
-                command: self.custom_command.clone(),
-                args: vec![],
-                adapter: aegis_types::AdapterConfig::Auto,
-                env: vec![],
-            },
+            ToolChoice::Custom => {
+                // Split "command --flag1 --flag2" into command + args
+                let parts: Vec<&str> = self.custom_command.split_whitespace().collect();
+                let command = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
+                AgentToolConfig::Custom {
+                    command,
+                    args,
+                    adapter: aegis_types::AdapterConfig::Auto,
+                    env: vec![],
+                }
+            }
         };
 
         let task = if self.task.trim().is_empty() {
@@ -684,6 +690,24 @@ mod tests {
 
         let config = wiz.build_config();
         assert!(matches!(config.tool, AgentToolConfig::Codex { .. }));
+    }
+
+    #[test]
+    fn wizard_custom_command_splits_args() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.tool_selected = 4; // Custom
+        wiz.custom_command = "my-agent --verbose --timeout 30".into();
+        wiz.name = "custom-1".into();
+        wiz.working_dir = "/tmp".into();
+
+        let config = wiz.build_config();
+        match &config.tool {
+            AgentToolConfig::Custom { command, args, .. } => {
+                assert_eq!(command, "my-agent");
+                assert_eq!(args, &["--verbose", "--timeout", "30"]);
+            }
+            _ => panic!("expected Custom tool config"),
+        }
     }
 
     #[test]
