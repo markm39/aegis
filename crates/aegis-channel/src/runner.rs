@@ -27,6 +27,8 @@ pub enum ChannelInput {
     },
     /// A pilot webhook event (permission decisions, stalls, exits, etc.).
     PilotEvent(PilotWebhookEvent),
+    /// A plain text message to send (e.g., command response feedback).
+    TextMessage(String),
 }
 
 /// Run the channel on the current thread with a single-threaded tokio runtime.
@@ -111,6 +113,9 @@ async fn run_telegram(
                     }
                     ChannelInput::PilotEvent(ref event) => {
                         format::format_pilot_event(event)
+                    }
+                    ChannelInput::TextMessage(ref text) => {
+                        crate::channel::OutboundMessage::text(format::escape_md(text))
                     }
                 };
 

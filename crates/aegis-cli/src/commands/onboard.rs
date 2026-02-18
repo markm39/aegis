@@ -53,7 +53,12 @@ pub fn run() -> anyhow::Result<()> {
     // No println! here: the fleet TUI enters alternate screen immediately,
     // so any output would be invisible. The TUI shows agent info on its own.
     if result.start_daemon {
-        let _ = crate::commands::daemon::start_quiet();
+        // Surface errors rather than silently discarding: the fleet TUI
+        // enters alternate screen immediately after this, so eprintln
+        // captures the error to stderr for later diagnosis.
+        if let Err(e) = crate::commands::daemon::start_quiet() {
+            eprintln!("warning: daemon failed to start: {e:#}");
+        }
     }
 
     crate::fleet_tui::run_fleet_tui()

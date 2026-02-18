@@ -577,6 +577,13 @@ impl FleetApp {
             anyhow::bail!("agent '{name}' already exists in config");
         }
 
+        if !agent.working_dir.is_dir() {
+            anyhow::bail!(
+                "working directory does not exist: {}",
+                agent.working_dir.display()
+            );
+        }
+
         config.agents.push(agent);
         let toml_str = config.to_toml()?;
 

@@ -230,7 +230,7 @@ impl DaemonRuntime {
     ///
     /// These commands were parsed from Telegram messages and converted to
     /// `DaemonCommand`s by the channel runner. We process them the same as
-    /// control socket commands, but discard the response (no reply channel).
+    /// control socket commands, and send the response back as a text message.
     fn drain_channel_commands(&mut self) {
         let cmds: Vec<DaemonCommand> = match &self.channel_cmd_rx {
             Some(rx) => rx.try_iter().collect(),
@@ -239,9 +239,17 @@ impl DaemonRuntime {
 
         for cmd in cmds {
             info!(?cmd, "processing command from notification channel");
-            let _response = self.handle_command(cmd);
-            // Response is discarded -- the channel runner doesn't wait for replies.
-            // In the future, we could send the response back as a Telegram message.
+            let response = self.handle_command(cmd);
+
+            // Send the response back to the user via the notification channel
+            if let Some(tx) = &self.channel_tx {
+                let text = if response.ok {
+                    response.message
+                } else {
+                    format!("Error: {}", response.message)
+                };
+                let _ = tx.send(ChannelInput::TextMessage(text));
+            }
         }
     }
 
@@ -630,10 +638,9 @@ impl DaemonRuntime {
                         DaemonResponse::ok(format!("fleet goal set: {display}"))
                     }
                     None => {
-                        let current = self.config.goal.as_deref().unwrap_or("(none)");
                         DaemonResponse::ok_with_data(
                             "fleet goal",
-                            serde_json::json!({ "goal": current }),
+                            serde_json::json!({ "goal": self.config.goal }),
                         )
                     }
                 }
@@ -1608,11 +1615,11 @@ mod tests {
     fn handle_command_fleet_goal_set_and_get() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
 
-        // Get when no goal set
+        // Get when no goal set -- returns null, not "(none)"
         let resp = runtime.handle_command(DaemonCommand::FleetGoal { goal: None });
         assert!(resp.ok);
         let data = resp.data.unwrap();
-        assert_eq!(data["goal"].as_str(), Some("(none)"));
+        assert!(data["goal"].is_null(), "unset goal should be null");
 
         // Set a goal
         let resp = runtime.handle_command(DaemonCommand::FleetGoal {
@@ -1642,10 +1649,10 @@ mod tests {
         assert!(resp.ok);
         assert!(resp.message.contains("(cleared)"));
 
-        // Verify it's cleared
+        // Verify it's cleared -- returns null
         let resp = runtime.handle_command(DaemonCommand::FleetGoal { goal: None });
         let data = resp.data.unwrap();
-        assert_eq!(data["goal"].as_str(), Some("(none)"));
+        assert!(data["goal"].is_null(), "cleared goal should be null");
     }
 
     #[test]
