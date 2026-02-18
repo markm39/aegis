@@ -484,10 +484,10 @@ impl FleetApp {
             KeyCode::PageUp => {
                 self.help_scroll = self.help_scroll.saturating_sub(20);
             }
-            KeyCode::Char('G') => {
+            KeyCode::Char('G') | KeyCode::End => {
                 self.help_scroll = help_lines.saturating_sub(1);
             }
-            KeyCode::Char('g') => {
+            KeyCode::Char('g') | KeyCode::Home => {
                 self.help_scroll = 0;
             }
             _ => {}
@@ -731,6 +731,11 @@ impl FleetApp {
                         .unwrap_or(self.input_buffer.len());
                 }
             }
+            KeyCode::Delete => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_buffer.remove(self.input_cursor);
+                }
+            }
             KeyCode::Home => {
                 self.input_cursor = 0;
             }
@@ -820,6 +825,12 @@ impl FleetApp {
                         .nth(1)
                         .map(|(i, _)| self.command_cursor + i)
                         .unwrap_or(self.command_buffer.len());
+                }
+            }
+            KeyCode::Delete => {
+                if self.command_cursor < self.command_buffer.len() {
+                    self.command_buffer.remove(self.command_cursor);
+                    self.update_completions();
                 }
             }
             KeyCode::Home => {
@@ -2334,5 +2345,74 @@ mod tests {
         app.handle_input_key(press(KeyCode::Backspace));
         assert_eq!(app.input_buffer, "\u{00fc}");
         assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn input_mode_delete_key() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+
+        for c in "abc".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        assert_eq!(app.input_buffer, "abc");
+
+        // Move cursor to start, delete forward
+        app.handle_key(press(KeyCode::Home));
+        assert_eq!(app.input_cursor, 0);
+
+        app.handle_key(press(KeyCode::Delete));
+        assert_eq!(app.input_buffer, "bc");
+        assert_eq!(app.input_cursor, 0);
+
+        app.handle_key(press(KeyCode::Delete));
+        assert_eq!(app.input_buffer, "c");
+
+        // Delete at end does nothing
+        app.handle_key(press(KeyCode::End));
+        app.handle_key(press(KeyCode::Delete));
+        assert_eq!(app.input_buffer, "c");
+    }
+
+    #[test]
+    fn command_mode_delete_key() {
+        let mut app = make_app();
+        app.command_mode = true;
+
+        for c in "quit".chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+        assert_eq!(app.command_buffer, "quit");
+
+        // Move to start, delete forward
+        app.handle_key(press(KeyCode::Home));
+        app.handle_key(press(KeyCode::Delete));
+        assert_eq!(app.command_buffer, "uit");
+        assert_eq!(app.command_cursor, 0);
+
+        // Delete at end does nothing
+        app.handle_key(press(KeyCode::End));
+        app.handle_key(press(KeyCode::Delete));
+        assert_eq!(app.command_buffer, "uit");
+    }
+
+    #[test]
+    fn help_view_home_end() {
+        let mut app = make_app();
+        app.view = FleetView::Help;
+
+        // Scroll down a few lines
+        app.handle_key(press(KeyCode::PageDown));
+        assert!(app.help_scroll > 0);
+
+        // Home goes to top
+        app.handle_key(press(KeyCode::Home));
+        assert_eq!(app.help_scroll, 0);
+
+        // End goes to bottom
+        app.handle_key(press(KeyCode::End));
+        let help_lines = command::help_text().lines().count();
+        assert_eq!(app.help_scroll, help_lines.saturating_sub(1));
     }
 }

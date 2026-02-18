@@ -897,7 +897,7 @@ fn draw_wizard_multiline_text(
     let title = if text.is_empty() {
         format!(" {label} ")
     } else {
-        format!(" {label}  [{} chars] ", text.len())
+        format!(" {label}  [{} chars] ", text.chars().count())
     };
 
     let lines = build_multiline_input(text, cursor, text_style, cursor_style);
@@ -936,19 +936,26 @@ fn build_multiline_input<'a>(
         if pos >= seg_start && pos <= seg_end {
             // Cursor is in this segment
             let local = pos - seg_start;
+            // Clamp to char boundary
+            let mut safe_local = local.min(segment.len());
+            while safe_local > 0 && !segment.is_char_boundary(safe_local) {
+                safe_local -= 1;
+            }
             let mut spans = Vec::new();
 
-            if local > 0 {
-                spans.push(Span::styled(segment[..local].to_string(), text_style));
+            if safe_local > 0 {
+                spans.push(Span::styled(segment[..safe_local].to_string(), text_style));
             }
-            if local < segment.len() {
+            if safe_local < segment.len() {
+                let ch = segment[safe_local..].chars().next().unwrap();
+                let ch_end = safe_local + ch.len_utf8();
                 spans.push(Span::styled(
-                    segment[local..local + 1].to_string(),
+                    segment[safe_local..ch_end].to_string(),
                     cursor_style,
                 ));
-                if local + 1 < segment.len() {
+                if ch_end < segment.len() {
                     spans.push(Span::styled(
-                        segment[local + 1..].to_string(),
+                        segment[ch_end..].to_string(),
                         text_style,
                     ));
                 }
@@ -1313,5 +1320,32 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn build_multiline_input_multibyte_cursor() {
+        let text_style = Style::default().fg(Color::White);
+        let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+        // e-acute is 2 bytes in UTF-8
+        let text = "a\u{00e9}b";
+        // Cursor at byte 1 (on the e-acute char) -- should not panic
+        let lines = build_multiline_input(text, 1, text_style, cursor_style);
+        assert_eq!(lines.len(), 1);
+        // Cursor at byte 3 (on 'b') -- should not panic
+        let lines = build_multiline_input(text, 3, text_style, cursor_style);
+        assert_eq!(lines.len(), 1);
+        // Cursor at byte 2 (middle of e-acute) -- should clamp to boundary
+        let lines = build_multiline_input(text, 2, text_style, cursor_style);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn build_multiline_input_with_newlines() {
+        let text_style = Style::default().fg(Color::White);
+        let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+        let text = "line1\nline2\nline3";
+        // Cursor in second line
+        let lines = build_multiline_input(text, 8, text_style, cursor_style);
+        assert_eq!(lines.len(), 3);
     }
 }
