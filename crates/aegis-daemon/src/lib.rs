@@ -368,7 +368,7 @@ impl DaemonRuntime {
                         _ => None,
                     },
                     uptime_secs: slot.started_at.map(|t| t.elapsed().as_secs()),
-                    session_id: None,
+                    session_id: slot.session_id.lock().ok().and_then(|g| *g).map(|u| u.to_string()),
                     role: slot.config.role.clone(),
                     agent_goal: slot.config.agent_goal.clone(),
                     context: slot.config.context.clone(),

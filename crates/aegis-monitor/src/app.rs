@@ -95,6 +95,8 @@ pub struct App {
     pub running: bool,
     /// Active filter text (empty means no filter).
     pub filter_text: String,
+    /// Cursor position within `filter_text` (byte offset).
+    pub filter_cursor: usize,
     /// Path to the SQLite ledger database.
     ledger_path: PathBuf,
     /// Cached sessions for the SessionList view.
@@ -135,6 +137,7 @@ impl App {
             selected_index: 0,
             running: true,
             filter_text: String::new(),
+            filter_cursor: 0,
             ledger_path,
             sessions: Vec::new(),
             session_selected: 0,
@@ -439,6 +442,7 @@ impl App {
                         self.active_config_name = Some(config.name.clone());
                         self.selected_index = 0;
                         self.filter_text.clear();
+                        self.filter_cursor = 0;
                         self.mode = AppMode::AuditFeed;
                     }
                 }
@@ -455,6 +459,7 @@ impl App {
                 KeyCode::Char('/') => {
                     self.mode = AppMode::FilterMode;
                     self.filter_text.clear();
+                    self.filter_cursor = 0;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     navigate(&mut self.selected_index, self.entries.len(), true);
@@ -472,10 +477,47 @@ impl App {
             AppMode::FilterMode => match key.code {
                 KeyCode::Esc => self.mode = AppMode::AuditFeed,
                 KeyCode::Enter => self.mode = AppMode::AuditFeed,
-                KeyCode::Char(c) => self.filter_text.push(c),
-                KeyCode::Backspace => {
-                    self.filter_text.pop();
+                KeyCode::Char(c) => {
+                    self.filter_text.insert(self.filter_cursor, c);
+                    self.filter_cursor += c.len_utf8();
                 }
+                KeyCode::Backspace => {
+                    if self.filter_cursor > 0 {
+                        // Find the previous char boundary
+                        let prev = self.filter_text[..self.filter_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.filter_text.remove(prev);
+                        self.filter_cursor = prev;
+                    }
+                }
+                KeyCode::Delete => {
+                    if self.filter_cursor < self.filter_text.len() {
+                        self.filter_text.remove(self.filter_cursor);
+                    }
+                }
+                KeyCode::Left => {
+                    if self.filter_cursor > 0 {
+                        self.filter_cursor = self.filter_text[..self.filter_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
+                }
+                KeyCode::Right => {
+                    if self.filter_cursor < self.filter_text.len() {
+                        self.filter_cursor = self.filter_text[self.filter_cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| self.filter_cursor + i)
+                            .unwrap_or(self.filter_text.len());
+                    }
+                }
+                KeyCode::Home => self.filter_cursor = 0,
+                KeyCode::End => self.filter_cursor = self.filter_text.len(),
                 _ => {}
             },
             AppMode::SessionList => match key.code {
@@ -1049,5 +1091,81 @@ mod tests {
         let mut app = app_empty;
         app.handle_key(make_key(KeyCode::Enter));
         assert!(matches!(app.mode, AppMode::Home));
+    }
+
+    #[test]
+    fn filter_cursor_movement() {
+        let mut app = make_app();
+        app.handle_key(make_key(KeyCode::Char('/')));
+        assert!(matches!(app.mode, AppMode::FilterMode));
+        assert_eq!(app.filter_cursor, 0);
+
+        // Type "abc"
+        app.handle_key(make_key(KeyCode::Char('a')));
+        app.handle_key(make_key(KeyCode::Char('b')));
+        app.handle_key(make_key(KeyCode::Char('c')));
+        assert_eq!(app.filter_text, "abc");
+        assert_eq!(app.filter_cursor, 3);
+
+        // Left moves cursor back
+        app.handle_key(make_key(KeyCode::Left));
+        assert_eq!(app.filter_cursor, 2);
+
+        // Insert at cursor
+        app.handle_key(make_key(KeyCode::Char('X')));
+        assert_eq!(app.filter_text, "abXc");
+        assert_eq!(app.filter_cursor, 3);
+
+        // Home goes to start
+        app.handle_key(make_key(KeyCode::Home));
+        assert_eq!(app.filter_cursor, 0);
+
+        // End goes to end
+        app.handle_key(make_key(KeyCode::End));
+        assert_eq!(app.filter_cursor, 4);
+
+        // Right at end stays at end
+        app.handle_key(make_key(KeyCode::Right));
+        assert_eq!(app.filter_cursor, 4);
+
+        // Left at start stays at start
+        app.handle_key(make_key(KeyCode::Home));
+        app.handle_key(make_key(KeyCode::Left));
+        assert_eq!(app.filter_cursor, 0);
+    }
+
+    #[test]
+    fn filter_backspace_at_cursor() {
+        let mut app = make_app();
+        app.mode = AppMode::FilterMode;
+        app.filter_text = "abcd".to_string();
+        app.filter_cursor = 2; // cursor after 'b'
+
+        app.handle_key(make_key(KeyCode::Backspace));
+        assert_eq!(app.filter_text, "acd");
+        assert_eq!(app.filter_cursor, 1);
+
+        // Backspace at start does nothing
+        app.handle_key(make_key(KeyCode::Home));
+        app.handle_key(make_key(KeyCode::Backspace));
+        assert_eq!(app.filter_text, "acd");
+        assert_eq!(app.filter_cursor, 0);
+    }
+
+    #[test]
+    fn filter_delete_at_cursor() {
+        let mut app = make_app();
+        app.mode = AppMode::FilterMode;
+        app.filter_text = "abcd".to_string();
+        app.filter_cursor = 1; // cursor on 'b'
+
+        app.handle_key(make_key(KeyCode::Delete));
+        assert_eq!(app.filter_text, "acd");
+        assert_eq!(app.filter_cursor, 1);
+
+        // Delete at end does nothing
+        app.handle_key(make_key(KeyCode::End));
+        app.handle_key(make_key(KeyCode::Delete));
+        assert_eq!(app.filter_text, "acd");
     }
 }

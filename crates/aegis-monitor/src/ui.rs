@@ -273,19 +273,40 @@ fn draw_info(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     if matches!(app.mode, AppMode::FilterMode) {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
+        // Build cursor-aware spans: text before cursor, cursor char, text after cursor
+        let mut filter_spans = vec![
             Span::styled("Filter: ", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                if app.filter_text.is_empty() {
-                    "(empty)"
-                } else {
-                    &app.filter_text
-                },
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        ];
+        let cursor = app.filter_cursor;
+        let text = &app.filter_text;
+        let text_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let cursor_style = Style::default().fg(Color::Black).bg(Color::Cyan);
+        if text.is_empty() {
+            // Show block cursor on empty input
+            filter_spans.push(Span::styled(" ", cursor_style));
+        } else {
+            let before = &text[..cursor];
+            if !before.is_empty() {
+                filter_spans.push(Span::styled(before.to_string(), text_style));
+            }
+            if cursor < text.len() {
+                // Cursor is on a character
+                let ch_end = text[cursor..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| cursor + i)
+                    .unwrap_or(text.len());
+                filter_spans.push(Span::styled(text[cursor..ch_end].to_string(), cursor_style));
+                let after = &text[ch_end..];
+                if !after.is_empty() {
+                    filter_spans.push(Span::styled(after.to_string(), text_style));
+                }
+            } else {
+                // Cursor at end: show block cursor after text
+                filter_spans.push(Span::styled(" ", cursor_style));
+            }
+        }
+        lines.push(Line::from(filter_spans));
         lines.push(Line::from(Span::styled(
             "Enter   Apply  |  Esc  Cancel",
             Style::default().fg(Color::DarkGray),
