@@ -504,11 +504,12 @@ fn draw_pending_panel(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
 fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
     let cursor_pos = app.input_cursor.min(app.input_buffer.len());
     let before = &app.input_buffer[..cursor_pos];
-    let cursor_char = app.input_buffer.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
-    let after = if cursor_pos < app.input_buffer.len() {
-        &app.input_buffer[cursor_pos + 1..]
+    let (cursor_char, after) = if cursor_pos < app.input_buffer.len() {
+        let ch = app.input_buffer[cursor_pos..].chars().next().unwrap();
+        let end = cursor_pos + ch.len_utf8();
+        (&app.input_buffer[cursor_pos..end], &app.input_buffer[end..])
     } else {
-        ""
+        (" ", "")
     };
 
     let line = Line::from(vec![
@@ -580,11 +581,12 @@ fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
     if app.command_mode {
         let cursor_pos = app.command_cursor.min(app.command_buffer.len());
         let before = &app.command_buffer[..cursor_pos];
-        let cursor_char = app.command_buffer.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
-        let after = if cursor_pos < app.command_buffer.len() {
-            &app.command_buffer[cursor_pos + 1..]
+        let (cursor_char, after) = if cursor_pos < app.command_buffer.len() {
+            let ch = app.command_buffer[cursor_pos..].chars().next().unwrap();
+            let end = cursor_pos + ch.len_utf8();
+            (&app.command_buffer[cursor_pos..end], &app.command_buffer[end..])
         } else {
-            ""
+            (" ", "")
         };
 
         let mut spans = vec![
@@ -820,11 +822,12 @@ fn draw_wizard_text(
 ) {
     let cursor_pos = cursor.min(text.len());
     let before = &text[..cursor_pos];
-    let cursor_char = text.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
-    let after = if cursor_pos < text.len() {
-        &text[cursor_pos + 1..]
+    let (cursor_char, after) = if cursor_pos < text.len() {
+        let ch = text[cursor_pos..].chars().next().unwrap();
+        let end = cursor_pos + ch.len_utf8();
+        (&text[cursor_pos..end], &text[end..])
     } else {
-        ""
+        (" ", "")
     };
 
     let input_line = Line::from(vec![

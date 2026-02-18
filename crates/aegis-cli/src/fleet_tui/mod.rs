@@ -695,20 +695,35 @@ impl FleetApp {
             }
             KeyCode::Char(c) => {
                 self.input_buffer.insert(self.input_cursor, c);
-                self.input_cursor += 1;
+                self.input_cursor += c.len_utf8();
             }
             KeyCode::Backspace => {
                 if self.input_cursor > 0 {
-                    self.input_cursor -= 1;
-                    self.input_buffer.remove(self.input_cursor);
+                    let prev = self.input_buffer[..self.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.input_buffer.remove(prev);
+                    self.input_cursor = prev;
                 }
             }
             KeyCode::Left => {
-                self.input_cursor = self.input_cursor.saturating_sub(1);
+                if self.input_cursor > 0 {
+                    self.input_cursor = self.input_buffer[..self.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
             }
             KeyCode::Right => {
                 if self.input_cursor < self.input_buffer.len() {
-                    self.input_cursor += 1;
+                    self.input_cursor = self.input_buffer[self.input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.input_cursor + i)
+                        .unwrap_or(self.input_buffer.len());
                 }
             }
             KeyCode::Home => {
@@ -769,22 +784,37 @@ impl FleetApp {
             }
             KeyCode::Char(c) => {
                 self.command_buffer.insert(self.command_cursor, c);
-                self.command_cursor += 1;
+                self.command_cursor += c.len_utf8();
                 self.update_completions();
             }
             KeyCode::Backspace => {
                 if self.command_cursor > 0 {
-                    self.command_cursor -= 1;
-                    self.command_buffer.remove(self.command_cursor);
+                    let prev = self.command_buffer[..self.command_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.command_buffer.remove(prev);
+                    self.command_cursor = prev;
                     self.update_completions();
                 }
             }
             KeyCode::Left => {
-                self.command_cursor = self.command_cursor.saturating_sub(1);
+                if self.command_cursor > 0 {
+                    self.command_cursor = self.command_buffer[..self.command_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
             }
             KeyCode::Right => {
                 if self.command_cursor < self.command_buffer.len() {
-                    self.command_cursor += 1;
+                    self.command_cursor = self.command_buffer[self.command_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.command_cursor + i)
+                        .unwrap_or(self.command_buffer.len());
                 }
             }
             KeyCode::Home => {
@@ -2184,5 +2214,62 @@ mod tests {
         assert!(!app.command_completions.is_empty());
         assert!(app.command_completions.contains(&"start".to_string()));
         assert!(app.command_completions.contains(&"stop".to_string()));
+    }
+
+    #[test]
+    fn multibyte_cursor_movement_in_command_mode() {
+        let mut app = make_app();
+        app.command_mode = true;
+
+        // Type a multi-byte character (e-acute is 2 bytes in UTF-8)
+        app.handle_command_key(press(KeyCode::Char('a')));
+        app.handle_command_key(press(KeyCode::Char('\u{00e9}'))); // e-acute
+        app.handle_command_key(press(KeyCode::Char('b')));
+        assert_eq!(app.command_buffer, "a\u{00e9}b");
+        assert_eq!(app.command_cursor, 4); // a(1) + e-acute(2) + b(1) = 4 bytes
+
+        // Left arrow should move back by one character, not one byte
+        app.handle_command_key(press(KeyCode::Left));
+        assert_eq!(app.command_cursor, 3); // before 'b'
+        app.handle_command_key(press(KeyCode::Left));
+        assert_eq!(app.command_cursor, 1); // before e-acute (skipped 2 bytes)
+        app.handle_command_key(press(KeyCode::Left));
+        assert_eq!(app.command_cursor, 0); // before 'a'
+
+        // Right arrow should move forward by one character
+        app.handle_command_key(press(KeyCode::Right));
+        assert_eq!(app.command_cursor, 1); // after 'a'
+        app.handle_command_key(press(KeyCode::Right));
+        assert_eq!(app.command_cursor, 3); // after e-acute (advanced 2 bytes)
+
+        // Backspace should delete one character
+        app.handle_command_key(press(KeyCode::Backspace));
+        assert_eq!(app.command_buffer, "ab");
+        assert_eq!(app.command_cursor, 1); // cursor now after 'a'
+    }
+
+    #[test]
+    fn multibyte_cursor_movement_in_input_mode() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+
+        // Insert multi-byte characters
+        app.handle_input_key(press(KeyCode::Char('\u{00fc}'))); // u-umlaut (2 bytes)
+        app.handle_input_key(press(KeyCode::Char('x')));
+        assert_eq!(app.input_buffer, "\u{00fc}x");
+        assert_eq!(app.input_cursor, 3); // u-umlaut(2) + x(1)
+
+        // Navigate left past multi-byte char
+        app.handle_input_key(press(KeyCode::Left));
+        assert_eq!(app.input_cursor, 2); // before 'x'
+        app.handle_input_key(press(KeyCode::Left));
+        assert_eq!(app.input_cursor, 0); // before u-umlaut
+
+        // Backspace from end deletes single multi-byte char
+        app.handle_input_key(press(KeyCode::End));
+        app.handle_input_key(press(KeyCode::Backspace));
+        assert_eq!(app.input_buffer, "\u{00fc}");
+        assert_eq!(app.input_cursor, 2);
     }
 }

@@ -355,19 +355,36 @@ impl AddAgentWizard {
             }
             KeyCode::Char(c) => {
                 text.insert(*cursor, c);
-                *cursor += 1;
+                *cursor += c.len_utf8();
             }
             KeyCode::Backspace => {
                 if *cursor > 0 {
-                    *cursor -= 1;
-                    text.remove(*cursor);
+                    let prev = text[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    text.remove(prev);
+                    *cursor = prev;
                 }
             }
             KeyCode::Left => {
-                *cursor = cursor.saturating_sub(1);
+                if *cursor > 0 {
+                    *cursor = text[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
             }
             KeyCode::Right => {
-                *cursor = (*cursor + 1).min(text.len());
+                if *cursor < text.len() {
+                    *cursor = text[*cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| *cursor + i)
+                        .unwrap_or(text.len());
+                }
             }
             KeyCode::Home => {
                 *cursor = 0;
@@ -838,5 +855,34 @@ mod tests {
         wiz.name = "test".into();
         wiz.working_dir = "  ".into();
         assert!(!wiz.is_valid());
+    }
+
+    #[test]
+    fn multibyte_text_input_cursor() {
+        let mut wiz = AddAgentWizard::new();
+        // Move to Name step (a text field) and clear default
+        wiz.step = WizardStep::Name;
+        wiz.name.clear();
+        wiz.name_cursor = 0;
+
+        // Type a multi-byte character (e-acute = 2 bytes)
+        wiz.handle_key(press(KeyCode::Char('r')));
+        wiz.handle_key(press(KeyCode::Char('\u{00e9}')));
+        wiz.handle_key(press(KeyCode::Char('s')));
+        assert_eq!(wiz.name, "r\u{00e9}s");
+        assert_eq!(wiz.name_cursor, 4); // r(1) + e-acute(2) + s(1)
+
+        // Left should skip past the 2-byte char properly
+        wiz.handle_key(press(KeyCode::Left));
+        assert_eq!(wiz.name_cursor, 3); // before 's'
+        wiz.handle_key(press(KeyCode::Left));
+        assert_eq!(wiz.name_cursor, 1); // before e-acute
+
+        // Backspace should delete the multi-byte char
+        wiz.handle_key(press(KeyCode::Right));
+        assert_eq!(wiz.name_cursor, 3); // after e-acute
+        wiz.handle_key(press(KeyCode::Backspace));
+        assert_eq!(wiz.name, "rs");
+        assert_eq!(wiz.name_cursor, 1);
     }
 }

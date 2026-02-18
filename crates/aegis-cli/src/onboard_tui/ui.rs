@@ -686,13 +686,15 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
         ));
     }
     if pos < text.len() {
+        let ch = text[pos..].chars().next().unwrap();
+        let end = pos + ch.len_utf8();
         spans.push(Span::styled(
-            &text[pos..pos + 1],
+            &text[pos..end],
             Style::default().fg(Color::Black).bg(Color::Yellow),
         ));
-        if pos + 1 < text.len() {
+        if end < text.len() {
             spans.push(Span::styled(
-                &text[pos + 1..],
+                &text[end..],
                 Style::default().fg(Color::Yellow),
             ));
         }
@@ -739,13 +741,15 @@ fn build_multiline_input(text: &str, cursor_pos: usize) -> Vec<Line<'static>> {
                 spans.push(Span::styled(segment[..local].to_string(), text_style));
             }
             if local < segment.len() {
+                let ch = segment[local..].chars().next().unwrap();
+                let end = local + ch.len_utf8();
                 spans.push(Span::styled(
-                    segment[local..local + 1].to_string(),
+                    segment[local..end].to_string(),
                     cursor_style,
                 ));
-                if local + 1 < segment.len() {
+                if end < segment.len() {
                     spans.push(Span::styled(
-                        segment[local + 1..].to_string(),
+                        segment[end..].to_string(),
                         text_style,
                     ));
                 }

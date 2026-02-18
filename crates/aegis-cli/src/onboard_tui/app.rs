@@ -654,19 +654,36 @@ impl OnboardApp {
         match key.code {
             KeyCode::Char(c) => {
                 text.insert(*cursor, c);
-                *cursor += 1;
+                *cursor += c.len_utf8();
             }
             KeyCode::Backspace => {
                 if *cursor > 0 {
-                    *cursor -= 1;
-                    text.remove(*cursor);
+                    let prev = text[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    text.remove(prev);
+                    *cursor = prev;
                 }
             }
             KeyCode::Left => {
-                *cursor = cursor.saturating_sub(1);
+                if *cursor > 0 {
+                    *cursor = text[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
             }
             KeyCode::Right => {
-                *cursor = (*cursor + 1).min(text.len());
+                if *cursor < text.len() {
+                    *cursor = text[*cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| *cursor + i)
+                        .unwrap_or(text.len());
+                }
             }
             KeyCode::Home => {
                 *cursor = 0;
