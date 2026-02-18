@@ -332,6 +332,27 @@ impl FleetApp {
         }
     }
 
+    /// Handle pasted text (bracketed paste).
+    pub fn handle_paste(&mut self, text: &str) {
+        // Route paste to command bar if active
+        if self.command_mode {
+            self.command_buffer.insert_str(self.command_cursor, text);
+            self.command_cursor += text.len();
+            return;
+        }
+        // Route paste to input mode if active
+        if self.input_mode {
+            let cleaned = text.replace(['\n', '\r'], " ");
+            self.input_buffer.insert_str(self.input_cursor, &cleaned);
+            self.input_cursor += cleaned.len();
+            return;
+        }
+        // Route paste to wizard if active
+        if let Some(ref mut wiz) = self.wizard {
+            wiz.handle_paste(text);
+        }
+    }
+
     /// Handle keys in the overview view.
     fn handle_overview_key(&mut self, key: KeyEvent) {
         match key.code {
@@ -1036,6 +1057,7 @@ pub fn run_fleet_tui_with_client(client: DaemonClient) -> Result<()> {
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableBracketedPaste,
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -1050,6 +1072,7 @@ pub fn run_fleet_tui_with_client(client: DaemonClient) -> Result<()> {
     crossterm::execute!(
         terminal.backend_mut(),
         crossterm::terminal::LeaveAlternateScreen,
+        crossterm::event::DisableBracketedPaste,
     )?;
     terminal.show_cursor()?;
 
@@ -1067,6 +1090,7 @@ fn run_event_loop(
 
         match events.next()? {
             AppEvent::Key(key) => app.handle_key(key),
+            AppEvent::Paste(text) => app.handle_paste(&text),
             AppEvent::Tick => {}
         }
 

@@ -355,6 +355,34 @@ impl AddAgentWizard {
         true
     }
 
+    /// Handle pasted text (from `Event::Paste` when bracketed paste is enabled).
+    ///
+    /// Inserts pasted text at the cursor of whichever text field is active.
+    /// Single-line fields (name, dir) collapse newlines to spaces.
+    /// Multi-line fields (task, role, goal) preserve newlines.
+    pub fn handle_paste(&mut self, text: &str) -> bool {
+        let (buf, cursor, multiline) = match self.step {
+            WizardStep::Name => (&mut self.name, &mut self.name_cursor, false),
+            WizardStep::WorkingDir => {
+                (&mut self.working_dir, &mut self.working_dir_cursor, false)
+            }
+            WizardStep::Task => (&mut self.task, &mut self.task_cursor, true),
+            WizardStep::Role => (&mut self.role, &mut self.role_cursor, true),
+            WizardStep::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor, true),
+            _ => return false,
+        };
+
+        let cleaned = if multiline {
+            text.replace('\r', "")
+        } else {
+            text.replace(['\n', '\r'], " ")
+        };
+
+        buf.insert_str(*cursor, &cleaned);
+        *cursor += cleaned.len();
+        true
+    }
+
     /// Check if the wizard has enough data to produce a valid config.
     pub fn is_valid(&self) -> bool {
         !self.name.trim().is_empty() && !self.working_dir.trim().is_empty()

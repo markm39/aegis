@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
@@ -167,6 +168,10 @@ pub struct OnboardApp {
 
     // -- Summary --
     pub start_daemon: bool,
+
+    // -- Paste indicator --
+    /// Temporary paste notification: (message, when).
+    pub paste_indicator: Option<(String, Instant)>,
 }
 
 impl OnboardApp {
@@ -210,6 +215,7 @@ impl OnboardApp {
             telegram_evt_rx: None,
             telegram_result: None,
             start_daemon: true,
+            paste_indicator: None,
         }
     }
 
@@ -232,6 +238,42 @@ impl OnboardApp {
             OnboardStep::TelegramProgress => self.handle_telegram_progress(key),
             OnboardStep::Summary => self.handle_summary(key),
             OnboardStep::Done | OnboardStep::Cancelled => {}
+        }
+    }
+
+    /// Handle pasted text (from `Event::Paste` when bracketed paste is enabled).
+    ///
+    /// Inserts the pasted text at the cursor position of whichever text field
+    /// is currently active. For single-line fields (name, dir, token), newlines
+    /// are collapsed to spaces. The task field preserves newlines.
+    pub fn handle_paste(&mut self, text: &str) {
+        let (buf, cursor) = match self.step {
+            OnboardStep::CustomCommand => (&mut self.custom_command, &mut self.custom_cursor),
+            OnboardStep::Name => (&mut self.name, &mut self.name_cursor),
+            OnboardStep::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor),
+            OnboardStep::Task => (&mut self.task, &mut self.task_cursor),
+            OnboardStep::TelegramToken => {
+                (&mut self.telegram_token, &mut self.telegram_token_cursor)
+            }
+            _ => return, // Not a text input step
+        };
+
+        // Task keeps newlines; other fields collapse them
+        let cleaned = if self.step == OnboardStep::Task {
+            text.replace('\r', "")
+        } else {
+            text.replace(['\n', '\r'], " ")
+        };
+
+        buf.insert_str(*cursor, &cleaned);
+        *cursor += cleaned.len();
+
+        // Show paste indicator for large pastes
+        if cleaned.len() > 20 {
+            self.paste_indicator = Some((
+                format!("[pasted {} chars]", cleaned.len()),
+                Instant::now(),
+            ));
         }
     }
 

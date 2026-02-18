@@ -3,11 +3,16 @@
 //! Draws each wizard step using ratatui widgets, matching the visual style
 //! of the existing Aegis TUIs (Cyan borders, Yellow labels, DarkGray chrome).
 
+use std::time::Duration;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
+
+/// How long the paste indicator stays visible.
+const PASTE_INDICATOR_DURATION: Duration = Duration::from_secs(3);
 
 use crate::fleet_tui::wizard::{RestartChoice, ToolChoice};
 
@@ -203,12 +208,14 @@ fn draw_tool(f: &mut Frame, app: &OnboardApp, area: Rect) {
 }
 
 fn draw_custom_command(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let indicator_height = paste_indicator_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // Description
-            Constraint::Length(3), // Input
-            Constraint::Min(0),   // Spacer
+            Constraint::Length(2),                // Description
+            Constraint::Length(3),                // Input
+            Constraint::Length(indicator_height),  // Paste indicator
+            Constraint::Min(0),                   // Spacer
         ])
         .split(area);
 
@@ -226,17 +233,21 @@ fn draw_custom_command(f: &mut Frame, app: &OnboardApp, area: Rect) {
             .title("Command"),
     );
     f.render_widget(input, chunks[1]);
+
+    draw_paste_indicator(f, app, chunks[2]);
 }
 
 fn draw_name(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let error_height = if app.name_error.is_some() { 1 } else { 0 };
+    let indicator_height = paste_indicator_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),            // Description
-            Constraint::Length(3),            // Input
-            Constraint::Length(error_height), // Error
-            Constraint::Min(0),              // Spacer
+            Constraint::Length(2),                // Description
+            Constraint::Length(3),                // Input
+            Constraint::Length(error_height),     // Error
+            Constraint::Length(indicator_height), // Paste indicator
+            Constraint::Min(0),                  // Spacer
         ])
         .split(area);
 
@@ -268,6 +279,8 @@ fn draw_name(f: &mut Frame, app: &OnboardApp, area: Rect) {
         ));
         f.render_widget(error, chunks[2]);
     }
+
+    draw_paste_indicator(f, app, chunks[3]);
 }
 
 fn draw_working_dir(f: &mut Frame, app: &OnboardApp, area: Rect) {
@@ -276,13 +289,15 @@ fn draw_working_dir(f: &mut Frame, app: &OnboardApp, area: Rect) {
     } else {
         0
     };
+    let indicator_height = paste_indicator_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),            // Description
-            Constraint::Length(3),            // Input
-            Constraint::Length(error_height), // Error
-            Constraint::Min(0),              // Spacer
+            Constraint::Length(2),                // Description
+            Constraint::Length(3),                // Input
+            Constraint::Length(error_height),     // Error
+            Constraint::Length(indicator_height), // Paste indicator
+            Constraint::Min(0),                  // Spacer
         ])
         .split(area);
 
@@ -308,15 +323,18 @@ fn draw_working_dir(f: &mut Frame, app: &OnboardApp, area: Rect) {
         ));
         f.render_widget(error, chunks[2]);
     }
+
+    draw_paste_indicator(f, app, chunks[3]);
 }
 
 fn draw_task(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let indicator_height = paste_indicator_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // Description
-            Constraint::Length(3), // Input
-            Constraint::Min(0),   // Spacer
+            Constraint::Length(2),                // Description
+            Constraint::Min(5),                   // Input (expands to fill)
+            Constraint::Length(indicator_height),  // Paste indicator
         ])
         .split(area);
 
@@ -326,20 +344,32 @@ fn draw_task(f: &mut Frame, app: &OnboardApp, area: Rect) {
             Style::default().fg(Color::White),
         ),
         Span::styled(
-            " Optional -- press Enter to skip.",
+            " Optional -- press Enter to skip. Paste supported.",
             Style::default().fg(Color::DarkGray),
         ),
     ]));
     f.render_widget(desc, chunks[0]);
 
-    let spans = build_cursor_spans(&app.task, app.task_cursor);
-    let input = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Task"),
-    );
+    // Multi-line input with word wrapping
+    let char_count = app.task.len();
+    let title = if char_count > 0 {
+        format!("Task ({char_count} chars)")
+    } else {
+        "Task".to_string()
+    };
+
+    let lines = build_multiline_input(&app.task, app.task_cursor);
+    let input = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(title),
+        );
     f.render_widget(input, chunks[1]);
+
+    draw_paste_indicator(f, app, chunks[2]);
 }
 
 fn draw_restart(f: &mut Frame, app: &OnboardApp, area: Rect) {
@@ -586,8 +616,11 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
 
     let task_display = if app.task.trim().is_empty() {
         "(none)".to_string()
+    } else if app.task.len() > 60 {
+        let preview: String = app.task.chars().take(57).collect();
+        format!("{preview}... [{} chars]", app.task.len())
     } else {
-        app.task.clone()
+        app.task.replace('\n', " ")
     };
 
     let telegram_display = match &app.telegram_result {
@@ -640,25 +673,26 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(p, area);
 }
 
-/// Build cursor-aware text input spans (before | cursor | after).
+/// Build cursor-aware text input spans for a single-line field.
 ///
 /// Produces Yellow text with an inverted Yellow cursor block at `cursor_pos`.
 fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
+    let pos = cursor_pos.min(text.len());
     let mut spans = Vec::new();
-    if cursor_pos > 0 {
+    if pos > 0 {
         spans.push(Span::styled(
-            &text[..cursor_pos],
+            &text[..pos],
             Style::default().fg(Color::Yellow),
         ));
     }
-    if cursor_pos < text.len() {
+    if pos < text.len() {
         spans.push(Span::styled(
-            &text[cursor_pos..cursor_pos + 1],
+            &text[pos..pos + 1],
             Style::default().fg(Color::Black).bg(Color::Yellow),
         ));
-        if cursor_pos + 1 < text.len() {
+        if pos + 1 < text.len() {
             spans.push(Span::styled(
-                &text[cursor_pos + 1..],
+                &text[pos + 1..],
                 Style::default().fg(Color::Yellow),
             ));
         }
@@ -669,6 +703,91 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
         ));
     }
     spans
+}
+
+/// Build cursor-aware Lines for a multi-line text field.
+///
+/// Splits text by newlines, finds which line the cursor is on, and applies
+/// the inverted cursor block to the correct position. Each line becomes a
+/// separate `Line` so `Paragraph::wrap()` handles visual wrapping.
+fn build_multiline_input(text: &str, cursor_pos: usize) -> Vec<Line<'static>> {
+    let pos = cursor_pos.min(text.len());
+
+    if text.is_empty() {
+        return vec![Line::from(Span::styled(
+            " ",
+            Style::default().bg(Color::Yellow),
+        ))];
+    }
+
+    let text_style = Style::default().fg(Color::Yellow);
+    let cursor_style = Style::default().fg(Color::Black).bg(Color::Yellow);
+
+    let mut result = Vec::new();
+    let mut offset = 0;
+
+    for segment in text.split('\n') {
+        let seg_start = offset;
+        let seg_end = offset + segment.len();
+
+        if pos >= seg_start && pos <= seg_end {
+            // Cursor is in this segment
+            let local = pos - seg_start;
+            let mut spans = Vec::new();
+
+            if local > 0 {
+                spans.push(Span::styled(segment[..local].to_string(), text_style));
+            }
+            if local < segment.len() {
+                spans.push(Span::styled(
+                    segment[local..local + 1].to_string(),
+                    cursor_style,
+                ));
+                if local + 1 < segment.len() {
+                    spans.push(Span::styled(
+                        segment[local + 1..].to_string(),
+                        text_style,
+                    ));
+                }
+            } else {
+                // Cursor at end of this segment
+                spans.push(Span::styled(" ".to_string(), cursor_style));
+            }
+
+            result.push(Line::from(spans));
+        } else {
+            result.push(Line::from(Span::styled(
+                segment.to_string(),
+                text_style,
+            )));
+        }
+
+        // +1 for the '\n' separator
+        offset = seg_end + 1;
+    }
+
+    result
+}
+
+/// Return 1 if the paste indicator should be shown, 0 otherwise.
+fn paste_indicator_height(app: &OnboardApp) -> u16 {
+    match &app.paste_indicator {
+        Some((_, when)) if when.elapsed() < PASTE_INDICATOR_DURATION => 1,
+        _ => 0,
+    }
+}
+
+/// Render the paste indicator line if active.
+fn draw_paste_indicator(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    if let Some((msg, when)) = &app.paste_indicator {
+        if when.elapsed() < PASTE_INDICATOR_DURATION {
+            let indicator = Paragraph::new(Span::styled(
+                format!("  {msg}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+            f.render_widget(indicator, area);
+        }
+    }
 }
 
 /// Build a styled label-value line for the summary.

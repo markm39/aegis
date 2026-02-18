@@ -31,7 +31,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use aegis_types::AgentStatus;
@@ -608,9 +608,9 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         WizardStep::Tool => draw_wizard_tool(frame, wiz, chunks[1]),
         WizardStep::Name => draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1]),
         WizardStep::WorkingDir => draw_wizard_text(frame, "Working Directory", &wiz.working_dir, wiz.working_dir_cursor, chunks[1]),
-        WizardStep::Task => draw_wizard_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
-        WizardStep::Role => draw_wizard_text(frame, "Role (optional, e.g. \"UX specialist\")", &wiz.role, wiz.role_cursor, chunks[1]),
-        WizardStep::AgentGoal => draw_wizard_text(frame, "Goal (optional, what this agent should achieve)", &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]),
+        WizardStep::Task => draw_wizard_multiline_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
+        WizardStep::Role => draw_wizard_multiline_text(frame, "Role (optional, e.g. \"UX specialist\")", &wiz.role, wiz.role_cursor, chunks[1]),
+        WizardStep::AgentGoal => draw_wizard_multiline_text(frame, "Goal (optional, what this agent should achieve)", &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]),
         WizardStep::RestartPolicy => draw_wizard_restart(frame, wiz, chunks[1]),
         WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
     }
@@ -705,6 +705,95 @@ fn draw_wizard_text(
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(content, area);
+}
+
+/// Draw a multi-line text input step with cursor and word-wrap.
+///
+/// Used for Task, Role, and AgentGoal fields which can contain long pasted text.
+fn draw_wizard_multiline_text(
+    frame: &mut Frame,
+    label: &str,
+    text: &str,
+    cursor: usize,
+    area: ratatui::layout::Rect,
+) {
+    let text_style = Style::default().fg(Color::White);
+    let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+
+    // Build title with char count for non-empty text
+    let title = if text.is_empty() {
+        format!(" {label} ")
+    } else {
+        format!(" {label}  [{} chars] ", text.len())
+    };
+
+    let lines = build_multiline_input(text, cursor, text_style, cursor_style);
+
+    let content = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    frame.render_widget(content, area);
+}
+
+/// Build multi-line `Line` spans from text with newlines, placing the cursor block.
+fn build_multiline_input<'a>(
+    text: &str,
+    cursor: usize,
+    text_style: Style,
+    cursor_style: Style,
+) -> Vec<Line<'a>> {
+    let pos = cursor.min(text.len());
+
+    if text.is_empty() {
+        return vec![Line::from(Span::styled(" ", cursor_style))];
+    }
+
+    let mut result = Vec::new();
+    let mut offset = 0;
+
+    for segment in text.split('\n') {
+        let seg_start = offset;
+        let seg_end = offset + segment.len();
+
+        if pos >= seg_start && pos <= seg_end {
+            // Cursor is in this segment
+            let local = pos - seg_start;
+            let mut spans = Vec::new();
+
+            if local > 0 {
+                spans.push(Span::styled(segment[..local].to_string(), text_style));
+            }
+            if local < segment.len() {
+                spans.push(Span::styled(
+                    segment[local..local + 1].to_string(),
+                    cursor_style,
+                ));
+                if local + 1 < segment.len() {
+                    spans.push(Span::styled(
+                        segment[local + 1..].to_string(),
+                        text_style,
+                    ));
+                }
+            } else {
+                // Cursor at end of segment
+                spans.push(Span::styled(" ".to_string(), cursor_style));
+            }
+
+            result.push(Line::from(spans));
+        } else {
+            result.push(Line::from(Span::styled(segment.to_string(), text_style)));
+        }
+
+        // +1 for the '\n' delimiter
+        offset = seg_end + 1;
+    }
+
+    result
 }
 
 /// Draw restart policy selection.

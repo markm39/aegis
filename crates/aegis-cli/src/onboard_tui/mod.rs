@@ -12,7 +12,9 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event as CrosstermEvent,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -26,12 +28,12 @@ const TICK_RATE_MS: u64 = 50;
 
 /// Run the onboarding wizard TUI and return the result.
 ///
-/// Initializes the terminal in raw/alternate-screen mode, runs the event
-/// loop, and restores the terminal on exit (including on error).
+/// Initializes the terminal in raw/alternate-screen mode with bracketed
+/// paste enabled, runs the event loop, and restores the terminal on exit.
 pub fn run_onboard_wizard() -> Result<OnboardResult> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -42,8 +44,10 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(tick_rate)? {
-            if let CrosstermEvent::Key(key) = event::read()? {
-                app.handle_key(key);
+            match event::read()? {
+                CrosstermEvent::Key(key) => app.handle_key(key),
+                CrosstermEvent::Paste(text) => app.handle_paste(&text),
+                _ => {}
             }
         }
 
@@ -53,7 +57,11 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
 
     // Restore terminal
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
 
     Ok(app.result())
