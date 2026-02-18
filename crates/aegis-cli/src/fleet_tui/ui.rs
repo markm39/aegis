@@ -595,13 +595,29 @@ fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
             Span::styled(after, Style::default().fg(Color::White)),
         ];
 
-        // Show completions hint
+        // Show completions hint with selected item highlighted
         if !app.command_completions.is_empty() {
-            let hint = app.command_completions.iter().take(5).cloned().collect::<Vec<_>>().join(" | ");
-            spans.push(Span::styled(
-                format!("  [{hint}]"),
-                Style::default().fg(Color::DarkGray),
-            ));
+            spans.push(Span::styled("  [", Style::default().fg(Color::DarkGray)));
+            for (i, comp) in app.command_completions.iter().take(5).enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+                }
+                if app.completion_idx == Some(i) {
+                    spans.push(Span::styled(
+                        comp.clone(),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::styled(comp.clone(), Style::default().fg(Color::DarkGray)));
+                }
+            }
+            if app.command_completions.len() > 5 {
+                spans.push(Span::styled(
+                    format!(" +{}", app.command_completions.len() - 5),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
         }
 
         let bar = Paragraph::new(Line::from(spans)).block(
