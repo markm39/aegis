@@ -96,6 +96,10 @@ pub enum FleetCommand {
     Enable { agent: String },
     /// Disable an agent slot (stop and prevent restart).
     Disable { agent: String },
+    /// Install launchd plist for daemon auto-start.
+    DaemonInstall,
+    /// Uninstall launchd plist.
+    DaemonUninstall,
 }
 
 /// All known command names for completion.
@@ -189,8 +193,10 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "reload" => Ok(Some(FleetCommand::DaemonReload)),
                 "restart" => Ok(Some(FleetCommand::DaemonRestart)),
                 "status" => Ok(Some(FleetCommand::DaemonStatus)),
-                "" => Err("usage: daemon start|stop|init|reload|restart|status".into()),
-                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init, reload, restart, status")),
+                "install" => Ok(Some(FleetCommand::DaemonInstall)),
+                "uninstall" => Ok(Some(FleetCommand::DaemonUninstall)),
+                "" => Err("usage: daemon start|stop|init|reload|restart|status|install|uninstall".into()),
+                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init, reload, restart, status, install, uninstall")),
             }
         }
         "deny" => {
@@ -338,7 +344,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 }
 
 /// Subcommands for `:daemon`.
-const DAEMON_SUBCOMMANDS: &[&str] = &["init", "reload", "restart", "start", "status", "stop"];
+const DAEMON_SUBCOMMANDS: &[&str] = &["init", "install", "reload", "restart", "start", "status", "stop", "uninstall"];
 
 /// Subcommands for `:telegram`.
 const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
@@ -439,11 +445,13 @@ pub fn help_text() -> &'static str {
      :context <a> <field>     Clear field\n\
      :context <a> <f> <val>   Set field (role/goal/context/task)\n\
      :daemon init             Create daemon.toml\n\
+     :daemon install          Install launchd plist\n\
      :daemon reload           Reload config from daemon.toml\n\
      :daemon restart          Stop and restart daemon\n\
      :daemon start            Start daemon in background\n\
      :daemon status           Show daemon status\n\
      :daemon stop             Stop running daemon\n\
+     :daemon uninstall        Uninstall launchd plist\n\
      :deny <agent>            Deny first pending prompt\n\
      :diff <s1> <s2>          Compare two audit sessions\n\
      :disable <agent>         Disable agent (stop + prevent restart)\n\

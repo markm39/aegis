@@ -962,6 +962,142 @@ pub fn follow(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Enable an agent slot (allows it to be started).
+pub fn enable_agent(name: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::EnableAgent {
+            name: name.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to enable agent: {e}"))?;
+
+    if response.ok {
+        println!("Agent '{name}' enabled.");
+    } else {
+        anyhow::bail!("{}", response.message);
+    }
+
+    Ok(())
+}
+
+/// Disable an agent slot (stops it if running, prevents restart).
+pub fn disable_agent(name: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::DisableAgent {
+            name: name.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to disable agent: {e}"))?;
+
+    if response.ok {
+        println!("Agent '{name}' disabled.");
+    } else {
+        anyhow::bail!("{}", response.message);
+    }
+
+    Ok(())
+}
+
+/// Get or set the fleet-wide goal.
+pub fn goal(text: Option<&str>) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::FleetGoal {
+            goal: text.map(|s| s.to_string()),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to manage fleet goal: {e}"))?;
+
+    if response.ok {
+        println!("{}", response.message);
+    } else {
+        anyhow::bail!("{}", response.message);
+    }
+
+    Ok(())
+}
+
+/// Get or set agent context fields (role, goal, context, task).
+pub fn context(
+    name: &str,
+    field: Option<&str>,
+    value: Option<&str>,
+) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running.");
+    }
+
+    match (field, value) {
+        (Some(f), Some(v)) => {
+            let (role, agent_goal, ctx, task) = match f {
+                "role" => (Some(v.to_string()), None, None, None),
+                "goal" => (None, Some(v.to_string()), None, None),
+                "context" => (None, None, Some(v.to_string()), None),
+                "task" => (None, None, None, Some(v.to_string())),
+                _ => anyhow::bail!(
+                    "Unknown field '{f}'. Valid fields: role, goal, context, task"
+                ),
+            };
+            let response = client
+                .send(&DaemonCommand::UpdateAgentContext {
+                    name: name.to_string(),
+                    role,
+                    agent_goal,
+                    context: ctx,
+                    task,
+                })
+                .map_err(|e| anyhow::anyhow!("failed to update context: {e}"))?;
+
+            if response.ok {
+                println!("{}", response.message);
+            } else {
+                anyhow::bail!("{}", response.message);
+            }
+        }
+        _ => {
+            let response = client
+                .send(&DaemonCommand::GetAgentContext {
+                    name: name.to_string(),
+                })
+                .map_err(|e| anyhow::anyhow!("failed to get context: {e}"))?;
+
+            if response.ok {
+                if let Some(data) = &response.data {
+                    if let Some(obj) = data.as_object() {
+                        for (k, v) in obj {
+                            let val = v.as_str().unwrap_or("(none)");
+                            let display = if val.is_empty() { "(none)" } else { val };
+                            println!("  {k}: {display}");
+                        }
+                    }
+                } else {
+                    println!("{}", response.message);
+                }
+            } else {
+                anyhow::bail!("{}", response.message);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Truncate a string to `max_chars` characters, appending "..." if truncated.
 /// Safe for multi-byte UTF-8 (truncates at char boundaries, not bytes).
 fn truncate_str(s: &str, max_chars: usize) -> String {

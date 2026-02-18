@@ -1278,6 +1278,18 @@ impl FleetApp {
                     ));
                 }
             }
+            FleetCommand::DaemonInstall => {
+                self.spawn_terminal(
+                    "aegis daemon install --start",
+                    "Installing launchd plist in new terminal",
+                );
+            }
+            FleetCommand::DaemonUninstall => {
+                self.spawn_terminal(
+                    "aegis daemon uninstall",
+                    "Uninstalling launchd plist in new terminal",
+                );
+            }
         }
     }
 

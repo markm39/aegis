@@ -644,6 +644,36 @@ enum DaemonCommands {
         name: String,
     },
 
+    /// Enable an agent slot (allows it to be started)
+    Enable {
+        /// Agent name
+        name: String,
+    },
+
+    /// Disable an agent slot (stops it, prevents restart)
+    Disable {
+        /// Agent name
+        name: String,
+    },
+
+    /// Get or set the fleet-wide goal
+    Goal {
+        /// Goal text (omit to show current goal)
+        text: Option<String>,
+    },
+
+    /// Get or set an agent's context fields
+    Context {
+        /// Agent name
+        name: String,
+
+        /// Field to set (role, goal, context, or task)
+        field: Option<String>,
+
+        /// Value to set for the field
+        value: Option<String>,
+    },
+
     /// Install launchd plist for auto-start
     Install {
         /// Start the daemon after installing
@@ -987,6 +1017,18 @@ fn main() -> anyhow::Result<()> {
             }
             DaemonCommands::Follow { name } => {
                 commands::daemon::follow(&name)
+            }
+            DaemonCommands::Enable { name } => {
+                commands::daemon::enable_agent(&name)
+            }
+            DaemonCommands::Disable { name } => {
+                commands::daemon::disable_agent(&name)
+            }
+            DaemonCommands::Goal { text } => {
+                commands::daemon::goal(text.as_deref())
+            }
+            DaemonCommands::Context { name, field, value } => {
+                commands::daemon::context(&name, field.as_deref(), value.as_deref())
             }
             DaemonCommands::Install { start } => {
                 commands::daemon::install(start)
