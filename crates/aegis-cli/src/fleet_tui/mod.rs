@@ -604,7 +604,8 @@ impl FleetApp {
                 self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
             KeyCode::Char('q') => {
-                self.running = false;
+                self.view = FleetView::Overview;
+                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.focus_pending {
@@ -1720,12 +1721,13 @@ mod tests {
     }
 
     #[test]
-    fn q_quits_from_detail() {
+    fn q_goes_back_from_detail() {
         let mut app = make_app();
         app.view = FleetView::AgentDetail;
 
         app.handle_key(press(KeyCode::Char('q')));
-        assert!(!app.running);
+        assert!(app.running, "q in detail view should go back, not quit");
+        assert_eq!(app.view, FleetView::Overview);
     }
 
     #[test]

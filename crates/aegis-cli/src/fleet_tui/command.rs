@@ -106,7 +106,7 @@ pub enum FleetCommand {
 const COMMAND_NAMES: &[&str] = &[
     "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "disable",
     "enable", "follow", "goal", "help", "hook", "init", "list", "log", "logs", "monitor",
-    "nudge", "pending", "pilot", "policy", "pop", "quit", "remove", "report", "restart",
+    "nudge", "pending", "pilot", "policy", "pop", "q", "quit", "remove", "report", "restart",
     "run", "send", "setup", "start", "status", "stop", "telegram", "use", "watch", "wrap",
 ];
 

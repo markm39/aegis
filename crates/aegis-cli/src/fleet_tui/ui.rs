@@ -592,10 +592,14 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     }
 
     spans.extend([
+        Span::styled("q", Style::default().fg(Color::Yellow)),
+        Span::styled(": back  ", Style::default().fg(Color::DarkGray)),
         Span::styled("n", Style::default().fg(Color::Magenta)),
         Span::styled(": nudge  ", Style::default().fg(Color::DarkGray)),
         Span::styled("j/k", Style::default().fg(Color::Yellow)),
         Span::styled(": scroll  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("g/G", Style::default().fg(Color::Yellow)),
+        Span::styled(": top/bottom  ", Style::default().fg(Color::DarkGray)),
         Span::styled("p", Style::default().fg(Color::Yellow)),
         Span::styled(": pop  ", Style::default().fg(Color::DarkGray)),
         Span::styled("s", Style::default().fg(Color::Green)),
