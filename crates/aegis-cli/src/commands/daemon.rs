@@ -578,3 +578,84 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Follow (tail) an agent's output in real time.
+///
+/// Polls the daemon every 200ms for new output lines and prints them.
+/// Exits when the agent stops or Ctrl+C is pressed.
+pub fn follow(name: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+    if !client.is_running() {
+        anyhow::bail!("daemon is not running. Start it with `aegis daemon start`.");
+    }
+
+    // Verify agent exists
+    let resp = client.send(&DaemonCommand::AgentStatus { name: name.into() })
+        .map_err(|e| anyhow::anyhow!(e))?;
+    if !resp.ok {
+        anyhow::bail!("{}", resp.message);
+    }
+
+    eprintln!("Following output from '{name}' (Ctrl+C to stop)...");
+
+    let mut last_line_count = 0;
+    let poll_ms = std::time::Duration::from_millis(200);
+
+    // Install Ctrl+C handler
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::Relaxed);
+    })
+    .ok();
+
+    while running.load(Ordering::Relaxed) {
+        let resp = client.send(&DaemonCommand::AgentOutput {
+            name: name.into(),
+            lines: Some(500),
+        });
+
+        match resp {
+            Ok(resp) if resp.ok => {
+                if let Some(data) = resp.data {
+                    if let Ok(lines) = serde_json::from_value::<Vec<String>>(data) {
+                        let total = lines.len();
+                        if total > last_line_count {
+                            // Print new lines only
+                            for line in &lines[last_line_count..] {
+                                println!("{line}");
+                            }
+                            last_line_count = total;
+                        }
+                    }
+                }
+            }
+            Ok(resp) => {
+                eprintln!("Error: {}", resp.message);
+                break;
+            }
+            Err(e) => {
+                eprintln!("Connection lost: {e}");
+                break;
+            }
+        }
+
+        // Check if agent is still running
+        let status_resp = client.send(&DaemonCommand::AgentStatus { name: name.into() });
+        if let Ok(resp) = status_resp {
+            if resp.ok {
+                if let Some(data) = resp.data {
+                    let status_str = data["status"].as_str().unwrap_or("");
+                    if status_str == "stopped" || status_str == "failed" {
+                        eprintln!("Agent '{name}' has exited.");
+                        break;
+                    }
+                }
+            }
+        }
+
+        std::thread::sleep(poll_ms);
+    }
+
+    Ok(())
+}

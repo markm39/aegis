@@ -1,6 +1,7 @@
 mod commands;
 mod fleet_tui;
 mod pilot_tui;
+mod terminal;
 mod wizard;
 
 use std::path::PathBuf;
@@ -573,6 +574,12 @@ enum DaemonCommands {
         name: String,
     },
 
+    /// Follow (tail) agent output in real time
+    Follow {
+        /// Agent name
+        name: String,
+    },
+
     /// Install launchd plist for auto-start
     Install {
         /// Start the daemon after installing
@@ -889,6 +896,9 @@ fn main() -> anyhow::Result<()> {
             }
             DaemonCommands::Pending { name } => {
                 commands::daemon::pending(&name)
+            }
+            DaemonCommands::Follow { name } => {
+                commands::daemon::follow(&name)
             }
             DaemonCommands::Install { start } => {
                 commands::daemon::install(start)

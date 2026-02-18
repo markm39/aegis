@@ -475,6 +475,19 @@ impl FleetApp {
                     name: self.detail_name.clone(),
                 });
             }
+            KeyCode::Char('p') => {
+                // Pop agent output into new terminal
+                let agent = self.detail_name.clone();
+                let cmd = format!("aegis daemon follow {agent}");
+                match crate::terminal::spawn_in_terminal(&cmd) {
+                    Ok(()) => {
+                        self.command_result = Some(format!("Opened '{agent}' in new terminal"));
+                    }
+                    Err(e) => {
+                        self.command_result = Some(e);
+                    }
+                }
+            }
             KeyCode::Char(':') => {
                 self.enter_command_mode();
             }
@@ -734,6 +747,27 @@ impl FleetApp {
             }
             FleetCommand::Nudge { agent, message } => {
                 self.send_named_command(DaemonCommand::NudgeAgent { name: agent, message });
+            }
+            FleetCommand::Pop { agent } => {
+                let cmd = format!("aegis daemon follow {agent}");
+                match crate::terminal::spawn_in_terminal(&cmd) {
+                    Ok(()) => {
+                        self.command_result = Some(format!("Opened '{agent}' in new terminal"));
+                    }
+                    Err(e) => {
+                        self.command_result = Some(e);
+                    }
+                }
+            }
+            FleetCommand::Monitor => {
+                match crate::terminal::spawn_in_terminal("aegis monitor") {
+                    Ok(()) => {
+                        self.command_result = Some("Opened monitor in new terminal".into());
+                    }
+                    Err(e) => {
+                        self.command_result = Some(e);
+                    }
+                }
             }
             FleetCommand::Follow { agent } => {
                 self.detail_name = agent;

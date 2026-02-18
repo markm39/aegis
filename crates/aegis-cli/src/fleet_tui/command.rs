@@ -24,6 +24,10 @@ pub enum FleetCommand {
     Nudge { agent: String, message: Option<String> },
     /// Drill into an agent's output (switch to detail view).
     Follow { agent: String },
+    /// Pop an agent's output into a new terminal window.
+    Pop { agent: String },
+    /// Open the monitor TUI in a new terminal window.
+    Monitor,
     /// Show daemon status summary.
     Status,
     /// Show help for all commands.
@@ -34,13 +38,13 @@ pub enum FleetCommand {
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "approve", "deny", "follow", "help", "nudge",
-    "quit", "restart", "send", "start", "status", "stop",
+    "add", "approve", "deny", "follow", "help", "monitor", "nudge",
+    "pop", "quit", "restart", "send", "start", "status", "stop",
 ];
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
-    "approve", "deny", "follow", "nudge", "restart", "send", "start", "stop",
+    "approve", "deny", "follow", "nudge", "pop", "restart", "send", "start", "stop",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -123,6 +127,14 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Ok(Some(FleetCommand::Follow { agent: arg1.into() }))
             }
         }
+        "pop" => {
+            if arg1.is_empty() {
+                Err("usage: pop <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Pop { agent: arg1.into() }))
+            }
+        }
+        "monitor" => Ok(Some(FleetCommand::Monitor)),
         "status" => Ok(Some(FleetCommand::Status)),
         "help" => Ok(Some(FleetCommand::Help)),
         "quit" | "q" => Ok(Some(FleetCommand::Quit)),
@@ -190,6 +202,8 @@ pub fn help_text() -> &'static str {
      :deny <agent>            Deny first pending prompt\n\
      :nudge <agent> [msg]     Nudge stalled agent\n\
      :follow <agent>          Drill into agent output\n\
+     :pop <agent>             Open agent in new terminal\n\
+     :monitor                 Open monitor in new terminal\n\
      :status                  Daemon status summary\n\
      :help                    Show this help\n\
      :quit                    Quit TUI"
@@ -325,6 +339,24 @@ mod tests {
     #[test]
     fn parse_unknown() {
         assert!(parse("bogus").is_err());
+    }
+
+    #[test]
+    fn parse_pop() {
+        assert_eq!(
+            parse("pop claude-1").unwrap(),
+            Some(FleetCommand::Pop { agent: "claude-1".into() })
+        );
+    }
+
+    #[test]
+    fn parse_pop_missing_agent() {
+        assert!(parse("pop").is_err());
+    }
+
+    #[test]
+    fn parse_monitor() {
+        assert_eq!(parse("monitor").unwrap(), Some(FleetCommand::Monitor));
     }
 
     #[test]
