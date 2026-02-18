@@ -72,7 +72,7 @@ async fn run_setup() -> anyhow::Result<()> {
 }
 
 /// Read the bot token from `$AEGIS_TELEGRAM_BOT_TOKEN` or stdin.
-fn prompt_token() -> anyhow::Result<String> {
+pub(crate) fn prompt_token() -> anyhow::Result<String> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
@@ -105,7 +105,7 @@ fn prompt_token() -> anyhow::Result<String> {
 }
 
 /// Validate a bot token by calling `getMe`.
-async fn validate_token(token: &str) -> anyhow::Result<aegis_channel::telegram::types::User> {
+pub(crate) async fn validate_token(token: &str) -> anyhow::Result<aegis_channel::telegram::types::User> {
     let api = TelegramApi::new(token);
     print!("  Validating token... ");
     io::stdout().flush()?;
@@ -125,7 +125,7 @@ async fn validate_token(token: &str) -> anyhow::Result<aegis_channel::telegram::
 /// Poll `getUpdates` until a message arrives, then return the chat ID.
 ///
 /// Uses 5-second long-poll intervals with a 60-second total timeout.
-async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> anyhow::Result<i64> {
+pub(crate) async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> anyhow::Result<i64> {
     println!("Step 2: Send any message to @{bot_username} on Telegram");
     println!("  Waiting for your message (60s timeout)...");
 
@@ -161,7 +161,7 @@ async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> anyhow::Resu
 }
 
 /// Write the Telegram config into `daemon.toml`, merging with existing config.
-fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> {
+pub(crate) fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> {
     let dir = daemon_dir();
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}", dir.display()))?;

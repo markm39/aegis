@@ -37,17 +37,20 @@ pub fn run() -> Result<()> {
             }
             aegis_monitor::run_dashboard(configs).context("dashboard exited with error")
         }
-        // Nothing at all: first-run wizard
+        // Nothing at all: unified onboard wizard
         (false, false) => {
-            println!("Welcome to Aegis -- zero-trust runtime for AI agents.\n");
-            println!("No configurations found. Let's set one up.\n");
-            crate::commands::init::run(None, "default-deny", None)
+            crate::commands::onboard::run()
         }
     }
 }
 
 /// Check whether any aegis configurations exist.
 fn has_configs(aegis_dir: &std::path::Path) -> bool {
+    // Check for daemon config first (created by `aegis` onboard wizard)
+    if aegis_types::daemon::daemon_config_path().exists() {
+        return true;
+    }
+
     if !aegis_dir.exists() {
         return false;
     }
