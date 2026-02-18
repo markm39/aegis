@@ -408,6 +408,19 @@ impl Fleet {
         self.slots.insert(config.name.clone(), slot);
     }
 
+    /// Remove an agent slot. Stops it first if running.
+    pub fn remove_agent(&mut self, name: &str) {
+        self.stop_agent(name);
+        self.slots.remove(name);
+    }
+
+    /// Update the stored config for an existing agent slot (without restarting).
+    pub fn update_agent_config(&mut self, config: &AgentSlotConfig) {
+        if let Some(slot) = self.slots.get_mut(&config.name) {
+            slot.config = config.clone();
+        }
+    }
+
     /// Restart a specific agent (stop then start).
     pub fn restart_agent(&mut self, name: &str) {
         self.stop_agent(name);
@@ -669,6 +682,48 @@ mod tests {
         fleet.add_agent(test_slot_config("new-agent"));
         assert_eq!(fleet.agent_count(), 2);
         assert!(fleet.agent_status("new-agent").is_some());
+    }
+
+    #[test]
+    fn remove_agent_decreases_count() {
+        let config = test_daemon_config(vec![
+            test_slot_config("a"),
+            test_slot_config("b"),
+        ]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        assert_eq!(fleet.agent_count(), 2);
+        fleet.remove_agent("a");
+        assert_eq!(fleet.agent_count(), 1);
+        assert!(fleet.agent_status("a").is_none());
+        assert!(fleet.agent_status("b").is_some());
+    }
+
+    #[test]
+    fn remove_nonexistent_agent_is_safe() {
+        let config = test_daemon_config(vec![test_slot_config("a")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        fleet.remove_agent("nonexistent");
+        assert_eq!(fleet.agent_count(), 1);
+    }
+
+    #[test]
+    fn update_agent_config_changes_stored_config() {
+        let config = test_daemon_config(vec![test_slot_config("a")]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        let mut updated = test_slot_config("a");
+        updated.role = Some("specialist".into());
+        updated.agent_goal = Some("test things".into());
+        fleet.update_agent_config(&updated);
+
+        let slot = fleet.slot("a").unwrap();
+        assert_eq!(slot.config.role, Some("specialist".into()));
+        assert_eq!(slot.config.agent_goal, Some("test things".into()));
     }
 
     #[test]

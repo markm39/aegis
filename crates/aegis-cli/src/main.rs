@@ -541,6 +541,9 @@ enum DaemonCommands {
     /// Stop a running daemon
     Stop,
 
+    /// Reload daemon configuration from daemon.toml (no restart)
+    Reload,
+
     /// Show daemon status (uptime, agent count)
     Status,
 
@@ -941,6 +944,7 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Run { launchd } => commands::daemon::run(launchd),
             DaemonCommands::Start => commands::daemon::start(),
             DaemonCommands::Stop => commands::daemon::stop(),
+            DaemonCommands::Reload => commands::daemon::reload(),
             DaemonCommands::Status => commands::daemon::status(),
             DaemonCommands::Agents => commands::daemon::agents(),
             DaemonCommands::Config { action } => match action {
@@ -2273,6 +2277,17 @@ mod tests {
         match cli.command.unwrap() {
             Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Path } } => {}
             _ => panic!("expected Daemon Config Path command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_reload() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "reload"]);
+        assert!(cli.is_ok(), "should parse daemon reload: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Reload } => {}
+            _ => panic!("expected Daemon Reload command"),
         }
     }
 

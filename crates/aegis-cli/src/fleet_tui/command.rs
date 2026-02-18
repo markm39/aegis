@@ -78,6 +78,10 @@ pub enum FleetCommand {
     DaemonStop,
     /// Create daemon.toml if it doesn't exist.
     DaemonInit,
+    /// Reload daemon configuration from daemon.toml.
+    DaemonReload,
+    /// Show daemon status in the command result bar.
+    DaemonStatus,
     /// Run system checks (verify sandbox, tools, etc.).
     Setup,
     /// Create an aegis project config (init wizard).
@@ -167,8 +171,10 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "start" => Ok(Some(FleetCommand::DaemonStart)),
                 "stop" => Ok(Some(FleetCommand::DaemonStop)),
                 "init" => Ok(Some(FleetCommand::DaemonInit)),
-                "" => Err("usage: daemon start|stop|init".into()),
-                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init")),
+                "reload" => Ok(Some(FleetCommand::DaemonReload)),
+                "status" => Ok(Some(FleetCommand::DaemonStatus)),
+                "" => Err("usage: daemon start|stop|init|reload|status".into()),
+                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init, reload, status")),
             }
         }
         "deny" => {
@@ -292,7 +298,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 }
 
 /// Subcommands for `:daemon`.
-const DAEMON_SUBCOMMANDS: &[&str] = &["init", "start", "stop"];
+const DAEMON_SUBCOMMANDS: &[&str] = &["init", "reload", "start", "status", "stop"];
 
 /// Complete the current command buffer, returning possible completions.
 ///
@@ -362,7 +368,9 @@ pub fn help_text() -> &'static str {
      :context <agent>         View agent context\n\
      :context <a> <f> <val>   Set context field (role/goal/context)\n\
      :daemon init             Create daemon.toml\n\
+     :daemon reload           Reload config from daemon.toml\n\
      :daemon start            Start daemon in background\n\
+     :daemon status           Show daemon status\n\
      :daemon stop             Stop running daemon\n\
      :deny <agent>            Deny first pending prompt\n\
      :diff <s1> <s2>          Compare two audit sessions\n\
@@ -800,6 +808,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_daemon_reload() {
+        assert_eq!(
+            parse("daemon reload").unwrap(),
+            Some(FleetCommand::DaemonReload)
+        );
+    }
+
+    #[test]
+    fn parse_daemon_status() {
+        assert_eq!(
+            parse("daemon status").unwrap(),
+            Some(FleetCommand::DaemonStatus)
+        );
+    }
+
+    #[test]
     fn parse_daemon_missing_sub() {
         assert!(parse("daemon").is_err());
     }
@@ -814,7 +838,9 @@ mod tests {
         let agents = vec![];
         let c = completions("daemon ", &agents);
         assert!(c.contains(&"init".to_string()));
+        assert!(c.contains(&"reload".to_string()));
         assert!(c.contains(&"start".to_string()));
+        assert!(c.contains(&"status".to_string()));
         assert!(c.contains(&"stop".to_string()));
     }
 
@@ -822,7 +848,7 @@ mod tests {
     fn completions_daemon_prefix() {
         let agents = vec![];
         let c = completions("daemon st", &agents);
-        assert_eq!(c, vec!["start", "stop"]);
+        assert_eq!(c, vec!["start", "status", "stop"]);
     }
 
     #[test]

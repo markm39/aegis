@@ -76,6 +76,12 @@ pub enum DaemonCommand {
     GetAgentContext {
         name: String,
     },
+    /// Reload daemon configuration from daemon.toml.
+    ///
+    /// Re-reads daemon.toml and applies changes: adds new agents, updates
+    /// config fields for existing agents, removes agents no longer present.
+    /// Running agents are not restarted -- only their stored config updates.
+    ReloadConfig,
     /// Request graceful daemon shutdown (stops all agents first).
     Shutdown,
 }

@@ -1078,6 +1078,26 @@ impl FleetApp {
                     }
                 }
             }
+            FleetCommand::DaemonReload => {
+                if !self.connected {
+                    self.command_result = Some("Daemon is not running.".into());
+                } else {
+                    self.send_named_command(DaemonCommand::ReloadConfig);
+                }
+            }
+            FleetCommand::DaemonStatus => {
+                if !self.connected {
+                    self.command_result = Some("Daemon is not running (offline mode).".into());
+                } else {
+                    let running = self.running_count();
+                    let total = self.agents.len();
+                    self.command_result = Some(format!(
+                        "{running} running / {total} total, PID {}, uptime {}",
+                        self.daemon_pid,
+                        format_uptime(self.daemon_uptime_secs),
+                    ));
+                }
+            }
         }
     }
 

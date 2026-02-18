@@ -175,6 +175,27 @@ pub fn stop() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Reload daemon configuration from daemon.toml without restarting.
+pub fn reload() -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running. Start it first with `aegis daemon start`.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::ReloadConfig)
+        .map_err(|e| anyhow::anyhow!("failed to send reload: {e}"))?;
+
+    if response.ok {
+        println!("{}", response.message);
+    } else {
+        println!("Reload failed: {}", response.message);
+    }
+
+    Ok(())
+}
+
 /// Query daemon status.
 pub fn status() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();

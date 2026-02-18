@@ -591,6 +591,10 @@ impl DaemonRuntime {
                 DaemonResponse::ok_with_data("agent context", data)
             }
 
+            DaemonCommand::ReloadConfig => {
+                self.reload_config()
+            }
+
             DaemonCommand::Shutdown => {
                 self.request_shutdown();
                 DaemonResponse::ok("shutdown initiated")
@@ -611,6 +615,60 @@ impl DaemonRuntime {
     /// Daemon uptime in seconds.
     pub fn uptime_secs(&self) -> u64 {
         self.started_at.elapsed().as_secs()
+    }
+
+    /// Reload configuration from daemon.toml.
+    ///
+    /// Adds new agents, updates config for existing agents, and removes
+    /// agents no longer in the config file. Running agents are NOT
+    /// automatically restarted -- config changes take effect on next start.
+    fn reload_config(&mut self) -> DaemonResponse {
+        let config_path = aegis_types::daemon::daemon_config_path();
+        let content = match std::fs::read_to_string(&config_path) {
+            Ok(c) => c,
+            Err(e) => return DaemonResponse::error(format!("failed to read daemon.toml: {e}")),
+        };
+        let new_config = match DaemonConfig::from_toml(&content) {
+            Ok(c) => c,
+            Err(e) => return DaemonResponse::error(format!("failed to parse daemon.toml: {e}")),
+        };
+
+        let mut added = 0usize;
+        let mut updated = 0usize;
+        let mut removed = 0usize;
+
+        // Collect current agent names
+        let current_names: std::collections::HashSet<String> =
+            self.fleet.agent_names().into_iter().collect();
+        let new_names: std::collections::HashSet<String> =
+            new_config.agents.iter().map(|a| a.name.clone()).collect();
+
+        // Remove agents no longer in config
+        for name in current_names.difference(&new_names) {
+            self.fleet.remove_agent(name);
+            removed += 1;
+        }
+
+        // Add or update agents
+        for agent_config in &new_config.agents {
+            if current_names.contains(&agent_config.name) {
+                self.fleet.update_agent_config(agent_config);
+                updated += 1;
+            } else {
+                self.fleet.add_agent(agent_config.clone());
+                added += 1;
+            }
+        }
+
+        // Update fleet goal
+        self.fleet.fleet_goal = new_config.goal.clone();
+
+        // Update stored config
+        self.config = new_config;
+
+        DaemonResponse::ok(format!(
+            "config reloaded: {added} added, {updated} updated, {removed} removed"
+        ))
     }
 
     /// Persist the current daemon config to daemon.toml.
@@ -1194,5 +1252,18 @@ mod tests {
         let verdict: ToolUseVerdict =
             serde_json::from_value(resp.data.unwrap()).unwrap();
         assert_eq!(verdict.decision, "allow");
+    }
+
+    #[test]
+    fn handle_command_reload_config_without_file() {
+        // ReloadConfig should fail gracefully if daemon.toml doesn't exist
+        // at the standard path. We can't easily test a full reload since
+        // daemon_config_path() is system-dependent, but we can verify
+        // the command doesn't panic.
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::ReloadConfig);
+        // May succeed or fail depending on whether daemon.toml exists on disk
+        // The important thing is it doesn't panic
+        let _ = resp;
     }
 }
