@@ -391,10 +391,9 @@ impl Fleet {
                             warn!(agent = name, pid, "SIGTERM timeout, sending SIGKILL");
                             let _ = signal::kill(Pid::from_raw(p), Signal::SIGKILL);
                         }
-                        // Only escalate once: clear the signal timestamp.
-                        if let Some(slot) = self.slots.get_mut(name) {
-                            slot.stop_signaled_at = None;
-                        }
+                        // Don't clear stop_signaled_at here -- handle_agent_exit
+                        // needs it to know this was a user-initiated stop.
+                        // Re-sending SIGKILL on subsequent ticks is harmless.
                     }
                 }
             }
@@ -490,6 +489,7 @@ impl Fleet {
         // How long did the agent actually run?
         let run_duration = slot.started_at.map(|t| t.elapsed());
         slot.started_at = None;
+        let was_user_stopped = slot.stop_signaled_at.is_some();
         slot.stop_signaled_at = None;
 
         // Clear dead channels (senders dropped when thread exited).
@@ -509,10 +509,9 @@ impl Fleet {
             return;
         }
 
-        // If the user explicitly stopped this agent (stop_signaled_at is set),
-        // don't apply the restart policy -- honor the explicit stop.
-        if slot.stop_signaled_at.is_some() {
-            slot.stop_signaled_at = None;
+        // If the user explicitly stopped this agent, don't apply the restart
+        // policy -- honor the explicit stop.
+        if was_user_stopped {
             slot.status = AgentStatus::Stopped { exit_code };
             info!(agent = name, exit_code, "agent stopped by user");
             return;
