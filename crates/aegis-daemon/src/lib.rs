@@ -469,8 +469,7 @@ impl DaemonRuntime {
 
                 // Disk write succeeded -- now safe to update memory
                 self.config = candidate;
-                self.fleet.stop_agent(name);
-                self.fleet.remove_agent(name);
+                self.fleet.remove_agent(name); // remove_agent stops the agent internally
                 DaemonResponse::ok(format!("agent '{name}' removed"))
             }
 

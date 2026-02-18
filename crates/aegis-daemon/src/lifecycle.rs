@@ -225,8 +225,28 @@ fn run_agent_slot_inner(
     let driver = create_driver(&slot_config.tool, Some(name));
     let strategy = driver.spawn_strategy(&slot_config.working_dir);
 
+    // 5. Compute task injection BEFORE spawn so CliArg can be folded into args
+    let composed = compose_prompt(
+        fleet_goal,
+        slot_config.role.as_deref(),
+        slot_config.agent_goal.as_deref(),
+        slot_config.context.as_deref(),
+        slot_config.task.as_deref(),
+    );
+    let injection = composed.as_ref().map(|p| driver.task_injection(p));
+
+    // Extract any CLI args that must be part of the spawn command
+    let cli_extra_args: Vec<String> = match &injection {
+        Some(TaskInjection::CliArg { flag, value }) => {
+            vec![flag.clone(), value.clone()]
+        }
+        _ => vec![],
+    };
+
     let pty = match strategy {
-        SpawnStrategy::Pty { command, args, mut env } => {
+        SpawnStrategy::Pty { command, mut args, mut env } => {
+            // Append CLI-arg task injection if needed
+            args.extend(cli_extra_args.clone());
             // Inject usage proxy URLs if active
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
@@ -241,7 +261,9 @@ fn run_agent_slot_inner(
             PtySession::spawn(&command, &args, &slot_config.working_dir, &env)
                 .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?
         }
-        SpawnStrategy::Process { command, args, mut env } => {
+        SpawnStrategy::Process { command, mut args, mut env } => {
+            // Append CLI-arg task injection if needed
+            args.extend(cli_extra_args.clone());
             // Inject usage proxy URLs if active
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
@@ -279,32 +301,17 @@ fn run_agent_slot_inner(
         }
     };
 
-    // 5. Inject composed prompt (fleet goal + agent context + task)
-    let composed = compose_prompt(
-        fleet_goal,
-        slot_config.role.as_deref(),
-        slot_config.agent_goal.as_deref(),
-        slot_config.context.as_deref(),
-        slot_config.task.as_deref(),
-    );
-    if let Some(ref prompt) = composed {
-        let injection = driver.task_injection(prompt);
-        match injection {
-            TaskInjection::Stdin { text } => {
-                // Wait a moment for the agent to be ready
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                if let Err(e) = pty.send_line(&text) {
-                    warn!(agent = name, error = %e, "failed to inject prompt via stdin");
-                } else {
-                    info!(agent = name, "composed prompt injected via stdin");
-                }
-            }
-            TaskInjection::CliArg { .. } => {
-                // CLI args are already included in the spawn strategy
-                info!(agent = name, "composed prompt provided via CLI arg");
-            }
-            TaskInjection::None => {}
+    // 5b. Inject via stdin (post-spawn) if needed
+    if let Some(TaskInjection::Stdin { ref text }) = injection {
+        // Wait a moment for the agent to be ready
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Err(e) = pty.send_line(text) {
+            warn!(agent = name, error = %e, "failed to inject prompt via stdin");
+        } else {
+            info!(agent = name, "composed prompt injected via stdin");
         }
+    } else if injection.as_ref().is_some_and(|i| matches!(i, TaskInjection::CliArg { .. })) {
+        info!(agent = name, "composed prompt provided via CLI arg");
     }
 
     // 6. Create adapter and run supervisor

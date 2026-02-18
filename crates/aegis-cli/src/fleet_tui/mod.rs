@@ -239,10 +239,10 @@ impl FleetApp {
                     match serde_json::from_value::<Vec<AgentSummary>>(data) {
                         Ok(agents) => {
                             self.agents = agents;
-                            // Clamp selection
-                            if self.agent_selected >= self.agents.len()
-                                && !self.agents.is_empty()
-                            {
+                            // Clamp selection to valid range
+                            if self.agents.is_empty() {
+                                self.agent_selected = 0;
+                            } else if self.agent_selected >= self.agents.len() {
                                 self.agent_selected = self.agents.len() - 1;
                             }
                         }
