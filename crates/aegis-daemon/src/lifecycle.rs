@@ -171,13 +171,36 @@ fn run_agent_slot_inner(
         None
     };
 
-    // 3c. Install hook settings for Claude Code agents so the PreToolUse
-    // hook routes every tool call through the daemon for Cedar policy evaluation.
-    if matches!(slot_config.tool, AgentToolConfig::ClaudeCode { .. }) {
-        if let Err(e) = hooks::install_daemon_hooks(&slot_config.working_dir) {
-            warn!(agent = name, error = %e, "failed to install hook settings, policy enforcement may not work");
-        } else {
-            info!(agent = name, dir = %slot_config.working_dir.display(), "installed PreToolUse hook settings");
+    // 3c. Install hook settings so pre-tool-use hooks route every tool call
+    // through the daemon for Cedar policy evaluation.
+    match &slot_config.tool {
+        AgentToolConfig::ClaudeCode { .. } => {
+            if let Err(e) = hooks::install_daemon_hooks(&slot_config.working_dir) {
+                warn!(agent = name, error = %e, "failed to install Claude Code hook settings, policy enforcement may not work");
+            } else {
+                info!(agent = name, dir = %slot_config.working_dir.display(), "installed Claude Code PreToolUse hook");
+            }
+        }
+        AgentToolConfig::Cursor { .. } => {
+            if let Err(e) = hooks::install_cursor_hooks(&slot_config.working_dir) {
+                warn!(agent = name, error = %e, "failed to install Cursor hook settings, policy enforcement may not work");
+            } else {
+                info!(agent = name, dir = %slot_config.working_dir.display(), "installed Cursor hooks");
+            }
+        }
+        AgentToolConfig::Codex { .. } => {
+            // Codex CLI does not have a hooks system yet (PR #11067 in review).
+            // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the
+            // driver for forward-compatibility when hooks ship.
+            info!(agent = name, "Codex hooks not yet available, env vars set for future use");
+        }
+        AgentToolConfig::OpenClaw { .. } => {
+            // OpenClaw's before_tool_call plugin hook is not fully wired (Issue #6535).
+            // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the driver.
+            info!(agent = name, "OpenClaw hook bridge not yet implemented, env vars set");
+        }
+        AgentToolConfig::Custom { .. } => {
+            // Custom agents may or may not support hooks -- skip.
         }
     }
 

@@ -118,6 +118,97 @@ pub fn install_daemon_hooks(working_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The Cursor hook events that Aegis intercepts.
+const CURSOR_HOOK_EVENTS: &[&str] = &[
+    "beforeShellExecution",
+    "beforeReadFile",
+    "beforeMCPExecution",
+];
+
+/// Generate the Cursor hooks JSON config that registers the aegis hook.
+fn cursor_hook_entry() -> serde_json::Value {
+    serde_json::json!({
+        "command": "aegis hook pre-tool-use"
+    })
+}
+
+/// Check if the aegis hook is already registered in a Cursor hooks array.
+///
+/// Cursor hook entries use `{"command": "..."}` (no `type` field).
+fn is_aegis_cursor_hook_installed(hooks_array: &[serde_json::Value]) -> bool {
+    hooks_array.iter().any(|entry| {
+        entry
+            .get("command")
+            .and_then(|v| v.as_str())
+            .is_some_and(|cmd| cmd.contains("aegis hook"))
+    })
+}
+
+/// Install hook settings for a daemon-managed Cursor agent.
+///
+/// Writes to `.cursor/hooks.json` in the given working directory. Cursor
+/// uses per-event hook arrays (`beforeShellExecution`, `beforeReadFile`,
+/// `beforeMCPExecution`) rather than Claude Code's unified `PreToolUse`.
+///
+/// The function is idempotent: if the aegis hook is already registered in
+/// each event array, it does nothing. Existing hooks are preserved.
+pub fn install_cursor_hooks(working_dir: &Path) -> Result<(), String> {
+    let cursor_dir = working_dir.join(".cursor");
+    std::fs::create_dir_all(&cursor_dir)
+        .map_err(|e| format!("failed to create .cursor directory: {e}"))?;
+
+    let hooks_path = cursor_dir.join("hooks.json");
+
+    // Load existing hooks or start fresh
+    let mut config: serde_json::Value = if hooks_path.exists() {
+        let content = std::fs::read_to_string(&hooks_path)
+            .map_err(|e| format!("failed to read {}: {e}", hooks_path.display()))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = config
+        .as_object_mut()
+        .ok_or_else(|| "hooks.json is not a JSON object".to_string())?;
+
+    // Ensure version field exists
+    obj.entry("version")
+        .or_insert(serde_json::json!(1));
+
+    // Navigate to hooks object
+    let hooks = obj
+        .entry("hooks")
+        .or_insert(serde_json::json!({}));
+
+    let hooks_obj = hooks
+        .as_object_mut()
+        .ok_or_else(|| "hooks is not a JSON object".to_string())?;
+
+    // Register aegis hook in each Cursor event array
+    for event_name in CURSOR_HOOK_EVENTS {
+        let event_hooks = hooks_obj
+            .entry(*event_name)
+            .or_insert(serde_json::json!([]));
+
+        let event_array = event_hooks
+            .as_array_mut()
+            .ok_or_else(|| format!("{event_name} is not an array"))?;
+
+        if !is_aegis_cursor_hook_installed(event_array) {
+            event_array.push(cursor_hook_entry());
+        }
+    }
+
+    // Write back
+    let output = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("failed to serialize hooks: {e}"))?;
+    std::fs::write(&hooks_path, output)
+        .map_err(|e| format!("failed to write {}: {e}", hooks_path.display()))?;
+
+    Ok(())
+}
+
 /// Install hook settings into a project's `.claude/settings.json`.
 ///
 /// Unlike `install_daemon_hooks` (which targets `settings.local.json`),
@@ -320,5 +411,103 @@ mod tests {
             "command": "echo hello"
         })];
         assert!(!is_aegis_hook_installed(&other));
+    }
+
+    // ── Cursor hook tests ──────────────────────────────────────────────
+
+    #[test]
+    fn install_cursor_hooks_creates_file() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        install_cursor_hooks(tmpdir.path()).expect("should install");
+
+        let hooks_path = tmpdir.path().join(".cursor").join("hooks.json");
+        assert!(hooks_path.exists());
+
+        let content = std::fs::read_to_string(&hooks_path).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(config["version"], 1);
+
+        for event in CURSOR_HOOK_EVENTS {
+            let arr = config["hooks"][event].as_array()
+                .unwrap_or_else(|| panic!("{event} should be an array"));
+            assert_eq!(arr.len(), 1, "{event} should have one hook");
+            assert!(arr[0]["command"].as_str().unwrap().contains("aegis hook"));
+        }
+    }
+
+    #[test]
+    fn install_cursor_hooks_idempotent() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        install_cursor_hooks(tmpdir.path()).expect("first install");
+        install_cursor_hooks(tmpdir.path()).expect("second install");
+
+        let content = std::fs::read_to_string(
+            tmpdir.path().join(".cursor").join("hooks.json"),
+        )
+        .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        for event in CURSOR_HOOK_EVENTS {
+            let arr = config["hooks"][event].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event} should not have duplicate hooks");
+        }
+    }
+
+    #[test]
+    fn install_cursor_hooks_preserves_existing() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let cursor_dir = tmpdir.path().join(".cursor");
+        std::fs::create_dir_all(&cursor_dir).unwrap();
+
+        // Write existing hooks with some other config
+        let existing = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "afterFileEdit": [
+                    {"command": "echo edited"}
+                ]
+            }
+        });
+        std::fs::write(
+            cursor_dir.join("hooks.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        install_cursor_hooks(tmpdir.path()).expect("should install");
+
+        let content =
+            std::fs::read_to_string(cursor_dir.join("hooks.json")).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Existing afterFileEdit hook should be preserved
+        assert_eq!(
+            config["hooks"]["afterFileEdit"].as_array().unwrap().len(),
+            1
+        );
+        // Aegis hooks should be added to all three events
+        for event in CURSOR_HOOK_EVENTS {
+            assert_eq!(
+                config["hooks"][event].as_array().unwrap().len(),
+                1,
+                "{event} should have aegis hook"
+            );
+        }
+    }
+
+    #[test]
+    fn is_aegis_cursor_hook_installed_detection() {
+        let hooks = vec![serde_json::json!({
+            "command": "aegis hook pre-tool-use"
+        })];
+        assert!(is_aegis_cursor_hook_installed(&hooks));
+
+        let empty: Vec<serde_json::Value> = vec![];
+        assert!(!is_aegis_cursor_hook_installed(&empty));
+
+        let other = vec![serde_json::json!({
+            "command": "echo hello"
+        })];
+        assert!(!is_aegis_cursor_hook_installed(&other));
     }
 }

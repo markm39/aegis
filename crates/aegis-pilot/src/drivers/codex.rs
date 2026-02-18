@@ -11,6 +11,9 @@ use crate::driver::{AgentDriver, SpawnStrategy, TaskInjection};
 
 /// Driver for OpenAI Codex CLI.
 pub struct CodexDriver {
+    /// Aegis agent name, set as AEGIS_AGENT_NAME env var so hooks can
+    /// identify which agent is making the tool call.
+    pub aegis_agent_name: Option<String>,
     pub approval_mode: String,
     pub one_shot: bool,
     pub extra_args: Vec<String>,
@@ -45,10 +48,20 @@ impl AgentDriver for CodexDriver {
 
         args.extend(self.extra_args.iter().cloned());
 
+        let mut env = Vec::new();
+        if let Some(ref name) = self.aegis_agent_name {
+            env.push(("AEGIS_AGENT_NAME".to_string(), name.clone()));
+        }
+        let socket_path = aegis_types::daemon::daemon_dir().join("daemon.sock");
+        env.push((
+            "AEGIS_SOCKET_PATH".to_string(),
+            socket_path.to_string_lossy().into_owned(),
+        ));
+
         SpawnStrategy::Pty {
             command: "codex".to_string(),
             args,
-            env: vec![],
+            env,
         }
     }
 
@@ -87,6 +100,7 @@ mod tests {
     #[test]
     fn spawn_strategy_suggest() {
         let driver = CodexDriver {
+            aegis_agent_name: None,
             approval_mode: "suggest".into(),
             one_shot: false,
             extra_args: vec![],
@@ -104,6 +118,7 @@ mod tests {
     #[test]
     fn spawn_strategy_full_auto() {
         let driver = CodexDriver {
+            aegis_agent_name: None,
             approval_mode: "full-auto".into(),
             one_shot: false,
             extra_args: vec![],
@@ -121,6 +136,7 @@ mod tests {
     #[test]
     fn one_shot_includes_subcommand() {
         let driver = CodexDriver {
+            aegis_agent_name: None,
             approval_mode: "suggest".into(),
             one_shot: true,
             extra_args: vec![],
@@ -135,8 +151,27 @@ mod tests {
     }
 
     #[test]
+    fn spawn_strategy_sets_aegis_env() {
+        let driver = CodexDriver {
+            aegis_agent_name: Some("codex-1".to_string()),
+            approval_mode: "full-auto".into(),
+            one_shot: false,
+            extra_args: vec![],
+        };
+        let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
+        match strategy {
+            SpawnStrategy::Pty { env, .. } => {
+                assert!(env.contains(&("AEGIS_AGENT_NAME".to_string(), "codex-1".to_string())));
+                assert!(env.iter().any(|(k, _)| k == "AEGIS_SOCKET_PATH"));
+            }
+            _ => panic!("expected Pty strategy"),
+        }
+    }
+
+    #[test]
     fn adapter_in_suggest_mode() {
         let driver = CodexDriver {
+            aegis_agent_name: None,
             approval_mode: "suggest".into(),
             one_shot: false,
             extra_args: vec![],
@@ -147,6 +182,7 @@ mod tests {
     #[test]
     fn no_adapter_in_full_auto() {
         let driver = CodexDriver {
+            aegis_agent_name: None,
             approval_mode: "full-auto".into(),
             one_shot: false,
             extra_args: vec![],

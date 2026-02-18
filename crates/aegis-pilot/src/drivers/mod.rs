@@ -30,19 +30,22 @@ pub fn create_driver(config: &AgentToolConfig, agent_name: Option<&str>) -> Box<
         }
         AgentToolConfig::Codex { approval_mode, one_shot, extra_args } => {
             Box::new(codex::CodexDriver {
+                aegis_agent_name: agent_name.map(|s| s.to_string()),
                 approval_mode: approval_mode.clone(),
                 one_shot: *one_shot,
                 extra_args: extra_args.clone(),
             })
         }
-        AgentToolConfig::OpenClaw { agent_name, extra_args } => {
+        AgentToolConfig::OpenClaw { agent_name: oc_name, extra_args } => {
             Box::new(openclaw::OpenClawDriver {
-                agent_name: agent_name.clone(),
+                aegis_agent_name: agent_name.map(|s| s.to_string()),
+                agent_name: oc_name.clone(),
                 extra_args: extra_args.clone(),
             })
         }
         AgentToolConfig::Cursor { assume_running } => {
             Box::new(cursor::CursorDriver {
+                aegis_agent_name: agent_name.map(|s| s.to_string()),
                 assume_running: *assume_running,
             })
         }

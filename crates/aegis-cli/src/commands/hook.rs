@@ -1,26 +1,159 @@
-//! Hook handlers for Claude Code integration.
+//! Hook handlers for AI coding tool integration.
 //!
-//! Claude Code fires hooks at well-defined lifecycle points. Aegis registers
-//! as a `PreToolUse` hook so that every tool call is evaluated against Cedar
-//! policy before execution.
+//! AI coding tools (Claude Code, Cursor) fire hooks at well-defined lifecycle
+//! points. Aegis registers as a pre-tool-use hook so that every tool call is
+//! evaluated against Cedar policy before execution.
 //!
 //! The flow:
-//! 1. Claude Code fires `PreToolUse`, passing `{tool_name, tool_input}` on stdin
-//! 2. `aegis hook pre-tool-use` reads stdin, sends `EvaluateToolUse` to the daemon
-//! 3. The daemon evaluates Cedar policy and returns allow/deny
-//! 4. This command outputs `{"permissionDecision": "allow"}` or exits with code 2
+//! 1. The tool fires a pre-tool-use event, passing JSON on stdin
+//! 2. `aegis hook pre-tool-use` auto-detects the format (Claude Code vs Cursor)
+//! 3. Sends `EvaluateToolUse` to the daemon for Cedar policy evaluation
+//! 4. Outputs the verdict in the caller's expected format (exit 0 + JSON)
 
 use std::io::{self, Read};
 
 use aegis_control::daemon::{DaemonClient, DaemonCommand, ToolUseVerdict};
 use aegis_control::hooks;
 
-/// Handle a `PreToolUse` hook invocation from Claude Code.
+/// Which tool is calling us, determined by the stdin payload shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookFormat {
+    /// Claude Code: `PreToolUse` event with `tool_name` + `tool_input`.
+    ClaudeCode,
+    /// Cursor: per-operation events (`beforeShellExecution`, `beforeReadFile`, etc.)
+    Cursor,
+}
+
+/// Parsed hook input, normalized to a common format regardless of caller.
+struct HookInput {
+    format: HookFormat,
+    tool_name: String,
+    tool_input: serde_json::Value,
+}
+
+/// Parse the hook payload from stdin and auto-detect the calling tool.
 ///
-/// Reads the hook payload from stdin, queries the daemon for a Cedar policy
-/// verdict, and outputs the result in Claude Code's expected format.
-/// Falls back to allow if the daemon is unreachable (matching the
-/// `--dangerously-skip-permissions` baseline).
+/// Detection uses the `hook_event_name` field:
+/// - `"PreToolUse"` -> Claude Code
+/// - `"beforeShellExecution"` / `"beforeReadFile"` / `"beforeMCPExecution"` -> Cursor
+/// - Anything else -> falls back to Claude Code format
+fn parse_hook_input(payload: &serde_json::Value) -> HookInput {
+    let event_name = payload
+        .get("hook_event_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    match event_name {
+        "beforeShellExecution" => {
+            let command = payload
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            HookInput {
+                format: HookFormat::Cursor,
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({ "command": command }),
+            }
+        }
+        "beforeReadFile" => {
+            let file_path = payload
+                .get("file_path")
+                .or_else(|| payload.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            HookInput {
+                format: HookFormat::Cursor,
+                tool_name: "Read".to_string(),
+                tool_input: serde_json::json!({ "file_path": file_path }),
+            }
+        }
+        "beforeMCPExecution" => {
+            // MCP tool calls from Cursor -- extract the tool name and input
+            let tool = payload
+                .get("mcp_tool_name")
+                .or_else(|| payload.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("mcp_tool")
+                .to_string();
+            let input = payload
+                .get("mcp_tool_input")
+                .or_else(|| payload.get("tool_input"))
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            HookInput {
+                format: HookFormat::Cursor,
+                tool_name: tool,
+                tool_input: input,
+            }
+        }
+        _ => {
+            // Claude Code format (default)
+            let tool_name = payload
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let tool_input = payload
+                .get("tool_input")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            HookInput {
+                format: HookFormat::ClaudeCode,
+                tool_name,
+                tool_input,
+            }
+        }
+    }
+}
+
+/// Format an allow response in the caller's expected dialect.
+fn format_allow(format: HookFormat) -> serde_json::Value {
+    match format {
+        HookFormat::ClaudeCode => serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            }
+        }),
+        HookFormat::Cursor => serde_json::json!({
+            "continue": true,
+            "permission": "allow",
+        }),
+    }
+}
+
+/// Format a deny response in the caller's expected dialect.
+///
+/// For Claude Code, `permissionDecisionReason` is shown directly to the model
+/// so it can adapt its approach (e.g. try a different tool).
+fn format_deny(format: HookFormat, tool_name: &str, reason: &str) -> serde_json::Value {
+    match format {
+        HookFormat::ClaudeCode => serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": format!(
+                    "Aegis policy denied this {tool_name} call: {reason}. \
+                     Try a different approach that doesn't require this tool."
+                ),
+            }
+        }),
+        HookFormat::Cursor => serde_json::json!({
+            "continue": false,
+            "permission": "deny",
+            "agentMessage": format!("Blocked by Aegis policy: {reason}"),
+        }),
+    }
+}
+
+/// Handle a pre-tool-use hook invocation from Claude Code or Cursor.
+///
+/// Reads the hook payload from stdin, auto-detects the format, queries the
+/// daemon for a Cedar policy verdict, and outputs the result in the caller's
+/// expected format. Falls back to allow if the daemon is unreachable (matching
+/// the `--dangerously-skip-permissions` baseline).
 pub fn pre_tool_use() -> anyhow::Result<()> {
     // Read the hook payload from stdin
     let mut input = String::new();
@@ -29,15 +162,7 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
     let payload: serde_json::Value = serde_json::from_str(&input)
         .unwrap_or_else(|_| serde_json::Value::Null);
 
-    let tool_name = payload
-        .get("tool_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-
-    let tool_input = payload
-        .get("tool_input")
-        .cloned()
-        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let hook_input = parse_hook_input(&payload);
 
     // Get agent name from environment (set by the daemon/driver when spawning)
     let agent_name = std::env::var("AEGIS_AGENT_NAME")
@@ -51,11 +176,10 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
     };
     let verdict = match client.send(&DaemonCommand::EvaluateToolUse {
         agent: agent_name,
-        tool_name: tool_name.to_string(),
-        tool_input,
+        tool_name: hook_input.tool_name.clone(),
+        tool_input: hook_input.tool_input,
     }) {
         Ok(resp) if resp.ok => {
-            // Parse the verdict from response data
             resp.data
                 .and_then(|d| serde_json::from_value::<ToolUseVerdict>(d).ok())
                 .unwrap_or(ToolUseVerdict {
@@ -64,7 +188,6 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
                 })
         }
         Ok(resp) => {
-            // Daemon returned an error -- default to allow
             eprintln!("aegis: policy evaluation error: {}", resp.message);
             ToolUseVerdict {
                 decision: "allow".to_string(),
@@ -72,7 +195,6 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
             }
         }
         Err(e) => {
-            // Daemon unreachable -- default to allow (dangerously-skip-permissions baseline)
             eprintln!("aegis: daemon unreachable, defaulting to allow: {e}");
             ToolUseVerdict {
                 decision: "allow".to_string(),
@@ -82,20 +204,13 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
     };
 
     if verdict.decision == "deny" {
-        // Claude Code interprets exit code 2 as "block this tool use"
-        eprintln!("aegis: denied {tool_name}: {}", verdict.reason);
-        let output = serde_json::json!({
-            "permissionDecision": "deny",
-            "reason": verdict.reason,
-        });
+        eprintln!("aegis: denied {}: {}", hook_input.tool_name, verdict.reason);
+        let output = format_deny(hook_input.format, &hook_input.tool_name, &verdict.reason);
         println!("{}", serde_json::to_string(&output)?);
-        std::process::exit(2);
+        return Ok(());
     }
 
-    // Allow: output the permission decision as JSON
-    let output = serde_json::json!({
-        "permissionDecision": "allow",
-    });
+    let output = format_allow(hook_input.format);
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
@@ -146,6 +261,105 @@ pub fn install_settings(project_dir: Option<&std::path::Path>) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_claude_code_format() {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la"}
+        });
+        let input = parse_hook_input(&payload);
+        assert_eq!(input.format, HookFormat::ClaudeCode);
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_input["command"], "ls -la");
+    }
+
+    #[test]
+    fn parse_cursor_shell_format() {
+        let payload = serde_json::json!({
+            "hook_event_name": "beforeShellExecution",
+            "command": "git status",
+            "cwd": "/tmp"
+        });
+        let input = parse_hook_input(&payload);
+        assert_eq!(input.format, HookFormat::Cursor);
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_input["command"], "git status");
+    }
+
+    #[test]
+    fn parse_cursor_read_format() {
+        let payload = serde_json::json!({
+            "hook_event_name": "beforeReadFile",
+            "file_path": "/etc/passwd"
+        });
+        let input = parse_hook_input(&payload);
+        assert_eq!(input.format, HookFormat::Cursor);
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "/etc/passwd");
+    }
+
+    #[test]
+    fn parse_cursor_mcp_format() {
+        let payload = serde_json::json!({
+            "hook_event_name": "beforeMCPExecution",
+            "mcp_tool_name": "github_search",
+            "mcp_tool_input": {"query": "aegis"}
+        });
+        let input = parse_hook_input(&payload);
+        assert_eq!(input.format, HookFormat::Cursor);
+        assert_eq!(input.tool_name, "github_search");
+        assert_eq!(input.tool_input["query"], "aegis");
+    }
+
+    #[test]
+    fn parse_unknown_defaults_to_claude_code() {
+        let payload = serde_json::json!({
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/foo"}
+        });
+        let input = parse_hook_input(&payload);
+        assert_eq!(input.format, HookFormat::ClaudeCode);
+        assert_eq!(input.tool_name, "Read");
+    }
+
+    #[test]
+    fn format_allow_claude_code() {
+        let output = format_allow(HookFormat::ClaudeCode);
+        let hso = &output["hookSpecificOutput"];
+        assert_eq!(hso["hookEventName"], "PreToolUse");
+        assert_eq!(hso["permissionDecision"], "allow");
+    }
+
+    #[test]
+    fn format_allow_cursor() {
+        let output = format_allow(HookFormat::Cursor);
+        assert_eq!(output["continue"], true);
+        assert_eq!(output["permission"], "allow");
+    }
+
+    #[test]
+    fn format_deny_claude_code() {
+        let output = format_deny(HookFormat::ClaudeCode, "Bash", "forbidden path");
+        let hso = &output["hookSpecificOutput"];
+        assert_eq!(hso["hookEventName"], "PreToolUse");
+        assert_eq!(hso["permissionDecision"], "deny");
+        let reason = hso["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("Bash"), "reason should mention tool name");
+        assert!(reason.contains("forbidden path"), "reason should include policy reason");
+    }
+
+    #[test]
+    fn format_deny_cursor() {
+        let output = format_deny(HookFormat::Cursor, "Bash", "forbidden path");
+        assert_eq!(output["continue"], false);
+        assert_eq!(output["permission"], "deny");
+        assert!(output["agentMessage"]
+            .as_str()
+            .unwrap()
+            .contains("forbidden path"));
+    }
 
     #[test]
     fn generate_hook_settings_structure() {
