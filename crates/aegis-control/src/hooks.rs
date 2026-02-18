@@ -97,7 +97,8 @@ pub fn install_daemon_hooks(working_dir: &Path) -> Result<(), String> {
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("failed to read {}: {e}", settings_path.display()))?;
-        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+        serde_json::from_str(&content)
+            .map_err(|e| format!("invalid JSON in {}: {e}", settings_path.display()))?
     } else {
         serde_json::json!({})
     };
@@ -185,7 +186,8 @@ pub fn install_cursor_hooks(working_dir: &Path) -> Result<(), String> {
     let mut config: serde_json::Value = if hooks_path.exists() {
         let content = std::fs::read_to_string(&hooks_path)
             .map_err(|e| format!("failed to read {}: {e}", hooks_path.display()))?;
-        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+        serde_json::from_str(&content)
+            .map_err(|e| format!("invalid JSON in {}: {e}", hooks_path.display()))?
     } else {
         serde_json::json!({})
     };
@@ -248,7 +250,8 @@ pub fn install_project_hooks(project_dir: &Path) -> Result<(), String> {
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path)
             .map_err(|e| format!("failed to read {}: {e}", settings_path.display()))?;
-        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+        serde_json::from_str(&content)
+            .map_err(|e| format!("invalid JSON in {}: {e}", settings_path.display()))?
     } else {
         serde_json::json!({})
     };

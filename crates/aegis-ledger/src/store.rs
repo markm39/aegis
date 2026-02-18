@@ -354,18 +354,37 @@ impl AuditStore {
             return Ok(0);
         }
 
-        // Delete old entries
+        // Wrap delete + rebuild in a savepoint so they're atomic.
+        // If the rebuild fails, the delete is rolled back too.
         self.conn
-            .execute(
-                "DELETE FROM audit_log WHERE timestamp < ?1",
-                params![before_str],
-            )
-            .map_err(|e| AegisError::LedgerError(format!("purge delete failed (before {before_str}): {e}")))?;
+            .execute_batch("SAVEPOINT purge_entries")
+            .map_err(|e| AegisError::LedgerError(format!("begin purge savepoint: {e}")))?;
 
-        // Rebuild hash chain for remaining entries
-        self.rebuild_hash_chain()?;
+        let result = (|| {
+            self.conn
+                .execute(
+                    "DELETE FROM audit_log WHERE timestamp < ?1",
+                    params![before_str],
+                )
+                .map_err(|e| AegisError::LedgerError(format!("purge delete failed (before {before_str}): {e}")))?;
 
-        Ok(count as usize)
+            self.rebuild_hash_chain()?;
+            Ok::<(), AegisError>(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.conn
+                    .execute_batch("RELEASE purge_entries")
+                    .map_err(|e| AegisError::LedgerError(format!("release purge savepoint: {e}")))?;
+                Ok(count as usize)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO purge_entries");
+                let _ = self.conn.execute_batch("RELEASE purge_entries");
+                Err(e)
+            }
+        }
     }
 
     /// Rebuild the hash chain from scratch for all remaining entries.
@@ -414,42 +433,63 @@ impl AuditStore {
 
         drop(stmt);
 
+        // Wrap all updates in a savepoint so a failure mid-rebuild
+        // doesn't leave a partially-rewritten hash chain.
+        self.conn
+            .execute_batch("SAVEPOINT rebuild_chain")
+            .map_err(|e| AegisError::LedgerError(format!("begin rebuild savepoint: {e}")))?;
+
         let mut prev_hash = GENESIS_HASH.to_string();
 
-        for row in &rows {
-            let entry_id: Uuid = row.entry_id
-                .parse()
-                .map_err(|e| AegisError::LedgerError(format!("invalid entry_id: {e}")))?;
-            let timestamp: DateTime<chrono::Utc> = DateTime::parse_from_rfc3339(&row.timestamp)
-                .map_err(|e| AegisError::LedgerError(format!("invalid timestamp: {e}")))?
-                .into();
-            let action_id: Uuid = row.action_id
-                .parse()
-                .map_err(|e| AegisError::LedgerError(format!("invalid action_id: {e}")))?;
+        let result = (|| {
+            for row in &rows {
+                let entry_id: Uuid = row.entry_id
+                    .parse()
+                    .map_err(|e| AegisError::LedgerError(format!("invalid entry_id: {e}")))?;
+                let timestamp: DateTime<chrono::Utc> = DateTime::parse_from_rfc3339(&row.timestamp)
+                    .map_err(|e| AegisError::LedgerError(format!("invalid timestamp: {e}")))?
+                    .into();
+                let action_id: Uuid = row.action_id
+                    .parse()
+                    .map_err(|e| AegisError::LedgerError(format!("invalid action_id: {e}")))?;
 
-            let new_hash = crate::entry::compute_hash(
-                &entry_id,
-                &timestamp,
-                &action_id,
-                &row.action_kind,
-                &row.principal,
-                &row.decision,
-                &row.reason,
-                &prev_hash,
-            );
+                let new_hash = crate::entry::compute_hash(
+                    &entry_id,
+                    &timestamp,
+                    &action_id,
+                    &row.action_kind,
+                    &row.principal,
+                    &row.decision,
+                    &row.reason,
+                    &prev_hash,
+                );
 
-            self.conn
-                .execute(
-                    "UPDATE audit_log SET prev_hash = ?1, entry_hash = ?2 WHERE id = ?3",
-                    params![prev_hash, new_hash, row.row_id],
-                )
-                .map_err(|e| AegisError::LedgerError(format!("rebuild update failed: {e}")))?;
+                self.conn
+                    .execute(
+                        "UPDATE audit_log SET prev_hash = ?1, entry_hash = ?2 WHERE id = ?3",
+                        params![prev_hash, new_hash, row.row_id],
+                    )
+                    .map_err(|e| AegisError::LedgerError(format!("rebuild update failed: {e}")))?;
 
-            prev_hash = new_hash;
+                prev_hash = new_hash;
+            }
+            Ok::<(), AegisError>(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.conn
+                    .execute_batch("RELEASE rebuild_chain")
+                    .map_err(|e| AegisError::LedgerError(format!("release rebuild savepoint: {e}")))?;
+                self.latest_hash = prev_hash;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO rebuild_chain");
+                let _ = self.conn.execute_batch("RELEASE rebuild_chain");
+                Err(e)
+            }
         }
-
-        self.latest_hash = prev_hash;
-        Ok(())
     }
 
     /// Provide read access to the underlying connection (for query extensions).

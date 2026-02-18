@@ -138,12 +138,11 @@ pub fn run(
         pipeline::start_observer(&config, &store_arc, &policy_arc, session_id);
 
     // Start usage proxy if configured
-    let usage_proxy_handle = if config
+    let usage_proxy_handle = if let Some(proxy_config) = config
         .usage_proxy
         .as_ref()
-        .is_some_and(|p| p.enabled)
+        .filter(|p| p.enabled)
     {
-        let proxy_config = config.usage_proxy.as_ref().unwrap();
         let proxy = aegis_proxy::UsageProxy::new(
             Arc::clone(&store_arc),
             config.name.clone(),
@@ -256,7 +255,8 @@ pub fn run(
     };
 
     // Create a separate policy engine for the supervisor thread
-    let policy_dir_for_eval = config.policy_paths.first().cloned().unwrap();
+    let policy_dir_for_eval = config.policy_paths.first().cloned()
+        .context("no policy paths configured -- add a policy directory to the config")?;
     let eval_engine = PolicyEngine::new(&policy_dir_for_eval, None)
         .context("failed to create evaluation policy engine")?;
 

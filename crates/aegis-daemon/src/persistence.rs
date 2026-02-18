@@ -42,9 +42,14 @@ pub fn remove_pid_file() {
 
 /// Check whether a process with the given PID is alive.
 pub fn is_process_alive(pid: u32) -> bool {
+    // Guard against PID values that would wrap negative when cast to i32,
+    // which could probe process groups instead of individual processes.
+    let Ok(raw_pid) = i32::try_from(pid) else {
+        return false;
+    };
     // kill(pid, 0) checks existence without sending a signal
     let result = nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(pid as i32),
+        nix::unistd::Pid::from_raw(raw_pid),
         None, // Signal 0: just check
     );
     result.is_ok()

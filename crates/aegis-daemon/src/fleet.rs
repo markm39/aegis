@@ -513,7 +513,10 @@ impl Fleet {
         // to prevent crash loops from spinning hot.
         let ran_briefly = run_duration.is_some_and(|d| d.as_secs() < 30);
         if ran_briefly {
-            let delay_secs = std::cmp::min(1u64 << slot.restart_count, 60);
+            let delay_secs = 1u64
+                .checked_shl(slot.restart_count)
+                .map(|d| std::cmp::min(d, 60))
+                .unwrap_or(60);
             let backoff_until = std::time::Instant::now()
                 + std::time::Duration::from_secs(delay_secs);
             info!(
