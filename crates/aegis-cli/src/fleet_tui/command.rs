@@ -78,14 +78,18 @@ pub enum FleetCommand {
     DaemonStop,
     /// Create daemon.toml if it doesn't exist.
     DaemonInit,
+    /// Run system checks (verify sandbox, tools, etc.).
+    Setup,
+    /// Create an aegis project config (init wizard).
+    Init,
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
     "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "follow",
-    "goal", "help", "hook", "list", "log", "logs", "monitor", "nudge", "pending", "pilot",
-    "policy", "pop", "quit", "remove", "report", "restart", "run", "send", "start",
-    "status", "stop", "telegram", "use", "watch", "wrap",
+    "goal", "help", "hook", "init", "list", "log", "logs", "monitor", "nudge", "pending",
+    "pilot", "policy", "pop", "quit", "remove", "report", "restart", "run", "send", "setup",
+    "start", "status", "stop", "telegram", "use", "watch", "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
@@ -256,6 +260,8 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "alerts" => Ok(Some(FleetCommand::Alerts)),
+        "setup" => Ok(Some(FleetCommand::Setup)),
+        "init" => Ok(Some(FleetCommand::Init)),
         "goal" => {
             let text = if arg1.is_empty() { None } else {
                 let full = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
@@ -365,6 +371,7 @@ pub fn help_text() -> &'static str {
      :goal <text>             Set fleet goal\n\
      :help                    Show this help\n\
      :hook                    Install aegis hooks (CWD)\n\
+     :init                    Create project aegis config\n\
      :list                    List all aegis configs\n\
      :log                     Recent audit entries\n\
      :logs                    Daemon log output\n\
@@ -380,6 +387,7 @@ pub fn help_text() -> &'static str {
      :restart <agent>         Restart agent\n\
      :run <cmd...>            Run sandboxed in terminal\n\
      :send <agent> <text>     Send text to agent stdin\n\
+     :setup                   Verify system requirements\n\
      :start <agent>           Start agent\n\
      :status                  Daemon status summary\n\
      :stop <agent>            Stop agent\n\

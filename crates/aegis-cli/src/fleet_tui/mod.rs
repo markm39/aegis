@@ -1007,6 +1007,12 @@ impl FleetApp {
             FleetCommand::Alerts => {
                 self.spawn_terminal("aegis alerts list", "Opened alerts in new terminal");
             }
+            FleetCommand::Setup => {
+                self.spawn_terminal("aegis setup", "Running system checks in new terminal");
+            }
+            FleetCommand::Init => {
+                self.spawn_terminal("aegis init", "Opened init wizard in new terminal");
+            }
             FleetCommand::Goal { text } => {
                 self.send_named_command(DaemonCommand::FleetGoal { goal: text });
             }
