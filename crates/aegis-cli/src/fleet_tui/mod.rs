@@ -759,11 +759,10 @@ impl FleetApp {
                 self.send_named_command(DaemonCommand::SendToAgent { name: agent, text });
             }
             FleetCommand::Approve { agent } => {
-                // Approve the first pending prompt (if we have it cached)
-                if let Some(pending) = self.detail_pending.first() {
+                if let Some(request_id) = self.fetch_first_pending_id(&agent) {
                     let cmd = DaemonCommand::ApproveRequest {
                         name: agent,
-                        request_id: pending.request_id.clone(),
+                        request_id,
                     };
                     self.send_named_command(cmd);
                 } else {
@@ -771,10 +770,10 @@ impl FleetApp {
                 }
             }
             FleetCommand::Deny { agent } => {
-                if let Some(pending) = self.detail_pending.first() {
+                if let Some(request_id) = self.fetch_first_pending_id(&agent) {
                     let cmd = DaemonCommand::DenyRequest {
                         name: agent,
-                        request_id: pending.request_id.clone(),
+                        request_id,
                     };
                     self.send_named_command(cmd);
                 } else {
@@ -817,22 +816,21 @@ impl FleetApp {
                 self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
             FleetCommand::Remove { agent } => {
-                // Stop the agent first, then advise to remove from config
-                self.send_named_command(DaemonCommand::StopAgent { name: agent.clone() });
-                self.command_result = Some(format!(
-                    "Stopped '{agent}'. Run `aegis daemon remove {agent}` to remove from config."
-                ));
+                match crate::commands::daemon::remove_agent(&agent) {
+                    Ok(()) => {
+                        self.command_result = Some(format!("Removed '{agent}' from config. Restart daemon to fully apply."));
+                        self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                    }
+                    Err(e) => {
+                        self.command_result = Some(format!("Failed to remove '{agent}': {e}"));
+                    }
+                }
             }
             FleetCommand::Config => {
-                self.command_result = Some(
-                    "Config editing requires exiting the TUI. Run: aegis daemon config edit".into()
-                );
+                self.spawn_terminal("aegis daemon config edit", "Opened config in editor");
             }
             FleetCommand::Telegram => {
-                self.command_result = Some(
-                    "Run `aegis telegram status` to view, `aegis telegram setup` to configure, \
-                     `aegis telegram disable` to remove.".into()
-                );
+                self.spawn_terminal("aegis telegram status", "Opened Telegram status in new terminal");
             }
             FleetCommand::Status => {
                 // Show status as command result
@@ -1018,6 +1016,29 @@ impl FleetApp {
                 }
             }
         }
+    }
+
+    /// Fetch the first pending prompt's request_id for an agent.
+    ///
+    /// If we're in detail view for this agent, uses the cached `detail_pending`.
+    /// Otherwise, makes a synchronous `ListPending` call to the daemon.
+    fn fetch_first_pending_id(&self, agent: &str) -> Option<String> {
+        // Use cached data if we're viewing this agent's detail
+        if self.detail_name == agent {
+            if let Some(p) = self.detail_pending.first() {
+                return Some(p.request_id.clone());
+            }
+        }
+        // Fetch on demand from daemon
+        let client = self.client.as_ref()?;
+        let cmd = DaemonCommand::ListPending { name: agent.to_string() };
+        let resp = client.send(&cmd).ok()?;
+        if !resp.ok {
+            return None;
+        }
+        let data = resp.data?;
+        let pending: Vec<PendingPromptSummary> = serde_json::from_value(data).ok()?;
+        pending.first().map(|p| p.request_id.clone())
     }
 
     /// Spawn a command in a new terminal and set the result message.
