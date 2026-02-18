@@ -161,12 +161,16 @@ fn run_agent_slot_inner(
         let port = handle.port;
         info!(agent = name, port, "usage proxy started");
 
-        // Keep the runtime alive in a background thread
+        // Subscribe to the proxy's shutdown signal so the runtime thread
+        // exits cleanly when the agent stops (instead of blocking on ctrl_c
+        // which never arrives in a background thread).
+        let mut shutdown_sub = handle.shutdown_tx.subscribe();
+
         std::thread::Builder::new()
             .name(format!("usage-proxy-rt-{name}"))
             .spawn(move || {
-                rt.block_on(async {
-                    tokio::signal::ctrl_c().await.ok();
+                rt.block_on(async move {
+                    let _ = shutdown_sub.wait_for(|&v| v).await;
                 });
             })
             .map_err(|e| format!("failed to spawn usage proxy runtime thread: {e}"))?;

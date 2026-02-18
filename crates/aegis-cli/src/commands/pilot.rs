@@ -161,12 +161,15 @@ pub fn run(
         let port = handle.port;
         info!(port, "usage proxy started");
 
-        // Keep the runtime alive in a background thread
+        // Subscribe to the proxy's shutdown signal so the runtime thread
+        // exits cleanly when the proxy is shut down.
+        let mut shutdown_sub = handle.shutdown_tx.subscribe();
+
         std::thread::Builder::new()
             .name("usage-proxy-rt".into())
             .spawn(move || {
-                rt.block_on(async {
-                    tokio::signal::ctrl_c().await.ok();
+                rt.block_on(async move {
+                    let _ = shutdown_sub.wait_for(|&v| v).await;
                 });
             })
             .context("failed to spawn usage proxy runtime thread")?;
