@@ -93,6 +93,19 @@ pub enum DaemonCommand {
     ReloadConfig,
     /// Request graceful daemon shutdown (stops all agents first).
     Shutdown,
+    /// Bulk fleet snapshot for the orchestrator's review cycle.
+    ///
+    /// Returns an `OrchestratorSnapshot` with status, context, and recent output
+    /// for each managed agent in a single call. Filters out orchestrator slots
+    /// by default (the orchestrator should not review itself).
+    OrchestratorContext {
+        /// Agent names to include. Empty = all non-orchestrator agents.
+        #[serde(default)]
+        agents: Vec<String>,
+        /// Number of recent output lines per agent (default: 30).
+        #[serde(default)]
+        output_lines: Option<usize>,
+    },
 }
 
 fn default_true() -> bool {
@@ -224,6 +237,41 @@ pub struct ToolUseVerdict {
     pub reason: String,
 }
 
+/// Bulk fleet snapshot returned by `OrchestratorContext`.
+///
+/// Contains everything an orchestrator agent needs for one review cycle:
+/// status, context, and recent output for each managed agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestratorSnapshot {
+    /// Fleet-wide goal (if set).
+    pub fleet_goal: Option<String>,
+    /// Per-agent views.
+    pub agents: Vec<OrchestratorAgentView>,
+}
+
+/// Per-agent view included in an `OrchestratorSnapshot`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestratorAgentView {
+    /// Slot name.
+    pub name: String,
+    /// Current status.
+    pub status: AgentStatus,
+    /// Agent's role.
+    pub role: Option<String>,
+    /// Agent's strategic goal.
+    pub agent_goal: Option<String>,
+    /// Current task.
+    pub task: Option<String>,
+    /// Recent output lines (most recent last).
+    pub recent_output: Vec<String>,
+    /// Seconds since this agent was started.
+    pub uptime_secs: Option<u64>,
+    /// Whether this agent needs human attention (stalled, pending prompt).
+    pub attention_needed: bool,
+    /// Number of pending permission prompts.
+    pub pending_count: usize,
+}
+
 /// Daemon health/ping response data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonPing {
@@ -332,6 +380,7 @@ mod tests {
                     restart: aegis_types::daemon::RestartPolicy::OnFailure,
                     max_restarts: 5,
                     enabled: true,
+                    orchestrator: None,
                 }),
                 start: true,
             },
@@ -368,6 +417,14 @@ mod tests {
             DaemonCommand::DisableAgent { name: "claude-1".into() },
             DaemonCommand::ReloadConfig,
             DaemonCommand::Shutdown,
+            DaemonCommand::OrchestratorContext {
+                agents: vec!["frontend".into(), "backend".into()],
+                output_lines: Some(30),
+            },
+            DaemonCommand::OrchestratorContext {
+                agents: vec![],
+                output_lines: None,
+            },
         ];
 
         for cmd in commands {
@@ -429,6 +486,45 @@ mod tests {
         let back: PendingPromptSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(back.request_id, "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(back.age_secs, 30);
+    }
+
+    #[test]
+    fn orchestrator_snapshot_serialization() {
+        let snapshot = OrchestratorSnapshot {
+            fleet_goal: Some("Build a chess app".into()),
+            agents: vec![
+                OrchestratorAgentView {
+                    name: "frontend".into(),
+                    status: AgentStatus::Running { pid: 1234 },
+                    role: Some("UI developer".into()),
+                    agent_goal: Some("Build the board".into()),
+                    task: Some("Implement drag-and-drop".into()),
+                    recent_output: vec!["compiling...".into(), "done".into()],
+                    uptime_secs: Some(3600),
+                    attention_needed: false,
+                    pending_count: 0,
+                },
+                OrchestratorAgentView {
+                    name: "backend".into(),
+                    status: AgentStatus::Stopped { exit_code: 0 },
+                    role: None,
+                    agent_goal: None,
+                    task: None,
+                    recent_output: vec![],
+                    uptime_secs: None,
+                    attention_needed: true,
+                    pending_count: 1,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let back: OrchestratorSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.fleet_goal.as_deref(), Some("Build a chess app"));
+        assert_eq!(back.agents.len(), 2);
+        assert_eq!(back.agents[0].name, "frontend");
+        assert_eq!(back.agents[0].uptime_secs, Some(3600));
+        assert!(back.agents[1].attention_needed);
+        assert_eq!(back.agents[1].pending_count, 1);
     }
 
     #[test]

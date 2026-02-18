@@ -63,6 +63,7 @@ pub fn init() -> anyhow::Result<()> {
             restart: RestartPolicy::OnFailure,
             max_restarts: 5,
             enabled: false, // Disabled by default so user must configure
+            orchestrator: None,
         }],
         channel: None,
     };
@@ -115,6 +116,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
             restart: RestartPolicy::OnFailure,
             max_restarts: 5,
             enabled: false,
+            orchestrator: None,
         }],
         channel: None,
     };
@@ -1058,6 +1060,84 @@ pub(crate) fn tool_display_name(tool: &AgentToolConfig) -> &str {
         AgentToolConfig::Cursor { .. } => "Cursor",
         AgentToolConfig::Custom { .. } => "Custom",
     }
+}
+
+/// Show orchestrator overview: bulk fleet status with recent output.
+pub fn orchestrator_status(agents: &[String], lines: usize) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
+    }
+
+    let response = client
+        .send(&DaemonCommand::OrchestratorContext {
+            agents: agents.to_vec(),
+            output_lines: Some(lines),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to get orchestrator context: {e}"))?;
+
+    if !response.ok {
+        anyhow::bail!("{}", response.message);
+    }
+
+    if let Some(data) = response.data {
+        if let Ok(snapshot) =
+            serde_json::from_value::<aegis_control::daemon::OrchestratorSnapshot>(data)
+        {
+            // Fleet goal
+            if let Some(goal) = &snapshot.fleet_goal {
+                println!("Fleet goal: {goal}");
+                println!();
+            }
+
+            if snapshot.agents.is_empty() {
+                println!("No managed agents.");
+                return Ok(());
+            }
+
+            for agent in &snapshot.agents {
+                // Header line
+                let uptime = agent.uptime_secs
+                    .map(|s| format!("{}m", s / 60))
+                    .unwrap_or_else(|| "-".to_string());
+                let attention = if agent.attention_needed { " [ATTENTION]" } else { "" };
+                let pending = if agent.pending_count > 0 {
+                    format!(" ({} pending)", agent.pending_count)
+                } else {
+                    String::new()
+                };
+
+                println!(
+                    "--- {} [{}, up {}{}{}] ---",
+                    agent.name, agent.status, uptime, pending, attention,
+                );
+
+                // Context
+                if let Some(role) = &agent.role {
+                    println!("  Role: {role}");
+                }
+                if let Some(goal) = &agent.agent_goal {
+                    println!("  Goal: {goal}");
+                }
+                if let Some(task) = &agent.task {
+                    println!("  Task: {task}");
+                }
+
+                // Recent output (last N lines)
+                if !agent.recent_output.is_empty() {
+                    println!("  Recent output:");
+                    for line in &agent.recent_output {
+                        println!("    {}", truncate_str(line, 120));
+                    }
+                }
+
+                println!();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Tail daemon logs.

@@ -1417,6 +1417,12 @@ impl FleetApp {
                 };
                 self.spawn_terminal(&cmd, "Exporting audit data in new terminal");
             }
+            FleetCommand::OrchestratorStatus => {
+                self.spawn_terminal(
+                    "aegis daemon orchestrator-status",
+                    "Opened orchestrator overview in new terminal",
+                );
+            }
         }
     }
 

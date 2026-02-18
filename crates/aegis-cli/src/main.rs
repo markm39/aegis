@@ -691,6 +691,17 @@ enum DaemonCommands {
         #[arg(long)]
         follow: bool,
     },
+
+    /// Show orchestrator overview (bulk fleet status for review)
+    #[command(name = "orchestrator-status")]
+    OrchestratorStatus {
+        /// Only include these agents (default: all non-orchestrator agents)
+        agents: Vec<String>,
+
+        /// Number of recent output lines per agent
+        #[arg(long, default_value = "30")]
+        lines: usize,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1037,6 +1048,9 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Uninstall => commands::daemon::uninstall(),
             DaemonCommands::Logs { follow } => {
                 commands::daemon::logs(follow)
+            }
+            DaemonCommands::OrchestratorStatus { agents, lines } => {
+                commands::daemon::orchestrator_status(&agents, lines)
             }
         },
         Commands::Hook { action } => match action {

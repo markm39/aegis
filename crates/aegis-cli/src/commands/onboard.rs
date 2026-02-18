@@ -230,6 +230,7 @@ mod tests {
                 restart: RestartPolicy::OnFailure,
                 max_restarts: 5,
                 enabled: true,
+                orchestrator: None,
             }],
             channel: None,
         };
@@ -264,6 +265,7 @@ mod tests {
                 restart: RestartPolicy::OnFailure,
                 max_restarts: 5,
                 enabled: true,
+                orchestrator: None,
             }],
             channel: Some(ChannelConfig::Telegram(TelegramConfig {
                 bot_token: "123:ABC".into(),

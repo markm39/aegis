@@ -484,14 +484,24 @@ impl Fleet {
         slot.command_tx = None;
         slot.update_rx = None;
 
-        // If a restart was requested (via restart_agent), skip the policy
-        // evaluation and start immediately.
+        // If a restart was explicitly requested (via restart_agent), skip the
+        // policy evaluation and start immediately.
         if slot.pending_restart {
             slot.pending_restart = false;
             slot.restart_count = 0;
+            slot.stop_signaled_at = None;
             slot.status = AgentStatus::Pending;
             info!(agent = name, "pending restart: starting agent");
             self.start_agent(name);
+            return;
+        }
+
+        // If the user explicitly stopped this agent (stop_signaled_at is set),
+        // don't apply the restart policy -- honor the explicit stop.
+        if slot.stop_signaled_at.is_some() {
+            slot.stop_signaled_at = None;
+            slot.status = AgentStatus::Stopped { exit_code };
+            info!(agent = name, exit_code, "agent stopped by user");
             return;
         }
 

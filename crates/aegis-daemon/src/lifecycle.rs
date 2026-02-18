@@ -24,7 +24,7 @@ use aegis_pilot::pty::PtySession;
 use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, SupervisorConfig};
 use aegis_policy::PolicyEngine;
 use aegis_control::hooks;
-use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig};
+use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, OrchestratorConfig};
 use aegis_types::AegisConfig;
 
 /// Result returned by a completed agent lifecycle thread.
@@ -235,14 +235,25 @@ fn run_agent_slot_inner(
     let driver = create_driver(&slot_config.tool, Some(name));
     let strategy = driver.spawn_strategy(&working_dir);
 
-    // 5. Compute task injection BEFORE spawn so CliArg can be folded into args
-    let composed = compose_prompt(
-        fleet_goal,
-        slot_config.role.as_deref(),
-        slot_config.agent_goal.as_deref(),
-        slot_config.context.as_deref(),
-        slot_config.task.as_deref(),
-    );
+    // 5. Compute task injection BEFORE spawn so CliArg can be folded into args.
+    //    Orchestrator slots get a specialized prompt with review-cycle instructions.
+    let composed = if let Some(ref orch_config) = slot_config.orchestrator {
+        Some(compose_orchestrator_prompt(
+            fleet_goal,
+            slot_config.role.as_deref(),
+            slot_config.agent_goal.as_deref(),
+            slot_config.context.as_deref(),
+            orch_config,
+        ))
+    } else {
+        compose_prompt(
+            fleet_goal,
+            slot_config.role.as_deref(),
+            slot_config.agent_goal.as_deref(),
+            slot_config.context.as_deref(),
+            slot_config.task.as_deref(),
+        )
+    };
     let injection = composed.as_ref().map(|p| driver.task_injection(p));
 
     // Extract any CLI args that must be part of the spawn command
@@ -436,6 +447,159 @@ fn compose_prompt(
     }
 }
 
+/// Compose the orchestrator agent's system prompt.
+///
+/// This is the "intelligence" of the orchestrator: a structured prompt that
+/// instructs the agent to run review cycles, evaluate worker output against
+/// the backlog, redirect low-value work, and verify what was built.
+///
+/// The orchestrator never writes code itself -- it only reviews, directs, and
+/// verifies. Its behavior emerges from this prompt combined with access to
+/// the `aegis` CLI tools.
+fn compose_orchestrator_prompt(
+    fleet_goal: Option<&str>,
+    role: Option<&str>,
+    agent_goal: Option<&str>,
+    context: Option<&str>,
+    orch_config: &OrchestratorConfig,
+) -> String {
+    let mut sections = Vec::new();
+
+    // Identity and mission
+    sections.push("# Orchestrator Agent\n\
+        You are the orchestrator for an Aegis-managed fleet of coding agents. \
+        Your job is strategic oversight: review what agents are doing, evaluate \
+        whether their work is high-value, redirect them when they drift, and \
+        verify that what they build actually works.\n\n\
+        CRITICAL RULES:\n\
+        - You NEVER write code, create files, or make commits yourself.\n\
+        - You ONLY review, direct, and verify.\n\
+        - You use `aegis` CLI commands to interact with the fleet.\n\
+        - You use `git log`, `git diff`, and `git show` to review work.\n\
+        - You evaluate every piece of work against the backlog priorities.".to_string());
+
+    // Fleet goal
+    if let Some(g) = fleet_goal.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Fleet Mission\n{g}"));
+    }
+
+    // Role and goal
+    if let Some(r) = role.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Your Role\n{r}"));
+    }
+    if let Some(ag) = agent_goal.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Your Goal\n{ag}"));
+    }
+    if let Some(c) = context.filter(|s| !s.is_empty()) {
+        sections.push(format!("## Context\n{c}"));
+    }
+
+    // Backlog
+    if let Some(ref backlog_path) = orch_config.backlog_path {
+        sections.push(format!(
+            "## Backlog\n\
+             The project backlog is at `{}`. Read it at the start of each \
+             review cycle and use it to prioritize agent work. Items near the \
+             top are highest priority.",
+            backlog_path.display()
+        ));
+    }
+
+    // Managed agents
+    if !orch_config.managed_agents.is_empty() {
+        let names = orch_config.managed_agents.join(", ");
+        sections.push(format!(
+            "## Managed Agents\nYou are responsible for these agents: {names}"
+        ));
+    }
+
+    // Review cycle instructions
+    let interval = orch_config.review_interval_secs;
+    sections.push(format!(
+        "## Review Cycle\n\
+         Run a review cycle every {interval} seconds. Each cycle:\n\n\
+         1. **Check fleet status:** Run `aegis orchestrator status` to get all agent statuses and recent output.\n\
+         2. **Check git history:** Run `git log --oneline -30` and `git diff --stat HEAD~5..HEAD` to see recent work.\n\
+         3. **Read the backlog** (if configured) to know current priorities.\n\
+         4. **Evaluate each agent's work:**\n\
+            - Is the agent working on something from the backlog?\n\
+            - Is the work high-value (moves the product forward) or low-value (polish nobody asked for, over-engineering)?\n\
+            - Is the agent stuck, looping, or producing errors?\n\
+         5. **Redirect agents** doing low-value work:\n\
+            - `aegis send <agent> \"STOP current work. Switch to: <specific task from backlog>\"`\n\
+            - If they ignore the redirect: `aegis context <agent> task \"<new task>\"` then `aegis restart <agent>`\n\
+         6. **Verify output** for agents that completed work (see Verification section).\n\
+         7. **Sleep** for {interval} seconds before the next cycle.\n\n\
+         Between cycles, use `sleep {interval}` to wait."
+    ));
+
+    // Verification instructions
+    sections.push(
+        "## Verification\n\
+         After an agent completes a task, verify the result actually works:\n\n\
+         ### For TUI applications:\n\
+         - Build the project: `cargo build -p <package>`\n\
+         - If `aegis-harness` is available, run TUI verification:\n\
+           `cargo run -p aegis-harness --example verify_tui -- <binary_path>`\n\
+         - Otherwise, run the binary briefly and check stderr/stdout for panics.\n\
+         - Run the test suite: `cargo test -p <package>`\n\n\
+         ### For web applications:\n\
+         - Start the dev server and check that it responds: `curl -s http://localhost:<port>`\n\
+         - Run `npx playwright test` if playwright tests exist.\n\
+         - Check the browser console for errors.\n\n\
+         ### For libraries/backends:\n\
+         - Run `cargo test -p <package>` or the equivalent test command.\n\
+         - Run `cargo clippy -p <package> -- -D warnings` for code quality.\n\
+         - Check that public API signatures match what was requested.\n\n\
+         If verification fails, send specific feedback to the worker:\n\
+         `aegis send <agent> \"VERIFICATION FAILED: <what broke and how to fix it>\"`"
+            .to_string(),
+    );
+
+    // Available aegis commands reference
+    sections.push(
+        "## Aegis CLI Reference\n\
+         Commands you can use:\n\
+         - `aegis orchestrator status` -- bulk fleet status with recent output\n\
+         - `aegis daemon status` -- list all agents with status\n\
+         - `aegis daemon output <agent> [--lines N]` -- get agent output\n\
+         - `aegis send <agent> \"message\"` -- send text to agent stdin\n\
+         - `aegis context <agent> task \"new task\"` -- update agent's task\n\
+         - `aegis context <agent> role \"new role\"` -- update agent's role\n\
+         - `aegis restart <agent>` -- restart an agent\n\
+         - `aegis stop <agent>` -- stop an agent\n\
+         - `aegis start <agent>` -- start an agent\n\
+         - `aegis goal \"new goal\"` -- set fleet-wide goal"
+            .to_string(),
+    );
+
+    // Value assessment framework
+    sections.push(
+        "## Value Assessment Framework\n\
+         When evaluating agent work, classify it:\n\n\
+         **High value (keep going):**\n\
+         - Implements a backlog item\n\
+         - Fixes a real bug that affects users\n\
+         - Adds a feature the user explicitly requested\n\
+         - Makes something that was broken actually work\n\n\
+         **Medium value (acceptable but deprioritize):**\n\
+         - Test coverage for new code\n\
+         - Documentation for public APIs\n\
+         - Reasonable refactoring that simplifies code\n\n\
+         **Low value (redirect immediately):**\n\
+         - Security hardening of local-only interfaces\n\
+         - Lint fixes and style changes nobody asked for\n\
+         - Over-engineering (adding abstractions for one-time code)\n\
+         - \"Improvements\" to working code that add complexity\n\
+         - Adding error handling for impossible scenarios\n\n\
+         When you see low-value work, redirect the agent to the highest-priority \
+         unstarted backlog item."
+            .to_string(),
+    );
+
+    sections.join("\n\n")
+}
+
 /// End an audit session in the store.
 fn end_session(store: &Arc<Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_code: i32) {
     match store.lock() {
@@ -491,6 +655,62 @@ mod tests {
         assert!(text.contains("## Fleet Mission\nMission"));
         assert!(!text.contains("Goal"));
         assert!(text.contains("## Task\nTask"));
+    }
+
+    #[test]
+    fn compose_orchestrator_prompt_includes_core_sections() {
+        let config = OrchestratorConfig {
+            review_interval_secs: 300,
+            backlog_path: Some(std::path::PathBuf::from("./BACKLOG.md")),
+            managed_agents: vec!["frontend".into(), "backend".into()],
+        };
+        let prompt = compose_orchestrator_prompt(
+            Some("Build a chess app"),
+            Some("Technical Director"),
+            Some("Keep agents focused"),
+            None,
+            &config,
+        );
+
+        assert!(prompt.contains("# Orchestrator Agent"));
+        assert!(prompt.contains("NEVER write code"));
+        assert!(prompt.contains("Fleet Mission\nBuild a chess app"));
+        assert!(prompt.contains("Your Role\nTechnical Director"));
+        assert!(prompt.contains("Your Goal\nKeep agents focused"));
+        assert!(prompt.contains("BACKLOG.md"));
+        assert!(prompt.contains("frontend, backend"));
+        assert!(prompt.contains("300 seconds"));
+        assert!(prompt.contains("aegis orchestrator status"));
+        assert!(prompt.contains("Value Assessment Framework"));
+        assert!(prompt.contains("Low value"));
+    }
+
+    #[test]
+    fn compose_orchestrator_prompt_minimal() {
+        let config = OrchestratorConfig::default();
+        let prompt = compose_orchestrator_prompt(None, None, None, None, &config);
+
+        assert!(prompt.contains("# Orchestrator Agent"));
+        assert!(prompt.contains("NEVER write code"));
+        // Should not contain empty sections
+        assert!(!prompt.contains("Fleet Mission"));
+        assert!(!prompt.contains("Your Role"));
+        assert!(!prompt.contains("Backlog"));
+        assert!(!prompt.contains("Managed Agents"));
+        // Should still have review cycle and verification
+        assert!(prompt.contains("Review Cycle"));
+        assert!(prompt.contains("Verification"));
+    }
+
+    #[test]
+    fn compose_orchestrator_prompt_custom_interval() {
+        let config = OrchestratorConfig {
+            review_interval_secs: 60,
+            backlog_path: None,
+            managed_agents: vec![],
+        };
+        let prompt = compose_orchestrator_prompt(None, None, None, None, &config);
+        assert!(prompt.contains("60 seconds"));
     }
 
     #[test]

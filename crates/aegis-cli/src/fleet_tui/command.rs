@@ -106,15 +106,17 @@ pub enum FleetCommand {
     Verify,
     /// Export audit entries in structured format.
     Export { format: Option<String> },
+    /// Show orchestrator overview (bulk fleet status for review).
+    OrchestratorStatus,
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
     "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "disable",
     "enable", "export", "follow", "goal", "help", "hook", "init", "list", "log", "logs",
-    "monitor", "nudge", "pending", "pilot", "policy", "pop", "q", "quit", "remove", "report",
-    "restart", "run", "send", "sessions", "setup", "start", "status", "stop", "telegram",
-    "use", "verify", "watch", "wrap",
+    "monitor", "nudge", "orch", "pending", "pilot", "policy", "pop", "q", "quit", "remove",
+    "report", "restart", "run", "send", "sessions", "setup", "start", "status", "stop",
+    "telegram", "use", "verify", "watch", "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
@@ -304,6 +306,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             let format = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
             Ok(Some(FleetCommand::Export { format }))
         }
+        "orch" | "orchestrator" => Ok(Some(FleetCommand::OrchestratorStatus)),
         "setup" => Ok(Some(FleetCommand::Setup)),
         "init" => Ok(Some(FleetCommand::Init)),
         "enable" => {
@@ -484,6 +487,7 @@ pub fn help_text() -> &'static str {
      :logs                    Daemon log output\n\
      :monitor                 Open monitor in new terminal\n\
      :nudge <agent> [msg]     Nudge stalled agent\n\
+     :orch                    Orchestrator fleet overview\n\
      :pending <agent>         Show pending prompts\n\
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
@@ -1101,6 +1105,25 @@ mod tests {
             parse("export csv").unwrap(),
             Some(FleetCommand::Export { format: Some("csv".into()) })
         );
+    }
+
+    #[test]
+    fn parse_orch() {
+        assert_eq!(
+            parse("orch").unwrap(),
+            Some(FleetCommand::OrchestratorStatus)
+        );
+        assert_eq!(
+            parse("orchestrator").unwrap(),
+            Some(FleetCommand::OrchestratorStatus)
+        );
+    }
+
+    #[test]
+    fn completions_orch() {
+        let agents = vec![];
+        let c = completions("or", &agents);
+        assert!(c.contains(&"orch".to_string()));
     }
 
     #[test]

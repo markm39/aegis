@@ -33,6 +33,7 @@ pub(crate) fn build_agent_slot(
         restart,
         max_restarts,
         enabled: true,
+        orchestrator: None,
     }
 }
 
