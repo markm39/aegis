@@ -40,17 +40,48 @@ pub enum FleetCommand {
     Help,
     /// Quit the TUI.
     Quit,
+    /// Show daemon logs in a new terminal.
+    Logs,
+    /// List pending prompts for an agent.
+    Pending { agent: String },
+    /// Wrap a command with Aegis observability in a new terminal.
+    Wrap { cmd: String },
+    /// Run a sandboxed command in a new terminal.
+    Run { cmd: String },
+    /// Launch a supervised agent (pilot) in a new terminal.
+    Pilot { cmd: String },
+    /// Show recent audit log entries in a new terminal.
+    Log,
+    /// Show policy info in a new terminal.
+    Policy,
+    /// Generate a compliance report in a new terminal.
+    Report,
+    /// List all aegis configurations.
+    List,
+    /// Install aegis hooks for the current project.
+    Hook,
+    /// Switch active aegis configuration.
+    Use { name: Option<String> },
+    /// Watch a directory for filesystem changes.
+    Watch,
+    /// Compare two audit sessions.
+    Diff { session1: String, session2: String },
+    /// Show alert rules.
+    Alerts,
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "approve", "config", "deny", "follow", "help", "monitor", "nudge",
-    "pop", "quit", "remove", "restart", "send", "start", "status", "stop", "telegram",
+    "add", "alerts", "approve", "config", "deny", "diff", "follow", "help", "hook",
+    "list", "log", "logs", "monitor", "nudge", "pending", "pilot", "policy", "pop",
+    "quit", "remove", "report", "restart", "run", "send", "start", "status", "stop",
+    "telegram", "use", "watch", "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
-    "approve", "deny", "follow", "nudge", "pop", "remove", "restart", "send", "start", "stop",
+    "approve", "deny", "follow", "nudge", "pending", "pop", "remove", "restart", "send",
+    "start", "stop",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -153,6 +184,59 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         "status" => Ok(Some(FleetCommand::Status)),
         "help" => Ok(Some(FleetCommand::Help)),
         "quit" | "q" => Ok(Some(FleetCommand::Quit)),
+        "logs" => Ok(Some(FleetCommand::Logs)),
+        "log" => Ok(Some(FleetCommand::Log)),
+        "pending" => {
+            if arg1.is_empty() {
+                Err("usage: pending <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Pending { agent: arg1.into() }))
+            }
+        }
+        "wrap" => {
+            if arg1.is_empty() {
+                Err("usage: wrap <command> [args...]".into())
+            } else {
+                let full_cmd = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                Ok(Some(FleetCommand::Wrap { cmd: full_cmd }))
+            }
+        }
+        "run" => {
+            if arg1.is_empty() {
+                Err("usage: run <command> [args...]".into())
+            } else {
+                let full_cmd = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                Ok(Some(FleetCommand::Run { cmd: full_cmd }))
+            }
+        }
+        "pilot" => {
+            if arg1.is_empty() {
+                Err("usage: pilot <command> [args...]".into())
+            } else {
+                let full_cmd = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                Ok(Some(FleetCommand::Pilot { cmd: full_cmd }))
+            }
+        }
+        "policy" => Ok(Some(FleetCommand::Policy)),
+        "report" => Ok(Some(FleetCommand::Report)),
+        "list" => Ok(Some(FleetCommand::List)),
+        "hook" => Ok(Some(FleetCommand::Hook)),
+        "use" => {
+            let name = if arg1.is_empty() { None } else { Some(arg1.into()) };
+            Ok(Some(FleetCommand::Use { name }))
+        }
+        "watch" => Ok(Some(FleetCommand::Watch)),
+        "diff" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                Err("usage: diff <session1> <session2>".into())
+            } else {
+                Ok(Some(FleetCommand::Diff {
+                    session1: arg1.into(),
+                    session2: arg2.into(),
+                }))
+            }
+        }
+        "alerts" => Ok(Some(FleetCommand::Alerts)),
         _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
     }
 }
@@ -209,22 +293,36 @@ pub fn apply_completion(buffer: &str, completion: &str) -> String {
 /// Help text listing all available commands.
 pub fn help_text() -> &'static str {
     ":add                     Add a new agent\n\
-     :remove <agent>          Remove agent from config\n\
-     :start <agent>           Start agent\n\
-     :stop <agent>            Stop agent\n\
-     :restart <agent>         Restart agent\n\
-     :send <agent> <text>     Send text to agent stdin\n\
+     :alerts                  Show alert rules\n\
      :approve <agent>         Approve first pending prompt\n\
-     :deny <agent>            Deny first pending prompt\n\
-     :nudge <agent> [msg]     Nudge stalled agent\n\
-     :follow <agent>          Drill into agent output\n\
-     :pop <agent>             Open agent in new terminal\n\
      :config                  Edit daemon.toml in $EDITOR\n\
-     :telegram                Show Telegram config status\n\
-     :monitor                 Open monitor in new terminal\n\
-     :status                  Daemon status summary\n\
+     :deny <agent>            Deny first pending prompt\n\
+     :diff <s1> <s2>          Compare two audit sessions\n\
+     :follow <agent>          Drill into agent output\n\
      :help                    Show this help\n\
-     :quit                    Quit TUI"
+     :hook                    Install aegis hooks (CWD)\n\
+     :list                    List all aegis configs\n\
+     :log                     Recent audit entries\n\
+     :logs                    Daemon log output\n\
+     :monitor                 Open monitor in new terminal\n\
+     :nudge <agent> [msg]     Nudge stalled agent\n\
+     :pending <agent>         Show pending prompts\n\
+     :pilot <cmd...>          Supervised agent in terminal\n\
+     :policy                  Show policy info\n\
+     :pop <agent>             Open agent in new terminal\n\
+     :quit                    Quit TUI\n\
+     :remove <agent>          Remove agent from config\n\
+     :report                  Compliance report\n\
+     :restart <agent>         Restart agent\n\
+     :run <cmd...>            Run sandboxed in terminal\n\
+     :send <agent> <text>     Send text to agent stdin\n\
+     :start <agent>           Start agent\n\
+     :status                  Daemon status summary\n\
+     :stop <agent>            Stop agent\n\
+     :telegram                Show Telegram config status\n\
+     :use [name]              Switch active config\n\
+     :watch                   Watch directory for changes\n\
+     :wrap <cmd...>           Wrap command in terminal"
 }
 
 #[cfg(test)]
@@ -449,5 +547,159 @@ mod tests {
     fn help_text_not_empty() {
         assert!(help_text().contains(":add"));
         assert!(help_text().contains(":quit"));
+        assert!(help_text().contains(":wrap"));
+        assert!(help_text().contains(":pilot"));
+    }
+
+    #[test]
+    fn parse_logs() {
+        assert_eq!(parse("logs").unwrap(), Some(FleetCommand::Logs));
+    }
+
+    #[test]
+    fn parse_log() {
+        assert_eq!(parse("log").unwrap(), Some(FleetCommand::Log));
+    }
+
+    #[test]
+    fn parse_pending() {
+        assert_eq!(
+            parse("pending claude-1").unwrap(),
+            Some(FleetCommand::Pending { agent: "claude-1".into() })
+        );
+    }
+
+    #[test]
+    fn parse_pending_missing_agent() {
+        assert!(parse("pending").is_err());
+    }
+
+    #[test]
+    fn parse_wrap() {
+        assert_eq!(
+            parse("wrap claude --help").unwrap(),
+            Some(FleetCommand::Wrap { cmd: "claude --help".into() })
+        );
+    }
+
+    #[test]
+    fn parse_wrap_single_arg() {
+        assert_eq!(
+            parse("wrap claude").unwrap(),
+            Some(FleetCommand::Wrap { cmd: "claude".into() })
+        );
+    }
+
+    #[test]
+    fn parse_wrap_missing() {
+        assert!(parse("wrap").is_err());
+    }
+
+    #[test]
+    fn parse_run_cmd() {
+        assert_eq!(
+            parse("run echo hello world").unwrap(),
+            Some(FleetCommand::Run { cmd: "echo hello world".into() })
+        );
+    }
+
+    #[test]
+    fn parse_run_missing() {
+        assert!(parse("run").is_err());
+    }
+
+    #[test]
+    fn parse_pilot_cmd() {
+        assert_eq!(
+            parse("pilot claude").unwrap(),
+            Some(FleetCommand::Pilot { cmd: "claude".into() })
+        );
+    }
+
+    #[test]
+    fn parse_pilot_missing() {
+        assert!(parse("pilot").is_err());
+    }
+
+    #[test]
+    fn parse_policy() {
+        assert_eq!(parse("policy").unwrap(), Some(FleetCommand::Policy));
+    }
+
+    #[test]
+    fn parse_report() {
+        assert_eq!(parse("report").unwrap(), Some(FleetCommand::Report));
+    }
+
+    #[test]
+    fn parse_list_configs() {
+        assert_eq!(parse("list").unwrap(), Some(FleetCommand::List));
+    }
+
+    #[test]
+    fn parse_hook() {
+        assert_eq!(parse("hook").unwrap(), Some(FleetCommand::Hook));
+    }
+
+    #[test]
+    fn parse_use_with_name() {
+        assert_eq!(
+            parse("use myconfig").unwrap(),
+            Some(FleetCommand::Use { name: Some("myconfig".into()) })
+        );
+    }
+
+    #[test]
+    fn parse_use_no_name() {
+        assert_eq!(
+            parse("use").unwrap(),
+            Some(FleetCommand::Use { name: None })
+        );
+    }
+
+    #[test]
+    fn parse_watch_cmd() {
+        assert_eq!(parse("watch").unwrap(), Some(FleetCommand::Watch));
+    }
+
+    #[test]
+    fn parse_diff_sessions() {
+        assert_eq!(
+            parse("diff abc123 def456").unwrap(),
+            Some(FleetCommand::Diff {
+                session1: "abc123".into(),
+                session2: "def456".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_diff_missing_second() {
+        assert!(parse("diff abc123").is_err());
+    }
+
+    #[test]
+    fn parse_diff_missing_both() {
+        assert!(parse("diff").is_err());
+    }
+
+    #[test]
+    fn parse_alerts_cmd() {
+        assert_eq!(parse("alerts").unwrap(), Some(FleetCommand::Alerts));
+    }
+
+    #[test]
+    fn completions_new_commands() {
+        let agents = vec![];
+        let c = completions("lo", &agents);
+        assert!(c.contains(&"log".to_string()));
+        assert!(c.contains(&"logs".to_string()));
+    }
+
+    #[test]
+    fn completions_pending_agent() {
+        let agents = vec!["claude-1".to_string(), "codex-1".to_string()];
+        let c = completions("pending cl", &agents);
+        assert_eq!(c, vec!["claude-1"]);
     }
 }

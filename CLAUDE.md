@@ -22,12 +22,17 @@ When making design decisions, optimize for the hub experience first. New feature
 
 ### Mandatory: Everything Configurable from the TUI
 
-Every setting, configuration, and management action MUST be accessible from the fleet TUI command bar (`:` mode). If a user can do it with `aegis <subcommand>`, they must also be able to do it from the TUI without exiting. This includes:
+Every setting, configuration, and management action MUST be accessible from the fleet TUI command bar (`:` mode). If a user can do it with `aegis <subcommand>`, they must also be able to do it from the TUI without exiting. The TUI should be like Claude Code -- one place to do everything. This includes:
 
 - **Agent lifecycle:** `:add`, `:remove`, `:start`, `:stop`, `:restart`
-- **Agent interaction:** `:send`, `:approve`, `:deny`, `:nudge`, `:follow`, `:pop`
-- **Configuration:** `:config` (edit daemon.toml), `:telegram` (view/manage notifications)
-- **Monitoring:** `:status`, `:monitor`
+- **Agent interaction:** `:send`, `:approve`, `:deny`, `:nudge`, `:follow`, `:pop`, `:pending`
+- **Configuration:** `:config` (edit daemon.toml), `:telegram` (manage notifications), `:use` (switch config), `:hook` (install hooks)
+- **Monitoring:** `:status`, `:monitor`, `:logs` (daemon logs), `:log` (audit log), `:alerts`
+- **Sandbox/supervision:** `:wrap` (observe command), `:run` (sandboxed command), `:pilot` (supervised agent)
+- **Audit/compliance:** `:policy` (policy info), `:report` (compliance report), `:diff` (session comparison)
+- **System:** `:list` (all configs), `:watch` (directory monitoring), `:help`, `:quit`
+
+Interactive and streaming commands spawn in a new terminal via `crate::terminal::spawn_in_terminal()`. Quick-info commands show results in the status bar.
 
 When adding a new CLI subcommand, you MUST also add a corresponding TUI command bar entry in `fleet_tui/command.rs`. No exceptions. The TUI is the primary interface -- CLI subcommands exist for scripting, not as the main way to interact with Aegis.
 

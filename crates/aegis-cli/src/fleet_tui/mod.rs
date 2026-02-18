@@ -814,6 +814,81 @@ impl FleetApp {
             FleetCommand::Quit => {
                 self.running = false;
             }
+            FleetCommand::Logs => {
+                self.spawn_terminal(
+                    "aegis daemon logs --follow",
+                    "Opened daemon logs in new terminal",
+                );
+            }
+            FleetCommand::Pending { agent } => {
+                // Switch to agent's detail view with focus on pending panel
+                self.detail_name = agent;
+                self.detail_output.clear();
+                self.detail_scroll = 0;
+                self.detail_pending.clear();
+                self.pending_selected = 0;
+                self.focus_pending = true;
+                self.detail_attention = false;
+                self.view = FleetView::AgentDetail;
+                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+            }
+            FleetCommand::Wrap { cmd } => {
+                self.spawn_terminal(
+                    &format!("aegis wrap -- {cmd}"),
+                    "Launched wrap in new terminal",
+                );
+            }
+            FleetCommand::Run { cmd } => {
+                self.spawn_terminal(
+                    &format!("aegis run -- {cmd}"),
+                    "Launched sandboxed run in new terminal",
+                );
+            }
+            FleetCommand::Pilot { cmd } => {
+                self.spawn_terminal(
+                    &format!("aegis pilot -- {cmd}"),
+                    "Launched pilot in new terminal",
+                );
+            }
+            FleetCommand::Log => {
+                self.spawn_terminal("aegis log", "Opened audit log in new terminal");
+            }
+            FleetCommand::Policy => {
+                self.spawn_terminal("aegis policy list", "Opened policy list in new terminal");
+            }
+            FleetCommand::Report => {
+                self.spawn_terminal("aegis report", "Opened compliance report in new terminal");
+            }
+            FleetCommand::List => {
+                self.spawn_terminal("aegis list", "Opened config list in new terminal");
+            }
+            FleetCommand::Hook => {
+                self.spawn_terminal("aegis hook install", "Installing hooks in new terminal");
+            }
+            FleetCommand::Use { name } => {
+                match name {
+                    Some(n) => self.spawn_terminal(
+                        &format!("aegis use {n}"),
+                        &format!("Switching to config '{n}'"),
+                    ),
+                    None => self.spawn_terminal(
+                        "aegis use",
+                        "Opened config picker in new terminal",
+                    ),
+                }
+            }
+            FleetCommand::Watch => {
+                self.spawn_terminal("aegis watch", "Started directory watch in new terminal");
+            }
+            FleetCommand::Diff { session1, session2 } => {
+                self.spawn_terminal(
+                    &format!("aegis diff {session1} {session2}"),
+                    "Opened session diff in new terminal",
+                );
+            }
+            FleetCommand::Alerts => {
+                self.spawn_terminal("aegis alerts list", "Opened alerts in new terminal");
+            }
         }
     }
 
@@ -841,6 +916,14 @@ impl FleetApp {
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                 }
             }
+        }
+    }
+
+    /// Spawn a command in a new terminal and set the result message.
+    fn spawn_terminal(&mut self, cmd: &str, msg: &str) {
+        match crate::terminal::spawn_in_terminal(cmd) {
+            Ok(()) => self.command_result = Some(msg.into()),
+            Err(e) => self.command_result = Some(e),
         }
     }
 
