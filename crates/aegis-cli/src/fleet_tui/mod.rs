@@ -450,13 +450,63 @@ impl FleetApp {
         }
     }
 
-    /// Send AddAgent command to the daemon.
+    /// Add an agent: send to daemon if connected, otherwise write to daemon.toml directly.
     fn send_add_agent(&mut self, config: aegis_types::daemon::AgentSlotConfig) {
-        let cmd = DaemonCommand::AddAgent {
-            config: Box::new(config),
-            start: true,
+        if self.connected {
+            let cmd = DaemonCommand::AddAgent {
+                config: Box::new(config),
+                start: true,
+            };
+            self.send_named_command(cmd);
+        } else {
+            // Offline: write directly to daemon.toml
+            match self.add_agent_to_config(config) {
+                Ok(name) => {
+                    self.command_result = Some(format!(
+                        "Added '{name}' to daemon.toml. Start daemon with :daemon start."
+                    ));
+                }
+                Err(e) => {
+                    self.command_result = Some(format!("Failed to add agent: {e}"));
+                }
+            }
+        }
+    }
+
+    /// Write an agent directly to daemon.toml (for offline mode).
+    fn add_agent_to_config(
+        &self,
+        agent: aegis_types::daemon::AgentSlotConfig,
+    ) -> anyhow::Result<String> {
+        use aegis_types::daemon::{daemon_config_path, daemon_dir, DaemonConfig};
+
+        let config_path = daemon_config_path();
+        let name = agent.name.clone();
+
+        let mut config = if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path)?;
+            DaemonConfig::from_toml(&content)?
+        } else {
+            std::fs::create_dir_all(daemon_dir())?;
+            DaemonConfig {
+                goal: None,
+                persistence: aegis_types::daemon::PersistenceConfig::default(),
+                control: aegis_types::daemon::DaemonControlConfig::default(),
+                alerts: vec![],
+                agents: vec![],
+                channel: None,
+            }
         };
-        self.send_named_command(cmd);
+
+        if config.agents.iter().any(|a| a.name == name) {
+            anyhow::bail!("agent '{name}' already exists in config");
+        }
+
+        config.agents.push(agent);
+        let toml_str = config.to_toml()?;
+        std::fs::write(&config_path, &toml_str)?;
+
+        Ok(name)
     }
 
     /// Handle keys in the agent detail view.
