@@ -1013,7 +1013,40 @@ impl FleetApp {
                 self.spawn_terminal("aegis daemon config edit", "Opened config in editor");
             }
             FleetCommand::Telegram => {
-                self.spawn_terminal("aegis telegram status", "Opened Telegram status in new terminal");
+                use aegis_types::daemon::daemon_config_path;
+                use aegis_types::daemon::DaemonConfig;
+                let config_path = daemon_config_path();
+                let status = if !config_path.exists() {
+                    "Telegram: not configured. Run :telegram setup to configure.".to_string()
+                } else {
+                    match std::fs::read_to_string(&config_path)
+                        .ok()
+                        .and_then(|c| DaemonConfig::from_toml(&c).ok())
+                    {
+                        Some(cfg) => match cfg.channel {
+                            Some(aegis_types::config::ChannelConfig::Telegram(tg)) => {
+                                let token_preview = if tg.bot_token.len() > 10 {
+                                    format!("{}...", &tg.bot_token[..10])
+                                } else {
+                                    "(set)".to_string()
+                                };
+                                format!("Telegram: configured (token: {token_preview}, chat: {})", tg.chat_id)
+                            }
+                            None => "Telegram: not configured. Run :telegram setup to configure.".to_string(),
+                        },
+                        None => "Telegram: failed to read daemon.toml".to_string(),
+                    }
+                };
+                self.set_result(status);
+            }
+            FleetCommand::TelegramSetup => {
+                self.spawn_terminal("aegis telegram setup", "Opened Telegram setup wizard");
+            }
+            FleetCommand::TelegramDisable => {
+                match crate::commands::telegram::disable() {
+                    Ok(()) => self.set_result("Telegram notifications disabled. Run :daemon reload to apply.".to_string()),
+                    Err(e) => self.set_result(format!("Failed to disable Telegram: {e}")),
+                }
             }
             FleetCommand::Status => {
                 // Show status as command result

@@ -34,8 +34,12 @@ pub enum FleetCommand {
     Status,
     /// Open daemon config in $EDITOR (suspends TUI).
     Config,
-    /// Show/manage Telegram settings.
+    /// Show Telegram configuration status.
     Telegram,
+    /// Run Telegram setup wizard in new terminal.
+    TelegramSetup,
+    /// Disable Telegram notifications.
+    TelegramDisable,
     /// Show help for all commands.
     Help,
     /// Quit the TUI.
@@ -133,7 +137,12 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "config" => Ok(Some(FleetCommand::Config)),
-        "telegram" => Ok(Some(FleetCommand::Telegram)),
+        "telegram" => match arg1 {
+            "" => Ok(Some(FleetCommand::Telegram)),
+            "setup" => Ok(Some(FleetCommand::TelegramSetup)),
+            "disable" => Ok(Some(FleetCommand::TelegramDisable)),
+            other => Err(format!("unknown telegram subcommand: {other}. Try: setup, disable")),
+        },
         "start" => {
             if arg1.is_empty() {
                 Err("usage: start <agent>".into())
@@ -321,6 +330,9 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 /// Subcommands for `:daemon`.
 const DAEMON_SUBCOMMANDS: &[&str] = &["init", "reload", "restart", "start", "status", "stop"];
 
+/// Subcommands for `:telegram`.
+const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
+
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
 
@@ -349,6 +361,15 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
         // Complete daemon subcommands
         if cmd == "daemon" {
             return DAEMON_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
+
+        // Complete telegram subcommands
+        if cmd == "telegram" {
+            return TELEGRAM_SUBCOMMANDS
                 .iter()
                 .filter(|s| s.starts_with(sub))
                 .map(|s| s.to_string())
@@ -442,6 +463,8 @@ pub fn help_text() -> &'static str {
      :status                  Daemon status summary\n\
      :stop <agent>            Stop agent\n\
      :telegram                Show Telegram config status\n\
+     :telegram setup           Run Telegram setup wizard\n\
+     :telegram disable         Disable Telegram notifications\n\
      :use [name]              Switch active config\n\
      :watch                   Watch directory for changes\n\
      :wrap <cmd...>           Wrap command in terminal"
@@ -595,6 +618,9 @@ mod tests {
     #[test]
     fn parse_telegram() {
         assert_eq!(parse("telegram").unwrap(), Some(FleetCommand::Telegram));
+        assert_eq!(parse("telegram setup").unwrap(), Some(FleetCommand::TelegramSetup));
+        assert_eq!(parse("telegram disable").unwrap(), Some(FleetCommand::TelegramDisable));
+        assert!(parse("telegram bogus").is_err());
     }
 
     #[test]
@@ -907,6 +933,17 @@ mod tests {
         let agents = vec![];
         let c = completions("da", &agents);
         assert!(c.contains(&"daemon".to_string()));
+    }
+
+    #[test]
+    fn completions_telegram_subcommands() {
+        let agents = vec![];
+        let c = completions("telegram ", &agents);
+        assert!(c.contains(&"setup".to_string()));
+        assert!(c.contains(&"disable".to_string()));
+
+        let c = completions("telegram d", &agents);
+        assert_eq!(c, vec!["disable"]);
     }
 
     #[test]
