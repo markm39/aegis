@@ -326,14 +326,31 @@ fn run_agent_slot_inner(
         }
     };
 
-    // 5b. Inject via stdin (post-spawn) if needed
+    // 5b. Inject via stdin (post-spawn) if needed.
+    //
+    // For TUI agents (Claude Code, etc.), we must wait until the application
+    // has fully initialized before sending input. We poll for PTY output
+    // (which indicates the TUI has drawn something) with a generous timeout.
+    // Then we use bracketed paste mode so multi-line prompts arrive as a
+    // single paste event rather than line-by-line Enter keypresses.
     if let Some(TaskInjection::Stdin { ref text }) = injection {
-        // Wait a moment for the agent to be ready
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        if let Err(e) = pty.send_line(text) {
+        let timeout = std::time::Duration::from_secs(15);
+        match pty.wait_for_output(timeout) {
+            Ok(true) => {
+                // Give the TUI a moment to finish its initial render
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Ok(false) => {
+                warn!(agent = name, "agent produced no output after 15s, injecting prompt anyway");
+            }
+            Err(e) => {
+                warn!(agent = name, error = %e, "error waiting for agent output");
+            }
+        }
+        if let Err(e) = pty.send_paste(text) {
             warn!(agent = name, error = %e, "failed to inject prompt via stdin");
         } else {
-            info!(agent = name, "composed prompt injected via stdin");
+            info!(agent = name, "composed prompt injected via bracketed paste");
         }
     } else if injection.as_ref().is_some_and(|i| matches!(i, TaskInjection::CliArg { .. })) {
         info!(agent = name, "composed prompt provided via CLI arg");

@@ -176,11 +176,50 @@ impl PtySession {
         Ok(())
     }
 
-    /// Send a line of text to the child's stdin (appends newline).
+    /// Send a line of text to the child's stdin (appends carriage return).
+    ///
+    /// Uses `\r` (carriage return) instead of `\n` because TUI applications
+    /// like Claude Code run in raw terminal mode where Enter = `\r`.
     pub fn send_line(&self, text: &str) -> Result<(), AegisError> {
         let mut data = text.as_bytes().to_vec();
-        data.push(b'\n');
+        data.push(b'\r');
         self.write_all(&data)
+    }
+
+    /// Send text using bracketed paste mode, then press Enter.
+    ///
+    /// Wraps the text in `\x1b[200~`..`\x1b[201~` so TUI applications
+    /// (like Claude Code) treat embedded newlines as literal text rather
+    /// than as individual Enter keypresses. After the paste, sends `\r`
+    /// to submit the input.
+    pub fn send_paste(&self, text: &str) -> Result<(), AegisError> {
+        let mut data = Vec::with_capacity(text.len() + 20);
+        data.extend_from_slice(b"\x1b[200~");
+        data.extend_from_slice(text.as_bytes());
+        data.extend_from_slice(b"\x1b[201~");
+        data.push(b'\r');
+        self.write_all(&data)
+    }
+
+    /// Block until the child produces output or the timeout expires.
+    ///
+    /// Returns `true` if output was detected, `false` on timeout.
+    /// Useful for waiting until a TUI application has fully initialized
+    /// before injecting input.
+    pub fn wait_for_output(&self, timeout: std::time::Duration) -> Result<bool, AegisError> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut buf = [0u8; 4096];
+
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let ms = remaining.as_millis().min(500) as i32;
+            if self.poll_readable(ms)? {
+                // Drain available data so it doesn't accumulate
+                let _ = self.read(&mut buf);
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Check if the child process is still alive.
