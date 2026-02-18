@@ -203,9 +203,35 @@ impl AddAgentWizard {
             return false;
         }
 
-        // Esc always cancels
+        // Esc goes back one step, or cancels at the first step
         if key.code == KeyCode::Esc {
-            self.active = false;
+            match self.step {
+                WizardStep::Tool => {
+                    self.active = false; // First step: cancel wizard
+                }
+                WizardStep::Name => self.step = WizardStep::Tool,
+                WizardStep::WorkingDir => {
+                    self.name_cursor = self.name.len();
+                    self.step = WizardStep::Name;
+                }
+                WizardStep::Task => {
+                    self.working_dir_cursor = self.working_dir.len();
+                    self.step = WizardStep::WorkingDir;
+                }
+                WizardStep::Role => {
+                    self.task_cursor = self.task.len();
+                    self.step = WizardStep::Task;
+                }
+                WizardStep::AgentGoal => {
+                    self.role_cursor = self.role.len();
+                    self.step = WizardStep::Role;
+                }
+                WizardStep::RestartPolicy => {
+                    self.agent_goal_cursor = self.agent_goal.len();
+                    self.step = WizardStep::AgentGoal;
+                }
+                WizardStep::Confirm => self.step = WizardStep::RestartPolicy,
+            }
             return true;
         }
 
@@ -643,13 +669,60 @@ mod tests {
     }
 
     #[test]
-    fn wizard_esc_cancels() {
+    fn wizard_esc_at_tool_cancels() {
         let mut wiz = AddAgentWizard::new();
-        wiz.step = WizardStep::WorkingDir;
+        assert_eq!(wiz.step, WizardStep::Tool);
 
         wiz.handle_key(press(KeyCode::Esc));
         assert!(!wiz.active);
         assert!(!wiz.completed);
+    }
+
+    #[test]
+    fn wizard_esc_goes_back_one_step() {
+        let mut wiz = AddAgentWizard::new();
+
+        // Name -> Tool
+        wiz.step = WizardStep::Name;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Tool);
+        assert!(wiz.active);
+
+        // WorkingDir -> Name
+        wiz.step = WizardStep::WorkingDir;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Name);
+        assert!(wiz.active);
+
+        // Task -> WorkingDir
+        wiz.step = WizardStep::Task;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::WorkingDir);
+        assert!(wiz.active);
+
+        // Role -> Task
+        wiz.step = WizardStep::Role;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Task);
+        assert!(wiz.active);
+
+        // AgentGoal -> Role
+        wiz.step = WizardStep::AgentGoal;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Role);
+        assert!(wiz.active);
+
+        // RestartPolicy -> AgentGoal
+        wiz.step = WizardStep::RestartPolicy;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::AgentGoal);
+        assert!(wiz.active);
+
+        // Confirm -> RestartPolicy
+        wiz.step = WizardStep::Confirm;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::RestartPolicy);
+        assert!(wiz.active);
     }
 
     #[test]
