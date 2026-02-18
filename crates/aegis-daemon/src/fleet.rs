@@ -95,10 +95,23 @@ impl Fleet {
         }
     }
 
+    /// Build per-agent AegisConfig, applying any overrides from the agent's
+    /// slot config (policy_dir, isolation) on top of the fleet default.
+    fn build_agent_aegis_config(&self, slot_config: &AgentSlotConfig) -> AegisConfig {
+        let mut config = self.default_aegis_config.clone();
+        config.name = slot_config.name.clone();
+        if let Some(ref policy_dir) = slot_config.policy_dir {
+            config.policy_paths = vec![policy_dir.clone()];
+        }
+        if let Some(ref isolation) = slot_config.isolation {
+            config.isolation = isolation.clone();
+        }
+        config
+    }
+
     /// Start a specific agent by name.
     pub fn start_agent(&mut self, name: &str) {
-        // Pre-compute orchestrator name before mutable borrow to avoid borrow conflict.
-        // Workers need to know the orchestrator so their prompt mentions it.
+        // Pre-compute values before mutable borrow to avoid borrow conflict.
         let is_orchestrator = self.slots.get(name)
             .is_some_and(|s| s.config.orchestrator.is_some());
         let orchestrator_name = if !is_orchestrator {
@@ -107,6 +120,14 @@ impl Fleet {
                 .map(|s| s.config.name.clone())
         } else {
             None
+        };
+        // Build per-agent AegisConfig before the mutable borrow on slots.
+        let aegis_config = match self.slots.get(name) {
+            Some(s) => self.build_agent_aegis_config(&s.config),
+            None => {
+                warn!(agent = name, "start_agent: unknown agent");
+                return;
+            }
         };
 
         let slot = match self.slots.get_mut(name) {
@@ -128,7 +149,6 @@ impl Fleet {
         }
 
         let slot_config = slot.config.clone();
-        let aegis_config = self.default_aegis_config.clone();
         let (output_tx, output_rx) = mpsc::channel::<String>();
 
         // Create command channel: fleet sends commands, supervisor receives
@@ -749,6 +769,9 @@ mod tests {
             max_restarts: 5,
             enabled: true,
             orchestrator: None,
+            security_preset: None,
+            policy_dir: None,
+            isolation: None,
         }
     }
 

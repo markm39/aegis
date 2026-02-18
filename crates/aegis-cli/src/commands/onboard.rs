@@ -30,19 +30,43 @@ pub fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Write daemon.toml (after TUI closes, back in normal terminal mode)
-    let config = DaemonConfig {
-        goal: None,
-        persistence: PersistenceConfig::default(),
-        control: DaemonControlConfig::default(),
-        alerts: vec![],
-        agents: vec![result.agent_slot.clone()],
-        channel: result.channel,
-    };
+    // Apply security preset to each agent from the wizard result.
+    let mut agents = result.agents;
+    for agent in &mut agents {
+        if agent.security_preset.is_none() {
+            agent.security_preset = Some(result.security_preset.clone());
+        }
+        if agent.isolation.is_none() {
+            agent.isolation = result.security_isolation.clone();
+        }
+    }
 
     let dir = daemon_dir();
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}", dir.display()))?;
+
+    // Write Cedar policy file if the security preset generated one.
+    if let Some(ref policy_text) = result.policy_text {
+        let policy_path = dir.join("policy.cedar");
+        std::fs::write(&policy_path, policy_text)
+            .with_context(|| format!("failed to write {}", policy_path.display()))?;
+        // Point each agent at the shared policy directory.
+        for agent in &mut agents {
+            if agent.policy_dir.is_none() {
+                agent.policy_dir = Some(dir.clone());
+            }
+        }
+    }
+
+    // Write daemon.toml (after TUI closes, back in normal terminal mode)
+    let config = DaemonConfig {
+        goal: result.fleet_goal,
+        persistence: PersistenceConfig::default(),
+        control: DaemonControlConfig::default(),
+        alerts: vec![],
+        agents,
+        channel: result.channel,
+    };
 
     let config_path = daemon_config_path();
     let toml_str = config.to_toml().context("failed to serialize config")?;
@@ -231,6 +255,9 @@ mod tests {
                 max_restarts: 5,
                 enabled: true,
                 orchestrator: None,
+                security_preset: None,
+                policy_dir: None,
+                isolation: None,
             }],
             channel: None,
         };
@@ -266,6 +293,9 @@ mod tests {
                 max_restarts: 5,
                 enabled: true,
                 orchestrator: None,
+                security_preset: None,
+                policy_dir: None,
+                isolation: None,
             }],
             channel: Some(ChannelConfig::Telegram(TelegramConfig {
                 bot_token: "123:ABC".into(),

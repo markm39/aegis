@@ -16,7 +16,9 @@ const PASTE_INDICATOR_DURATION: Duration = Duration::from_secs(3);
 
 use crate::fleet_tui::wizard::{RestartChoice, ToolChoice};
 
-use super::app::{OnboardApp, OnboardStep, TelegramStatus};
+use crate::wizard::model::{ActionPermission, SecurityPreset};
+
+use super::app::{OnboardApp, OnboardStep, TelegramStatus, WorkflowChoice};
 
 /// Main draw function -- dispatches to the appropriate step renderer.
 pub fn draw(f: &mut Frame, app: &OnboardApp) {
@@ -31,10 +33,8 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
         ])
         .split(area);
 
-    // Title bar with step progress
-    let step_num = app.step.number();
-    let step_total = OnboardStep::total();
-    let step_name = app.step.label();
+    // Title bar with progress
+    let progress = app.progress_text();
 
     let title = Paragraph::new(Line::from(vec![
         Span::styled(
@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
         ),
         Span::raw("  "),
         Span::styled(
-            format!("Step {step_num} of {step_total}: {step_name}"),
+            progress,
             Style::default().fg(Color::DarkGray),
         ),
     ]))
@@ -59,12 +59,20 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
     // Content area
     match app.step {
         OnboardStep::Welcome => draw_welcome(f, app, chunks[1]),
+        OnboardStep::Workflow => draw_workflow(f, app, chunks[1]),
+        OnboardStep::FleetGoal => draw_fleet_goal(f, app, chunks[1]),
         OnboardStep::Tool => draw_tool(f, app, chunks[1]),
         OnboardStep::CustomCommand => draw_custom_command(f, app, chunks[1]),
         OnboardStep::Name => draw_name(f, app, chunks[1]),
         OnboardStep::WorkingDir => draw_working_dir(f, app, chunks[1]),
         OnboardStep::Task => draw_task(f, app, chunks[1]),
         OnboardStep::RestartPolicy => draw_restart(f, app, chunks[1]),
+        OnboardStep::OrchestratorBacklog => draw_backlog(f, app, chunks[1]),
+        OnboardStep::OrchestratorInterval => draw_interval(f, app, chunks[1]),
+        OnboardStep::AddMore => draw_add_more(f, app, chunks[1]),
+        OnboardStep::SecurityPreset => draw_security_preset(f, app, chunks[1]),
+        OnboardStep::SecurityDetail => draw_security_detail(f, app, chunks[1]),
+        OnboardStep::MonitoringInfo => draw_monitoring_info(f, app, chunks[1]),
         OnboardStep::TelegramOffer => draw_telegram_offer(f, app, chunks[1]),
         OnboardStep::TelegramToken => draw_telegram_token(f, app, chunks[1]),
         OnboardStep::TelegramProgress => draw_telegram_progress(f, app, chunks[1]),
@@ -75,12 +83,20 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
     // Help bar
     let help_text = match app.step {
         OnboardStep::Welcome => "Enter: continue  Esc: cancel",
+        OnboardStep::Workflow => "j/k: navigate  Enter: select  Esc: back",
+        OnboardStep::FleetGoal => "Enter: continue (optional)  Esc: back",
         OnboardStep::Tool => "j/k: navigate  Enter: select  Esc: back",
         OnboardStep::CustomCommand => "Enter: confirm  Esc: back",
         OnboardStep::Name => "Enter: confirm  Esc: back",
         OnboardStep::WorkingDir => "Enter: confirm  Esc: back",
         OnboardStep::Task => "Enter: continue (leave empty to skip)  Esc: back",
         OnboardStep::RestartPolicy => "j/k: navigate  Enter: select  Esc: back",
+        OnboardStep::OrchestratorBacklog => "Enter: continue (optional)  Esc: back",
+        OnboardStep::OrchestratorInterval => "Enter: confirm  Esc: back",
+        OnboardStep::AddMore => "j/k: navigate  Enter: select  Esc: done",
+        OnboardStep::SecurityPreset => "j/k: navigate  Enter: select  Esc: back",
+        OnboardStep::SecurityDetail => "j/k: navigate  Space: toggle  Enter/Tab: continue  Esc: back",
+        OnboardStep::MonitoringInfo => "Enter: continue  Esc: back",
         OnboardStep::TelegramOffer => "j/k: navigate  Enter: select  Esc: back",
         OnboardStep::TelegramToken => "Enter: validate  Esc: back",
         OnboardStep::TelegramProgress => match &app.telegram_status {
@@ -154,6 +170,207 @@ fn draw_welcome(f: &mut Frame, app: &OnboardApp, area: Rect) {
             .title("Welcome"),
     );
     f.render_widget(p, area);
+}
+
+fn draw_workflow(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Description
+            Constraint::Min(5),   // List
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(Span::styled(
+        "How do you want to organize your fleet?",
+        Style::default().fg(Color::White),
+    ));
+    f.render_widget(desc, chunks[0]);
+
+    let items: Vec<ListItem> = WorkflowChoice::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, choice)| {
+            let selected = i == app.workflow_selected;
+            let marker = if selected { "> " } else { "  " };
+
+            let label_style = if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let line = Line::from(vec![
+                Span::styled(marker, label_style),
+                Span::styled(format!("{:<24}", choice.label()), label_style),
+                Span::styled(
+                    format!("  {}", choice.description()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Workflow"),
+    );
+    f.render_widget(list, chunks[1]);
+}
+
+fn draw_fleet_goal(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let indicator_height = paste_indicator_height(app);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),                // Description
+            Constraint::Length(3),                // Input
+            Constraint::Length(indicator_height),  // Paste indicator
+            Constraint::Min(0),                   // Spacer
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "What is the overall goal for your fleet?",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "Optional -- shared across all agents. Press Enter to skip.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ]);
+    f.render_widget(desc, chunks[0]);
+
+    let spans = build_cursor_spans(&app.fleet_goal, app.fleet_goal_cursor);
+    let input = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Fleet Goal"),
+    );
+    f.render_widget(input, chunks[1]);
+
+    draw_paste_indicator(f, app, chunks[2]);
+}
+
+fn draw_backlog(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let indicator_height = paste_indicator_height(app);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(indicator_height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "Path to a backlog/roadmap file the orchestrator reads for priorities.",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "Optional -- press Enter to skip. Relative to working directory.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ]);
+    f.render_widget(desc, chunks[0]);
+
+    let spans = build_cursor_spans(&app.backlog_path, app.backlog_path_cursor);
+    let input = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Backlog Path"),
+    );
+    f.render_widget(input, chunks[1]);
+
+    draw_paste_indicator(f, app, chunks[2]);
+}
+
+fn draw_interval(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "How often (in seconds) should the orchestrator review agent progress?",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "Default: 300 (5 minutes).",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ]);
+    f.render_widget(desc, chunks[0]);
+
+    let spans = build_cursor_spans(&app.review_interval, app.review_interval_cursor);
+    let input = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Review Interval (seconds)"),
+    );
+    f.render_widget(input, chunks[1]);
+}
+
+fn draw_add_more(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let worker_count = app.completed_agents.iter()
+        .filter(|a| a.orchestrator.is_none())
+        .count();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(5),
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(Span::styled(
+        format!("{worker_count} worker(s) configured. Add another?"),
+        Style::default().fg(Color::White),
+    ));
+    f.render_widget(desc, chunks[0]);
+
+    let choices = ["Yes, add another worker", "No, continue to setup"];
+    let items: Vec<ListItem> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let selected = i == app.add_more_selected;
+            let marker = if selected { "> " } else { "  " };
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Span::styled(format!("{marker}{label}"), style))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Add Worker"),
+    );
+    f.render_widget(list, chunks[1]);
 }
 
 fn draw_tool(f: &mut Frame, app: &OnboardApp, area: Rect) {
@@ -418,6 +635,209 @@ fn draw_restart(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(list, chunks[1]);
 }
 
+fn draw_security_preset(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Description
+            Constraint::Min(5),   // List
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(Span::styled(
+        "Choose a security level for your fleet.",
+        Style::default().fg(Color::White),
+    ));
+    f.render_widget(desc, chunks[0]);
+
+    let items: Vec<ListItem> = SecurityPreset::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, preset)| {
+            let selected = i == app.security_preset_selected;
+            let marker = if selected { "> " } else { "  " };
+
+            let label_style = if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let line = Line::from(vec![
+                Span::styled(marker, label_style),
+                Span::styled(format!("{:<20}", preset.label()), label_style),
+                Span::styled(
+                    format!("  {}", preset.description()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Security Level"),
+    );
+    f.render_widget(list, chunks[1]);
+}
+
+fn draw_security_detail(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Description
+            Constraint::Min(5),   // Action list
+            Constraint::Length(2), // Note
+        ])
+        .split(area);
+
+    let desc = Paragraph::new(Span::styled(
+        "Toggle permissions for each action. Infrastructure actions are always allowed.",
+        Style::default().fg(Color::White),
+    ));
+    f.render_widget(desc, chunks[0]);
+
+    let items: Vec<ListItem> = app
+        .security_actions
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let selected = i == app.security_action_selected;
+            let marker = if selected { "> " } else { "  " };
+
+            let (perm_label, perm_color) = if entry.meta.infrastructure {
+                ("[Always]", Color::DarkGray)
+            } else {
+                match &entry.permission {
+                    ActionPermission::Allow | ActionPermission::Scoped(_) => {
+                        ("[Allow]", Color::Green)
+                    }
+                    ActionPermission::Deny => ("[Deny] ", Color::Red),
+                }
+            };
+
+            let label_style = if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let line = Line::from(vec![
+                Span::styled(marker, label_style),
+                Span::styled(
+                    format!("{:<8}", perm_label),
+                    Style::default().fg(perm_color),
+                ),
+                Span::styled(format!("{:<22}", entry.meta.label), label_style),
+                Span::styled(
+                    entry.meta.description,
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Action Permissions"),
+    );
+    f.render_widget(list, chunks[1]);
+
+    let note = Paragraph::new(Span::styled(
+        "  Fine-tune scopes later with :security in the hub.",
+        Style::default().fg(Color::DarkGray),
+    ));
+    f.render_widget(note, chunks[2]);
+}
+
+fn draw_monitoring_info(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let preset = app.selected_security_preset();
+    let preset_label = preset.label();
+    let preset_desc = preset.description();
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  What Aegis does for you:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Audit ledger      ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "Every action is logged. View with :log in the hub.",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  File observer     ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "Filesystem changes tracked in real-time via FSEvents.",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Permission gate   ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "Agent tool calls checked against your Cedar policy.",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "                    Pending prompts appear in the hub for approve/deny.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(vec![
+            Span::styled("  Stall detection   ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "If an agent goes silent for 2 min, Aegis nudges it.",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Your security level: ", Style::default().fg(Color::White)),
+            Span::styled(
+                preset_label,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!("  {preset_desc}"),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Adjust anytime with :security in the hub.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let p = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Monitoring"),
+        );
+    f.render_widget(p, area);
+}
+
 fn draw_telegram_offer(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -626,22 +1046,6 @@ fn draw_telegram_progress(f: &mut Frame, app: &OnboardApp, area: Rect) {
 }
 
 fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
-    let tool_label = ToolChoice::ALL.get(app.tool_selected)
-        .map(|t| t.label())
-        .unwrap_or("Unknown");
-    let restart_label = RestartChoice::ALL.get(app.restart_selected)
-        .map(|r| r.label())
-        .unwrap_or("Unknown");
-
-    let task_display = if app.task.trim().is_empty() {
-        "(none)".to_string()
-    } else if app.task.chars().count() > 60 {
-        let preview: String = app.task.chars().take(57).collect();
-        format!("{preview}... [{} chars]", app.task.chars().count())
-    } else {
-        app.task.replace('\n', " ")
-    };
-
     let telegram_display = match &app.telegram_result {
         Some((_, chat_id, bot_username)) => format!("@{bot_username} (chat {})", chat_id),
         None => "(not configured)".to_string(),
@@ -662,20 +1066,70 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        labeled_line("Tool:", tool_label, Color::Yellow),
-        labeled_line("Name:", &app.name, Color::Yellow),
-        labeled_line("Directory:", &app.working_dir, Color::White),
-        labeled_line("Task:", &task_display, Color::White),
-        labeled_line("Restart:", restart_label, Color::White),
-        labeled_line("Telegram:", &telegram_display, Color::White),
-        Line::from(""),
     ];
 
-    if ToolChoice::ALL.get(app.tool_selected) == Some(&ToolChoice::Custom) {
-        // Insert custom command line after Tool
-        lines.insert(4, labeled_line("Command:", &app.custom_command, Color::White));
+    // Workflow type
+    let wf = app.workflow_choice();
+    lines.push(labeled_line("Workflow:", wf.label(), Color::Yellow));
+
+    if app.is_multi_agent() {
+        // Fleet goal
+        let goal_display = if app.fleet_goal.trim().is_empty() {
+            "(none)".to_string()
+        } else {
+            app.fleet_goal.trim().to_string()
+        };
+        lines.push(labeled_line("Fleet Goal:", &goal_display, Color::White));
+        lines.push(Line::from(""));
+
+        // List each completed agent
+        for agent in &app.completed_agents {
+            let is_orch = agent.orchestrator.is_some();
+            let type_label = if is_orch { "ORCH" } else { "Worker" };
+            let name_line = format!("  [{type_label}] {}", agent.name);
+            lines.push(Line::from(Span::styled(
+                name_line,
+                Style::default()
+                    .fg(if is_orch { Color::Magenta } else { Color::Yellow })
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(labeled_line("    Dir:", &agent.working_dir.display().to_string(), Color::White));
+            if let Some(task) = &agent.task {
+                let task_short = if task.len() > 50 {
+                    format!("{}...", &task[..47])
+                } else {
+                    task.clone()
+                };
+                lines.push(labeled_line("    Task:", &task_short, Color::White));
+            }
+        }
+    } else {
+        // Solo: show single agent from current fields
+        let tool_label = ToolChoice::ALL.get(app.tool_selected)
+            .map(|t| t.label())
+            .unwrap_or("Unknown");
+        let restart_label = RestartChoice::ALL.get(app.restart_selected)
+            .map(|r| r.label())
+            .unwrap_or("Unknown");
+        let task_display = if app.task.trim().is_empty() {
+            "(none)".to_string()
+        } else if app.task.chars().count() > 60 {
+            let preview: String = app.task.chars().take(57).collect();
+            format!("{preview}... [{} chars]", app.task.chars().count())
+        } else {
+            app.task.replace('\n', " ")
+        };
+
+        lines.push(labeled_line("Tool:", tool_label, Color::Yellow));
+        labeled_line_if_custom(app, &mut lines);
+        lines.push(labeled_line("Name:", &app.name, Color::Yellow));
+        lines.push(labeled_line("Directory:", &app.working_dir, Color::White));
+        lines.push(labeled_line("Task:", &task_display, Color::White));
+        lines.push(labeled_line("Restart:", restart_label, Color::White));
     }
 
+    lines.push(Line::from(""));
+    lines.push(labeled_line("Telegram:", &telegram_display, Color::White));
     lines.push(labeled_line("Start daemon:", daemon_display, Color::Green));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -690,6 +1144,12 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
             .title("Summary"),
     );
     f.render_widget(p, area);
+}
+
+fn labeled_line_if_custom(app: &OnboardApp, lines: &mut Vec<Line<'_>>) {
+    if ToolChoice::ALL.get(app.tool_selected) == Some(&ToolChoice::Custom) {
+        lines.push(labeled_line("Command:", &app.custom_command, Color::White));
+    }
 }
 
 /// Build cursor-aware text input spans for a single-line field.

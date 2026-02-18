@@ -34,6 +34,9 @@ pub(crate) fn build_agent_slot(
         max_restarts,
         enabled: true,
         orchestrator: None,
+        security_preset: None,
+        policy_dir: None,
+        isolation: None,
     }
 }
 

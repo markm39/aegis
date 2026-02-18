@@ -8,7 +8,25 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AdapterConfig, AlertRule, ChannelConfig, PilotConfig};
+use crate::config::{AdapterConfig, AlertRule, ChannelConfig, IsolationConfig, PilotConfig};
+
+/// Security preset applied during onboarding.
+///
+/// Controls which Cedar policy is generated and what isolation level is used
+/// for the agent. Stored in `daemon.toml` per-agent so the daemon knows how
+/// to construct the agent's `AegisConfig` at startup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityPresetKind {
+    /// Log all activity, enforce nothing. Default for first run.
+    ObserveOnly,
+    /// Allow reads, block writes and network access.
+    ReadOnly,
+    /// Block everything except process lifecycle.
+    FullLockdown,
+    /// User-configured per-action permissions.
+    Custom,
+}
 
 /// Top-level daemon configuration, loaded from `~/.aegis/daemon/daemon.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +88,15 @@ pub struct AgentSlotConfig {
     /// directs other agents instead of writing code itself.
     #[serde(default)]
     pub orchestrator: Option<OrchestratorConfig>,
+    /// Security preset applied during onboarding. Controls default policy generation.
+    #[serde(default)]
+    pub security_preset: Option<SecurityPresetKind>,
+    /// Path to a Cedar policy directory for this agent. Overrides the daemon default.
+    #[serde(default)]
+    pub policy_dir: Option<PathBuf>,
+    /// OS-level isolation override for this agent. If not set, derived from security_preset.
+    #[serde(default)]
+    pub isolation: Option<IsolationConfig>,
 }
 
 /// Configuration for an agent acting as the fleet orchestrator.
@@ -355,6 +382,9 @@ mod tests {
                 max_restarts: 5,
                 enabled: true,
                 orchestrator: None,
+                security_preset: None,
+                policy_dir: None,
+                isolation: None,
             }],
         };
 

@@ -5,7 +5,7 @@
 
 mod app;
 pub mod model;
-mod policy_gen;
+pub(crate) mod policy_gen;
 mod ui;
 
 use std::io;

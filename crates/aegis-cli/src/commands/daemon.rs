@@ -64,6 +64,9 @@ pub fn init() -> anyhow::Result<()> {
             max_restarts: 5,
             enabled: false, // Disabled by default so user must configure
             orchestrator: None,
+            security_preset: None,
+            policy_dir: None,
+            isolation: None,
         }],
         channel: None,
     };
@@ -117,6 +120,9 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
             max_restarts: 5,
             enabled: false,
             orchestrator: None,
+            security_preset: None,
+            policy_dir: None,
+            isolation: None,
         }],
         channel: None,
     };

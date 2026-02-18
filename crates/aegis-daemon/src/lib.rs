@@ -1253,6 +1253,9 @@ mod tests {
             max_restarts: 5,
             enabled: true,
             orchestrator: None,
+            security_preset: None,
+            policy_dir: None,
+            isolation: None,
         }
     }
 
@@ -1558,6 +1561,9 @@ mod tests {
             max_restarts: 5,
             enabled: true,
             orchestrator: None,
+            security_preset: None,
+            policy_dir: None,
+            isolation: None,
         };
 
         let prompt = compose_autonomy_prompt(
