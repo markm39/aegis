@@ -55,6 +55,8 @@ pub struct DaemonRuntime {
     channel_tx: Option<mpsc::Sender<ChannelInput>>,
     /// Receiver for inbound commands from the notification channel.
     channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
+    /// Thread handle for the notification channel (detect panics).
+    channel_thread: Option<std::thread::JoinHandle<()>>,
     /// Cedar policy engine for evaluating tool use requests from hooks.
     policy_engine: Option<aegis_policy::PolicyEngine>,
     /// Aegis config (needed for policy reload).
@@ -102,6 +104,7 @@ impl DaemonRuntime {
             started_at: Instant::now(),
             channel_tx: None,
             channel_cmd_rx: None,
+            channel_thread: None,
             policy_engine,
             aegis_config,
         }
@@ -154,9 +157,10 @@ impl DaemonRuntime {
                     aegis_channel::run_fleet(config, input_rx, Some(feedback_tx));
                 })
             {
-                Ok(_) => {
+                Ok(handle) => {
                     self.channel_tx = Some(input_tx);
                     self.channel_cmd_rx = Some(feedback_rx);
+                    self.channel_thread = Some(handle);
                     info!("notification channel started");
                 }
                 Err(e) => {
@@ -185,6 +189,20 @@ impl DaemonRuntime {
 
             // Drain inbound commands from the notification channel
             self.drain_channel_commands();
+
+            // Check if the channel thread has exited (panic or unexpected exit)
+            if let Some(handle) = &self.channel_thread {
+                if handle.is_finished() {
+                    let handle = self.channel_thread.take().unwrap();
+                    match handle.join() {
+                        Ok(()) => tracing::warn!("notification channel thread exited unexpectedly"),
+                        Err(_) => tracing::error!("notification channel thread panicked"),
+                    }
+                    // Clear senders so we don't keep trying to send to a dead thread
+                    self.channel_tx = None;
+                    self.channel_cmd_rx = None;
+                }
+            }
 
             // Tick the fleet (check for exits, apply restart policies)
             let notable_events = self.fleet.tick();
