@@ -194,7 +194,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         return;
     }
 
-    let header = Row::new(vec!["", "NAME", "ROLE", "STATUS", "TOOL", "RESTARTS", "DIR"])
+    let header = Row::new(vec!["", "NAME", "ROLE", "STATUS", "PENDING", "TOOL", "DIR"])
         .style(
             Style::default()
                 .fg(Color::DarkGray)
@@ -206,10 +206,21 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         .iter()
         .enumerate()
         .map(|(i, agent)| {
-            let selected = if i == app.agent_selected { ">" } else { " " };
+            let marker = if agent.attention_needed {
+                "!"
+            } else if i == app.agent_selected {
+                ">"
+            } else {
+                " "
+            };
             let (status_text, status_color) = status_display(&agent.status);
             let dir = truncate_path(&agent.working_dir, 30);
             let role = agent.role.as_deref().unwrap_or("-").to_string();
+            let pending = if agent.pending_count > 0 {
+                format!("{}", agent.pending_count)
+            } else {
+                "-".to_string()
+            };
 
             let style = if i == app.agent_selected {
                 Style::default().add_modifier(Modifier::BOLD)
@@ -217,14 +228,25 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
                 Style::default()
             };
 
+            // Use attention color for the marker column
+            let marker_color = if agent.attention_needed {
+                Color::Yellow
+            } else {
+                status_color
+            };
+
             Row::new(vec![
-                selected.to_string(),
-                agent.name.clone(),
-                truncate_str(&role, 16),
-                status_text.to_string(),
-                agent.tool.clone(),
-                agent.restart_count.to_string(),
-                dir,
+                ratatui::widgets::Cell::from(marker).style(Style::default().fg(marker_color)),
+                ratatui::widgets::Cell::from(agent.name.clone()),
+                ratatui::widgets::Cell::from(truncate_str(&role, 16)),
+                ratatui::widgets::Cell::from(status_text.to_string()),
+                ratatui::widgets::Cell::from(pending).style(if agent.pending_count > 0 {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                }),
+                ratatui::widgets::Cell::from(agent.tool.clone()),
+                ratatui::widgets::Cell::from(dir),
             ])
             .style(style)
             .fg(status_color)
@@ -236,8 +258,8 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         Constraint::Length(16),
         Constraint::Length(18),
         Constraint::Length(12),
+        Constraint::Length(9),
         Constraint::Length(14),
-        Constraint::Length(10),
         Constraint::Min(10),
     ];
 
