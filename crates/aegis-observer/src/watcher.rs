@@ -113,15 +113,20 @@ impl FsWatcher {
 
     /// Stop the watcher and return the number of events processed.
     pub fn stop(mut self) -> usize {
-        // Signal shutdown
+        self.shutdown_and_join();
+        let count = self.event_count.load(Ordering::SeqCst);
+        tracing::info!(events = count, "FSEvents watcher stopped");
+        count
+    }
+
+    /// Signal shutdown and join the consumer thread.
+    fn shutdown_and_join(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
 
-        // Wait for consumer to finish
         if let Some(handle) = self.consumer_handle.take() {
             if let Err(panic_payload) = handle.join() {
-                // Extract a message from the panic payload if possible
                 let msg = panic_payload
                     .downcast_ref::<&str>()
                     .copied()
@@ -134,12 +139,13 @@ impl FsWatcher {
                 tracing::error!(message = msg, "observer consumer thread panicked");
             }
         }
-
-        let count = self.event_count.load(Ordering::SeqCst);
-        tracing::info!(events = count, "FSEvents watcher stopped");
-        count
     }
+}
 
+impl Drop for FsWatcher {
+    fn drop(&mut self) {
+        self.shutdown_and_join();
+    }
 }
 
 /// Shared context for event processing functions.

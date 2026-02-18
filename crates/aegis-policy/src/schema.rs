@@ -67,9 +67,14 @@ namespace Aegis {
 /// Returns `Err` if the schema text is invalid (should not happen with the
 /// built-in schema).
 pub fn default_schema() -> Result<cedar_policy::Schema, aegis_types::AegisError> {
-    cedar_policy::Schema::from_cedarschema_str(AEGIS_SCHEMA)
-        .map(|(schema, _warnings)| schema)
-        .map_err(|e| aegis_types::AegisError::PolicyError(format!("failed to parse Aegis schema: {e}")))
+    let (schema, warnings) = cedar_policy::Schema::from_cedarschema_str(AEGIS_SCHEMA)
+        .map_err(|e| aegis_types::AegisError::PolicyError(format!("failed to parse Aegis schema: {e}")))?;
+
+    for warning in warnings {
+        tracing::warn!(%warning, "Cedar schema warning");
+    }
+
+    Ok(schema)
 }
 
 #[cfg(test)]

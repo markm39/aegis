@@ -271,9 +271,20 @@ pub fn daemon_state_path() -> PathBuf {
 
 impl DaemonConfig {
     /// Parse a daemon configuration from a TOML string.
+    ///
+    /// Validates agent slot names against `validate_config_name` to prevent
+    /// path traversal and special character injection.
     pub fn from_toml(content: &str) -> Result<Self, crate::AegisError> {
-        toml::from_str(content)
-            .map_err(|e| crate::AegisError::DaemonError(format!("invalid daemon config: {e}")))
+        let config: Self = toml::from_str(content)
+            .map_err(|e| crate::AegisError::DaemonError(format!("invalid daemon config: {e}")))?;
+
+        for agent in &config.agents {
+            crate::validate_config_name(&agent.name).map_err(|e| {
+                crate::AegisError::DaemonError(format!("invalid agent name {:?}: {e}", agent.name))
+            })?;
+        }
+
+        Ok(config)
     }
 
     /// Serialize the configuration to a TOML string.
@@ -416,5 +427,30 @@ mod tests {
         assert!(daemon_pid_path().ends_with("daemon.pid"));
         assert!(daemon_lock_path().ends_with("daemon.lock"));
         assert!(daemon_state_path().ends_with("state.json"));
+    }
+
+    #[test]
+    fn from_toml_rejects_invalid_agent_names() {
+        let toml_str = r#"
+            [[agents]]
+            name = "../escape"
+            working_dir = "/tmp"
+
+            [agents.tool]
+            type = "claude_code"
+        "#;
+        let result = DaemonConfig::from_toml(toml_str);
+        assert!(result.is_err(), "path traversal in agent name should be rejected");
+
+        let toml_str = r#"
+            [[agents]]
+            name = "bad name"
+            working_dir = "/tmp"
+
+            [agents.tool]
+            type = "claude_code"
+        "#;
+        let result = DaemonConfig::from_toml(toml_str);
+        assert!(result.is_err(), "spaces in agent name should be rejected");
     }
 }
