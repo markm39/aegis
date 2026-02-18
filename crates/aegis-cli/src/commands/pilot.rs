@@ -137,8 +137,56 @@ pub fn run(
     let observer_session =
         pipeline::start_observer(&config, &store_arc, &policy_arc, session_id);
 
+    // Start usage proxy if configured
+    let usage_proxy_handle = if config
+        .usage_proxy
+        .as_ref()
+        .is_some_and(|p| p.enabled)
+    {
+        let proxy_config = config.usage_proxy.as_ref().unwrap();
+        let proxy = aegis_proxy::UsageProxy::new(
+            Arc::clone(&store_arc),
+            config.name.clone(),
+            Some(session_id),
+            proxy_config.port,
+        );
+
+        let rt = tokio::runtime::Runtime::new()
+            .context("failed to create tokio runtime for usage proxy")?;
+
+        let handle = rt
+            .block_on(proxy.start())
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("failed to start usage proxy")?;
+
+        let port = handle.port;
+        info!(port, "usage proxy started");
+
+        // Keep the runtime alive in a background thread
+        std::thread::Builder::new()
+            .name("usage-proxy-rt".into())
+            .spawn(move || {
+                rt.block_on(async {
+                    tokio::signal::ctrl_c().await.ok();
+                });
+            })
+            .context("failed to spawn usage proxy runtime thread")?;
+
+        Some(handle)
+    } else {
+        None
+    };
+
     // Collect environment for the child process
-    let env: Vec<(String, String)> = std::env::vars().collect();
+    let mut env: Vec<(String, String)> = std::env::vars().collect();
+
+    // Inject usage proxy URLs if active
+    if let Some(ref handle) = usage_proxy_handle {
+        let port = handle.port;
+        env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
+        env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+        info!(port, "injected API base URLs for usage tracking");
+    }
 
     // Spawn the agent in a PTY
     let pty = PtySession::spawn(command, args, &project_dir, &env)
@@ -272,6 +320,11 @@ pub fn run(
     // (event_tx was moved into the supervisor thread, which has exited)
     if let Some(handle) = event_logger {
         let _ = handle.join();
+    }
+
+    // Stop usage proxy
+    if let Some(handle) = usage_proxy_handle {
+        let _ = handle.shutdown_tx.send(true);
     }
 
     // Stop observer

@@ -131,12 +131,57 @@ fn run_agent_slot_inner(
     )
     .map_err(|e| format!("failed to start observer for {name}: {e}"))?;
 
+    // 3b. Start usage proxy if configured
+    let usage_proxy_handle = if aegis_config
+        .usage_proxy
+        .as_ref()
+        .is_some_and(|p| p.enabled)
+    {
+        let proxy_config = aegis_config.usage_proxy.as_ref().unwrap();
+        let proxy = aegis_proxy::UsageProxy::new(
+            Arc::clone(&store),
+            name.clone(),
+            Some(session_id),
+            proxy_config.port,
+        );
+
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("failed to create tokio runtime for usage proxy: {e}"))?;
+
+        let handle = rt
+            .block_on(proxy.start())
+            .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?;
+
+        let port = handle.port;
+        info!(agent = name, port, "usage proxy started");
+
+        // Keep the runtime alive in a background thread
+        std::thread::Builder::new()
+            .name(format!("usage-proxy-rt-{name}"))
+            .spawn(move || {
+                rt.block_on(async {
+                    tokio::signal::ctrl_c().await.ok();
+                });
+            })
+            .map_err(|e| format!("failed to spawn usage proxy runtime thread: {e}"))?;
+
+        Some(handle)
+    } else {
+        None
+    };
+
     // 4. Create driver and determine spawn strategy
     let driver = create_driver(&slot_config.tool);
     let strategy = driver.spawn_strategy(&slot_config.working_dir);
 
     let pty = match strategy {
-        SpawnStrategy::Pty { command, args, env } => {
+        SpawnStrategy::Pty { command, args, mut env } => {
+            // Inject usage proxy URLs if active
+            if let Some(ref handle) = usage_proxy_handle {
+                let port = handle.port;
+                env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
+                env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+            }
             info!(
                 agent = name,
                 command = command,
@@ -145,7 +190,13 @@ fn run_agent_slot_inner(
             PtySession::spawn(&command, &args, &slot_config.working_dir, &env)
                 .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?
         }
-        SpawnStrategy::Process { command, args, env } => {
+        SpawnStrategy::Process { command, args, mut env } => {
+            // Inject usage proxy URLs if active
+            if let Some(ref handle) = usage_proxy_handle {
+                let port = handle.port;
+                env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
+                env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+            }
             // For non-PTY processes, still use PTY for uniformity
             info!(
                 agent = name,
@@ -159,7 +210,10 @@ fn run_agent_slot_inner(
             // External process (e.g. Cursor already running) -- nothing to spawn
             info!(agent = name, "external agent, skipping spawn");
 
-            // Stop observer, end session
+            // Stop usage proxy, observer, end session
+            if let Some(handle) = usage_proxy_handle {
+                let _ = handle.shutdown_tx.send(true);
+            }
             if let Err(e) = aegis_observer::stop_observer(observer_session) {
                 warn!(agent = name, error = %e, "failed to stop observer");
             }
@@ -248,7 +302,12 @@ fn run_agent_slot_inner(
         "agent exited"
     );
 
-    // 7. Stop observer and end session
+    // 7. Stop usage proxy
+    if let Some(handle) = usage_proxy_handle {
+        let _ = handle.shutdown_tx.send(true);
+    }
+
+    // 8. Stop observer and end session
     if let Err(e) = aegis_observer::stop_observer(observer_session) {
         warn!(agent = name, error = %e, "failed to stop observer");
     }

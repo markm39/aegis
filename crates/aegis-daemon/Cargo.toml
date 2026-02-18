@@ -13,6 +13,8 @@ aegis-ledger = { path = "../aegis-ledger" }
 aegis-observer = { path = "../aegis-observer" }
 aegis-control = { path = "../aegis-control" }
 aegis-alert = { path = "../aegis-alert" }
+aegis-channel = { path = "../aegis-channel" }
+aegis-proxy = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

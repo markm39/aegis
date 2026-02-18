@@ -104,6 +104,7 @@ dependencies = [
  "aegis-observer",
  "aegis-pilot",
  "aegis-policy",
+ "aegis-proxy",
  "aegis-types",
  "anyhow",
  "chrono",
