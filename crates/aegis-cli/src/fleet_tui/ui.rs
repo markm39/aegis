@@ -283,17 +283,17 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             Span::styled(" j/k", Style::default().fg(Color::Yellow)),
             Span::styled(": navigate  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Yellow)),
-            Span::styled(": output  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(": detail  ", Style::default().fg(Color::DarkGray)),
             Span::styled("s", Style::default().fg(Color::Green)),
             Span::styled(": start  ", Style::default().fg(Color::DarkGray)),
             Span::styled("x", Style::default().fg(Color::Red)),
             Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("r", Style::default().fg(Color::Yellow)),
-            Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
             Span::styled("a", Style::default().fg(Color::Cyan)),
             Span::styled(": add  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(":", Style::default().fg(Color::Yellow)),
+            Span::styled(": commands  ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::DarkGray)),
-            Span::styled(": quit (daemon stays running)", Style::default().fg(Color::DarkGray)),
+            Span::styled(": quit", Style::default().fg(Color::DarkGray)),
         ]
     } else {
         vec![
