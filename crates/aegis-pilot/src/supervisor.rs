@@ -386,8 +386,9 @@ fn handle_scan_result(
                     pty.send_line(&detection.deny_response)?;
                     stats.denied += 1;
 
-                    // Brief delay, then tell the agent why so it can adjust
-                    std::thread::sleep(Duration::from_millis(500));
+                    // Brief pause so the agent reads the denial before guidance.
+                    // Keep short to avoid blocking the supervisor event loop.
+                    std::thread::sleep(Duration::from_millis(50));
                     let guidance = format!(
                         "[aegis] Action denied by policy: {} -- {}. Continue working on the task, but avoid this type of action.",
                         detection.action, verdict.reason
@@ -415,7 +416,7 @@ fn handle_scan_result(
                     pty.send_line("n")?;
                     stats.denied += 1;
 
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(Duration::from_millis(50));
                     pty.send_line("[aegis] Action denied (unrecognized prompt, default-deny policy). Continue working on the task.")?;
                     "denied"
                 }

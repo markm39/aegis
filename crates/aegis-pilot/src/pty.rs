@@ -160,6 +160,12 @@ impl PtySession {
                             "pty write: buffer full after 5s of retries".into(),
                         ));
                     }
+                    // Bail early if child exited (no point retrying a dead process)
+                    if retries.is_multiple_of(100) && !self.is_alive() {
+                        return Err(AegisError::PilotError(
+                            "pty write: child exited during write".into(),
+                        ));
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 Err(e) => {
