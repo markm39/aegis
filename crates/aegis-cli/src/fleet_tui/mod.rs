@@ -321,6 +321,26 @@ impl FleetApp {
             return;
         }
 
+        // Ctrl+C: cancel modal modes, or quit
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            if self.command_mode {
+                self.command_mode = false;
+                self.command_buffer.clear();
+                self.command_cursor = 0;
+                self.command_completions.clear();
+                self.completion_idx = None;
+            } else if self.input_mode {
+                self.input_mode = false;
+                self.input_buffer.clear();
+                self.input_cursor = 0;
+            } else {
+                self.running = false;
+            }
+            return;
+        }
+
         // Command mode intercepts all keys
         if self.command_mode {
             self.handle_command_key(key);
@@ -1961,5 +1981,46 @@ mod tests {
         app.handle_key(press(KeyCode::Char('q')));
         assert_eq!(app.view, FleetView::Overview);
         assert!(app.running, "q in help view should go back, not quit");
+    }
+
+    fn ctrl_c() -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::empty(),
+        }
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_overview() {
+        let mut app = make_app();
+        app.handle_key(ctrl_c());
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn ctrl_c_exits_command_mode() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "some text".into();
+
+        app.handle_key(ctrl_c());
+        assert!(!app.command_mode);
+        assert!(app.command_buffer.is_empty());
+        assert!(app.running, "Ctrl+C in command mode should exit mode, not quit");
+    }
+
+    #[test]
+    fn ctrl_c_exits_input_mode() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        app.input_mode = true;
+        app.input_buffer = "some text".into();
+
+        app.handle_key(ctrl_c());
+        assert!(!app.input_mode);
+        assert!(app.input_buffer.is_empty());
+        assert!(app.running, "Ctrl+C in input mode should exit mode, not quit");
     }
 }
