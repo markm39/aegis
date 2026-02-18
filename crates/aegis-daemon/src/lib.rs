@@ -57,6 +57,8 @@ pub struct DaemonRuntime {
     channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
     /// Cedar policy engine for evaluating tool use requests from hooks.
     policy_engine: Option<aegis_policy::PolicyEngine>,
+    /// Aegis config (needed for policy reload).
+    aegis_config: AegisConfig,
 }
 
 impl DaemonRuntime {
@@ -101,6 +103,7 @@ impl DaemonRuntime {
             channel_tx: None,
             channel_cmd_rx: None,
             policy_engine,
+            aegis_config,
         }
     }
 
@@ -726,6 +729,27 @@ impl DaemonRuntime {
 
         // Update stored config
         self.config = new_config;
+
+        // Reload policy engine (picks up new/changed .cedar files)
+        let new_policy = self.aegis_config
+            .policy_paths
+            .first()
+            .filter(|dir| {
+                dir.is_dir()
+                    && std::fs::read_dir(dir)
+                        .ok()
+                        .map(|entries| {
+                            entries.filter_map(|e| e.ok()).any(|e| {
+                                e.path().extension().is_some_and(|ext| ext == "cedar")
+                            })
+                        })
+                        .unwrap_or(false)
+            })
+            .and_then(|dir| aegis_policy::PolicyEngine::new(dir, None).ok());
+        if new_policy.is_some() != self.policy_engine.is_some() {
+            info!("policy engine reloaded (active: {})", new_policy.is_some());
+        }
+        self.policy_engine = new_policy;
 
         DaemonResponse::ok(format!(
             "config reloaded: {added} added, {updated} updated, {removed} removed"
