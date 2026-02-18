@@ -995,6 +995,13 @@ impl DaemonRuntime {
         let toml_str = config.to_toml().map_err(|e| e.to_string())?;
         let config_path = aegis_types::daemon::daemon_config_path();
 
+        // Ensure the daemon directory exists (handles fresh installs, CI,
+        // and recovery if someone deletes the config dir while running).
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create config directory: {e}"))?;
+        }
+
         // Write to a uniquely-named sibling temp file, fsync, then rename for
         // crash safety. Without fsync, a power loss between write and rename could
         // leave the temp file empty/truncated, and rename would replace the good
