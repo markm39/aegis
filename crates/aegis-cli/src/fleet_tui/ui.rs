@@ -281,26 +281,24 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
 fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
     let mut spans = if app.connected {
         vec![
-            Span::styled(" j/k", Style::default().fg(Color::Yellow)),
-            Span::styled(": navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" :", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" cmd  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("j/k", Style::default().fg(Color::Yellow)),
+            Span::styled(" nav  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Yellow)),
-            Span::styled(": detail  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" detail  ", Style::default().fg(Color::DarkGray)),
             Span::styled("s", Style::default().fg(Color::Green)),
-            Span::styled(": start  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled("x", Style::default().fg(Color::Red)),
-            Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled("r", Style::default().fg(Color::Yellow)),
-            Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" start/stop/restart  ", Style::default().fg(Color::DarkGray)),
             Span::styled("a", Style::default().fg(Color::Cyan)),
-            Span::styled(": add  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Tab", Style::default().fg(Color::Magenta)),
-            Span::styled(": next attn  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(":", Style::default().fg(Color::Yellow)),
-            Span::styled(": commands  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
             Span::styled("?", Style::default().fg(Color::Cyan)),
-            Span::styled(": help  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::DarkGray)),
-            Span::styled(": quit", Style::default().fg(Color::DarkGray)),
+            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
         ]
     } else {
         vec![
@@ -609,24 +607,22 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     }
 
     spans.extend([
+        Span::styled(":", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" cmd  ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Yellow)),
-        Span::styled(": back  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("n", Style::default().fg(Color::Magenta)),
-        Span::styled(": nudge  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
         Span::styled("j/k", Style::default().fg(Color::Yellow)),
-        Span::styled(": scroll  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("g/G", Style::default().fg(Color::Yellow)),
-        Span::styled(": top/bottom  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("n", Style::default().fg(Color::Magenta)),
+        Span::styled(" nudge  ", Style::default().fg(Color::DarkGray)),
         Span::styled("p", Style::default().fg(Color::Yellow)),
-        Span::styled(": pop  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" pop  ", Style::default().fg(Color::DarkGray)),
         Span::styled("s", Style::default().fg(Color::Green)),
-        Span::styled(": start  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("/", Style::default().fg(Color::DarkGray)),
         Span::styled("x", Style::default().fg(Color::Red)),
-        Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("/", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
-        Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(":", Style::default().fg(Color::Cyan)),
-        Span::styled(": command", Style::default().fg(Color::DarkGray)),
+        Span::styled(" start/stop/restart", Style::default().fg(Color::DarkGray)),
     ]);
 
     if app.detail_attention {
