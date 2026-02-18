@@ -189,15 +189,18 @@ impl AddAgentWizard {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "agent-1".into());
 
+        let name_len = default_name.len();
+        let cwd_len = cwd.len();
+
         Self {
             step: WizardStep::Tool,
             active: true,
             completed: false,
             tool_selected: 0,
             name: default_name,
-            name_cursor: 0,
+            name_cursor: name_len,
             working_dir: cwd,
-            working_dir_cursor: 0,
+            working_dir_cursor: cwd_len,
             task: String::new(),
             task_cursor: 0,
             role: String::new(),
@@ -638,6 +641,13 @@ mod tests {
         let mut wiz = AddAgentWizard::new();
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Name);
+    }
+
+    #[test]
+    fn wizard_cursors_start_at_end_of_default_text() {
+        let wiz = AddAgentWizard::new();
+        assert_eq!(wiz.name_cursor, wiz.name.len());
+        assert_eq!(wiz.working_dir_cursor, wiz.working_dir.len());
     }
 
     #[test]

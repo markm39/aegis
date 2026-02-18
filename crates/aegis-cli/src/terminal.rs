@@ -56,33 +56,70 @@ pub fn spawn_in_terminal(command: &str) -> Result<(), String> {
 
 /// Spawn in a tmux split pane.
 fn spawn_tmux(command: &str) -> Result<(), String> {
-    let status = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["split-window", "-h", command])
-        .status()
+        .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(format!("tmux split-window failed (exit {})", status))
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            Err(format!("tmux split-window failed (exit {})", output.status))
+        } else {
+            Err(format!("tmux split-window failed: {detail}"))
+        }
     }
 }
 
 /// Escape a string for use inside an AppleScript double-quoted literal.
 ///
-/// AppleScript string literals require escaping backslashes first, then
-/// double quotes. Order matters to avoid double-escaping.
+/// Escapes backslashes, double quotes, newlines, and carriage returns.
+/// Order matters: backslashes must be escaped first to avoid double-escaping.
 fn escape_applescript(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Run an AppleScript via osascript, capturing stderr for error messages.
+fn run_applescript(script: &str, label: &str) -> Result<(), String> {
+    let output = Command::new("osascript")
+        .args(["-e", script])
+        .output()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            Err(format!("{label} osascript failed (exit {})", output.status))
+        } else {
+            Err(format!("{label}: {detail}"))
+        }
+    }
 }
 
 /// Spawn in an iTerm2 tab via osascript.
+///
+/// If iTerm2 has no open windows, creates a new window first.
 fn spawn_iterm2(command: &str) -> Result<(), String> {
     let escaped = escape_applescript(command);
     let script = format!(
         r#"tell application "iTerm2"
+            if (count of windows) = 0 then
+                create window with default profile
+            else
+                tell current window
+                    create tab with default profile
+                end tell
+            end if
             tell current window
-                create tab with default profile
                 tell current session
                     write text "{escaped}"
                 end tell
@@ -90,16 +127,7 @@ fn spawn_iterm2(command: &str) -> Result<(), String> {
         end tell"#,
     );
 
-    let status = Command::new("osascript")
-        .args(["-e", &script])
-        .status()
-        .map_err(|e| format!("failed to run osascript: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("iTerm2 osascript failed (exit {})", status))
-    }
+    run_applescript(&script, "iTerm2")
 }
 
 /// Spawn in a Terminal.app window via osascript.
@@ -112,16 +140,7 @@ fn spawn_terminal_app(command: &str) -> Result<(), String> {
         end tell"#,
     );
 
-    let status = Command::new("osascript")
-        .args(["-e", &script])
-        .status()
-        .map_err(|e| format!("failed to run osascript: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("Terminal.app osascript failed (exit {})", status))
-    }
+    run_applescript(&script, "Terminal.app")
 }
 
 #[cfg(test)]
@@ -169,6 +188,14 @@ mod tests {
         assert_eq!(
             escape_applescript(r#"echo "back\slash""#),
             r#"echo \"back\\slash\""#
+        );
+    }
+
+    #[test]
+    fn escape_applescript_newlines() {
+        assert_eq!(
+            escape_applescript("line1\nline2\rline3"),
+            "line1\\nline2\\rline3"
         );
     }
 
