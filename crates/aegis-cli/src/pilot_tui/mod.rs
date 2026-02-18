@@ -416,6 +416,19 @@ impl PilotApp {
         }
     }
 
+    /// Handle pasted text (from bracketed paste mode).
+    ///
+    /// Only active in InputMode. Collapses newlines to spaces since the
+    /// input buffer is single-line.
+    pub fn handle_paste(&mut self, text: &str) {
+        if !matches!(self.mode, PilotMode::InputMode) {
+            return;
+        }
+        let cleaned = text.replace(['\n', '\r'], " ");
+        self.input_buffer.insert_str(self.input_cursor, &cleaned);
+        self.input_cursor += cleaned.len();
+    }
+
     fn push_output(&mut self, text: String, annotation: Option<LineAnnotation>) {
         if self.output_lines.len() >= MAX_OUTPUT_LINES {
             self.output_lines.pop_front();
@@ -476,6 +489,7 @@ pub fn run_pilot_tui(
             std::io::stdout(),
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste,
         );
         original_hook(info);
     }));
@@ -487,6 +501,7 @@ pub fn run_pilot_tui(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste,
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -509,6 +524,7 @@ pub fn run_pilot_tui(
         terminal.backend_mut(),
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste,
     )?;
     terminal.show_cursor()?;
 
@@ -535,6 +551,7 @@ fn run_event_loop(
         match events.next()? {
             AppEvent::Tick => {}
             AppEvent::Key(key) => app.handle_key(key),
+            AppEvent::Paste(text) => app.handle_paste(&text),
         }
 
         if !app.running {
@@ -1008,5 +1025,29 @@ mod tests {
         // PageDown scrolls down by 20
         app.handle_key(make_key(KeyCode::PageDown));
         assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn paste_in_input_mode() {
+        let mut app = make_app();
+        app.handle_key(make_key(KeyCode::Char('i')));
+
+        app.handle_paste("hello world");
+        assert_eq!(app.input_buffer, "hello world");
+        assert_eq!(app.input_cursor, 11);
+
+        // Newlines collapse to spaces
+        app.input_buffer.clear();
+        app.input_cursor = 0;
+        app.handle_paste("line1\nline2\r\nline3");
+        assert_eq!(app.input_buffer, "line1 line2  line3");
+    }
+
+    #[test]
+    fn paste_ignored_in_normal_mode() {
+        let mut app = make_app();
+        assert!(matches!(app.mode, PilotMode::Normal));
+        app.handle_paste("should be ignored");
+        assert!(app.input_buffer.is_empty());
     }
 }

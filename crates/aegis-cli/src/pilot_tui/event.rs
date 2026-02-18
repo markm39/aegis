@@ -14,6 +14,8 @@ pub enum AppEvent {
     Tick,
     /// A key was pressed.
     Key(KeyEvent),
+    /// Text was pasted (bracketed paste mode).
+    Paste(String),
 }
 
 /// Polls crossterm for terminal events at a fixed tick rate.
@@ -37,6 +39,7 @@ impl EventHandler {
         if event::poll(self.tick_rate)? {
             match event::read()? {
                 CrosstermEvent::Key(key) => Ok(AppEvent::Key(key)),
+                CrosstermEvent::Paste(text) => Ok(AppEvent::Paste(text)),
                 _ => Ok(AppEvent::Tick),
             }
         } else {
