@@ -28,6 +28,21 @@ pub struct PendingPromptInfo {
     pub received_at: Instant,
 }
 
+/// Events from `drain_updates()` that should be forwarded to the notification
+/// channel (Telegram). These represent the subset of `PilotUpdate` events that
+/// are worth notifying the user about when they're away from the terminal.
+#[derive(Debug)]
+pub enum NotableEvent {
+    /// A permission prompt needs human approval.
+    PendingPrompt { request_id: Uuid, raw_prompt: String },
+    /// Agent is stalled and needs human attention (max nudges exceeded).
+    AttentionNeeded { nudge_count: u32 },
+    /// A stall nudge was sent.
+    StallNudge { nudge_count: u32 },
+    /// The agent process exited.
+    ChildExited { exit_code: i32 },
+}
+
 /// Runtime state for a single supervised agent in the fleet.
 pub struct AgentSlot {
     /// Configuration for this slot.
@@ -130,22 +145,25 @@ impl AgentSlot {
     /// - `Stats`: updates the latest stats snapshot
     /// - Other variants are ignored (output is handled by `drain_output`)
     ///
-    /// Returns the number of updates processed.
-    pub fn drain_updates(&mut self) -> usize {
+    /// Returns notable events that should be forwarded to the notification
+    /// channel (Telegram, etc.). The caller is responsible for converting
+    /// these into outbound channel messages.
+    pub fn drain_updates(&mut self) -> Vec<NotableEvent> {
         let rx = match &self.update_rx {
             Some(rx) => rx,
-            None => return 0,
+            None => return Vec::new(),
         };
 
-        let mut count = 0;
+        let mut notable = Vec::new();
         while let Ok(update) = rx.try_recv() {
             match update {
                 PilotUpdate::PendingPrompt { request_id, raw_prompt } => {
                     self.pending_prompts.push(PendingPromptInfo {
                         request_id,
-                        raw_prompt,
+                        raw_prompt: raw_prompt.clone(),
                         received_at: Instant::now(),
                     });
+                    notable.push(NotableEvent::PendingPrompt { request_id, raw_prompt });
                 }
                 PilotUpdate::PendingResolved { request_id, .. } => {
                     self.pending_prompts.retain(|p| p.request_id != request_id);
@@ -154,19 +172,24 @@ impl AgentSlot {
                         self.attention_needed = false;
                     }
                 }
-                PilotUpdate::AttentionNeeded { .. } => {
+                PilotUpdate::AttentionNeeded { nudge_count } => {
                     self.attention_needed = true;
+                    notable.push(NotableEvent::AttentionNeeded { nudge_count });
+                }
+                PilotUpdate::StallNudge { nudge_count } => {
+                    notable.push(NotableEvent::StallNudge { nudge_count });
+                }
+                PilotUpdate::ChildExited { exit_code } => {
+                    notable.push(NotableEvent::ChildExited { exit_code });
                 }
                 PilotUpdate::Stats(stats) => {
                     self.pilot_stats = Some(stats);
                 }
-                // OutputLine, PromptDecided, StallNudge, ChildExited
-                // are handled elsewhere or not needed on the slot
+                // OutputLine, PromptDecided are handled elsewhere
                 _ => {}
             }
-            count += 1;
         }
-        count
+        notable
     }
 
     /// Get the most recent N output lines.
@@ -282,8 +305,9 @@ mod tests {
             raw_prompt: "Allow Bash(rm -rf)?".into(),
         }).unwrap();
 
-        let count = slot.drain_updates();
-        assert_eq!(count, 1);
+        let events = slot.drain_updates();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], NotableEvent::PendingPrompt { .. }));
         assert_eq!(slot.pending_prompts.len(), 1);
         assert_eq!(slot.pending_prompts[0].request_id, id);
         assert_eq!(slot.pending_prompts[0].raw_prompt, "Allow Bash(rm -rf)?");
@@ -318,8 +342,10 @@ mod tests {
         assert!(!slot.attention_needed);
         tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
 
-        slot.drain_updates();
+        let events = slot.drain_updates();
         assert!(slot.attention_needed);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], NotableEvent::AttentionNeeded { nudge_count: 3 }));
     }
 
     #[test]
@@ -337,7 +363,8 @@ mod tests {
         };
         tx.send(PilotUpdate::Stats(stats)).unwrap();
 
-        slot.drain_updates();
+        let events = slot.drain_updates();
+        assert!(events.is_empty()); // Stats are not notable events
         let s = slot.pilot_stats.unwrap();
         assert_eq!(s.approved, 5);
         assert_eq!(s.denied, 2);
@@ -345,9 +372,35 @@ mod tests {
     }
 
     #[test]
-    fn drain_updates_no_channel_returns_zero() {
+    fn drain_updates_no_channel_returns_empty() {
         let mut slot = AgentSlot::new(test_config("test"));
-        assert_eq!(slot.drain_updates(), 0);
+        assert!(slot.drain_updates().is_empty());
+    }
+
+    #[test]
+    fn drain_updates_child_exited_is_notable() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        tx.send(PilotUpdate::ChildExited { exit_code: 0 }).unwrap();
+
+        let events = slot.drain_updates();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], NotableEvent::ChildExited { exit_code: 0 }));
+    }
+
+    #[test]
+    fn drain_updates_stall_nudge_is_notable() {
+        let (tx, rx) = mpsc::channel();
+        let mut slot = AgentSlot::new(test_config("test"));
+        slot.update_rx = Some(rx);
+
+        tx.send(PilotUpdate::StallNudge { nudge_count: 2 }).unwrap();
+
+        let events = slot.drain_updates();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], NotableEvent::StallNudge { nudge_count: 2 }));
     }
 
     #[test]
