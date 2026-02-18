@@ -35,6 +35,12 @@ impl AgentDriver for ClaudeCodeDriver {
         if let Some(ref name) = self.agent_name {
             env.push(("AEGIS_AGENT_NAME".to_string(), name.clone()));
         }
+        // Point the PreToolUse hook at the daemon's control socket.
+        let socket_path = aegis_types::daemon::daemon_dir().join("daemon.sock");
+        env.push((
+            "AEGIS_SOCKET_PATH".to_string(),
+            socket_path.to_string_lossy().into_owned(),
+        ));
 
         SpawnStrategy::Pty {
             command: "claude".to_string(),

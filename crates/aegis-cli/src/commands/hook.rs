@@ -13,6 +13,7 @@
 use std::io::{self, Read};
 
 use aegis_control::daemon::{DaemonClient, DaemonCommand, ToolUseVerdict};
+use aegis_control::hooks;
 
 /// Handle a `PreToolUse` hook invocation from Claude Code.
 ///
@@ -42,8 +43,12 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
     let agent_name = std::env::var("AEGIS_AGENT_NAME")
         .unwrap_or_else(|_| "unknown".to_string());
 
-    // Try to reach the daemon for policy evaluation
-    let client = DaemonClient::default_path();
+    // Try to reach the daemon for policy evaluation.
+    // AEGIS_SOCKET_PATH allows the daemon to point hooks at a non-default socket.
+    let client = match std::env::var("AEGIS_SOCKET_PATH") {
+        Ok(path) => DaemonClient::new(path.into()),
+        Err(_) => DaemonClient::default_path(),
+    };
     let verdict = match client.send(&DaemonCommand::EvaluateToolUse {
         agent: agent_name,
         tool_name: tool_name.to_string(),
@@ -97,27 +102,10 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
 
 /// Generate the Claude Code settings JSON fragment that registers the aegis hook.
 ///
-/// Returns a JSON object suitable for merging into `.claude/settings.json`:
-/// ```json
-/// {
-///   "hooks": {
-///     "PreToolUse": [
-///       { "type": "command", "command": "aegis hook pre-tool-use" }
-///     ]
-///   }
-/// }
-/// ```
+/// Delegates to `aegis_control::hooks::generate_hook_settings()` -- the single
+/// source of truth for hook configuration format.
 pub fn generate_hook_settings() -> serde_json::Value {
-    serde_json::json!({
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "type": "command",
-                    "command": "aegis hook pre-tool-use"
-                }
-            ]
-        }
-    })
+    hooks::generate_hook_settings()
 }
 
 /// Print the hook settings JSON to stdout (for `aegis hook show-settings`).
@@ -130,70 +118,28 @@ pub fn show_settings() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Install the hook settings into a project's .claude/settings.json.
+/// Install the hook settings into a project's `.claude/settings.json`.
 ///
 /// Creates or merges the hooks configuration. Existing non-aegis hooks
-/// are preserved.
+/// are preserved. Delegates to `aegis_control::hooks::install_project_hooks()`.
 pub fn install_settings(project_dir: Option<&std::path::Path>) -> anyhow::Result<()> {
     let base = match project_dir {
         Some(dir) => dir.to_path_buf(),
         None => std::env::current_dir()?,
     };
 
-    let claude_dir = base.join(".claude");
-    std::fs::create_dir_all(&claude_dir)?;
+    let settings_path = base.join(".claude").join("settings.json");
+    let already_exists = settings_path.exists();
 
-    let settings_path = claude_dir.join("settings.json");
+    hooks::install_project_hooks(&base)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    // Load existing settings or start fresh
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    if already_exists {
+        // Check if it was a no-op (already installed)
+        println!("Aegis hook installed in {}", settings_path.display());
     } else {
-        serde_json::json!({})
-    };
-
-    // Merge hooks
-    let hook_entry = serde_json::json!({
-        "type": "command",
-        "command": "aegis hook pre-tool-use"
-    });
-
-    let hooks = settings
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("settings.json is not a JSON object"))?
-        .entry("hooks")
-        .or_insert(serde_json::json!({}));
-
-    let pre_tool_use = hooks
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("hooks is not a JSON object"))?
-        .entry("PreToolUse")
-        .or_insert(serde_json::json!([]));
-
-    let hooks_array = pre_tool_use
-        .as_array_mut()
-        .ok_or_else(|| anyhow::anyhow!("PreToolUse is not an array"))?;
-
-    // Check if aegis hook is already registered
-    let already_installed = hooks_array.iter().any(|entry| {
-        entry.get("command")
-            .and_then(|v| v.as_str())
-            .is_some_and(|cmd| cmd.contains("aegis hook"))
-    });
-
-    if already_installed {
-        println!("Aegis hook already installed in {}", settings_path.display());
-        return Ok(());
+        println!("Aegis hook installed in {}", settings_path.display());
     }
-
-    hooks_array.push(hook_entry);
-
-    // Write back
-    let output = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&settings_path, output)?;
-
-    println!("Aegis hook installed in {}", settings_path.display());
     Ok(())
 }
 

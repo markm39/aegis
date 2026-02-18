@@ -13,5 +13,6 @@
 pub mod command;
 pub mod daemon;
 pub mod event;
+pub mod hooks;
 pub mod pending;
 pub mod server;

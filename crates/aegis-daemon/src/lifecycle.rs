@@ -23,7 +23,8 @@ use aegis_pilot::drivers::create_driver;
 use aegis_pilot::pty::PtySession;
 use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, SupervisorConfig};
 use aegis_policy::PolicyEngine;
-use aegis_types::daemon::AgentSlotConfig;
+use aegis_control::hooks;
+use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig};
 use aegis_types::AegisConfig;
 
 /// Result returned by a completed agent lifecycle thread.
@@ -169,6 +170,16 @@ fn run_agent_slot_inner(
     } else {
         None
     };
+
+    // 3c. Install hook settings for Claude Code agents so the PreToolUse
+    // hook routes every tool call through the daemon for Cedar policy evaluation.
+    if matches!(slot_config.tool, AgentToolConfig::ClaudeCode { .. }) {
+        if let Err(e) = hooks::install_daemon_hooks(&slot_config.working_dir) {
+            warn!(agent = name, error = %e, "failed to install hook settings, policy enforcement may not work");
+        } else {
+            info!(agent = name, dir = %slot_config.working_dir.display(), "installed PreToolUse hook settings");
+        }
+    }
 
     // 4. Create driver and determine spawn strategy
     let driver = create_driver(&slot_config.tool, Some(name));
