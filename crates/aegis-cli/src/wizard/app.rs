@@ -201,20 +201,35 @@ impl WizardApp {
             }
             KeyCode::Char(c) => {
                 self.name_input.insert(self.name_cursor, c);
-                self.name_cursor += 1;
+                self.name_cursor += c.len_utf8();
             }
             KeyCode::Backspace => {
                 if self.name_cursor > 0 {
-                    self.name_cursor -= 1;
-                    self.name_input.remove(self.name_cursor);
+                    let prev = self.name_input[..self.name_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.name_input.remove(prev);
+                    self.name_cursor = prev;
                 }
             }
             KeyCode::Left => {
-                self.name_cursor = self.name_cursor.saturating_sub(1);
+                if self.name_cursor > 0 {
+                    self.name_cursor = self.name_input[..self.name_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
             }
             KeyCode::Right => {
                 if self.name_cursor < self.name_input.len() {
-                    self.name_cursor += 1;
+                    self.name_cursor = self.name_input[self.name_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.name_cursor + i)
+                        .unwrap_or(self.name_input.len());
                 }
             }
             KeyCode::Home => {
@@ -353,20 +368,35 @@ impl WizardApp {
                 }
                 KeyCode::Char(c) => {
                     self.scope_input.insert(self.scope_cursor, c);
-                    self.scope_cursor += 1;
+                    self.scope_cursor += c.len_utf8();
                 }
                 KeyCode::Backspace => {
                     if self.scope_cursor > 0 {
-                        self.scope_cursor -= 1;
-                        self.scope_input.remove(self.scope_cursor);
+                        let prev = self.scope_input[..self.scope_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.scope_input.remove(prev);
+                        self.scope_cursor = prev;
                     }
                 }
                 KeyCode::Left => {
-                    self.scope_cursor = self.scope_cursor.saturating_sub(1);
+                    if self.scope_cursor > 0 {
+                        self.scope_cursor = self.scope_input[..self.scope_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
                 }
                 KeyCode::Right => {
                     if self.scope_cursor < self.scope_input.len() {
-                        self.scope_cursor += 1;
+                        self.scope_cursor = self.scope_input[self.scope_cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| self.scope_cursor + i)
+                            .unwrap_or(self.scope_input.len());
                     }
                 }
                 KeyCode::Home => {
@@ -435,20 +465,35 @@ impl WizardApp {
                 }
                 KeyCode::Char(c) => {
                     self.dir_input.insert(self.dir_cursor, c);
-                    self.dir_cursor += 1;
+                    self.dir_cursor += c.len_utf8();
                 }
                 KeyCode::Backspace => {
                     if self.dir_cursor > 0 {
-                        self.dir_cursor -= 1;
-                        self.dir_input.remove(self.dir_cursor);
+                        let prev = self.dir_input[..self.dir_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.dir_input.remove(prev);
+                        self.dir_cursor = prev;
                     }
                 }
                 KeyCode::Left => {
-                    self.dir_cursor = self.dir_cursor.saturating_sub(1);
+                    if self.dir_cursor > 0 {
+                        self.dir_cursor = self.dir_input[..self.dir_cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
                 }
                 KeyCode::Right => {
                     if self.dir_cursor < self.dir_input.len() {
-                        self.dir_cursor += 1;
+                        self.dir_cursor = self.dir_input[self.dir_cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| self.dir_cursor + i)
+                            .unwrap_or(self.dir_input.len());
                     }
                 }
                 KeyCode::Home => {

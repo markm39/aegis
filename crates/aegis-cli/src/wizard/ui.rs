@@ -526,10 +526,11 @@ fn format_scope_inline(rules: &[ScopeRule]) -> String {
 
 /// Truncate a path string for display, keeping the end visible.
 fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+    if path.chars().count() <= max_len {
         return path.to_string();
     }
-    format!("...{}", &path[path.len() - (max_len - 3)..])
+    let tail: String = path.chars().rev().take(max_len - 3).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("...{tail}")
 }
 
 /// Build cursor-aware text input spans (before | cursor | after).
@@ -537,21 +538,24 @@ fn truncate_path(path: &str, max_len: usize) -> String {
 /// Produces Yellow text with an inverted Yellow cursor block at `cursor_pos`.
 /// If the cursor is at the end of text, a trailing block cursor is shown.
 fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
+    let pos = cursor_pos.min(text.len());
     let mut spans = Vec::new();
-    if cursor_pos > 0 {
+    if pos > 0 {
         spans.push(Span::styled(
-            &text[..cursor_pos],
+            &text[..pos],
             Style::default().fg(Color::Yellow),
         ));
     }
-    if cursor_pos < text.len() {
+    if pos < text.len() {
+        let ch = text[pos..].chars().next().unwrap();
+        let end = pos + ch.len_utf8();
         spans.push(Span::styled(
-            &text[cursor_pos..cursor_pos + 1],
+            &text[pos..end],
             Style::default().fg(Color::Black).bg(Color::Yellow),
         ));
-        if cursor_pos + 1 < text.len() {
+        if end < text.len() {
             spans.push(Span::styled(
-                &text[cursor_pos + 1..],
+                &text[end..],
                 Style::default().fg(Color::Yellow),
             ));
         }

@@ -306,10 +306,8 @@ pub fn tag_session(config_name: &str, session_id_str: &str, tag: &str) -> Result
         .update_session_tag(&session_id, tag)
         .context("failed to tag session")?;
 
-    println!(
-        "Session {}... tagged: {tag}",
-        &session_id_str[..8.min(session_id_str.len())]
-    );
+    let short_id: String = session_id_str.chars().take(8).collect();
+    println!("Session {short_id}... tagged: {tag}");
 
     Ok(())
 }
