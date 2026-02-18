@@ -98,6 +98,7 @@ fn ensure_run_config(name: &str, policy: &str) -> Result<AegisConfig> {
         alerts: Vec::new(),
         pilot: None,
         channel: None,
+        usage_proxy: None,
     };
 
     let toml_content = config

@@ -149,6 +149,7 @@ pub fn ensure_wrap_config(
             alerts: Vec::new(),
             pilot: None,
             channel: None,
+            usage_proxy: None,
         };
 
         let toml_content = config

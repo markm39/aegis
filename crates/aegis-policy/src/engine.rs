@@ -233,6 +233,7 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::ToolCall { tool, .. } => Ok(("ToolCall", tool.as_str())),
         ActionKind::ProcessSpawn { command, .. } => Ok(("ProcessSpawn", command.as_str())),
         ActionKind::ProcessExit { command, .. } => Ok(("ProcessExit", command.as_str())),
+        ActionKind::ApiUsage { provider, .. } => Ok(("ApiUsage", provider.as_str())),
     }
 }
 

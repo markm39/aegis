@@ -154,6 +154,7 @@ pub(crate) mod test_helpers {
             alerts: Vec::new(),
             pilot: None,
             channel: None,
+            usage_proxy: None,
         }
     }
 }

@@ -385,6 +385,34 @@ pub struct TelegramConfig {
     pub allow_group_commands: bool,
 }
 
+/// Configuration for the API usage tracking proxy.
+///
+/// When enabled, Aegis starts a local HTTP reverse proxy that intercepts
+/// AI tool API traffic, forwards it to the real upstream, and extracts
+/// token/model usage data from responses (including streaming SSE).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsageProxyConfig {
+    /// Whether usage tracking is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Port to bind the proxy to. 0 means OS-assigned random port.
+    #[serde(default)]
+    pub port: u16,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for UsageProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 0,
+        }
+    }
+}
+
 /// Top-level configuration for an Aegis agent instance.
 ///
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,
@@ -418,6 +446,9 @@ pub struct AegisConfig {
     /// Bidirectional messaging channel (Telegram, Slack, etc.).
     #[serde(default)]
     pub channel: Option<ChannelConfig>,
+    /// API usage tracking proxy configuration.
+    #[serde(default)]
+    pub usage_proxy: Option<UsageProxyConfig>,
 }
 
 /// Validate that a config name is safe for use as a directory component.
@@ -498,6 +529,7 @@ impl AegisConfig {
             alerts: Vec::new(),
             pilot: None,
             channel: None,
+            usage_proxy: None,
         }
     }
 }
@@ -534,6 +566,7 @@ mod tests {
             }],
             pilot: None,
             channel: None,
+            usage_proxy: None,
         };
 
         let toml_str = config.to_toml().unwrap();

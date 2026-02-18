@@ -169,6 +169,7 @@ mod tests {
             alerts: Vec::new(),
             pilot: None,
             channel: None,
+            usage_proxy: None,
         };
         assert!(describe_isolation(&seatbelt).contains("Seatbelt"));
 

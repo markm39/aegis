@@ -246,6 +246,7 @@ mod tests {
             alerts: Vec::new(),
             pilot: None,
             channel: None,
+            usage_proxy: None,
         };
 
         let (_, isolation) = describe_config(&config);
@@ -266,6 +267,7 @@ mod tests {
             alerts: Vec::new(),
             pilot: None,
             channel: None,
+            usage_proxy: None,
         };
 
         let (_, isolation) = describe_config(&config);

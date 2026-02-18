@@ -74,6 +74,23 @@ pub enum ActionKind {
         /// Process exit code (negative if terminated by signal).
         exit_code: i32,
     },
+    /// API usage data extracted from an AI provider's response.
+    ApiUsage {
+        /// Provider name (e.g., "anthropic", "openai").
+        provider: String,
+        /// Model name from the API response.
+        model: String,
+        /// API endpoint path (e.g., "/v1/messages").
+        endpoint: String,
+        /// Input/prompt tokens consumed.
+        input_tokens: u64,
+        /// Output/completion tokens consumed.
+        output_tokens: u64,
+        /// Cache creation input tokens (Anthropic-specific, 0 otherwise).
+        cache_creation_input_tokens: u64,
+        /// Cache read input tokens (Anthropic-specific, 0 otherwise).
+        cache_read_input_tokens: u64,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -132,6 +149,9 @@ impl std::fmt::Display for ActionKind {
             ActionKind::ProcessSpawn { command, .. } => write!(f, "ProcessSpawn {command}"),
             ActionKind::ProcessExit { command, exit_code } => {
                 write!(f, "ProcessExit {command} (code {exit_code})")
+            }
+            ActionKind::ApiUsage { provider, model, input_tokens, output_tokens, .. } => {
+                write!(f, "ApiUsage {provider}/{model} in={input_tokens} out={output_tokens}")
             }
         }
     }
@@ -192,6 +212,15 @@ mod tests {
             ActionKind::ProcessExit {
                 command: "echo".into(),
                 exit_code: 0,
+            },
+            ActionKind::ApiUsage {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-4-5-20250929".into(),
+                endpoint: "/v1/messages".into(),
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 10,
             },
         ];
         for v in variants {
@@ -260,6 +289,18 @@ mod tests {
         assert_eq!(
             ActionKind::ProcessExit { command: "ls".into(), exit_code: 1 }.to_string(),
             "ProcessExit ls (code 1)"
+        );
+        assert_eq!(
+            ActionKind::ApiUsage {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-4-5-20250929".into(),
+                endpoint: "/v1/messages".into(),
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            }.to_string(),
+            "ApiUsage anthropic/claude-sonnet-4-5-20250929 in=100 out=50"
         );
     }
 }

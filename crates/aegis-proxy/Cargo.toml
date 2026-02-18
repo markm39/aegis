@@ -17,6 +17,14 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+http-body-util = "0.1"
+bytes = "1"
+futures-util = "0.3"
+tokio-stream = "0.1"
+async-stream = "0.3"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wiremock = { workspace = true }
