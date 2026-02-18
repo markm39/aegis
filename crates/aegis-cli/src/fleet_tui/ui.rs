@@ -804,6 +804,7 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         WizardStep::Task => draw_wizard_multiline_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
         WizardStep::Role => draw_wizard_multiline_text(frame, "Role (optional, e.g. \"UX specialist\")", &wiz.role, wiz.role_cursor, chunks[1]),
         WizardStep::AgentGoal => draw_wizard_multiline_text(frame, "Goal (optional, what this agent should achieve)", &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]),
+        WizardStep::Context => draw_wizard_multiline_text(frame, "Context (optional, constraints or instructions)", &wiz.context, wiz.context_cursor, chunks[1]),
         WizardStep::RestartPolicy => draw_wizard_restart(frame, wiz, chunks[1]),
         WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
     }
@@ -1051,6 +1052,11 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
     } else {
         truncate_str(&wiz.agent_goal, 60)
     };
+    let context_display = if wiz.context.trim().is_empty() {
+        "(none)".to_string()
+    } else {
+        truncate_str(&wiz.context, 60)
+    };
 
     let lines = vec![
         Line::from(""),
@@ -1077,6 +1083,10 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
         Line::from(vec![
             Span::styled("  Goal:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(goal_display, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Context:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(context_display, Style::default().fg(Color::White)),
         ]),
         Line::from(vec![
             Span::styled("  Restart:   ", Style::default().fg(Color::DarkGray)),

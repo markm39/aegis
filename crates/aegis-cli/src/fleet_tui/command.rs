@@ -32,7 +32,7 @@ pub enum FleetCommand {
     Monitor,
     /// Show daemon status summary.
     Status,
-    /// Open daemon config in $EDITOR (suspends TUI).
+    /// Open daemon config in $EDITOR in a new terminal window.
     Config,
     /// Show Telegram configuration status.
     Telegram,

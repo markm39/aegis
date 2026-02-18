@@ -71,7 +71,13 @@ impl DaemonState {
     pub fn load() -> Option<Self> {
         let path = daemon_state_path();
         let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        match serde_json::from_str(&content) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to parse daemon state file, skipping crash recovery");
+                None
+            }
+        }
     }
 
     /// Remove the state file from disk.

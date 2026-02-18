@@ -27,6 +27,7 @@ pub enum WizardStep {
     Task,
     Role,
     AgentGoal,
+    Context,
     RestartPolicy,
     Confirm,
 }
@@ -41,6 +42,7 @@ impl WizardStep {
         WizardStep::Task,
         WizardStep::Role,
         WizardStep::AgentGoal,
+        WizardStep::Context,
         WizardStep::RestartPolicy,
         WizardStep::Confirm,
     ];
@@ -169,7 +171,11 @@ pub struct AddAgentWizard {
     pub agent_goal: String,
     pub agent_goal_cursor: usize,
 
-    // Step 7: Restart policy
+    // Step 7: Context (constraints, knowledge, instructions)
+    pub context: String,
+    pub context_cursor: usize,
+
+    // Step 8: Restart policy
     pub restart_selected: usize,
 
     // Custom command (only if tool == Custom)
@@ -210,6 +216,8 @@ impl AddAgentWizard {
             role_cursor: 0,
             agent_goal: String::new(),
             agent_goal_cursor: 0,
+            context: String::new(),
+            context_cursor: 0,
             restart_selected: 0,
             custom_command: String::new(),
             custom_command_cursor: 0,
@@ -254,9 +262,13 @@ impl AddAgentWizard {
                     self.role_cursor = self.role.len();
                     self.step = WizardStep::Role;
                 }
-                WizardStep::RestartPolicy => {
+                WizardStep::Context => {
                     self.agent_goal_cursor = self.agent_goal.len();
                     self.step = WizardStep::AgentGoal;
+                }
+                WizardStep::RestartPolicy => {
+                    self.context_cursor = self.context.len();
+                    self.step = WizardStep::Context;
                 }
                 WizardStep::Confirm => self.step = WizardStep::RestartPolicy,
             }
@@ -271,6 +283,7 @@ impl AddAgentWizard {
             WizardStep::Task => self.handle_text_key(key, TextTarget::Task),
             WizardStep::Role => self.handle_text_key(key, TextTarget::Role),
             WizardStep::AgentGoal => self.handle_text_key(key, TextTarget::AgentGoal),
+            WizardStep::Context => self.handle_text_key(key, TextTarget::Context),
             WizardStep::RestartPolicy => self.handle_restart_key(key),
             WizardStep::Confirm => self.handle_confirm_key(key),
         }
@@ -348,6 +361,7 @@ impl AddAgentWizard {
             TextTarget::Task => (&mut self.task, &mut self.task_cursor),
             TextTarget::Role => (&mut self.role, &mut self.role_cursor),
             TextTarget::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor),
+            TextTarget::Context => (&mut self.context, &mut self.context_cursor),
         };
 
         match key.code {
@@ -383,7 +397,11 @@ impl AddAgentWizard {
                         WizardStep::AgentGoal
                     }
                     WizardStep::AgentGoal => {
-                        self.agent_goal_cursor = self.agent_goal.len();
+                        self.context_cursor = self.context.len();
+                        WizardStep::Context
+                    }
+                    WizardStep::Context => {
+                        self.context_cursor = self.context.len();
                         WizardStep::RestartPolicy
                     }
                     _ => return true,
@@ -483,6 +501,7 @@ impl AddAgentWizard {
             WizardStep::Task => (&mut self.task, &mut self.task_cursor, true),
             WizardStep::Role => (&mut self.role, &mut self.role_cursor, true),
             WizardStep::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor, true),
+            WizardStep::Context => (&mut self.context, &mut self.context_cursor, true),
             _ => return false,
         };
 
@@ -578,6 +597,12 @@ impl AddAgentWizard {
             Some(self.agent_goal.clone())
         };
 
+        let context = if self.context.trim().is_empty() {
+            None
+        } else {
+            Some(self.context.clone())
+        };
+
         let mut config = crate::commands::build_agent_slot(
             self.name.trim().to_string(),
             tool,
@@ -588,6 +613,7 @@ impl AddAgentWizard {
         );
         config.role = role;
         config.agent_goal = agent_goal;
+        config.context = context;
         config
     }
 }
@@ -600,6 +626,7 @@ enum TextTarget {
     Task,
     Role,
     AgentGoal,
+    Context,
 }
 
 #[cfg(test)]
@@ -632,8 +659,9 @@ mod tests {
         assert_eq!(WizardStep::Name.number(false), 2);
         assert_eq!(WizardStep::Role.number(false), 5);
         assert_eq!(WizardStep::AgentGoal.number(false), 6);
-        assert_eq!(WizardStep::Confirm.number(false), 8);
-        assert_eq!(WizardStep::total(false), 8);
+        assert_eq!(WizardStep::Context.number(false), 7);
+        assert_eq!(WizardStep::Confirm.number(false), 9);
+        assert_eq!(WizardStep::total(false), 9);
     }
 
     #[test]
@@ -642,8 +670,8 @@ mod tests {
         assert_eq!(WizardStep::Tool.number(true), 1);
         assert_eq!(WizardStep::CustomCommand.number(true), 2);
         assert_eq!(WizardStep::Name.number(true), 3);
-        assert_eq!(WizardStep::Confirm.number(true), 9);
-        assert_eq!(WizardStep::total(true), 9);
+        assert_eq!(WizardStep::Confirm.number(true), 10);
+        assert_eq!(WizardStep::total(true), 10);
     }
 
     #[test]
@@ -777,13 +805,17 @@ mod tests {
 
         // Step 6: Agent goal (optional, enter to skip)
         wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Context);
+
+        // Step 7: Context (optional, enter to skip)
+        wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::RestartPolicy);
 
-        // Step 7: Restart policy
+        // Step 8: Restart policy
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Confirm);
 
-        // Step 8: Confirm
+        // Step 9: Confirm
         wiz.handle_key(press(KeyCode::Enter));
         assert!(!wiz.active);
         assert!(wiz.completed);
@@ -865,10 +897,16 @@ mod tests {
         assert_eq!(wiz.step, WizardStep::Role);
         assert!(wiz.active);
 
-        // RestartPolicy -> AgentGoal
-        wiz.step = WizardStep::RestartPolicy;
+        // Context -> AgentGoal
+        wiz.step = WizardStep::Context;
         wiz.handle_key(press(KeyCode::Esc));
         assert_eq!(wiz.step, WizardStep::AgentGoal);
+        assert!(wiz.active);
+
+        // RestartPolicy -> Context
+        wiz.step = WizardStep::RestartPolicy;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Context);
         assert!(wiz.active);
 
         // Confirm -> RestartPolicy
