@@ -547,7 +547,11 @@ impl FleetApp {
 
         config.agents.push(agent);
         let toml_str = config.to_toml()?;
-        std::fs::write(&config_path, &toml_str)?;
+
+        // Atomic write: write to temp file, then rename for crash safety
+        let tmp_path = config_path.with_extension("toml.tmp");
+        std::fs::write(&tmp_path, &toml_str)?;
+        std::fs::rename(&tmp_path, &config_path)?;
 
         Ok(name)
     }
@@ -1241,24 +1245,15 @@ impl FleetApp {
                 if !self.connected {
                     self.set_result("Daemon is not running. Use :daemon start.");
                 } else {
-                    // Stop first, then start
-                    let stop_result = crate::commands::daemon::stop();
-                    match stop_result {
+                    // Use the CLI restart function which has a proper polling wait
+                    // (stop, wait until daemon exits, then start).
+                    match crate::commands::daemon::restart() {
                         Ok(()) => {
-                            // Brief pause for socket cleanup
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            match crate::commands::daemon::start() {
-                                Ok(()) => {
-                                    self.set_result("Daemon restarting...");
-                                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
-                                }
-                                Err(e) => {
-                                    self.set_result(format!("Stopped, but failed to restart: {e}"));
-                                }
-                            }
+                            self.set_result("Daemon restarting...");
+                            self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
-                            self.set_result(format!("Failed to stop daemon: {e}"));
+                            self.set_result(format!("Failed to restart daemon: {e}"));
                         }
                     }
                 }
