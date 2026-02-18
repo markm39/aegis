@@ -622,14 +622,32 @@ impl DaemonRuntime {
 
             DaemonCommand::EnableAgent { name } => {
                 match self.fleet.enable_agent(&name) {
-                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' enabled")),
+                    Ok(()) => {
+                        // Persist enabled state to daemon.toml
+                        if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == name) {
+                            cfg.enabled = true;
+                        }
+                        if let Err(e) = self.persist_config() {
+                            return DaemonResponse::error(format!("enabled but failed to persist: {e}"));
+                        }
+                        DaemonResponse::ok(format!("agent '{name}' enabled"))
+                    }
                     Err(e) => DaemonResponse::error(e),
                 }
             }
 
             DaemonCommand::DisableAgent { name } => {
                 match self.fleet.disable_agent(&name) {
-                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' disabled")),
+                    Ok(()) => {
+                        // Persist disabled state to daemon.toml
+                        if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == name) {
+                            cfg.enabled = false;
+                        }
+                        if let Err(e) = self.persist_config() {
+                            return DaemonResponse::error(format!("disabled but failed to persist: {e}"));
+                        }
+                        DaemonResponse::ok(format!("agent '{name}' disabled"))
+                    }
                     Err(e) => DaemonResponse::error(e),
                 }
             }
