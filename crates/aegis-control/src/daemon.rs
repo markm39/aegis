@@ -62,7 +62,7 @@ pub enum DaemonCommand {
         /// If Some, sets the fleet goal. If None, returns the current goal.
         goal: Option<String>,
     },
-    /// Update an agent's context fields (role, goal, context) at runtime.
+    /// Update an agent's context fields (role, goal, context, task) at runtime.
     UpdateAgentContext {
         name: String,
         /// New role (None = leave unchanged, Some("") = clear).
@@ -71,6 +71,9 @@ pub enum DaemonCommand {
         agent_goal: Option<String>,
         /// New context (None = leave unchanged, Some("") = clear).
         context: Option<String>,
+        /// New task (None = leave unchanged, Some("") = clear).
+        #[serde(default)]
+        task: Option<String>,
     },
     /// Get an agent's full context (role, goal, context, task).
     GetAgentContext {
@@ -344,6 +347,7 @@ mod tests {
                 role: Some("UX specialist".into()),
                 agent_goal: None,
                 context: Some("Use Tailwind CSS".into()),
+                task: Some("Build the login page".into()),
             },
             DaemonCommand::GetAgentContext { name: "claude-1".into() },
             DaemonCommand::Shutdown,

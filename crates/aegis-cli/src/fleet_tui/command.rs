@@ -298,7 +298,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         }
         "context" => {
             if arg1.is_empty() {
-                Err("usage: context <agent> [role|goal|context <value>]".into())
+                Err("usage: context <agent> [role|goal|context|task <value>]".into())
             } else if arg2.is_empty() {
                 // View mode: :context <agent>
                 Ok(Some(FleetCommand::Context { agent: arg1.into(), field: None, value: None }))
@@ -321,11 +321,15 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 /// Subcommands for `:daemon`.
 const DAEMON_SUBCOMMANDS: &[&str] = &["init", "reload", "restart", "start", "status", "stop"];
 
+/// Field names for `:context <agent> <field>`.
+const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
+
 /// Complete the current command buffer, returning possible completions.
 ///
 /// - If the buffer has no space, complete command names.
 /// - If the command is `daemon`, complete with daemon subcommands.
 /// - If the command takes an agent name, complete agent names.
+/// - If the command is `context` with an agent already typed, complete field names.
 pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
     let trimmed = buffer.trim_start();
 
@@ -338,16 +342,26 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
             .map(|name| name.to_string())
             .collect()
     } else {
-        let mut parts = trimmed.splitn(2, ' ');
-        let cmd = parts.next().unwrap_or("");
-        let sub_prefix = parts.next().unwrap_or("").trim();
+        let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
+        let cmd = parts[0];
+        let sub = parts.get(1).copied().unwrap_or("");
 
         // Complete daemon subcommands
         if cmd == "daemon" {
             return DAEMON_SUBCOMMANDS
                 .iter()
-                .filter(|s| s.starts_with(sub_prefix))
+                .filter(|s| s.starts_with(sub))
                 .map(|s| s.to_string())
+                .collect();
+        }
+
+        // Third token: context field completion
+        if cmd == "context" && parts.len() == 3 {
+            let field_prefix = parts[2].trim();
+            return CONTEXT_FIELDS
+                .iter()
+                .filter(|f| f.starts_with(field_prefix))
+                .map(|f| f.to_string())
                 .collect();
         }
 
@@ -358,7 +372,7 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
 
         agent_names
             .iter()
-            .filter(|name| name.starts_with(sub_prefix))
+            .filter(|name| name.starts_with(sub))
             .cloned()
             .collect()
     }
@@ -367,16 +381,20 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
 /// Build the full buffer string from a completion selection.
 ///
 /// For command completions: just the command name.
-/// For agent completions: "command agent".
+/// For agent/field completions: "command [agent] [field]".
 pub fn apply_completion(buffer: &str, completion: &str) -> String {
     let trimmed = buffer.trim_start();
     if !trimmed.contains(' ') {
         // Completing command name
         format!("{completion} ")
     } else {
-        // Completing agent name
-        let cmd = trimmed.split(' ').next().unwrap_or("");
-        format!("{cmd} {completion} ")
+        // Rebuild by replacing the last token with the completion
+        let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
+        match parts.len() {
+            2 => format!("{} {completion} ", parts[0]),
+            3 => format!("{} {} {completion} ", parts[0], parts[1]),
+            _ => format!("{} {completion} ", parts[0]),
+        }
     }
 }
 
@@ -387,7 +405,7 @@ pub fn help_text() -> &'static str {
      :approve <agent>         Approve first pending prompt\n\
      :config                  Edit daemon.toml in $EDITOR\n\
      :context <agent>         View agent context\n\
-     :context <a> <f> <val>   Set context field (role/goal/context)\n\
+     :context <a> <f> <val>   Set field (role/goal/context/task)\n\
      :daemon init             Create daemon.toml\n\
      :daemon reload           Reload config from daemon.toml\n\
      :daemon restart          Stop and restart daemon\n\
@@ -924,5 +942,43 @@ mod tests {
         assert_eq!(c, vec!["claude-1"]);
         let c = completions("disable co", &agents);
         assert_eq!(c, vec!["codex-1"]);
+    }
+
+    #[test]
+    fn parse_context_with_task_field() {
+        let result = parse("context claude-1 task Build the feature").unwrap();
+        assert_eq!(
+            result,
+            Some(FleetCommand::Context {
+                agent: "claude-1".into(),
+                field: Some("task".into()),
+                value: Some("Build the feature".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn completions_context_field_names() {
+        let agents = vec!["claude-1".to_string()];
+        // After agent name, should complete field names
+        let c = completions("context claude-1 ", &agents);
+        assert_eq!(c, vec!["context", "goal", "role", "task"]);
+    }
+
+    #[test]
+    fn completions_context_field_prefix() {
+        let agents = vec!["claude-1".to_string()];
+        let c = completions("context claude-1 ro", &agents);
+        assert_eq!(c, vec!["role"]);
+        let c = completions("context claude-1 t", &agents);
+        assert_eq!(c, vec!["task"]);
+    }
+
+    #[test]
+    fn apply_completion_context_field() {
+        assert_eq!(
+            apply_completion("context claude-1 ro", "role"),
+            "context claude-1 role "
+        );
     }
 }

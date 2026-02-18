@@ -560,7 +560,7 @@ impl DaemonRuntime {
                 }
             }
 
-            DaemonCommand::UpdateAgentContext { ref name, ref role, ref agent_goal, ref context } => {
+            DaemonCommand::UpdateAgentContext { ref name, ref role, ref agent_goal, ref context, ref task } => {
                 let slot = match self.fleet.slot_mut(name) {
                     Some(s) => s,
                     None => return DaemonResponse::error(format!("unknown agent: {name}")),
@@ -574,11 +574,15 @@ impl DaemonRuntime {
                 if let Some(c) = context {
                     slot.config.context = if c.is_empty() { None } else { Some(c.clone()) };
                 }
+                if let Some(t) = task {
+                    slot.config.task = if t.is_empty() { None } else { Some(t.clone()) };
+                }
                 // Sync to persisted config
                 if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == *name) {
                     cfg.role.clone_from(&slot.config.role);
                     cfg.agent_goal.clone_from(&slot.config.agent_goal);
                     cfg.context.clone_from(&slot.config.context);
+                    cfg.task.clone_from(&slot.config.task);
                 }
                 if let Err(e) = self.persist_config() {
                     return DaemonResponse::error(format!("context updated but failed to persist: {e}"));

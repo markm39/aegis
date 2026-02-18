@@ -394,10 +394,11 @@ pub fn parse_fleet_command(text: &str) -> Option<DaemonCommand> {
                 }
                 Some(field) => {
                     let value = parts.next().unwrap_or("").trim().to_string();
-                    let (role, agent_goal, context) = match field.trim() {
-                        "role" => (Some(value), None, None),
-                        "goal" => (None, Some(value), None),
-                        "context" => (None, None, Some(value)),
+                    let (role, agent_goal, context, task) = match field.trim() {
+                        "role" => (Some(value), None, None, None),
+                        "goal" => (None, Some(value), None, None),
+                        "context" => (None, None, Some(value), None),
+                        "task" => (None, None, None, Some(value)),
                         _ => return None,
                     };
                     Some(DaemonCommand::UpdateAgentContext {
@@ -405,6 +406,7 @@ pub fn parse_fleet_command(text: &str) -> Option<DaemonCommand> {
                         role,
                         agent_goal,
                         context,
+                        task,
                     })
                 }
             }

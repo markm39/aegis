@@ -1097,13 +1097,14 @@ impl FleetApp {
             FleetCommand::Context { agent, field, value } => {
                 match (field, value) {
                     (Some(f), Some(v)) => {
-                        let (role, agent_goal, context) = match f.as_str() {
-                            "role" => (Some(v), None, None),
-                            "goal" => (None, Some(v), None),
-                            "context" => (None, None, Some(v)),
+                        let (role, agent_goal, context, task) = match f.as_str() {
+                            "role" => (Some(v), None, None, None),
+                            "goal" => (None, Some(v), None, None),
+                            "context" => (None, None, Some(v), None),
+                            "task" => (None, None, None, Some(v)),
                             _ => {
                                 self.set_result(format!(
-                                    "unknown field '{f}'. Use: role, goal, or context"
+                                    "unknown field '{f}'. Use: role, goal, context, or task"
                                 ));
                                 return;
                             }
@@ -1113,6 +1114,7 @@ impl FleetApp {
                             role,
                             agent_goal,
                             context,
+                            task,
                         });
                     }
                     _ => {
