@@ -133,10 +133,10 @@ pub(crate) async fn poll_for_chat_id(api: &TelegramApi, timeout_secs: u64) -> an
     // Drain any old updates first so we only detect fresh messages
     loop {
         let updates = api.get_updates(offset, 0).await?;
-        if updates.is_empty() {
-            break;
+        match updates.last() {
+            Some(last) => offset = Some(last.update_id + 1),
+            None => break,
         }
-        offset = Some(updates.last().unwrap().update_id + 1);
     }
 
     // Now poll for the user's message

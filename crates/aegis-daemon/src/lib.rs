@@ -916,12 +916,26 @@ impl DaemonRuntime {
         let toml_str = config.to_toml().map_err(|e| e.to_string())?;
         let config_path = aegis_types::daemon::daemon_config_path();
 
-        // Write to a uniquely-named sibling temp file, then rename for crash safety.
-        // The atomic counter prevents races when tests run in parallel.
+        // Write to a uniquely-named sibling temp file, fsync, then rename for
+        // crash safety. Without fsync, a power loss between write and rename could
+        // leave the temp file empty/truncated, and rename would replace the good
+        // config with a corrupt one.
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let tmp_path = config_path.with_extension(format!("toml.{n}.tmp"));
-        std::fs::write(&tmp_path, &toml_str)
+
+        let file = std::fs::File::create(&tmp_path)
+            .map_err(|e| format!("failed to create temp config: {e}"))?;
+        use std::io::Write;
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(toml_str.as_bytes())
             .map_err(|e| format!("failed to write temp config: {e}"))?;
+        writer.flush()
+            .map_err(|e| format!("failed to flush temp config: {e}"))?;
+        writer.into_inner()
+            .map_err(|e| format!("failed to finalize temp config: {e}"))?
+            .sync_all()
+            .map_err(|e| format!("failed to sync temp config to disk: {e}"))?;
+
         std::fs::rename(&tmp_path, &config_path)
             .map_err(|e| format!("failed to atomically replace config: {e}"))?;
 

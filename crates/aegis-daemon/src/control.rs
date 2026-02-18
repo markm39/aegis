@@ -70,9 +70,18 @@ async fn serve(
         }
     }
 
-    // Remove stale socket file
-    if socket_path.exists() {
-        let _ = std::fs::remove_file(socket_path);
+    // Remove stale socket file (unconditional: avoids TOCTOU race with exists()+remove())
+    match std::fs::remove_file(socket_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            warn!(
+                path = %socket_path.display(),
+                error = %e,
+                "failed to remove stale socket file"
+            );
+            return;
+        }
     }
 
     let listener = match UnixListener::bind(socket_path) {
