@@ -21,6 +21,8 @@ use aegis_ledger::AuditStore;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
 use aegis_pilot::pty::PtySession;
+use aegis_pilot::session::AgentSession;
+use aegis_pilot::tmux::TmuxSession;
 use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, SupervisorConfig};
 use aegis_policy::PolicyEngine;
 use aegis_control::hooks;
@@ -268,8 +270,11 @@ fn run_agent_slot_inner(
         _ => vec![],
     };
 
-    let pty = match strategy {
-        SpawnStrategy::Pty { command, mut args, mut env } => {
+    let use_tmux = aegis_pilot::tmux::tmux_available();
+
+    let session: Box<dyn AgentSession> = match strategy {
+        SpawnStrategy::Pty { command, mut args, mut env }
+        | SpawnStrategy::Process { command, mut args, mut env } => {
             // Append CLI-arg task injection if needed
             args.extend(cli_extra_args.clone());
             // Inject usage proxy URLs if active
@@ -278,31 +283,20 @@ fn run_agent_slot_inner(
                 env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
                 env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
             }
-            info!(
-                agent = name,
-                command = command,
-                "spawning agent in PTY"
-            );
-            PtySession::spawn(&command, &args, &working_dir, &env)
-                .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?
-        }
-        SpawnStrategy::Process { command, mut args, mut env } => {
-            // Append CLI-arg task injection if needed
-            args.extend(cli_extra_args.clone());
-            // Inject usage proxy URLs if active
-            if let Some(ref handle) = usage_proxy_handle {
-                let port = handle.port;
-                env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
-                env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+
+            if use_tmux {
+                info!(agent = name, command = command, "spawning agent in tmux session");
+                Box::new(
+                    TmuxSession::spawn(name, &command, &args, &working_dir, &env)
+                        .map_err(|e| format!("failed to spawn tmux session for {name}: {e}"))?,
+                )
+            } else {
+                info!(agent = name, command = command, "spawning agent in PTY");
+                Box::new(
+                    PtySession::spawn(&command, &args, &working_dir, &env)
+                        .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?,
+                )
             }
-            // For non-PTY processes, still use PTY for uniformity
-            info!(
-                agent = name,
-                command = command,
-                "spawning agent process (via PTY)"
-            );
-            PtySession::spawn(&command, &args, &working_dir, &env)
-                .map_err(|e| format!("failed to spawn process for {name}: {e}"))?
         }
         SpawnStrategy::External => {
             // External process (e.g. Cursor already running) -- nothing to spawn
@@ -335,7 +329,7 @@ fn run_agent_slot_inner(
     // single paste event rather than line-by-line Enter keypresses.
     if let Some(TaskInjection::Stdin { ref text }) = injection {
         let timeout = std::time::Duration::from_secs(15);
-        match pty.wait_for_output(timeout) {
+        match session.wait_for_output(timeout) {
             Ok(true) => {
                 // Give the TUI a moment to finish its initial render
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -347,7 +341,7 @@ fn run_agent_slot_inner(
                 warn!(agent = name, error = %e, "error waiting for agent output");
             }
         }
-        if let Err(e) = pty.send_paste(text) {
+        if let Err(e) = session.send_paste(text) {
             warn!(agent = name, error = %e, "failed to inject prompt via stdin");
         } else {
             info!(agent = name, "composed prompt injected via bracketed paste");
@@ -380,12 +374,20 @@ fn run_agent_slot_inner(
     };
 
     // Publish the child PID so stop_agent() can send SIGTERM.
-    child_pid.store(pty.pid(), Ordering::Release);
+    child_pid.store(session.pid(), Ordering::Release);
 
-    info!(agent = name, pid = pty.pid(), "running supervisor loop");
+    // Store the attach command if the session supports external attach (tmux).
+    if let Some(attach_cmd) = session.attach_command() {
+        if let Some(tx) = update_tx {
+            // Encode as a special update so the slot knows how to pop
+            let _ = tx.send(PilotUpdate::AttachCommand(attach_cmd));
+        }
+    }
+
+    info!(agent = name, pid = session.pid(), "running supervisor loop");
 
     let result = supervisor::run(
-        &pty,
+        session.as_ref(),
         adapter.as_mut(),
         &engine_for_supervisor,
         &sup_config,

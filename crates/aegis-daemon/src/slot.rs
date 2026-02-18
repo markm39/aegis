@@ -92,6 +92,10 @@ pub struct AgentSlot {
     /// Set by `restart_agent` so the tick loop can start the agent once the
     /// thread has exited.
     pub pending_restart: bool,
+    /// If the agent session supports external attach (e.g., tmux), stores
+    /// the command components needed to attach. Used by `:pop` to open
+    /// the actual agent TUI in a new terminal.
+    pub attach_command: Option<Vec<String>>,
 }
 
 impl AgentSlot {
@@ -123,6 +127,7 @@ impl AgentSlot {
             session_id: Arc::new(Mutex::new(None)),
             stop_signaled_at: None,
             pending_restart: false,
+            attach_command: None,
         }
     }
 
@@ -218,6 +223,9 @@ impl AgentSlot {
                 }
                 PilotUpdate::Stats(stats) => {
                     self.pilot_stats = Some(stats);
+                }
+                PilotUpdate::AttachCommand(cmd) => {
+                    self.attach_command = Some(cmd);
                 }
                 // OutputLine, PromptDecided are handled elsewhere
                 _ => {}

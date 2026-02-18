@@ -292,6 +292,39 @@ impl PtySession {
     }
 }
 
+impl crate::session::AgentSession for PtySession {
+    fn read(&self, buf: &mut [u8]) -> Result<usize, AegisError> {
+        self.read(buf)
+    }
+    fn write_all(&self, data: &[u8]) -> Result<(), AegisError> {
+        self.write_all(data)
+    }
+    fn send_line(&self, text: &str) -> Result<(), AegisError> {
+        self.send_line(text)
+    }
+    fn send_paste(&self, text: &str) -> Result<(), AegisError> {
+        self.send_paste(text)
+    }
+    fn poll_readable(&self, timeout_ms: i32) -> Result<bool, AegisError> {
+        self.poll_readable(timeout_ms)
+    }
+    fn wait_for_output(&self, timeout: std::time::Duration) -> Result<bool, AegisError> {
+        self.wait_for_output(timeout)
+    }
+    fn is_alive(&self) -> bool {
+        self.is_alive()
+    }
+    fn wait(&self) -> Result<i32, AegisError> {
+        self.wait()
+    }
+    fn terminate(&self) -> Result<(), AegisError> {
+        self.terminate()
+    }
+    fn pid(&self) -> u32 {
+        self.pid()
+    }
+}
+
 impl Drop for PtySession {
     fn drop(&mut self) {
         // Attempt to terminate the child if still alive, then reap to avoid zombies.

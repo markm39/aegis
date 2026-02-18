@@ -22,5 +22,7 @@ pub mod driver;
 pub mod drivers;
 pub mod output;
 pub mod pty;
+pub mod session;
 pub mod stall;
 pub mod supervisor;
+pub mod tmux;

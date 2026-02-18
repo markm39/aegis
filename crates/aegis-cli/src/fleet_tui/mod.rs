@@ -1091,7 +1091,12 @@ impl FleetApp {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    let cmd = format!("aegis daemon follow {agent}");
+                    // Use the tmux attach command if available, otherwise fall back to follow
+                    let cmd = self.agents.iter()
+                        .find(|a| a.name == agent)
+                        .and_then(|a| a.attach_command.as_ref())
+                        .map(|parts| parts.join(" "))
+                        .unwrap_or_else(|| format!("aegis daemon follow {agent}"));
                     self.spawn_terminal(&cmd, &format!("Opened '{agent}' in new terminal"));
                 }
             }
@@ -1713,6 +1718,7 @@ mod tests {
                 pending_count: 0,
                 attention_needed: false,
                 is_orchestrator: false,
+                attach_command: None,
             },
             AgentSummary {
                 name: "beta".into(),
@@ -1724,6 +1730,7 @@ mod tests {
                 pending_count: 0,
                 attention_needed: false,
                 is_orchestrator: false,
+                attach_command: None,
             },
             AgentSummary {
                 name: "gamma".into(),
@@ -1735,6 +1742,7 @@ mod tests {
                 pending_count: 0,
                 attention_needed: false,
                 is_orchestrator: false,
+                attach_command: None,
             },
         ];
         app

@@ -406,6 +406,7 @@ impl DaemonRuntime {
                             pending_count: self.fleet.agent_pending_count(name),
                             attention_needed: self.fleet.agent_attention_needed(name),
                             is_orchestrator: config.orchestrator.is_some(),
+                            attach_command: slot.attach_command.clone(),
                         })
                     })
                     .collect();

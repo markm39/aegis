@@ -1335,6 +1335,7 @@ mod tests {
                 pending_count: 0,
                 attention_needed: false,
                 is_orchestrator: false,
+                attach_command: None,
             },
         ];
         let backend = ratatui::backend::TestBackend::new(80, 24);

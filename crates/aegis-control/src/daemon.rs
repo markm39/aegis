@@ -178,6 +178,10 @@ pub struct AgentSummary {
     /// Whether this agent is an orchestrator (vs a worker).
     #[serde(default)]
     pub is_orchestrator: bool,
+    /// If the agent's session supports external attach (e.g., tmux),
+    /// the command components to attach (e.g., ["tmux", "attach-session", "-t", "aegis-foo"]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_command: Option<Vec<String>>,
 }
 
 /// Detailed status for a single agent, returned by AgentStatus.
@@ -474,6 +478,7 @@ mod tests {
             pending_count: 2,
             attention_needed: true,
             is_orchestrator: false,
+            attach_command: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         let back: AgentSummary = serde_json::from_str(&json).unwrap();

@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::adapter::{AgentAdapter, ScanResult};
 use crate::output::OutputBuffer;
-use crate::pty::PtySession;
+use crate::session::AgentSession;
 use crate::stall::{StallAction, StallDetector};
 
 /// Statistics collected during a pilot session.
@@ -109,6 +109,9 @@ pub enum PilotUpdate {
     },
     /// Periodic stats snapshot.
     Stats(PilotStats),
+    /// The session supports external attach (e.g., tmux).
+    /// Contains the command components to attach (e.g., ["tmux", "attach-session", "-t", "aegis-foo"]).
+    AttachCommand(Vec<String>),
 }
 
 /// Commands sent to the supervisor from the TUI or control plane.
@@ -160,7 +163,7 @@ pub struct SupervisorConfig {
 /// Returns the child's exit code and session statistics.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
-    pty: &PtySession,
+    pty: &dyn AgentSession,
     adapter: &mut dyn AgentAdapter,
     engine: &PolicyEngine,
     config: &SupervisorConfig,
@@ -355,7 +358,7 @@ pub fn run(
 #[allow(clippy::too_many_arguments)]
 fn handle_scan_result(
     result: ScanResult,
-    pty: &PtySession,
+    pty: &dyn AgentSession,
     adapter: &mut dyn AgentAdapter,
     engine: &PolicyEngine,
     config: &SupervisorConfig,
@@ -456,7 +459,7 @@ fn handle_scan_result(
 /// Handle a command received from the TUI or control plane.
 fn handle_command(
     cmd: SupervisorCommand,
-    pty: &PtySession,
+    pty: &dyn AgentSession,
     stats: &mut PilotStats,
     pending: &mut HashMap<Uuid, PendingInfo>,
     stall: &mut StallDetector,
