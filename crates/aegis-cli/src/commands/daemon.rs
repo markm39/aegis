@@ -233,10 +233,24 @@ pub fn restart() -> anyhow::Result<()> {
         .send(&DaemonCommand::Shutdown)
         .map_err(|e| anyhow::anyhow!("failed to send shutdown: {e}"))?;
 
-    println!("Daemon stopped. Restarting...");
+    println!("Shutdown requested. Waiting for daemon to exit...");
 
-    // Brief pause for socket cleanup
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Poll until the daemon is actually gone, with a timeout.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !client.is_running() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "daemon did not exit within 10 seconds.\n\
+                 Check `aegis daemon status` or stop it manually."
+            );
+        }
+    }
+
+    println!("Daemon stopped. Restarting...");
 
     // Start
     start()?;
