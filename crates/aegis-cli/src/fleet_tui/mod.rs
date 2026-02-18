@@ -1015,9 +1015,9 @@ impl FleetApp {
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                 } else {
                     // Offline: edit daemon.toml directly
-                    match crate::commands::daemon::remove_agent(&agent) {
-                        Ok(()) => {
-                            self.set_result(format!("Removed '{agent}'."));
+                    match crate::commands::daemon::remove_agent_quiet(&agent) {
+                        Ok(msg) => {
+                            self.set_result(msg);
                         }
                         Err(e) => {
                             self.set_result(format!("Failed to remove '{agent}': {e}"));
@@ -1065,8 +1065,8 @@ impl FleetApp {
                 self.spawn_terminal("aegis telegram setup", "Opened Telegram setup wizard");
             }
             FleetCommand::TelegramDisable => {
-                match crate::commands::telegram::disable() {
-                    Ok(()) => self.set_result("Telegram notifications disabled. Run :daemon reload to apply.".to_string()),
+                match crate::commands::telegram::disable_quiet() {
+                    Ok(msg) => self.set_result(msg),
                     Err(e) => self.set_result(format!("Failed to disable Telegram: {e}")),
                 }
             }
@@ -1209,9 +1209,9 @@ impl FleetApp {
                 }
             }
             FleetCommand::DaemonStart => {
-                match crate::commands::daemon::start() {
-                    Ok(()) => {
-                        self.set_result("Daemon starting...");
+                match crate::commands::daemon::start_quiet() {
+                    Ok(msg) => {
+                        self.set_result(msg);
                         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                     }
                     Err(e) => {
@@ -1223,9 +1223,9 @@ impl FleetApp {
                 if !self.connected {
                     self.set_result("Daemon is not running.");
                 } else {
-                    match crate::commands::daemon::stop() {
-                        Ok(()) => {
-                            self.set_result("Daemon shutdown requested.");
+                    match crate::commands::daemon::stop_quiet() {
+                        Ok(msg) => {
+                            self.set_result(msg);
                             self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
@@ -1235,9 +1235,9 @@ impl FleetApp {
                 }
             }
             FleetCommand::DaemonInit => {
-                match crate::commands::daemon::init() {
-                    Ok(()) => {
-                        self.set_result("Created daemon.toml.");
+                match crate::commands::daemon::init_quiet() {
+                    Ok(msg) => {
+                        self.set_result(msg);
                     }
                     Err(e) => {
                         self.set_result(format!("{e}"));
@@ -1263,11 +1263,9 @@ impl FleetApp {
                 if !self.connected {
                     self.set_result("Daemon is not running. Use :daemon start.");
                 } else {
-                    // Use the CLI restart function which has a proper polling wait
-                    // (stop, wait until daemon exits, then start).
-                    match crate::commands::daemon::restart() {
-                        Ok(()) => {
-                            self.set_result("Daemon restarting...");
+                    match crate::commands::daemon::restart_quiet() {
+                        Ok(msg) => {
+                            self.set_result(msg);
                             self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {

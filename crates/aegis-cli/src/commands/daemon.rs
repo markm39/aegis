@@ -78,6 +78,50 @@ pub fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Create default daemon.toml without printing to stdout.
+///
+/// Returns a message describing what happened. Used by TUI to avoid
+/// corrupting the alternate screen with println! output.
+pub(crate) fn init_quiet() -> anyhow::Result<String> {
+    let dir = daemon_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let config_path = daemon_config_path();
+    if config_path.exists() {
+        return Ok(format!("daemon.toml already exists at {}", config_path.display()));
+    }
+
+    let example = DaemonConfig {
+        goal: None,
+        persistence: PersistenceConfig::default(),
+        control: DaemonControlConfig::default(),
+        alerts: vec![],
+        agents: vec![AgentSlotConfig {
+            name: "claude-1".to_string(),
+            tool: AgentToolConfig::ClaudeCode {
+                skip_permissions: false,
+                one_shot: false,
+                extra_args: vec![],
+            },
+            working_dir: PathBuf::from("/path/to/your/project"),
+            role: None,
+            agent_goal: None,
+            context: None,
+            task: Some("Implement the feature described in TODO.md".into()),
+            pilot: None,
+            restart: RestartPolicy::OnFailure,
+            max_restarts: 5,
+            enabled: false,
+        }],
+        channel: None,
+    };
+
+    let toml_str = example.to_toml()?;
+    std::fs::write(&config_path, &toml_str)?;
+
+    Ok(format!("Created daemon.toml at {}", config_path.display()))
+}
+
 /// Run the daemon in the foreground. Blocks until shutdown.
 pub fn run(launchd: bool) -> anyhow::Result<()> {
     let config_path = daemon_config_path();
@@ -177,6 +221,47 @@ pub fn start() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Start the daemon in the background without printing to stdout.
+///
+/// Returns a message describing what happened. Used by TUI.
+pub(crate) fn start_quiet() -> anyhow::Result<String> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!(
+            "No daemon config found. Create one with :daemon init."
+        );
+    }
+
+    if let Some(pid) = persistence::read_pid() {
+        if persistence::is_process_alive(pid) {
+            return Ok(format!("Daemon already running (PID {pid})."));
+        }
+    }
+
+    let binary = std::env::current_exe()
+        .unwrap_or_else(|_| PathBuf::from("aegis"));
+
+    let log_dir = daemon_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let stdout_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("stdout.log"))?;
+    let stderr_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("stderr.log"))?;
+
+    let child = std::process::Command::new(&binary)
+        .args(["daemon", "run"])
+        .stdout(stdout_file)
+        .stderr(stderr_file)
+        .stdin(std::process::Stdio::null())
+        .spawn()?;
+
+    Ok(format!("Daemon started (PID {}).", child.id()))
+}
+
 /// Stop a running daemon via the control socket.
 pub fn stop() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
@@ -197,6 +282,27 @@ pub fn stop() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Stop a running daemon without printing to stdout.
+///
+/// Returns a message describing what happened. Used by TUI.
+pub(crate) fn stop_quiet() -> anyhow::Result<String> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        return Ok("Daemon is not running.".to_string());
+    }
+
+    let response = client
+        .send(&DaemonCommand::Shutdown)
+        .map_err(|e| anyhow::anyhow!("failed to send shutdown: {e}"))?;
+
+    if response.ok {
+        Ok("Daemon shutdown requested.".to_string())
+    } else {
+        Ok(format!("Shutdown failed: {}", response.message))
+    }
 }
 
 /// Reload daemon configuration from daemon.toml without restarting.
@@ -235,12 +341,43 @@ pub fn restart() -> anyhow::Result<()> {
 
     println!("Shutdown requested. Waiting for daemon to exit...");
 
-    // Poll until the daemon is actually gone, with a timeout.
+    wait_for_daemon_exit(&client)?;
+
+    println!("Daemon stopped. Restarting...");
+
+    // Start
+    start()?;
+
+    Ok(())
+}
+
+/// Stop and restart the daemon without printing to stdout.
+///
+/// Returns a message describing what happened. Used by TUI.
+pub(crate) fn restart_quiet() -> anyhow::Result<String> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        anyhow::bail!("Daemon is not running. Use :daemon start instead.");
+    }
+
+    client
+        .send(&DaemonCommand::Shutdown)
+        .map_err(|e| anyhow::anyhow!("failed to send shutdown: {e}"))?;
+
+    wait_for_daemon_exit(&client)?;
+
+    let msg = start_quiet()?;
+    Ok(format!("Daemon restarted. {msg}"))
+}
+
+/// Poll until the daemon exits, with a 10-second timeout.
+fn wait_for_daemon_exit(client: &DaemonClient) -> anyhow::Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
         if !client.is_running() {
-            break;
+            return Ok(());
         }
         if std::time::Instant::now() >= deadline {
             anyhow::bail!(
@@ -249,13 +386,6 @@ pub fn restart() -> anyhow::Result<()> {
             );
         }
     }
-
-    println!("Daemon stopped. Restarting...");
-
-    // Start
-    start()?;
-
-    Ok(())
 }
 
 /// Query daemon status.
@@ -832,6 +962,31 @@ pub fn remove_agent(name: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Remove an agent from daemon.toml without printing to stdout.
+///
+/// Returns a message describing what happened. Used by TUI.
+pub(crate) fn remove_agent_quiet(name: &str) -> anyhow::Result<String> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!("No daemon config found at {}.", config_path.display());
+    }
+
+    let content = std::fs::read_to_string(&config_path)?;
+    let mut config = DaemonConfig::from_toml(&content)?;
+
+    let before = config.agents.len();
+    config.agents.retain(|a| a.name != name);
+
+    if config.agents.len() == before {
+        anyhow::bail!("agent '{name}' not found in daemon.toml");
+    }
+
+    let toml_str = config.to_toml()?;
+    std::fs::write(&config_path, &toml_str)?;
+
+    Ok(format!("Removed '{name}'."))
 }
 
 /// Human-readable display name for a tool config.

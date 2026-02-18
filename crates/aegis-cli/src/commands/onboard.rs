@@ -53,7 +53,7 @@ pub fn run() -> anyhow::Result<()> {
     // No println! here: the fleet TUI enters alternate screen immediately,
     // so any output would be invisible. The TUI shows agent info on its own.
     if result.start_daemon {
-        let _ = crate::commands::daemon::start();
+        let _ = crate::commands::daemon::start_quiet();
     }
 
     crate::fleet_tui::run_fleet_tui()

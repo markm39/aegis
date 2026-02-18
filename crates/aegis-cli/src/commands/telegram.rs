@@ -235,6 +235,32 @@ pub fn disable() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Remove Telegram configuration without printing to stdout.
+///
+/// Returns a message describing what happened. Used by TUI.
+pub(crate) fn disable_quiet() -> anyhow::Result<String> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!("no daemon config found -- nothing to disable");
+    }
+
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let mut config = DaemonConfig::from_toml(&content)
+        .with_context(|| format!("failed to parse {}", config_path.display()))?;
+
+    if config.channel.is_none() {
+        anyhow::bail!("Telegram is not configured -- nothing to disable");
+    }
+
+    config.channel = None;
+    let toml_str = config.to_toml().context("failed to serialize config")?;
+    std::fs::write(&config_path, &toml_str)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+    Ok("Telegram notifications disabled. Run :daemon reload to apply.".to_string())
+}
+
 /// Write the Telegram config into `daemon.toml`, merging with existing config.
 pub(crate) fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> {
     let dir = daemon_dir();
