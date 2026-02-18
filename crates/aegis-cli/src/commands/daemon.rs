@@ -152,14 +152,28 @@ pub fn start() -> anyhow::Result<()> {
     let binary = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("aegis"));
 
+    // Redirect stdout/stderr to log files so daemon output is not lost.
+    // Uses append mode to preserve logs across restarts.
+    let log_dir = daemon_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let stdout_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("stdout.log"))?;
+    let stderr_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("stderr.log"))?;
+
     let child = std::process::Command::new(&binary)
         .args(["daemon", "run"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(stdout_file)
+        .stderr(stderr_file)
         .stdin(std::process::Stdio::null())
         .spawn()?;
 
     println!("Daemon started (PID {}).", child.id());
+    println!("Logs: {}/stdout.log", log_dir.display());
     Ok(())
 }
 

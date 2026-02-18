@@ -514,6 +514,11 @@ impl DaemonRuntime {
                         self.config.goal.as_deref(),
                         self.fleet.slot(agent).map(|s| &s.config),
                     );
+                    info!(
+                        agent = %agent, tool = %tool_name,
+                        decision = "deny", reason = "interactive tool blocked",
+                        "hook policy evaluation"
+                    );
                     let tool_verdict = ToolUseVerdict {
                         decision: "deny".to_string(),
                         reason,
@@ -541,6 +546,12 @@ impl DaemonRuntime {
                         ("allow".to_string(), "no policy engine loaded".to_string())
                     }
                 };
+
+                info!(
+                    agent = %agent, tool = %tool_name,
+                    decision = %decision_str, reason = %reason,
+                    "hook policy evaluation"
+                );
 
                 let tool_verdict = ToolUseVerdict {
                     decision: decision_str.clone(),
