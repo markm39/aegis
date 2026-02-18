@@ -93,6 +93,16 @@ fn run_agent_slot_inner(
     let name = &slot_config.name;
     info!(agent = name, "agent lifecycle starting");
 
+    // 0. Validate and canonicalize working directory
+    let working_dir = slot_config.working_dir.canonicalize()
+        .map_err(|e| format!("working directory '{}' for agent {name}: {e}", slot_config.working_dir.display()))?;
+    if !working_dir.is_dir() {
+        return Err(format!(
+            "working directory '{}' for agent {name} is not a directory",
+            working_dir.display()
+        ));
+    }
+
     // 1. Create policy engine from config's policy paths
     let policy_dir = aegis_config
         .policy_paths
@@ -134,7 +144,7 @@ fn run_agent_slot_inner(
 
     // 3. Start filesystem observer
     let observer_session = aegis_observer::start_observer(
-        &slot_config.working_dir,
+        &working_dir,
         Arc::clone(&store),
         Arc::clone(&engine_arc),
         name,
@@ -192,17 +202,17 @@ fn run_agent_slot_inner(
     // through the daemon for Cedar policy evaluation.
     match &slot_config.tool {
         AgentToolConfig::ClaudeCode { .. } => {
-            if let Err(e) = hooks::install_daemon_hooks(&slot_config.working_dir) {
+            if let Err(e) = hooks::install_daemon_hooks(&working_dir) {
                 warn!(agent = name, error = %e, "failed to install Claude Code hook settings, policy enforcement may not work");
             } else {
-                info!(agent = name, dir = %slot_config.working_dir.display(), "installed Claude Code PreToolUse hook");
+                info!(agent = name, dir = %working_dir.display(), "installed Claude Code PreToolUse hook");
             }
         }
         AgentToolConfig::Cursor { .. } => {
-            if let Err(e) = hooks::install_cursor_hooks(&slot_config.working_dir) {
+            if let Err(e) = hooks::install_cursor_hooks(&working_dir) {
                 warn!(agent = name, error = %e, "failed to install Cursor hook settings, policy enforcement may not work");
             } else {
-                info!(agent = name, dir = %slot_config.working_dir.display(), "installed Cursor hooks");
+                info!(agent = name, dir = %working_dir.display(), "installed Cursor hooks");
             }
         }
         AgentToolConfig::Codex { .. } => {
@@ -223,7 +233,7 @@ fn run_agent_slot_inner(
 
     // 4. Create driver and determine spawn strategy
     let driver = create_driver(&slot_config.tool, Some(name));
-    let strategy = driver.spawn_strategy(&slot_config.working_dir);
+    let strategy = driver.spawn_strategy(&working_dir);
 
     // 5. Compute task injection BEFORE spawn so CliArg can be folded into args
     let composed = compose_prompt(
@@ -258,7 +268,7 @@ fn run_agent_slot_inner(
                 command = command,
                 "spawning agent in PTY"
             );
-            PtySession::spawn(&command, &args, &slot_config.working_dir, &env)
+            PtySession::spawn(&command, &args, &working_dir, &env)
                 .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?
         }
         SpawnStrategy::Process { command, mut args, mut env } => {
@@ -276,7 +286,7 @@ fn run_agent_slot_inner(
                 command = command,
                 "spawning agent process (via PTY)"
             );
-            PtySession::spawn(&command, &args, &slot_config.working_dir, &env)
+            PtySession::spawn(&command, &args, &working_dir, &env)
                 .map_err(|e| format!("failed to spawn process for {name}: {e}"))?
         }
         SpawnStrategy::External => {

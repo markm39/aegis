@@ -53,7 +53,7 @@ pub async fn poll_loop(
 
                 for update in updates {
                     // Advance offset to acknowledge this update
-                    offset = Some(update.update_id + 1);
+                    offset = Some(update.update_id.saturating_add(1));
 
                     // Handle text messages
                     if let Some(msg) = update.message {

@@ -459,6 +459,13 @@ impl DaemonRuntime {
                 if self.fleet.agent_status(&name).is_some() {
                     return DaemonResponse::error(format!("agent '{name}' already exists"));
                 }
+                // Validate working directory at the API boundary for immediate feedback.
+                if !config.working_dir.is_dir() {
+                    return DaemonResponse::error(format!(
+                        "working directory '{}' does not exist or is not a directory",
+                        config.working_dir.display()
+                    ));
+                }
                 let slot_config: AgentSlotConfig = *config.clone();
 
                 // Persist first: build candidate config and write to disk
@@ -1706,5 +1713,18 @@ mod tests {
         let resp = runtime.handle_command(DaemonCommand::RestartAgent { name: "a1".into() });
         // RestartAgent stops + starts; stop on a non-running agent is fine
         assert!(resp.ok);
+    }
+
+    #[test]
+    fn handle_command_add_agent_invalid_working_dir() {
+        let mut runtime = test_runtime(vec![]);
+        let mut agent = test_agent("bad-dir");
+        agent.working_dir = PathBuf::from("/nonexistent/path/that/does/not/exist");
+        let resp = runtime.handle_command(DaemonCommand::AddAgent {
+            config: Box::new(agent),
+            start: false,
+        });
+        assert!(!resp.ok, "should reject invalid working_dir");
+        assert!(resp.message.contains("not a directory") || resp.message.contains("does not exist"));
     }
 }
