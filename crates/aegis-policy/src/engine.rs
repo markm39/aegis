@@ -112,6 +112,15 @@ impl PolicyEngine {
                     command: "__probe__".into(),
                     exit_code: 0,
                 },
+                "ApiUsage" => ActionKind::ApiUsage {
+                    provider: "__probe__".into(),
+                    model: String::new(),
+                    endpoint: String::new(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                },
                 _ => return false,
             },
         );
@@ -506,6 +515,21 @@ mod tests {
             },
         ));
         assert_eq!(v.decision, Decision::Allow);
+
+        // ApiUsage
+        let v = engine.evaluate(&Action::new(
+            "a",
+            ActionKind::ApiUsage {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-4-5-20250929".into(),
+                endpoint: "/v1/messages".into(),
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            },
+        ));
+        assert_eq!(v.decision, Decision::Allow);
     }
 
     // Test: default-deny denies writes even when reads are allowed
@@ -699,6 +723,7 @@ mod tests {
             (ActionKind::ToolCall { tool: "t".into(), args: serde_json::Value::Null }, "ToolCall"),
             (ActionKind::ProcessSpawn { command: "c".into(), args: vec![] }, "ProcessSpawn"),
             (ActionKind::ProcessExit { command: "c".into(), exit_code: 0 }, "ProcessExit"),
+            (ActionKind::ApiUsage { provider: "anthropic".into(), model: "m".into(), endpoint: "/v1".into(), input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, "ApiUsage"),
         ];
 
         for (kind, expected_name) in &cases {

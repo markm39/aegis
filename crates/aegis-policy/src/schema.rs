@@ -11,7 +11,7 @@
 ///
 /// Actions:
 /// - FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect,
-///   ToolCall, ProcessSpawn -- each applying to principal Agent and resource Resource
+///   ToolCall, ProcessSpawn, ProcessExit, ApiUsage -- each applying to principal Agent and resource Resource
 pub const AEGIS_SCHEMA: &str = r#"
 namespace Aegis {
     entity Agent = {};
@@ -52,6 +52,10 @@ namespace Aegis {
         resource: [Resource],
     };
     action "ProcessExit" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "ApiUsage" appliesTo {
         principal: [Agent],
         resource: [Resource],
     };
@@ -114,6 +118,7 @@ mod tests {
             "ToolCall",
             "ProcessSpawn",
             "ProcessExit",
+            "ApiUsage",
         ];
 
         let schema_text = AEGIS_SCHEMA;
