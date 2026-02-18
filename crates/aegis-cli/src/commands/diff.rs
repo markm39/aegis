@@ -53,16 +53,16 @@ pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<
     // Print header
     println!("Session Comparison");
     println!("==================");
+    let s1_short: String = session1_str.chars().take(8).collect();
+    let s2_short: String = session2_str.chars().take(8).collect();
     println!(
-        "Session A: {}... ({}, {} {})",
-        &session1_str[..8.min(session1_str.len())],
+        "Session A: {s1_short}... ({}, {} {})",
         s1_meta.start_time.format(DATETIME_SHORT_FMT),
         s1_meta.command,
         s1_meta.args.join(" "),
     );
     println!(
-        "Session B: {}... ({}, {} {})",
-        &session2_str[..8.min(session2_str.len())],
+        "Session B: {s2_short}... ({}, {} {})",
         s2_meta.start_time.format(DATETIME_SHORT_FMT),
         s2_meta.command,
         s2_meta.args.join(" "),

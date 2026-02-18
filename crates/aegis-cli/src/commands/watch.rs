@@ -279,13 +279,20 @@ pub fn read_pid_file(path: &Path) -> Result<WatchPidFile> {
 
 /// Check if a process is still running.
 pub fn is_process_alive(pid: u32) -> bool {
+    // pid_t is i32; reject PIDs above i32::MAX to avoid wrapping negative,
+    // which would make kill() target a process group instead of a process.
+    let Ok(pid_t) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
     // kill(pid, 0) checks process existence without sending a signal
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    unsafe { libc::kill(pid_t, 0) == 0 }
 }
 
 /// Send SIGTERM to a process.
 fn send_sigterm(pid: u32) -> Result<()> {
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    let pid_t = libc::pid_t::try_from(pid)
+        .map_err(|_| anyhow::anyhow!("PID {pid} exceeds i32::MAX, refusing to signal"))?;
+    let result = unsafe { libc::kill(pid_t, libc::SIGTERM) };
     if result != 0 {
         bail!(
             "failed to send SIGTERM to PID {}: {}",

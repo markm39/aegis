@@ -121,7 +121,6 @@ fn run_policy_demo(agent_name: &str, policy_text: &str, project_dir: &Path) -> R
     };
 
     let sample_file = project_dir.join("README.md");
-    let sample_path = sample_file.display().to_string();
 
     let test_actions: Vec<(&str, ActionKind)> = vec![
         ("FileRead", ActionKind::FileRead { path: sample_file.clone() }),
@@ -152,11 +151,13 @@ fn run_policy_demo(agent_name: &str, policy_text: &str, project_dir: &Path) -> R
             _ => String::new(),
         };
 
-        println!("  [{symbol}] {label:<14} {resource}", resource = if resource.len() > MAX_RESOURCE_DISPLAY_LEN {
-            format!("...{}", &sample_path[sample_path.len().saturating_sub(MAX_RESOURCE_DISPLAY_LEN - 3)..])
+        let display_resource = if resource.len() > MAX_RESOURCE_DISPLAY_LEN {
+            let tail: String = resource.chars().rev().take(MAX_RESOURCE_DISPLAY_LEN - 3).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("...{tail}")
         } else {
             resource
-        });
+        };
+        println!("  [{symbol}] {label:<14} {display_resource}");
     }
 
     Ok(())
