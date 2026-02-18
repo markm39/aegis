@@ -3,66 +3,117 @@
 //!
 //! Steps:
 //! 1. Tool selection (Claude Code, Codex, OpenClaw, Custom)
-//! 2. Agent name (text input, auto-derived from working dir)
-//! 3. Working directory (text input, defaults to CWD)
-//! 4. Task / initial prompt (text input, optional)
-//! 5. Role (text input, optional, e.g. "UX specialist")
-//! 6. Agent goal (text input, optional, what the agent should achieve)
-//! 7. Restart policy (select: Never, OnFailure, Always)
-//! 8. Confirm summary
+//! 2. Agent type (Worker vs Orchestrator)
+//! 3. Agent name (text input, auto-derived from working dir)
+//! 4. Working directory (text input, defaults to CWD)
+//! 5. Task / initial prompt (text input, optional -- skipped for orchestrators)
+//! 6. Role (text input, optional, e.g. "UX specialist")
+//! 7. Agent goal (text input, optional, what the agent should achieve)
+//! 8. Context (optional, constraints or instructions)
+//! 9. Backlog path (orchestrators only, path to roadmap/backlog file)
+//! 10. Review interval (orchestrators only, seconds between review cycles)
+//! 11. Restart policy (select: Never, OnFailure, Always)
+//! 12. Confirm summary
 
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, RestartPolicy};
+use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, OrchestratorConfig, RestartPolicy};
 
 /// Wizard steps in order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WizardStep {
     Tool,
     CustomCommand,
+    AgentType,
     Name,
     WorkingDir,
     Task,
     Role,
     AgentGoal,
     Context,
+    BacklogPath,
+    ReviewInterval,
     RestartPolicy,
     Confirm,
 }
 
 impl WizardStep {
-    /// All steps in order (including CustomCommand, which is conditionally shown).
+    /// All steps in order (conditional steps included).
     pub const ALL: &'static [WizardStep] = &[
         WizardStep::Tool,
         WizardStep::CustomCommand,
+        WizardStep::AgentType,
         WizardStep::Name,
         WizardStep::WorkingDir,
         WizardStep::Task,
         WizardStep::Role,
         WizardStep::AgentGoal,
         WizardStep::Context,
+        WizardStep::BacklogPath,
+        WizardStep::ReviewInterval,
         WizardStep::RestartPolicy,
         WizardStep::Confirm,
     ];
 
-    /// Step number (1-based), adjusted to skip CustomCommand for non-Custom tools.
-    pub fn number(&self, is_custom: bool) -> usize {
+    /// Step number (1-based), adjusted to skip conditional steps.
+    ///
+    /// Conditional skips:
+    /// - `CustomCommand` hidden unless tool is Custom
+    /// - `Task` hidden for orchestrators (they don't get tasks)
+    /// - `BacklogPath` and `ReviewInterval` hidden for workers
+    pub fn number(&self, is_custom: bool, is_orchestrator: bool) -> usize {
         Self::ALL
             .iter()
-            .filter(|s| is_custom || **s != WizardStep::CustomCommand)
+            .filter(|s| Self::visible(s, is_custom, is_orchestrator))
             .position(|s| s == self)
             .unwrap_or(0)
             + 1
     }
 
-    /// Total steps, adjusted to skip CustomCommand for non-Custom tools.
-    pub fn total(is_custom: bool) -> usize {
-        if is_custom {
-            Self::ALL.len()
-        } else {
-            Self::ALL.len() - 1
+    /// Total visible steps.
+    pub fn total(is_custom: bool, is_orchestrator: bool) -> usize {
+        Self::ALL
+            .iter()
+            .filter(|s| Self::visible(s, is_custom, is_orchestrator))
+            .count()
+    }
+
+    fn visible(step: &WizardStep, is_custom: bool, is_orchestrator: bool) -> bool {
+        match step {
+            WizardStep::CustomCommand => is_custom,
+            WizardStep::Task => !is_orchestrator,
+            WizardStep::BacklogPath | WizardStep::ReviewInterval => is_orchestrator,
+            _ => true,
+        }
+    }
+}
+
+/// Agent type choices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AgentTypeChoice {
+    Worker,
+    Orchestrator,
+}
+
+impl AgentTypeChoice {
+    pub const ALL: &'static [AgentTypeChoice] = &[
+        AgentTypeChoice::Worker,
+        AgentTypeChoice::Orchestrator,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            AgentTypeChoice::Worker => "Worker (recommended)",
+            AgentTypeChoice::Orchestrator => "Orchestrator",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            AgentTypeChoice::Worker => "Writes code, implements features, fixes bugs",
+            AgentTypeChoice::Orchestrator => "Reviews worker output, assigns tasks, never writes code",
         }
     }
 }
@@ -151,31 +202,42 @@ pub struct AddAgentWizard {
     // Step 1: Tool
     pub tool_selected: usize,
 
-    // Step 2: Name
+    // Step 2: Agent type (Worker vs Orchestrator)
+    pub agent_type_selected: usize,
+
+    // Step 3: Name
     pub name: String,
     pub name_cursor: usize,
 
-    // Step 3: Working dir
+    // Step 4: Working dir
     pub working_dir: String,
     pub working_dir_cursor: usize,
 
-    // Step 4: Task
+    // Step 5: Task (skipped for orchestrators)
     pub task: String,
     pub task_cursor: usize,
 
-    // Step 5: Role
+    // Step 6: Role
     pub role: String,
     pub role_cursor: usize,
 
-    // Step 6: Agent goal
+    // Step 7: Agent goal
     pub agent_goal: String,
     pub agent_goal_cursor: usize,
 
-    // Step 7: Context (constraints, knowledge, instructions)
+    // Step 8: Context (constraints, knowledge, instructions)
     pub context: String,
     pub context_cursor: usize,
 
-    // Step 8: Restart policy
+    // Step 9: Backlog path (orchestrators only)
+    pub backlog_path: String,
+    pub backlog_path_cursor: usize,
+
+    // Step 10: Review interval (orchestrators only)
+    pub review_interval: String,
+    pub review_interval_cursor: usize,
+
+    // Step 11: Restart policy
     pub restart_selected: usize,
 
     // Custom command (only if tool == Custom)
@@ -206,6 +268,7 @@ impl AddAgentWizard {
             active: true,
             completed: false,
             tool_selected: 0,
+            agent_type_selected: 0,
             name: default_name,
             name_cursor: name_len,
             working_dir: cwd,
@@ -218,6 +281,10 @@ impl AddAgentWizard {
             agent_goal_cursor: 0,
             context: String::new(),
             context_cursor: 0,
+            backlog_path: String::new(),
+            backlog_path_cursor: 0,
+            review_interval: "300".to_string(),
+            review_interval_cursor: 3,
             restart_selected: 0,
             custom_command: String::new(),
             custom_command_cursor: 0,
@@ -238,7 +305,7 @@ impl AddAgentWizard {
                     self.active = false; // First step: cancel wizard
                 }
                 WizardStep::CustomCommand => self.step = WizardStep::Tool,
-                WizardStep::Name => {
+                WizardStep::AgentType => {
                     if self.is_custom_tool() {
                         self.custom_command_cursor = self.custom_command.len();
                         self.step = WizardStep::CustomCommand;
@@ -246,17 +313,27 @@ impl AddAgentWizard {
                         self.step = WizardStep::Tool;
                     }
                 }
+                WizardStep::Name => {
+                    self.step = WizardStep::AgentType;
+                }
                 WizardStep::WorkingDir => {
                     self.name_cursor = self.name.len();
                     self.step = WizardStep::Name;
                 }
                 WizardStep::Task => {
+                    // Task is only shown for workers
                     self.working_dir_cursor = self.working_dir.len();
                     self.step = WizardStep::WorkingDir;
                 }
                 WizardStep::Role => {
-                    self.task_cursor = self.task.len();
-                    self.step = WizardStep::Task;
+                    if self.is_orchestrator() {
+                        // Orchestrators skip Task
+                        self.working_dir_cursor = self.working_dir.len();
+                        self.step = WizardStep::WorkingDir;
+                    } else {
+                        self.task_cursor = self.task.len();
+                        self.step = WizardStep::Task;
+                    }
                 }
                 WizardStep::AgentGoal => {
                     self.role_cursor = self.role.len();
@@ -266,9 +343,23 @@ impl AddAgentWizard {
                     self.agent_goal_cursor = self.agent_goal.len();
                     self.step = WizardStep::AgentGoal;
                 }
-                WizardStep::RestartPolicy => {
+                WizardStep::BacklogPath => {
+                    // Only orchestrators see this
                     self.context_cursor = self.context.len();
                     self.step = WizardStep::Context;
+                }
+                WizardStep::ReviewInterval => {
+                    self.backlog_path_cursor = self.backlog_path.len();
+                    self.step = WizardStep::BacklogPath;
+                }
+                WizardStep::RestartPolicy => {
+                    if self.is_orchestrator() {
+                        self.review_interval_cursor = self.review_interval.len();
+                        self.step = WizardStep::ReviewInterval;
+                    } else {
+                        self.context_cursor = self.context.len();
+                        self.step = WizardStep::Context;
+                    }
                 }
                 WizardStep::Confirm => self.step = WizardStep::RestartPolicy,
             }
@@ -278,12 +369,15 @@ impl AddAgentWizard {
         match self.step {
             WizardStep::Tool => self.handle_tool_key(key),
             WizardStep::CustomCommand => self.handle_text_key(key, TextTarget::CustomCommand),
+            WizardStep::AgentType => self.handle_agent_type_key(key),
             WizardStep::Name => self.handle_text_key(key, TextTarget::Name),
             WizardStep::WorkingDir => self.handle_text_key(key, TextTarget::WorkingDir),
             WizardStep::Task => self.handle_text_key(key, TextTarget::Task),
             WizardStep::Role => self.handle_text_key(key, TextTarget::Role),
             WizardStep::AgentGoal => self.handle_text_key(key, TextTarget::AgentGoal),
             WizardStep::Context => self.handle_text_key(key, TextTarget::Context),
+            WizardStep::BacklogPath => self.handle_text_key(key, TextTarget::BacklogPath),
+            WizardStep::ReviewInterval => self.handle_text_key(key, TextTarget::ReviewInterval),
             WizardStep::RestartPolicy => self.handle_restart_key(key),
             WizardStep::Confirm => self.handle_confirm_key(key),
         }
@@ -305,9 +399,33 @@ impl AddAgentWizard {
                     self.step = WizardStep::CustomCommand;
                     self.custom_command_cursor = self.custom_command.len();
                 } else {
-                    self.step = WizardStep::Name;
-                    self.name_cursor = self.name.len();
+                    self.step = WizardStep::AgentType;
                 }
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Handle agent type selection keys (Worker vs Orchestrator).
+    fn handle_agent_type_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.agent_type_selected =
+                    (self.agent_type_selected + 1).min(AgentTypeChoice::ALL.len() - 1);
+                true
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.agent_type_selected = self.agent_type_selected.saturating_sub(1);
+                true
+            }
+            KeyCode::Enter => {
+                // When switching to orchestrator, default restart to Always (index 1)
+                if self.is_orchestrator() {
+                    self.restart_selected = 1; // Always
+                }
+                self.step = WizardStep::Name;
+                self.name_cursor = self.name.len();
                 true
             }
             _ => true,
@@ -364,6 +482,8 @@ impl AddAgentWizard {
             TextTarget::Role => (&mut self.role, &mut self.role_cursor),
             TextTarget::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor),
             TextTarget::Context => (&mut self.context, &mut self.context_cursor),
+            TextTarget::BacklogPath => (&mut self.backlog_path, &mut self.backlog_path_cursor),
+            TextTarget::ReviewInterval => (&mut self.review_interval, &mut self.review_interval_cursor),
         };
 
         match key.code {
@@ -376,8 +496,7 @@ impl AddAgentWizard {
                             return true;
                         }
                         self.validation_error = None;
-                        self.name_cursor = self.name.len();
-                        WizardStep::Name
+                        WizardStep::AgentType
                     }
                     WizardStep::Name => {
                         let trimmed = self.name.trim();
@@ -405,8 +524,14 @@ impl AddAgentWizard {
                             return true;
                         }
                         self.validation_error = None;
-                        self.task_cursor = self.task.len();
-                        WizardStep::Task
+                        if self.is_orchestrator() {
+                            // Orchestrators skip Task, go to Role
+                            self.role_cursor = self.role.len();
+                            WizardStep::Role
+                        } else {
+                            self.task_cursor = self.task.len();
+                            WizardStep::Task
+                        }
                     }
                     WizardStep::Task => {
                         self.role_cursor = self.role.len();
@@ -421,6 +546,25 @@ impl AddAgentWizard {
                         WizardStep::Context
                     }
                     WizardStep::Context => {
+                        if self.is_orchestrator() {
+                            self.backlog_path_cursor = self.backlog_path.len();
+                            WizardStep::BacklogPath
+                        } else {
+                            WizardStep::RestartPolicy
+                        }
+                    }
+                    WizardStep::BacklogPath => {
+                        self.review_interval_cursor = self.review_interval.len();
+                        WizardStep::ReviewInterval
+                    }
+                    WizardStep::ReviewInterval => {
+                        // Validate interval is a number
+                        let trimmed = self.review_interval.trim();
+                        if !trimmed.is_empty() && trimmed.parse::<u64>().is_err() {
+                            self.validation_error = Some("must be a number (seconds)".into());
+                            return true;
+                        }
+                        self.validation_error = None;
                         WizardStep::RestartPolicy
                     }
                     _ => return true,
@@ -521,6 +665,12 @@ impl AddAgentWizard {
             WizardStep::Role => (&mut self.role, &mut self.role_cursor, true),
             WizardStep::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor, true),
             WizardStep::Context => (&mut self.context, &mut self.context_cursor, true),
+            WizardStep::BacklogPath => {
+                (&mut self.backlog_path, &mut self.backlog_path_cursor, false)
+            }
+            WizardStep::ReviewInterval => {
+                (&mut self.review_interval, &mut self.review_interval_cursor, false)
+            }
             _ => return false,
         };
 
@@ -538,6 +688,18 @@ impl AddAgentWizard {
     /// Whether the selected tool is Custom (which needs the extra command step).
     pub fn is_custom_tool(&self) -> bool {
         self.tool_choice() == ToolChoice::Custom
+    }
+
+    /// Whether this agent is being configured as an orchestrator.
+    pub fn is_orchestrator(&self) -> bool {
+        self.agent_type_choice() == AgentTypeChoice::Orchestrator
+    }
+
+    /// Get the selected agent type choice (bounds-checked).
+    pub fn agent_type_choice(&self) -> AgentTypeChoice {
+        AgentTypeChoice::ALL.get(self.agent_type_selected)
+            .copied()
+            .unwrap_or(AgentTypeChoice::Worker)
     }
 
     /// Check if the wizard has enough data to produce a valid config.
@@ -637,6 +799,23 @@ impl AddAgentWizard {
         config.role = role;
         config.agent_goal = agent_goal;
         config.context = context;
+
+        if self.is_orchestrator() {
+            let backlog = if self.backlog_path.trim().is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(self.backlog_path.trim()))
+            };
+            let interval = self.review_interval.trim()
+                .parse::<u64>()
+                .unwrap_or(300);
+            config.orchestrator = Some(OrchestratorConfig {
+                review_interval_secs: interval,
+                backlog_path: backlog,
+                managed_agents: vec![], // empty = manage all non-orchestrator agents
+            });
+        }
+
         config
     }
 }
@@ -650,6 +829,8 @@ enum TextTarget {
     Role,
     AgentGoal,
     Context,
+    BacklogPath,
+    ReviewInterval,
 }
 
 #[cfg(test)]
@@ -676,25 +857,39 @@ mod tests {
     }
 
     #[test]
-    fn wizard_step_numbers_non_custom() {
-        // Non-custom: CustomCommand step is hidden
-        assert_eq!(WizardStep::Tool.number(false), 1);
-        assert_eq!(WizardStep::Name.number(false), 2);
-        assert_eq!(WizardStep::Role.number(false), 5);
-        assert_eq!(WizardStep::AgentGoal.number(false), 6);
-        assert_eq!(WizardStep::Context.number(false), 7);
-        assert_eq!(WizardStep::Confirm.number(false), 9);
-        assert_eq!(WizardStep::total(false), 9);
+    fn wizard_step_numbers_worker_non_custom() {
+        // Non-custom worker: CustomCommand, BacklogPath, ReviewInterval hidden
+        assert_eq!(WizardStep::Tool.number(false, false), 1);
+        assert_eq!(WizardStep::AgentType.number(false, false), 2);
+        assert_eq!(WizardStep::Name.number(false, false), 3);
+        assert_eq!(WizardStep::Role.number(false, false), 6);
+        assert_eq!(WizardStep::AgentGoal.number(false, false), 7);
+        assert_eq!(WizardStep::Context.number(false, false), 8);
+        assert_eq!(WizardStep::Confirm.number(false, false), 10);
+        assert_eq!(WizardStep::total(false, false), 10);
     }
 
     #[test]
-    fn wizard_step_numbers_custom() {
-        // Custom: CustomCommand step is visible
-        assert_eq!(WizardStep::Tool.number(true), 1);
-        assert_eq!(WizardStep::CustomCommand.number(true), 2);
-        assert_eq!(WizardStep::Name.number(true), 3);
-        assert_eq!(WizardStep::Confirm.number(true), 10);
-        assert_eq!(WizardStep::total(true), 10);
+    fn wizard_step_numbers_custom_worker() {
+        // Custom worker: CustomCommand visible, BacklogPath/ReviewInterval hidden
+        assert_eq!(WizardStep::Tool.number(true, false), 1);
+        assert_eq!(WizardStep::CustomCommand.number(true, false), 2);
+        assert_eq!(WizardStep::AgentType.number(true, false), 3);
+        assert_eq!(WizardStep::Name.number(true, false), 4);
+        assert_eq!(WizardStep::Confirm.number(true, false), 11);
+        assert_eq!(WizardStep::total(true, false), 11);
+    }
+
+    #[test]
+    fn wizard_step_numbers_orchestrator() {
+        // Orchestrator: Task hidden, BacklogPath/ReviewInterval visible
+        assert_eq!(WizardStep::Tool.number(false, true), 1);
+        assert_eq!(WizardStep::AgentType.number(false, true), 2);
+        assert_eq!(WizardStep::Name.number(false, true), 3);
+        assert_eq!(WizardStep::BacklogPath.number(false, true), 8);
+        assert_eq!(WizardStep::ReviewInterval.number(false, true), 9);
+        assert_eq!(WizardStep::Confirm.number(false, true), 11);
+        assert_eq!(WizardStep::total(false, true), 11);
     }
 
     #[test]
@@ -721,7 +916,7 @@ mod tests {
     fn wizard_tool_enter_advances() {
         let mut wiz = AddAgentWizard::new();
         wiz.handle_key(press(KeyCode::Enter));
-        assert_eq!(wiz.step, WizardStep::Name);
+        assert_eq!(wiz.step, WizardStep::AgentType);
     }
 
     #[test]
@@ -807,38 +1002,42 @@ mod tests {
 
         // Step 1: Tool (Claude Code -- skips CustomCommand)
         wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::AgentType);
+
+        // Step 2: Agent type (Worker -- default)
+        wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Name);
 
-        // Step 2: Name
+        // Step 3: Name
         wiz.name = "test-agent".into();
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::WorkingDir);
 
-        // Step 3: Working dir
+        // Step 4: Working dir
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Task);
 
-        // Step 4: Task (optional, enter to skip)
+        // Step 5: Task (optional, enter to skip)
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Role);
 
-        // Step 5: Role (optional, enter to skip)
+        // Step 6: Role (optional, enter to skip)
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::AgentGoal);
 
-        // Step 6: Agent goal (optional, enter to skip)
+        // Step 7: Agent goal (optional, enter to skip)
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Context);
 
-        // Step 7: Context (optional, enter to skip)
+        // Step 8: Context (optional, enter to skip)
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::RestartPolicy);
 
-        // Step 8: Restart policy
+        // Step 9: Restart policy
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Confirm);
 
-        // Step 9: Confirm
+        // Step 10: Confirm
         wiz.handle_key(press(KeyCode::Enter));
         assert!(!wiz.active);
         assert!(wiz.completed);
@@ -857,11 +1056,11 @@ mod tests {
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::CustomCommand, "empty command should not advance");
 
-        // Type a command and advance
+        // Type a command and advance to AgentType
         wiz.custom_command = "my-tool --verbose".into();
         wiz.custom_command_cursor = wiz.custom_command.len();
         wiz.handle_key(press(KeyCode::Enter));
-        assert_eq!(wiz.step, WizardStep::Name);
+        assert_eq!(wiz.step, WizardStep::AgentType);
     }
 
     #[test]
@@ -878,15 +1077,20 @@ mod tests {
     fn wizard_esc_goes_back_one_step() {
         let mut wiz = AddAgentWizard::new();
 
-        // Name -> Tool (non-custom)
+        // Name -> AgentType
         wiz.step = WizardStep::Name;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::AgentType);
+        assert!(wiz.active);
+
+        // AgentType -> Tool (non-custom)
         wiz.handle_key(press(KeyCode::Esc));
         assert_eq!(wiz.step, WizardStep::Tool);
         assert!(wiz.active);
 
-        // Name -> CustomCommand (when Custom tool is selected)
+        // AgentType -> CustomCommand (when Custom tool is selected)
         wiz.tool_selected = 4; // Custom
-        wiz.step = WizardStep::Name;
+        wiz.step = WizardStep::AgentType;
         wiz.handle_key(press(KeyCode::Esc));
         assert_eq!(wiz.step, WizardStep::CustomCommand);
         assert!(wiz.active);
@@ -1118,8 +1322,12 @@ mod tests {
     fn wizard_backtab_goes_back() {
         let mut wiz = AddAgentWizard::new();
 
-        // Name -> Tool
+        // Name -> AgentType
         wiz.step = WizardStep::Name;
+        wiz.handle_key(press(KeyCode::BackTab));
+        assert_eq!(wiz.step, WizardStep::AgentType);
+
+        // AgentType -> Tool
         wiz.handle_key(press(KeyCode::BackTab));
         assert_eq!(wiz.step, WizardStep::Tool);
 
@@ -1214,5 +1422,143 @@ mod tests {
         // Typing clears error
         wiz.handle_key(press(KeyCode::Char('x')));
         assert!(wiz.validation_error.is_none());
+    }
+
+    #[test]
+    fn wizard_orchestrator_step_progression() {
+        let mut wiz = AddAgentWizard::new();
+
+        // Step 1: Tool
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::AgentType);
+
+        // Step 2: Select Orchestrator (index 1)
+        wiz.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(wiz.agent_type_selected, 1);
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Name);
+        assert!(wiz.is_orchestrator());
+        // Restart should auto-default to Always (index 1)
+        assert_eq!(wiz.restart_selected, 1);
+
+        // Step 3: Name
+        wiz.name = "director".into();
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::WorkingDir);
+
+        // Step 4: Working dir
+        wiz.handle_key(press(KeyCode::Enter));
+        // Orchestrators skip Task, go to Role
+        assert_eq!(wiz.step, WizardStep::Role);
+
+        // Step 5: Role
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::AgentGoal);
+
+        // Step 6: Agent goal
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Context);
+
+        // Step 7: Context
+        wiz.handle_key(press(KeyCode::Enter));
+        // Orchestrators see BacklogPath next
+        assert_eq!(wiz.step, WizardStep::BacklogPath);
+
+        // Step 8: Backlog path
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::ReviewInterval);
+
+        // Step 9: Review interval
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::RestartPolicy);
+
+        // Step 10: Restart policy
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Confirm);
+
+        // Step 11: Confirm
+        wiz.handle_key(press(KeyCode::Enter));
+        assert!(!wiz.active);
+        assert!(wiz.completed);
+    }
+
+    #[test]
+    fn wizard_orchestrator_builds_config_with_orchestrator_field() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.agent_type_selected = 1; // Orchestrator
+        wiz.name = "orch-1".into();
+        wiz.working_dir = "/tmp".into();
+        wiz.backlog_path = "./BACKLOG.md".into();
+        wiz.review_interval = "120".into();
+
+        let config = wiz.build_config();
+        assert_eq!(config.name, "orch-1");
+        let orch = config.orchestrator.expect("should have orchestrator config");
+        assert_eq!(orch.review_interval_secs, 120);
+        assert_eq!(orch.backlog_path, Some(PathBuf::from("./BACKLOG.md")));
+        assert!(orch.managed_agents.is_empty());
+    }
+
+    #[test]
+    fn wizard_worker_builds_config_without_orchestrator_field() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.agent_type_selected = 0; // Worker
+        wiz.name = "worker-1".into();
+        wiz.working_dir = "/tmp".into();
+
+        let config = wiz.build_config();
+        assert!(config.orchestrator.is_none());
+    }
+
+    #[test]
+    fn wizard_orchestrator_esc_back_navigation() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.agent_type_selected = 1; // Orchestrator
+
+        // Role -> WorkingDir (skips Task for orchestrators)
+        wiz.step = WizardStep::Role;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::WorkingDir);
+
+        // BacklogPath -> Context
+        wiz.step = WizardStep::BacklogPath;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Context);
+
+        // ReviewInterval -> BacklogPath
+        wiz.step = WizardStep::ReviewInterval;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::BacklogPath);
+
+        // RestartPolicy -> ReviewInterval (for orchestrators)
+        wiz.step = WizardStep::RestartPolicy;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::ReviewInterval);
+    }
+
+    #[test]
+    fn wizard_agent_type_choice_bounds_checked() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.agent_type_selected = 999;
+        assert_eq!(wiz.agent_type_choice(), AgentTypeChoice::Worker); // fallback
+    }
+
+    #[test]
+    fn wizard_review_interval_validation() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.agent_type_selected = 1;
+        wiz.step = WizardStep::ReviewInterval;
+        wiz.review_interval = "not-a-number".into();
+        wiz.review_interval_cursor = wiz.review_interval.len();
+
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::ReviewInterval, "invalid interval should not advance");
+        assert!(wiz.validation_error.is_some());
+
+        // Valid number should advance
+        wiz.review_interval = "60".into();
+        wiz.review_interval_cursor = wiz.review_interval.len();
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::RestartPolicy);
     }
 }

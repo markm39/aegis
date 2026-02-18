@@ -314,7 +314,7 @@ fn install_sigterm_handler(shutdown: &Arc<AtomicBool>) {
 
     unsafe {
         SHUTDOWN_PTR.store(shutdown_ptr as *mut (), Ordering::SeqCst);
-        libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, sigterm_handler as *const () as libc::sighandler_t);
     }
 }
 
