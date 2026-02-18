@@ -663,6 +663,8 @@ impl FleetApp {
                         request_id: pending.request_id.clone(),
                     };
                     self.send_and_show_result(cmd);
+                } else {
+                    self.set_result("No pending prompts to approve");
                 }
             }
             KeyCode::Char('d') => {
@@ -673,6 +675,8 @@ impl FleetApp {
                         request_id: pending.request_id.clone(),
                     };
                     self.send_and_show_result(cmd);
+                } else {
+                    self.set_result("No pending prompts to deny");
                 }
             }
             KeyCode::Char('n') => {
@@ -1360,6 +1364,8 @@ impl FleetApp {
             let name = agent.name.clone();
             let cmd = make_cmd(name);
             self.send_and_show_result(cmd);
+        } else {
+            self.set_result("No agents available");
         }
     }
 

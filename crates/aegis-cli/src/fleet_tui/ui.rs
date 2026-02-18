@@ -207,12 +207,11 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         .iter()
         .enumerate()
         .map(|(i, agent)| {
-            let marker = if agent.attention_needed {
-                "!"
-            } else if i == app.agent_selected {
-                ">"
-            } else {
-                " "
+            let marker = match (agent.attention_needed, i == app.agent_selected) {
+                (true, true) => "!>",
+                (true, false) => "! ",
+                (false, true) => " >",
+                (false, false) => "  ",
             };
             let (status_text, status_color) = status_display(&agent.status);
             let dir = truncate_path(&agent.working_dir, 30);
@@ -323,7 +322,7 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
     if let Some(ref err) = app.last_error {
         spans.push(Span::styled("  ", Style::default()));
         spans.push(Span::styled(
-            truncate_str(err, 40),
+            truncate_str(err, 80),
             Style::default().fg(Color::Red),
         ));
     }
