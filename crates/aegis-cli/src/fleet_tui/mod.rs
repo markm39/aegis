@@ -1099,17 +1099,7 @@ impl FleetApp {
                     {
                         Some(cfg) => match cfg.channel {
                             Some(aegis_types::config::ChannelConfig::Telegram(tg)) => {
-                                let token_preview = if tg.bot_token.len() > 10 {
-                                    // Find a char boundary at or before byte 10
-                                    let end = tg.bot_token.char_indices()
-                                        .take_while(|(i, _)| *i < 10)
-                                        .last()
-                                        .map(|(i, c)| i + c.len_utf8())
-                                        .unwrap_or(0);
-                                    format!("{}...", &tg.bot_token[..end])
-                                } else {
-                                    "(set)".to_string()
-                                };
+                                let token_preview = crate::tui_utils::truncate_str(&tg.bot_token, 13);
                                 format!("Telegram: configured (token: {token_preview}, chat: {})", tg.chat_id)
                             }
                             None => "Telegram: not configured. Run :telegram setup to configure.".to_string(),

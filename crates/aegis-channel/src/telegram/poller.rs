@@ -111,8 +111,10 @@ pub async fn poll_loop(
                                 // Ack the callback (dismiss spinner)
                                 let ack_text = if data.starts_with("approve:") {
                                     "Approved"
-                                } else {
+                                } else if data.starts_with("deny:") {
                                     "Denied"
+                                } else {
+                                    "OK"
                                 };
                                 let _ = api
                                     .answer_callback_query(&cb.id, Some(ack_text))

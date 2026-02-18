@@ -141,7 +141,9 @@ async fn handle_connection(
                 let resp = DaemonResponse::error(format!("invalid JSON: {e}"));
                 let mut json = serde_json::to_string(&resp).unwrap_or_default();
                 json.push('\n');
-                let _ = writer.write_all(json.as_bytes()).await;
+                if let Err(write_err) = writer.write_all(json.as_bytes()).await {
+                    warn!(error = %write_err, "failed to write error response to control client");
+                }
                 continue;
             }
         };
@@ -151,7 +153,9 @@ async fn handle_connection(
             let resp = DaemonResponse::error("daemon main loop disconnected");
             let mut json = serde_json::to_string(&resp).unwrap_or_default();
             json.push('\n');
-            let _ = writer.write_all(json.as_bytes()).await;
+            if let Err(write_err) = writer.write_all(json.as_bytes()).await {
+                warn!(error = %write_err, "failed to write disconnect response to control client");
+            }
             break;
         }
 

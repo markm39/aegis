@@ -140,13 +140,26 @@ impl PtySession {
     }
 
     /// Write all bytes to the master PTY (injecting into child's stdin).
+    ///
+    /// Retries on EAGAIN up to ~5 seconds before giving up. Without a limit,
+    /// a child that stops reading stdin could cause this to spin forever,
+    /// blocking the supervisor thread.
     pub fn write_all(&self, data: &[u8]) -> Result<(), AegisError> {
         let mut written = 0;
+        let mut retries = 0u32;
         while written < data.len() {
             match unistd::write(&self.master, &data[written..]) {
-                Ok(n) => written += n,
+                Ok(n) => {
+                    written += n;
+                    retries = 0;
+                }
                 Err(nix::errno::Errno::EAGAIN) => {
-                    // Briefly yield and retry
+                    retries += 1;
+                    if retries > 5000 {
+                        return Err(AegisError::PilotError(
+                            "pty write: buffer full after 5s of retries".into(),
+                        ));
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 Err(e) => {
