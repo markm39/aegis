@@ -378,6 +378,7 @@ impl FleetApp {
         if self.command_mode {
             self.command_buffer.insert_str(self.command_cursor, text);
             self.command_cursor += text.len();
+            self.update_completions();
             return;
         }
         // Route paste to input mode if active
@@ -2169,5 +2170,19 @@ mod tests {
         assert!(!app.input_mode);
         assert!(app.input_buffer.is_empty());
         assert!(app.running, "Ctrl+C in input mode should exit mode, not quit");
+    }
+
+    #[test]
+    fn paste_in_command_mode_updates_completions() {
+        let mut app = make_app();
+        app.command_mode = true;
+
+        app.handle_paste("st");
+        assert_eq!(app.command_buffer, "st");
+        assert_eq!(app.command_cursor, 2);
+        // Completions should be refreshed after paste
+        assert!(!app.command_completions.is_empty());
+        assert!(app.command_completions.contains(&"start".to_string()));
+        assert!(app.command_completions.contains(&"stop".to_string()));
     }
 }

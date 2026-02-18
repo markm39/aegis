@@ -758,11 +758,13 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
     }
 
-    // Footer
+    // Footer -- Esc behavior depends on step (back-navigation):
+    // Tool: Esc cancels wizard. All other steps: Esc goes back one step.
     let footer_text = match wiz.step {
-        WizardStep::Tool | WizardStep::RestartPolicy => "j/k: select  Enter: confirm  Esc: cancel",
-        WizardStep::Confirm => "Enter/y: create agent  n/Esc: cancel",
-        _ => "Type to edit  Enter: next  Esc: cancel",
+        WizardStep::Tool => "j/k: select  Enter: confirm  Esc: cancel",
+        WizardStep::RestartPolicy => "j/k: select  Enter: confirm  Esc: back",
+        WizardStep::Confirm => "Enter/y: create agent  n: cancel  Esc: back",
+        _ => "Type to edit  Enter: next  Esc: back",
     };
     let footer = Paragraph::new(Span::styled(
         format!(" {footer_text}"),
