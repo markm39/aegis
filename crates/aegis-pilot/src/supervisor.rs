@@ -328,6 +328,15 @@ pub fn run(
                 }
                 stats.lines_processed += lines.len() as u64;
             }
+
+            // Flush any remaining partial line (e.g. a prompt without trailing newline)
+            if let Some(remaining) = output_buf.flush_partial() {
+                if let Some(tx) = output_tx {
+                    let _ = tx.send(remaining.clone());
+                }
+                send_update(update_tx, PilotUpdate::OutputLine(remaining));
+                stats.lines_processed += 1;
+            }
             break;
         }
     }

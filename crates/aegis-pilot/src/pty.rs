@@ -230,6 +230,23 @@ impl PtySession {
     }
 }
 
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        // Attempt to terminate the child if still alive, then reap to avoid zombies.
+        // Ignore errors -- we're in a destructor and best-effort cleanup is fine.
+        if matches!(
+            waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)),
+            Ok(WaitStatus::StillAlive)
+        ) {
+            let _ = signal::kill(self.child_pid, Signal::SIGTERM);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            // Reap if it exited; if not, it becomes an orphan (init adopts it).
+            let _ = waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG));
+        }
+        // OwnedFd closes the master fd automatically when dropped.
+    }
+}
+
 /// Create a `PtySession` from a pre-existing master fd and child pid.
 ///
 /// Used in tests and by the supervisor when the PTY was set up externally.
