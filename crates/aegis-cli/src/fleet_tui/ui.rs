@@ -743,8 +743,9 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         .split(area);
 
     // Header
-    let step_num = wiz.step.number();
-    let total = WizardStep::total();
+    let is_custom = wiz.is_custom_tool();
+    let step_num = wiz.step.number(is_custom);
+    let total = WizardStep::total(is_custom);
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             " Add Agent ",
@@ -765,6 +766,7 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
     // Content -- depends on current step
     match wiz.step {
         WizardStep::Tool => draw_wizard_tool(frame, wiz, chunks[1]),
+        WizardStep::CustomCommand => draw_wizard_text(frame, "Custom Command (e.g. my-tool --flag)", &wiz.custom_command, wiz.custom_command_cursor, chunks[1]),
         WizardStep::Name => draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1]),
         WizardStep::WorkingDir => draw_wizard_text(frame, "Working Directory", &wiz.working_dir, wiz.working_dir_cursor, chunks[1]),
         WizardStep::Task => draw_wizard_multiline_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),

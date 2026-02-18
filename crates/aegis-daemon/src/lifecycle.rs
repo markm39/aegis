@@ -11,7 +11,6 @@
 //! 6. Stop the observer, end the audit session
 //! 7. Return the result to the fleet manager
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -95,7 +94,7 @@ fn run_agent_slot_inner(
         .policy_paths
         .first()
         .cloned()
-        .unwrap_or_else(|| PathBuf::from("/nonexistent"));
+        .ok_or_else(|| format!("no policy paths configured for agent {name}"))?;
 
     let engine = PolicyEngine::new(&policy_dir, None)
         .map_err(|e| format!("failed to create policy engine for {name}: {e}"))?;

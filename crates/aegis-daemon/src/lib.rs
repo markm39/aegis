@@ -432,12 +432,18 @@ impl DaemonRuntime {
                     return DaemonResponse::error(format!("agent '{name}' already exists"));
                 }
                 let slot_config: AgentSlotConfig = *config.clone();
-                self.fleet.add_agent(slot_config.clone());
-                // Also add to the runtime config so it persists
-                self.config.agents.push(slot_config);
-                if let Err(e) = self.persist_config() {
-                    return DaemonResponse::error(format!("agent added but failed to save config: {e}"));
+
+                // Persist first: build candidate config and write to disk
+                // before mutating in-memory state.
+                let mut candidate = self.config.clone();
+                candidate.agents.push(slot_config.clone());
+                if let Err(e) = Self::persist_config_to_disk(&candidate) {
+                    return DaemonResponse::error(format!("failed to save config: {e}"));
                 }
+
+                // Disk write succeeded -- now safe to update memory
+                self.config = candidate;
+                self.fleet.add_agent(slot_config);
                 if start {
                     self.fleet.start_agent(&name);
                 }
@@ -448,15 +454,18 @@ impl DaemonRuntime {
                 if self.fleet.agent_status(name).is_none() {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
                 }
-                // Stop if running
-                self.fleet.stop_agent(name);
-                // Remove from fleet
-                self.fleet.remove_agent(name);
-                // Remove from persisted config
-                self.config.agents.retain(|a| a.name != *name);
-                if let Err(e) = self.persist_config() {
-                    return DaemonResponse::error(format!("agent removed but failed to save config: {e}"));
+
+                // Persist first: build candidate config without the agent
+                let mut candidate = self.config.clone();
+                candidate.agents.retain(|a| a.name != *name);
+                if let Err(e) = Self::persist_config_to_disk(&candidate) {
+                    return DaemonResponse::error(format!("failed to save config: {e}"));
                 }
+
+                // Disk write succeeded -- now safe to update memory
+                self.config = candidate;
+                self.fleet.stop_agent(name);
+                self.fleet.remove_agent(name);
                 DaemonResponse::ok(format!("agent '{name}' removed"))
             }
 
@@ -571,18 +580,19 @@ impl DaemonRuntime {
             DaemonCommand::FleetGoal { ref goal } => {
                 match goal {
                     Some(new_goal) => {
-                        let display = if new_goal.is_empty() {
-                            self.config.goal = None;
-                            self.fleet.fleet_goal = None;
-                            "(cleared)".to_string()
-                        } else {
-                            self.config.goal = Some(new_goal.clone());
-                            self.fleet.fleet_goal = Some(new_goal.clone());
-                            new_goal.clone()
-                        };
-                        if let Err(e) = self.persist_config() {
-                            return DaemonResponse::error(format!("goal set but failed to persist: {e}"));
+                        let new_goal_val = if new_goal.is_empty() { None } else { Some(new_goal.clone()) };
+                        let display = new_goal_val.clone().unwrap_or_else(|| "(cleared)".to_string());
+
+                        // Persist first
+                        let mut candidate = self.config.clone();
+                        candidate.goal = new_goal_val.clone();
+                        if let Err(e) = Self::persist_config_to_disk(&candidate) {
+                            return DaemonResponse::error(format!("failed to persist goal: {e}"));
                         }
+
+                        // Disk write succeeded -- update memory
+                        self.config = candidate;
+                        self.fleet.fleet_goal = new_goal_val;
                         DaemonResponse::ok(format!("fleet goal set: {display}"))
                     }
                     None => {
@@ -596,32 +606,42 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::UpdateAgentContext { ref name, ref role, ref agent_goal, ref context, ref task } => {
-                let slot = match self.fleet.slot_mut(name) {
-                    Some(s) => s,
-                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
-                };
-                if let Some(r) = role {
-                    slot.config.role = if r.is_empty() { None } else { Some(r.clone()) };
+                if self.fleet.slot(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
                 }
-                if let Some(g) = agent_goal {
-                    slot.config.agent_goal = if g.is_empty() { None } else { Some(g.clone()) };
+
+                // Build candidate config with updated context fields
+                let mut candidate = self.config.clone();
+                if let Some(cfg) = candidate.agents.iter_mut().find(|a| a.name == *name) {
+                    if let Some(r) = role {
+                        cfg.role = if r.is_empty() { None } else { Some(r.clone()) };
+                    }
+                    if let Some(g) = agent_goal {
+                        cfg.agent_goal = if g.is_empty() { None } else { Some(g.clone()) };
+                    }
+                    if let Some(c) = context {
+                        cfg.context = if c.is_empty() { None } else { Some(c.clone()) };
+                    }
+                    if let Some(t) = task {
+                        cfg.task = if t.is_empty() { None } else { Some(t.clone()) };
+                    }
                 }
-                if let Some(c) = context {
-                    slot.config.context = if c.is_empty() { None } else { Some(c.clone()) };
+
+                // Persist first
+                if let Err(e) = Self::persist_config_to_disk(&candidate) {
+                    return DaemonResponse::error(format!("failed to persist context: {e}"));
                 }
-                if let Some(t) = task {
-                    slot.config.task = if t.is_empty() { None } else { Some(t.clone()) };
+
+                // Disk write succeeded -- update memory (fleet slot + self.config)
+                if let Some(slot) = self.fleet.slot_mut(name) {
+                    if let Some(cfg) = candidate.agents.iter().find(|a| a.name == *name) {
+                        slot.config.role.clone_from(&cfg.role);
+                        slot.config.agent_goal.clone_from(&cfg.agent_goal);
+                        slot.config.context.clone_from(&cfg.context);
+                        slot.config.task.clone_from(&cfg.task);
+                    }
                 }
-                // Sync to persisted config
-                if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == *name) {
-                    cfg.role.clone_from(&slot.config.role);
-                    cfg.agent_goal.clone_from(&slot.config.agent_goal);
-                    cfg.context.clone_from(&slot.config.context);
-                    cfg.task.clone_from(&slot.config.task);
-                }
-                if let Err(e) = self.persist_config() {
-                    return DaemonResponse::error(format!("context updated but failed to persist: {e}"));
-                }
+                self.config = candidate;
                 DaemonResponse::ok(format!("context updated for '{name}' (takes effect on next restart)"))
             }
 
@@ -640,33 +660,55 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::EnableAgent { name } => {
-                match self.fleet.enable_agent(&name) {
-                    Ok(()) => {
-                        // Persist enabled state to daemon.toml
-                        if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == name) {
-                            cfg.enabled = true;
-                        }
-                        if let Err(e) = self.persist_config() {
-                            return DaemonResponse::error(format!("enabled but failed to persist: {e}"));
-                        }
-                        DaemonResponse::ok(format!("agent '{name}' enabled"))
+                // Validate first
+                match self.fleet.slot(&name) {
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                    Some(s) if s.config.enabled => {
+                        return DaemonResponse::error(format!("agent '{name}' is already enabled"));
                     }
+                    _ => {}
+                }
+
+                // Persist first
+                let mut candidate = self.config.clone();
+                if let Some(cfg) = candidate.agents.iter_mut().find(|a| a.name == name) {
+                    cfg.enabled = true;
+                }
+                if let Err(e) = Self::persist_config_to_disk(&candidate) {
+                    return DaemonResponse::error(format!("failed to persist enable: {e}"));
+                }
+
+                // Disk write succeeded -- update memory
+                self.config = candidate;
+                match self.fleet.enable_agent(&name) {
+                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' enabled")),
                     Err(e) => DaemonResponse::error(e),
                 }
             }
 
             DaemonCommand::DisableAgent { name } => {
-                match self.fleet.disable_agent(&name) {
-                    Ok(()) => {
-                        // Persist disabled state to daemon.toml
-                        if let Some(cfg) = self.config.agents.iter_mut().find(|a| a.name == name) {
-                            cfg.enabled = false;
-                        }
-                        if let Err(e) = self.persist_config() {
-                            return DaemonResponse::error(format!("disabled but failed to persist: {e}"));
-                        }
-                        DaemonResponse::ok(format!("agent '{name}' disabled"))
+                // Validate first
+                match self.fleet.slot(&name) {
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                    Some(s) if !s.config.enabled => {
+                        return DaemonResponse::error(format!("agent '{name}' is already disabled"));
                     }
+                    _ => {}
+                }
+
+                // Persist first
+                let mut candidate = self.config.clone();
+                if let Some(cfg) = candidate.agents.iter_mut().find(|a| a.name == name) {
+                    cfg.enabled = false;
+                }
+                if let Err(e) = Self::persist_config_to_disk(&candidate) {
+                    return DaemonResponse::error(format!("failed to persist disable: {e}"));
+                }
+
+                // Disk write succeeded -- update memory
+                self.config = candidate;
+                match self.fleet.disable_agent(&name) {
+                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' disabled")),
                     Err(e) => DaemonResponse::error(e),
                 }
             }
@@ -772,15 +814,19 @@ impl DaemonRuntime {
         ))
     }
 
-    /// Persist the current daemon config to daemon.toml.
+    /// Persist a config to daemon.toml.
     ///
     /// Uses atomic write (write to temp file, then rename) to prevent
     /// corruption if the process is interrupted mid-write.
-    fn persist_config(&self) -> Result<(), String> {
+    ///
+    /// Accepts the config to write explicitly so callers can build a
+    /// candidate config, persist it, and only then update in-memory state.
+    /// This prevents memory/disk divergence if the write fails.
+    fn persist_config_to_disk(config: &DaemonConfig) -> Result<(), String> {
         use std::sync::atomic::AtomicU64;
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        let toml_str = self.config.to_toml().map_err(|e| e.to_string())?;
+        let toml_str = config.to_toml().map_err(|e| e.to_string())?;
         let config_path = aegis_types::daemon::daemon_config_path();
 
         // Write to a uniquely-named sibling temp file, then rename for crash safety.

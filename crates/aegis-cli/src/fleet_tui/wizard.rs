@@ -21,6 +21,7 @@ use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, RestartPolicy};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WizardStep {
     Tool,
+    CustomCommand,
     Name,
     WorkingDir,
     Task,
@@ -31,9 +32,10 @@ pub enum WizardStep {
 }
 
 impl WizardStep {
-    /// All steps in order.
+    /// All steps in order (including CustomCommand, which is conditionally shown).
     pub const ALL: &'static [WizardStep] = &[
         WizardStep::Tool,
+        WizardStep::CustomCommand,
         WizardStep::Name,
         WizardStep::WorkingDir,
         WizardStep::Task,
@@ -43,14 +45,23 @@ impl WizardStep {
         WizardStep::Confirm,
     ];
 
-    /// Step number (1-based).
-    pub fn number(&self) -> usize {
-        Self::ALL.iter().position(|s| s == self).unwrap_or(0) + 1
+    /// Step number (1-based), adjusted to skip CustomCommand for non-Custom tools.
+    pub fn number(&self, is_custom: bool) -> usize {
+        Self::ALL
+            .iter()
+            .filter(|s| is_custom || **s != WizardStep::CustomCommand)
+            .position(|s| s == self)
+            .unwrap_or(0)
+            + 1
     }
 
-    /// Total steps.
-    pub fn total() -> usize {
-        Self::ALL.len()
+    /// Total steps, adjusted to skip CustomCommand for non-Custom tools.
+    pub fn total(is_custom: bool) -> usize {
+        if is_custom {
+            Self::ALL.len()
+        } else {
+            Self::ALL.len() - 1
+        }
     }
 }
 
@@ -163,6 +174,7 @@ pub struct AddAgentWizard {
 
     // Custom command (only if tool == Custom)
     pub custom_command: String,
+    pub custom_command_cursor: usize,
 }
 
 impl AddAgentWizard {
@@ -194,6 +206,7 @@ impl AddAgentWizard {
             agent_goal_cursor: 0,
             restart_selected: 0,
             custom_command: String::new(),
+            custom_command_cursor: 0,
         }
     }
 
@@ -209,7 +222,15 @@ impl AddAgentWizard {
                 WizardStep::Tool => {
                     self.active = false; // First step: cancel wizard
                 }
-                WizardStep::Name => self.step = WizardStep::Tool,
+                WizardStep::CustomCommand => self.step = WizardStep::Tool,
+                WizardStep::Name => {
+                    if self.is_custom_tool() {
+                        self.custom_command_cursor = self.custom_command.len();
+                        self.step = WizardStep::CustomCommand;
+                    } else {
+                        self.step = WizardStep::Tool;
+                    }
+                }
                 WizardStep::WorkingDir => {
                     self.name_cursor = self.name.len();
                     self.step = WizardStep::Name;
@@ -237,6 +258,7 @@ impl AddAgentWizard {
 
         match self.step {
             WizardStep::Tool => self.handle_tool_key(key),
+            WizardStep::CustomCommand => self.handle_text_key(key, TextTarget::CustomCommand),
             WizardStep::Name => self.handle_text_key(key, TextTarget::Name),
             WizardStep::WorkingDir => self.handle_text_key(key, TextTarget::WorkingDir),
             WizardStep::Task => self.handle_text_key(key, TextTarget::Task),
@@ -259,9 +281,13 @@ impl AddAgentWizard {
                 true
             }
             KeyCode::Enter => {
-                self.step = WizardStep::Name;
-                // Position cursor at end of name
-                self.name_cursor = self.name.len();
+                if self.is_custom_tool() {
+                    self.step = WizardStep::CustomCommand;
+                    self.custom_command_cursor = self.custom_command.len();
+                } else {
+                    self.step = WizardStep::Name;
+                    self.name_cursor = self.name.len();
+                }
                 true
             }
             _ => true,
@@ -309,6 +335,7 @@ impl AddAgentWizard {
     /// Handle text input with cursor support.
     fn handle_text_key(&mut self, key: KeyEvent, target: TextTarget) -> bool {
         let (text, cursor) = match target {
+            TextTarget::CustomCommand => (&mut self.custom_command, &mut self.custom_command_cursor),
             TextTarget::Name => (&mut self.name, &mut self.name_cursor),
             TextTarget::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor),
             TextTarget::Task => (&mut self.task, &mut self.task_cursor),
@@ -320,6 +347,13 @@ impl AddAgentWizard {
             KeyCode::Enter => {
                 // Advance to next step
                 self.step = match self.step {
+                    WizardStep::CustomCommand => {
+                        if self.custom_command.trim().is_empty() {
+                            return true; // Don't advance with empty command
+                        }
+                        self.name_cursor = self.name.len();
+                        WizardStep::Name
+                    }
                     WizardStep::Name => {
                         if self.name.trim().is_empty() {
                             return true; // Don't advance with empty name
@@ -405,6 +439,9 @@ impl AddAgentWizard {
     /// Multi-line fields (task, role, goal) preserve newlines.
     pub fn handle_paste(&mut self, text: &str) -> bool {
         let (buf, cursor, multiline) = match self.step {
+            WizardStep::CustomCommand => {
+                (&mut self.custom_command, &mut self.custom_command_cursor, false)
+            }
             WizardStep::Name => (&mut self.name, &mut self.name_cursor, false),
             WizardStep::WorkingDir => {
                 (&mut self.working_dir, &mut self.working_dir_cursor, false)
@@ -426,9 +463,19 @@ impl AddAgentWizard {
         true
     }
 
+    /// Whether the selected tool is Custom (which needs the extra command step).
+    pub fn is_custom_tool(&self) -> bool {
+        self.tool_choice() == ToolChoice::Custom
+    }
+
     /// Check if the wizard has enough data to produce a valid config.
     pub fn is_valid(&self) -> bool {
-        !self.name.trim().is_empty() && !self.working_dir.trim().is_empty()
+        let base = !self.name.trim().is_empty() && !self.working_dir.trim().is_empty();
+        if self.is_custom_tool() {
+            base && !self.custom_command.trim().is_empty()
+        } else {
+            base
+        }
     }
 
     /// Get the selected tool choice.
@@ -509,6 +556,7 @@ impl AddAgentWizard {
 
 /// Which text field the cursor belongs to.
 enum TextTarget {
+    CustomCommand,
     Name,
     WorkingDir,
     Task,
@@ -540,13 +588,24 @@ mod tests {
     }
 
     #[test]
-    fn wizard_step_numbers() {
-        assert_eq!(WizardStep::Tool.number(), 1);
-        assert_eq!(WizardStep::Name.number(), 2);
-        assert_eq!(WizardStep::Role.number(), 5);
-        assert_eq!(WizardStep::AgentGoal.number(), 6);
-        assert_eq!(WizardStep::Confirm.number(), 8);
-        assert_eq!(WizardStep::total(), 8);
+    fn wizard_step_numbers_non_custom() {
+        // Non-custom: CustomCommand step is hidden
+        assert_eq!(WizardStep::Tool.number(false), 1);
+        assert_eq!(WizardStep::Name.number(false), 2);
+        assert_eq!(WizardStep::Role.number(false), 5);
+        assert_eq!(WizardStep::AgentGoal.number(false), 6);
+        assert_eq!(WizardStep::Confirm.number(false), 8);
+        assert_eq!(WizardStep::total(false), 8);
+    }
+
+    #[test]
+    fn wizard_step_numbers_custom() {
+        // Custom: CustomCommand step is visible
+        assert_eq!(WizardStep::Tool.number(true), 1);
+        assert_eq!(WizardStep::CustomCommand.number(true), 2);
+        assert_eq!(WizardStep::Name.number(true), 3);
+        assert_eq!(WizardStep::Confirm.number(true), 9);
+        assert_eq!(WizardStep::total(true), 9);
     }
 
     #[test]
@@ -650,7 +709,7 @@ mod tests {
     fn wizard_step_progression() {
         let mut wiz = AddAgentWizard::new();
 
-        // Step 1: Tool
+        // Step 1: Tool (Claude Code -- skips CustomCommand)
         wiz.handle_key(press(KeyCode::Enter));
         assert_eq!(wiz.step, WizardStep::Name);
 
@@ -686,6 +745,26 @@ mod tests {
     }
 
     #[test]
+    fn wizard_custom_tool_step_progression() {
+        let mut wiz = AddAgentWizard::new();
+
+        // Select Custom (index 4)
+        wiz.tool_selected = 4;
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::CustomCommand, "Custom should go to CustomCommand step");
+
+        // Empty command should not advance
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::CustomCommand, "empty command should not advance");
+
+        // Type a command and advance
+        wiz.custom_command = "my-tool --verbose".into();
+        wiz.custom_command_cursor = wiz.custom_command.len();
+        wiz.handle_key(press(KeyCode::Enter));
+        assert_eq!(wiz.step, WizardStep::Name);
+    }
+
+    #[test]
     fn wizard_esc_at_tool_cancels() {
         let mut wiz = AddAgentWizard::new();
         assert_eq!(wiz.step, WizardStep::Tool);
@@ -699,8 +778,20 @@ mod tests {
     fn wizard_esc_goes_back_one_step() {
         let mut wiz = AddAgentWizard::new();
 
-        // Name -> Tool
+        // Name -> Tool (non-custom)
         wiz.step = WizardStep::Name;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::Tool);
+        assert!(wiz.active);
+
+        // Name -> CustomCommand (when Custom tool is selected)
+        wiz.tool_selected = 4; // Custom
+        wiz.step = WizardStep::Name;
+        wiz.handle_key(press(KeyCode::Esc));
+        assert_eq!(wiz.step, WizardStep::CustomCommand);
+        assert!(wiz.active);
+
+        // CustomCommand -> Tool
         wiz.handle_key(press(KeyCode::Esc));
         assert_eq!(wiz.step, WizardStep::Tool);
         assert!(wiz.active);
@@ -855,6 +946,19 @@ mod tests {
         wiz.name = "test".into();
         wiz.working_dir = "  ".into();
         assert!(!wiz.is_valid());
+    }
+
+    #[test]
+    fn wizard_custom_is_valid_requires_command() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.tool_selected = 4; // Custom
+        wiz.name = "test".into();
+        wiz.working_dir = "/tmp".into();
+        wiz.custom_command = "".into();
+        assert!(!wiz.is_valid(), "custom tool with empty command should be invalid");
+
+        wiz.custom_command = "my-tool".into();
+        assert!(wiz.is_valid(), "custom tool with command should be valid");
     }
 
     #[test]

@@ -67,7 +67,9 @@ impl Fleet {
                 let pid = slot.child_pid.load(Ordering::Acquire);
                 if pid > 0 {
                     info!(agent = name, pid, "stop_all: sending SIGTERM");
-                    let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+                    if let Ok(raw_pid) = i32::try_from(pid) {
+                        let _ = signal::kill(Pid::from_raw(raw_pid), Signal::SIGTERM);
+                    }
                 }
             }
         }
@@ -176,9 +178,10 @@ impl Fleet {
 
         // Send SIGTERM to the child process if we know the PID.
         let pid = slot.child_pid.load(Ordering::Acquire);
-        if pid > 0 {
+        let raw_pid = i32::try_from(pid).ok().filter(|&p| p > 0);
+        if let Some(p) = raw_pid {
             info!(agent = name, pid, "sending SIGTERM to child");
-            let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+            let _ = signal::kill(Pid::from_raw(p), Signal::SIGTERM);
         }
 
         if let Some(handle) = slot.thread_handle.take() {
@@ -190,9 +193,11 @@ impl Fleet {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
-            if !handle.is_finished() && pid > 0 {
-                warn!(agent = name, pid, "SIGTERM timeout, sending SIGKILL");
-                let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+            if !handle.is_finished() {
+                if let Some(p) = raw_pid {
+                    warn!(agent = name, pid, "SIGTERM timeout, sending SIGKILL");
+                    let _ = signal::kill(Pid::from_raw(p), Signal::SIGKILL);
+                }
 
                 // Give it another 2 seconds after SIGKILL.
                 let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
