@@ -228,6 +228,12 @@ enum Commands {
         action: DaemonCommands,
     },
 
+    /// Claude Code hook integration (policy enforcement via PreToolUse hooks)
+    Hook {
+        #[command(subcommand)]
+        action: HookCommands,
+    },
+
     /// Watch a directory for filesystem changes (background daemon mode)
     Watch {
         /// Directory to watch (defaults to current directory)
@@ -490,6 +496,22 @@ enum AlertCommands {
 enum TelegramCommands {
     /// Interactive setup wizard for the Telegram bot
     Setup,
+}
+
+#[derive(Subcommand, Debug)]
+enum HookCommands {
+    /// Handle a PreToolUse hook from Claude Code (reads stdin, outputs verdict)
+    PreToolUse,
+
+    /// Show the settings JSON needed to register the aegis hook
+    ShowSettings,
+
+    /// Install the aegis hook into a project's .claude/settings.json
+    Install {
+        /// Project directory (defaults to current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -921,6 +943,13 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Uninstall => commands::daemon::uninstall(),
             DaemonCommands::Logs { follow } => {
                 commands::daemon::logs(follow)
+            }
+        },
+        Commands::Hook { action } => match action {
+            HookCommands::PreToolUse => commands::hook::pre_tool_use(),
+            HookCommands::ShowSettings => commands::hook::show_settings(),
+            HookCommands::Install { dir } => {
+                commands::hook::install_settings(dir.as_deref())
             }
         },
         Commands::Watch {
@@ -2144,6 +2173,54 @@ mod tests {
         match cli.command.unwrap() {
             Commands::Telegram { action: TelegramCommands::Setup } => {}
             _ => panic!("expected Telegram Setup command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_hook_pre_tool_use() {
+        let cli = Cli::try_parse_from(["aegis", "hook", "pre-tool-use"]);
+        assert!(cli.is_ok(), "should parse hook pre-tool-use: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Hook { action: HookCommands::PreToolUse } => {}
+            _ => panic!("expected Hook PreToolUse command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_hook_show_settings() {
+        let cli = Cli::try_parse_from(["aegis", "hook", "show-settings"]);
+        assert!(cli.is_ok(), "should parse hook show-settings: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Hook { action: HookCommands::ShowSettings } => {}
+            _ => panic!("expected Hook ShowSettings command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_hook_install() {
+        let cli = Cli::try_parse_from(["aegis", "hook", "install"]);
+        assert!(cli.is_ok(), "should parse hook install: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Hook { action: HookCommands::Install { dir } } => {
+                assert!(dir.is_none());
+            }
+            _ => panic!("expected Hook Install command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_hook_install_with_dir() {
+        let cli = Cli::try_parse_from(["aegis", "hook", "install", "--dir", "/tmp/project"]);
+        assert!(cli.is_ok(), "should parse hook install with dir: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Hook { action: HookCommands::Install { dir } } => {
+                assert_eq!(dir, Some(PathBuf::from("/tmp/project")));
+            }
+            _ => panic!("expected Hook Install command"),
         }
     }
 }

@@ -65,10 +65,23 @@ impl DaemonRuntime {
         let fleet = Fleet::new(&config, aegis_config.clone());
 
         // Load Cedar policy engine for hook-based tool use evaluation.
-        // Falls back to None if no policy paths are configured.
+        // Only loads if a policy directory exists AND contains .cedar files.
+        // When no policies are configured, hooks default to allow (matching
+        // the --dangerously-skip-permissions baseline).
         let policy_engine = aegis_config
             .policy_paths
             .first()
+            .filter(|dir| {
+                dir.is_dir()
+                    && std::fs::read_dir(dir)
+                        .ok()
+                        .map(|entries| {
+                            entries.filter_map(|e| e.ok()).any(|e| {
+                                e.path().extension().is_some_and(|ext| ext == "cedar")
+                            })
+                        })
+                        .unwrap_or(false)
+            })
             .and_then(|dir| match aegis_policy::PolicyEngine::new(dir, None) {
                 Ok(engine) => {
                     info!(policy_dir = %dir.display(), "loaded Cedar policy engine for hooks");

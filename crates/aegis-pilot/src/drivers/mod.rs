@@ -15,11 +15,15 @@ use aegis_types::AgentToolConfig;
 use crate::driver::AgentDriver;
 
 /// Create the appropriate driver for an agent tool configuration.
-pub fn create_driver(config: &AgentToolConfig) -> Box<dyn AgentDriver> {
+///
+/// The optional `agent_name` is passed as `AEGIS_AGENT_NAME` to the spawned
+/// process so that PreToolUse hooks can identify the agent when querying
+/// the daemon for Cedar policy evaluation.
+pub fn create_driver(config: &AgentToolConfig, agent_name: Option<&str>) -> Box<dyn AgentDriver> {
     match config {
-        AgentToolConfig::ClaudeCode { skip_permissions, one_shot, extra_args } => {
+        AgentToolConfig::ClaudeCode { one_shot, extra_args, .. } => {
             Box::new(claude_code::ClaudeCodeDriver {
-                skip_permissions: *skip_permissions,
+                agent_name: agent_name.map(|s| s.to_string()),
                 one_shot: *one_shot,
                 extra_args: extra_args.clone(),
             })
@@ -64,7 +68,7 @@ mod tests {
             one_shot: false,
             extra_args: vec![],
         };
-        let driver = create_driver(&config);
+        let driver = create_driver(&config, Some("test-agent"));
         assert_eq!(driver.name(), "ClaudeCode");
         assert!(driver.supports_headless());
     }
@@ -76,7 +80,7 @@ mod tests {
             one_shot: false,
             extra_args: vec![],
         };
-        let driver = create_driver(&config);
+        let driver = create_driver(&config, None);
         assert_eq!(driver.name(), "Codex");
         assert!(driver.supports_headless());
     }
@@ -87,14 +91,14 @@ mod tests {
             agent_name: None,
             extra_args: vec![],
         };
-        let driver = create_driver(&config);
+        let driver = create_driver(&config, None);
         assert_eq!(driver.name(), "OpenClaw");
     }
 
     #[test]
     fn create_cursor_driver() {
         let config = AgentToolConfig::Cursor { assume_running: true };
-        let driver = create_driver(&config);
+        let driver = create_driver(&config, None);
         assert_eq!(driver.name(), "Cursor");
         assert!(!driver.supports_headless());
     }
@@ -107,7 +111,7 @@ mod tests {
             adapter: aegis_types::AdapterConfig::Auto,
             env: vec![],
         };
-        let driver = create_driver(&config);
+        let driver = create_driver(&config, None);
         assert_eq!(driver.name(), "Custom");
     }
 }

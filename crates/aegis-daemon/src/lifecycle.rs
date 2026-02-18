@@ -171,7 +171,7 @@ fn run_agent_slot_inner(
     };
 
     // 4. Create driver and determine spawn strategy
-    let driver = create_driver(&slot_config.tool);
+    let driver = create_driver(&slot_config.tool, Some(name));
     let strategy = driver.spawn_strategy(&slot_config.working_dir);
 
     let pty = match strategy {

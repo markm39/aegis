@@ -11,6 +11,7 @@ pub mod audit;
 pub mod config;
 pub mod daemon;
 pub mod default_action;
+pub mod hook;
 pub mod diff;
 pub mod init;
 pub mod list;
