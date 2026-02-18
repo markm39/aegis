@@ -886,7 +886,7 @@ pub fn config_edit() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to launch editor '{editor}': {e}"))?;
 
     if !status.success() {
-        anyhow::bail!("editor exited with code {}", status.code().unwrap_or(-1));
+        anyhow::bail!("editor exited unsuccessfully ({status})");
     }
 
     // Validate the edited config
@@ -1078,11 +1078,26 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
         args.push("-f");
     }
 
+    let stdout_str = stdout_log
+        .to_str()
+        .map(|s| s.to_string());
+    let stderr_str = stderr_log
+        .to_str()
+        .map(|s| s.to_string());
+
     if stdout_log.exists() {
-        args.push(stdout_log.to_str().unwrap_or_default());
+        if let Some(ref s) = stdout_str {
+            args.push(s);
+        } else {
+            anyhow::bail!("daemon stdout log path is not valid UTF-8");
+        }
     }
     if stderr_log.exists() {
-        args.push(stderr_log.to_str().unwrap_or_default());
+        if let Some(ref s) = stderr_str {
+            args.push(s);
+        } else {
+            anyhow::bail!("daemon stderr log path is not valid UTF-8");
+        }
     }
 
     let status = std::process::Command::new("tail")
@@ -1159,15 +1174,29 @@ pub fn follow(name: &str) -> anyhow::Result<()> {
 
         // Check if agent is still running
         let status_resp = client.send(&DaemonCommand::AgentStatus { name: name.into() });
-        if let Ok(resp) = status_resp {
-            if resp.ok {
+        match status_resp {
+            Ok(resp) if resp.ok => {
                 if let Some(data) = resp.data {
-                    let status_str = data["status"].as_str().unwrap_or("");
-                    if status_str == "stopped" || status_str == "failed" {
-                        eprintln!("Agent '{name}' has exited.");
-                        break;
+                    let status_str = data["status"].as_str().unwrap_or("unknown");
+                    match status_str {
+                        "running" | "starting" | "unknown" => {}
+                        terminal => {
+                            eprintln!("Agent '{name}' has exited (status: {terminal}).");
+                            break;
+                        }
                     }
                 }
+            }
+            Ok(resp) => {
+                // Agent doesn't exist or daemon rejected the query
+                eprintln!("Agent '{name}': {}", resp.message);
+                break;
+            }
+            Err(_) => {
+                // Connection lost -- already handled in output fetch above,
+                // but break here too for safety
+                eprintln!("Connection to daemon lost.");
+                break;
             }
         }
 
