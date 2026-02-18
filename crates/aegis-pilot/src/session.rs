@@ -48,4 +48,10 @@ pub trait AgentSession {
     fn attach_command(&self) -> Option<Vec<String>> {
         None
     }
+
+    /// If this is a Claude Code JSON stream session, return the CC session ID
+    /// for `--resume` follow-up messages. Returns None for PTY/tmux sessions.
+    fn cc_session_id(&self) -> Option<&str> {
+        None
+    }
 }

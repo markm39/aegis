@@ -74,6 +74,11 @@ impl PtySession {
                     unistd::chdir(working_dir)
                         .map_err(|e| format!("chdir: {e}"))?;
 
+                    // Unset CLAUDECODE so nested Claude Code sessions don't
+                    // refuse to start with "cannot be launched inside another
+                    // Claude Code session".
+                    std::env::remove_var("CLAUDECODE");
+
                     for (key, value) in env {
                         std::env::set_var(key, value);
                     }

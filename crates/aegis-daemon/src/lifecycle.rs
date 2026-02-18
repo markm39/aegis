@@ -20,6 +20,7 @@ use tracing::{error, info, warn};
 use aegis_ledger::AuditStore;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
+use aegis_pilot::json_stream::JsonStreamSession;
 use aegis_pilot::pty::PtySession;
 use aegis_pilot::session::AgentSession;
 use aegis_pilot::tmux::TmuxSession;
@@ -262,29 +263,43 @@ fn run_agent_slot_inner(
     };
     let injection = composed.as_ref().map(|p| driver.task_injection(p));
 
-    // Extract any CLI args that must be part of the spawn command
-    let cli_extra_args: Vec<String> = match &injection {
-        Some(TaskInjection::CliArg { flag, value }) => {
-            vec![flag.clone(), value.clone()]
-        }
-        _ => vec![],
+    // Extract the prompt text for JsonStreamSession (which handles -p internally)
+    let prompt_text: Option<String> = match &injection {
+        Some(TaskInjection::CliArg { value, .. }) => Some(value.clone()),
+        Some(TaskInjection::Stdin { text }) => Some(text.clone()),
+        _ => None,
     };
 
-    let use_tmux = aegis_pilot::tmux::tmux_available();
-
     let session: Box<dyn AgentSession> = match strategy {
-        SpawnStrategy::Pty { command, mut args, mut env }
-        | SpawnStrategy::Process { command, mut args, mut env } => {
-            // Append CLI-arg task injection if needed
-            args.extend(cli_extra_args.clone());
-            // Inject usage proxy URLs if active
+        SpawnStrategy::Process { command, args, mut env } => {
+            // Process strategy: use JsonStreamSession (structured JSON I/O).
+            // The prompt is passed as -p arg and output comes as NDJSON.
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
                 env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
                 env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
             }
 
-            if use_tmux {
+            let prompt = prompt_text.as_deref().unwrap_or("");
+            info!(agent = name, command = command, "spawning agent via JsonStreamSession");
+            Box::new(
+                JsonStreamSession::spawn(name, &command, &args, &working_dir, &env, prompt)
+                    .map_err(|e| format!("failed to spawn json-stream session for {name}: {e}"))?,
+            )
+        }
+        SpawnStrategy::Pty { command, mut args, mut env } => {
+            // PTY strategy: legacy path for non-Claude-Code agents.
+            // Append CLI-arg task injection if needed.
+            if let Some(TaskInjection::CliArg { ref flag, ref value }) = injection {
+                args.extend([flag.clone(), value.clone()]);
+            }
+            if let Some(ref handle) = usage_proxy_handle {
+                let port = handle.port;
+                env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
+                env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+            }
+
+            if aegis_pilot::tmux::tmux_available() {
                 info!(agent = name, command = command, "spawning agent in tmux session");
                 Box::new(
                     TmuxSession::spawn(name, &command, &args, &working_dir, &env)
@@ -320,20 +335,13 @@ fn run_agent_slot_inner(
         }
     };
 
-    // 5b. Inject via stdin (post-spawn) if needed.
-    //
-    // For TUI agents (Claude Code, etc.), we must wait until the application
-    // has fully initialized before sending input. We poll for PTY output
-    // (which indicates the TUI has drawn something) with a generous timeout.
-    // Then we use bracketed paste mode so multi-line prompts arrive as a
-    // single paste event rather than line-by-line Enter keypresses.
+    // For PTY-based agents with Stdin injection, inject after spawn.
+    // (Claude Code uses Process/JsonStreamSession with CliArg, so this
+    // only fires for other agent types that use PTY + Stdin injection.)
     if let Some(TaskInjection::Stdin { ref text }) = injection {
         let timeout = std::time::Duration::from_secs(15);
         match session.wait_for_output(timeout) {
             Ok(true) => {
-                // Claude Code takes several seconds after first output to fully
-                // initialize its Ink TUI and be ready for input. 500ms is not
-                // enough -- the input field isn't active yet.
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
             Ok(false) => {
@@ -348,8 +356,6 @@ fn run_agent_slot_inner(
         } else {
             info!(agent = name, "composed prompt injected via bracketed paste");
         }
-    } else if injection.as_ref().is_some_and(|i| matches!(i, TaskInjection::CliArg { .. })) {
-        info!(agent = name, "composed prompt provided via CLI arg");
     }
 
     // 6. Create adapter and run supervisor
@@ -378,11 +384,17 @@ fn run_agent_slot_inner(
     // Publish the child PID so stop_agent() can send SIGTERM.
     child_pid.store(session.pid(), Ordering::Release);
 
-    // Store the attach command if the session supports external attach (tmux).
+    // Store the attach command if the session supports external attach.
     if let Some(attach_cmd) = session.attach_command() {
         if let Some(tx) = update_tx {
-            // Encode as a special update so the slot knows how to pop
             let _ = tx.send(PilotUpdate::AttachCommand(attach_cmd));
+        }
+    }
+
+    // Publish the CC session ID for --resume follow-up messages.
+    if let Some(cc_id) = session.cc_session_id() {
+        if let Some(tx) = update_tx {
+            let _ = tx.send(PilotUpdate::SessionId(cc_id.to_string()));
         }
     }
 

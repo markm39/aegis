@@ -109,9 +109,11 @@ pub enum PilotUpdate {
     },
     /// Periodic stats snapshot.
     Stats(PilotStats),
-    /// The session supports external attach (e.g., tmux).
-    /// Contains the command components to attach (e.g., ["tmux", "attach-session", "-t", "aegis-foo"]).
+    /// The session supports external attach (e.g., tmux, or `claude --resume`).
+    /// Contains the command components to attach (e.g., ["claude", "--resume", "<id>"]).
     AttachCommand(Vec<String>),
+    /// The Claude Code session ID for `--resume` follow-up messages.
+    SessionId(String),
 }
 
 /// Commands sent to the supervisor from the TUI or control plane.

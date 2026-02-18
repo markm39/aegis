@@ -20,6 +20,7 @@ pub mod adapters;
 pub mod ansi;
 pub mod driver;
 pub mod drivers;
+pub mod json_stream;
 pub mod output;
 pub mod pty;
 pub mod session;

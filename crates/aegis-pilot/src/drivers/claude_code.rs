@@ -1,12 +1,14 @@
 //! Claude Code driver.
 //!
-//! Spawns `claude` in a PTY with `--dangerously-skip-permissions` for headless
-//! operation. Policy enforcement is handled externally via Claude Code's
-//! `PreToolUse` hook system rather than PTY-based prompt detection (Claude Code
-//! is a full-screen Ink/React TUI that cannot be reliably parsed line-by-line).
+//! Spawns `claude` in print mode with `--output-format stream-json` for
+//! reliable programmatic communication. The prompt is passed as `-p "prompt"`
+//! on the command line. Output is structured NDJSON on stdout.
 //!
-//! Tasks are injected via `-p "prompt"` (one-shot) or by writing to stdin after
-//! the interactive session starts.
+//! Follow-up messages use `--resume <session-id>` to continue the conversation.
+//! The user can `:pop` into the full interactive TUI via `claude --resume <id>`.
+//!
+//! Policy enforcement is handled externally via Claude Code's `PreToolUse` hook
+//! system rather than output parsing.
 
 use std::path::Path;
 
@@ -42,7 +44,9 @@ impl AgentDriver for ClaudeCodeDriver {
             socket_path.to_string_lossy().into_owned(),
         ));
 
-        SpawnStrategy::Pty {
+        // Use Process (not Pty) -- the lifecycle layer spawns via JsonStreamSession
+        // which handles --output-format stream-json, --session-id, etc.
+        SpawnStrategy::Process {
             command: "claude".to_string(),
             args,
             env,
@@ -57,17 +61,14 @@ impl AgentDriver for ClaudeCodeDriver {
     }
 
     fn task_injection(&self, task: &str) -> TaskInjection {
-        if self.one_shot {
-            // Pass as CLI argument: claude -p "task"
-            TaskInjection::CliArg {
-                flag: "-p".to_string(),
-                value: task.to_string(),
-            }
-        } else {
-            // Write to stdin after the interactive session starts
-            TaskInjection::Stdin {
-                text: task.to_string(),
-            }
+        // Always use -p (print mode) for reliable prompt delivery.
+        // Stdin injection into Claude Code's Ink TUI is unreliable --
+        // bracketed paste often fails and the Enter keypress gets lost.
+        // In -p mode, Claude Code runs the full agentic loop (tool calls,
+        // file edits, etc.) and exits when done.
+        TaskInjection::CliArg {
+            flag: "-p".to_string(),
+            value: task.to_string(),
         }
     }
 
@@ -90,11 +91,11 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { command, args, .. } => {
+            SpawnStrategy::Process { command, args, .. } => {
                 assert_eq!(command, "claude");
                 assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 
@@ -107,10 +108,10 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { env, .. } => {
+            SpawnStrategy::Process { env, .. } => {
                 assert!(env.contains(&("AEGIS_AGENT_NAME".to_string(), "claude-1".to_string())));
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 
@@ -123,38 +124,26 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { args, .. } => {
+            SpawnStrategy::Process { args, .. } => {
                 assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
                 assert!(args.contains(&"--verbose".to_string()));
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 
     #[test]
-    fn task_injection_stdin() {
+    fn task_injection_always_uses_print_mode() {
+        // Even with one_shot=false, -p is always used for reliable delivery
         let driver = ClaudeCodeDriver {
             agent_name: None,
             one_shot: false,
             extra_args: vec![],
         };
         match driver.task_injection("build the login page") {
-            TaskInjection::Stdin { text } => assert_eq!(text, "build the login page"),
-            other => panic!("expected Stdin, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn task_injection_one_shot() {
-        let driver = ClaudeCodeDriver {
-            agent_name: None,
-            one_shot: true,
-            extra_args: vec![],
-        };
-        match driver.task_injection("fix the bug") {
             TaskInjection::CliArg { flag, value } => {
                 assert_eq!(flag, "-p");
-                assert_eq!(value, "fix the bug");
+                assert_eq!(value, "build the login page");
             }
             other => panic!("expected CliArg, got {other:?}"),
         }

@@ -92,10 +92,13 @@ pub struct AgentSlot {
     /// Set by `restart_agent` so the tick loop can start the agent once the
     /// thread has exited.
     pub pending_restart: bool,
-    /// If the agent session supports external attach (e.g., tmux), stores
-    /// the command components needed to attach. Used by `:pop` to open
-    /// the actual agent TUI in a new terminal.
+    /// If the agent session supports external attach (e.g., `claude --resume`),
+    /// stores the command components needed to attach. Used by `:pop` to open
+    /// the agent in a new terminal.
     pub attach_command: Option<Vec<String>>,
+    /// Claude Code session ID for `--resume` follow-up messages.
+    /// Set when the agent uses `JsonStreamSession`.
+    pub cc_session_id: Option<String>,
 }
 
 impl AgentSlot {
@@ -128,6 +131,7 @@ impl AgentSlot {
             stop_signaled_at: None,
             pending_restart: false,
             attach_command: None,
+            cc_session_id: None,
         }
     }
 
@@ -226,6 +230,9 @@ impl AgentSlot {
                 }
                 PilotUpdate::AttachCommand(cmd) => {
                     self.attach_command = Some(cmd);
+                }
+                PilotUpdate::SessionId(id) => {
+                    self.cc_session_id = Some(id);
                 }
                 // OutputLine, PromptDecided are handled elsewhere
                 _ => {}
