@@ -233,6 +233,14 @@ impl PilotApp {
             return;
         }
 
+        // Ctrl+C always exits (raw mode captures the signal).
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            self.running = false;
+            return;
+        }
+
         match self.mode {
             PilotMode::Normal => self.handle_normal_key(key),
             PilotMode::InputMode => self.handle_input_key(key),
@@ -776,5 +784,36 @@ mod tests {
         // Should not go below zero
         app.handle_key(make_key(KeyCode::Char('k')));
         assert_eq!(app.pending_selected, 0);
+    }
+
+    #[test]
+    fn ctrl_c_exits() {
+        let mut app = make_app();
+        assert!(app.running);
+
+        let ctrl_c = KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        app.handle_key(ctrl_c);
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn ctrl_c_exits_from_input_mode() {
+        let mut app = make_app();
+        app.mode = PilotMode::InputMode;
+        assert!(app.running);
+
+        let ctrl_c = KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        app.handle_key(ctrl_c);
+        assert!(!app.running);
     }
 }
