@@ -1235,4 +1235,24 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
     }
+
+    #[test]
+    fn draw_does_not_panic_help_view() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::Help;
+        app.help_scroll = 0;
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_help_view_scrolled() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::Help;
+        app.help_scroll = 10;
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
 }

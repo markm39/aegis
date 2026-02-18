@@ -1809,4 +1809,45 @@ mod tests {
         assert!(app.running, "q in command mode should type 'q', not quit");
         assert_eq!(app.command_buffer, "q");
     }
+
+    #[test]
+    fn help_command_opens_help_view() {
+        let mut app = make_app();
+        app.command_mode = true;
+        app.command_buffer = "help".into();
+        app.command_cursor = 4;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.view, FleetView::Help);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn help_view_scroll_and_exit() {
+        let mut app = make_app();
+        app.view = FleetView::Help;
+        app.help_scroll = 0;
+
+        // Scroll down
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.help_scroll, 1);
+
+        // Scroll up
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.help_scroll, 0);
+
+        // Exit with Esc
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.view, FleetView::Overview);
+    }
+
+    #[test]
+    fn help_view_q_exits() {
+        let mut app = make_app();
+        app.view = FleetView::Help;
+
+        app.handle_key(press(KeyCode::Char('q')));
+        assert_eq!(app.view, FleetView::Overview);
+        assert!(app.running, "q in help view should go back, not quit");
+    }
 }
