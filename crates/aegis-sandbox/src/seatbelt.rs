@@ -113,6 +113,7 @@ impl SandboxBackend for SeatbeltBackend {
             .arg(tmp.path())
             .arg(command)
             .args(args)
+            .current_dir(&config.sandbox_dir)
             .status()
             .map_err(|e| {
                 AegisError::SandboxError(format!("failed to run sandbox-exec: {e}"))
@@ -137,7 +138,8 @@ impl SandboxBackend for SeatbeltBackend {
         );
 
         let mut cmd = std::process::Command::new("sandbox-exec");
-        cmd.arg("-f").arg(tmp.path()).arg(command).args(args);
+        cmd.arg("-f").arg(tmp.path()).arg(command).args(args)
+            .current_dir(&config.sandbox_dir);
 
         for (key, val) in env {
             cmd.env(key, val);
