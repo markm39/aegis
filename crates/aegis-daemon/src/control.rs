@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{debug, info, warn};
 
@@ -131,7 +131,9 @@ async fn handle_connection(
     cmd_tx: DaemonCmdTx,
 ) -> Result<(), String> {
     let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    // Cap total readable bytes per connection to prevent next_line() from
+    // accumulating unbounded memory on lines without newlines.
+    let mut lines = BufReader::new(reader.take(MAX_LINE_LENGTH as u64 + 1)).lines();
 
     while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
         if line.len() > MAX_LINE_LENGTH {
