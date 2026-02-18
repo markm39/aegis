@@ -36,7 +36,7 @@ use ratatui::Frame;
 
 use aegis_types::AgentStatus;
 
-use super::wizard::{AddAgentWizard, RestartChoice, ToolChoice, WizardStep};
+use super::wizard::{AddAgentWizard, AgentTypeChoice, RestartChoice, ToolChoice, WizardStep};
 use super::{FleetApp, FleetView};
 use crate::tui_utils::truncate_str;
 
@@ -215,7 +215,14 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
             };
             let (status_text, status_color) = status_display(&agent.status);
             let dir = truncate_path(&agent.working_dir, 30);
-            let role = agent.role.as_deref().unwrap_or("-").to_string();
+            let role = if agent.is_orchestrator {
+                match agent.role.as_deref() {
+                    Some(r) if !r.is_empty() => format!("ORCH: {r}"),
+                    _ => "Orchestrator".to_string(),
+                }
+            } else {
+                agent.role.as_deref().unwrap_or("-").to_string()
+            };
             let pending = if agent.pending_count > 0 {
                 format!("{}", agent.pending_count)
             } else {
@@ -356,6 +363,7 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
 
     let role = agent_summary
         .and_then(|a| a.role.as_deref());
+    let is_orch = agent_summary.map(|a| a.is_orchestrator).unwrap_or(false);
 
     let mut header_spans = vec![
         Span::styled(" ", Style::default()),
@@ -364,6 +372,13 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         ),
     ];
+
+    if is_orch {
+        header_spans.push(Span::styled(
+            "  [Orchestrator]",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     if let Some(r) = role {
         header_spans.push(Span::styled(
@@ -794,8 +809,9 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
 
     // Header
     let is_custom = wiz.is_custom_tool();
-    let step_num = wiz.step.number(is_custom);
-    let total = WizardStep::total(is_custom);
+    let is_orch = wiz.is_orchestrator();
+    let step_num = wiz.step.number(is_custom, is_orch);
+    let total = WizardStep::total(is_custom, is_orch);
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             " Add Agent ",
@@ -817,12 +833,29 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
     match wiz.step {
         WizardStep::Tool => draw_wizard_tool(frame, wiz, chunks[1]),
         WizardStep::CustomCommand => draw_wizard_text(frame, "Custom Command (e.g. my-tool --flag)", &wiz.custom_command, wiz.custom_command_cursor, chunks[1]),
+        WizardStep::AgentType => draw_wizard_agent_type(frame, wiz, chunks[1]),
         WizardStep::Name => draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1]),
         WizardStep::WorkingDir => draw_wizard_text(frame, "Working Directory", &wiz.working_dir, wiz.working_dir_cursor, chunks[1]),
         WizardStep::Task => draw_wizard_multiline_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
-        WizardStep::Role => draw_wizard_multiline_text(frame, "Role (optional, e.g. \"UX specialist\")", &wiz.role, wiz.role_cursor, chunks[1]),
-        WizardStep::AgentGoal => draw_wizard_multiline_text(frame, "Goal (optional, what this agent should achieve)", &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]),
+        WizardStep::Role => {
+            let label = if wiz.is_orchestrator() {
+                "Role (e.g. \"Technical Director\")"
+            } else {
+                "Role (optional, e.g. \"UX specialist\")"
+            };
+            draw_wizard_multiline_text(frame, label, &wiz.role, wiz.role_cursor, chunks[1]);
+        }
+        WizardStep::AgentGoal => {
+            let label = if wiz.is_orchestrator() {
+                "Goal (what this orchestrator should optimize for)"
+            } else {
+                "Goal (optional, what this agent should achieve)"
+            };
+            draw_wizard_multiline_text(frame, label, &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]);
+        }
         WizardStep::Context => draw_wizard_multiline_text(frame, "Context (optional, constraints or instructions)", &wiz.context, wiz.context_cursor, chunks[1]),
+        WizardStep::BacklogPath => draw_wizard_text(frame, "Backlog Path (optional, path to roadmap/backlog file)", &wiz.backlog_path, wiz.backlog_path_cursor, chunks[1]),
+        WizardStep::ReviewInterval => draw_wizard_text(frame, "Review Interval (seconds between review cycles, default: 300)", &wiz.review_interval, wiz.review_interval_cursor, chunks[1]),
         WizardStep::RestartPolicy => draw_wizard_restart(frame, wiz, chunks[1]),
         WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
     }
@@ -830,7 +863,7 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
     // Footer -- Esc behavior depends on step (back-navigation):
     // Tool: Esc cancels wizard. All other steps: Esc goes back one step.
     let footer_text = match wiz.step {
-        WizardStep::Tool => "j/k: select  Enter: confirm  Esc: cancel",
+        WizardStep::Tool | WizardStep::AgentType => "j/k: select  Enter: confirm  Esc: cancel",
         WizardStep::RestartPolicy => "j/k: select  Enter: confirm  Esc: back",
         WizardStep::Confirm => "Enter/y: create agent  n: cancel  Esc: back",
         _ => "Type to edit  Enter: next  Esc: back",
@@ -879,6 +912,38 @@ fn draw_wizard_tool(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layo
         Block::default()
             .borders(Borders::ALL)
             .title(" Select Tool ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(list, area);
+}
+
+/// Draw agent type selection step (Worker vs Orchestrator).
+fn draw_wizard_agent_type(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::Rect) {
+    let items: Vec<ListItem> = AgentTypeChoice::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, choice)| {
+            let marker = if i == wiz.agent_type_selected { "> " } else { "  " };
+            let style = if i == wiz.agent_type_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(choice.label(), style),
+                Span::styled(
+                    format!("  -- {}", choice.description()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Agent Type ")
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     frame.render_widget(list, area);
@@ -1054,6 +1119,7 @@ fn draw_wizard_restart(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
 /// Draw the confirmation summary.
 fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::Rect) {
     let tool_label = wiz.tool_choice().label();
+    let type_label = wiz.agent_type_choice().label();
     let restart_label = wiz.restart_choice().label();
     let task_display = if wiz.task.trim().is_empty() {
         "(none)".to_string()
@@ -1091,6 +1157,12 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
         ]));
     }
 
+    let type_color = if wiz.is_orchestrator() { Color::Magenta } else { Color::White };
+    lines.push(Line::from(vec![
+        Span::styled("  Type:      ", Style::default().fg(Color::DarkGray)),
+        Span::styled(type_label, Style::default().fg(type_color).add_modifier(Modifier::BOLD)),
+    ]));
+
     lines.push(Line::from(vec![
             Span::styled("  Name:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(&wiz.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
@@ -1100,10 +1172,17 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
             Span::styled("  Dir:       ", Style::default().fg(Color::DarkGray)),
             Span::styled(&wiz.working_dir, Style::default().fg(Color::White)),
         ]),
-        Line::from(vec![
+    ]);
+
+    // Task only shown for workers
+    if !wiz.is_orchestrator() {
+        lines.push(Line::from(vec![
             Span::styled("  Task:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(task_display, Style::default().fg(Color::White)),
-        ]),
+        ]));
+    }
+
+    lines.extend([
         Line::from(vec![
             Span::styled("  Role:      ", Style::default().fg(Color::DarkGray)),
             Span::styled(role_display, Style::default().fg(Color::White)),
@@ -1116,6 +1195,33 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
             Span::styled("  Context:   ", Style::default().fg(Color::DarkGray)),
             Span::styled(context_display, Style::default().fg(Color::White)),
         ]),
+    ]);
+
+    // Orchestrator-specific fields
+    if wiz.is_orchestrator() {
+        let backlog = if wiz.backlog_path.trim().is_empty() {
+            "(none)".to_string()
+        } else {
+            truncate_str(&wiz.backlog_path, 50)
+        };
+        let interval = if wiz.review_interval.trim().is_empty() {
+            "300".to_string()
+        } else {
+            wiz.review_interval.trim().to_string()
+        };
+        lines.extend([
+            Line::from(vec![
+                Span::styled("  Backlog:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(backlog, Style::default().fg(Color::Magenta)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Interval:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{interval}s"), Style::default().fg(Color::Magenta)),
+            ]),
+        ]);
+    }
+
+    lines.extend([
         Line::from(vec![
             Span::styled("  Restart:   ", Style::default().fg(Color::DarkGray)),
             Span::styled(restart_label, Style::default().fg(Color::White)),
@@ -1228,6 +1334,7 @@ mod tests {
                 restart_count: 0,
                 pending_count: 0,
                 attention_needed: false,
+                is_orchestrator: false,
             },
         ];
         let backend = ratatui::backend::TestBackend::new(80, 24);

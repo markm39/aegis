@@ -97,6 +97,18 @@ impl Fleet {
 
     /// Start a specific agent by name.
     pub fn start_agent(&mut self, name: &str) {
+        // Pre-compute orchestrator name before mutable borrow to avoid borrow conflict.
+        // Workers need to know the orchestrator so their prompt mentions it.
+        let is_orchestrator = self.slots.get(name)
+            .is_some_and(|s| s.config.orchestrator.is_some());
+        let orchestrator_name = if !is_orchestrator {
+            self.slots.values()
+                .find(|s| s.config.orchestrator.is_some())
+                .map(|s| s.config.name.clone())
+        } else {
+            None
+        };
+
         let slot = match self.slots.get_mut(name) {
             Some(s) => s,
             None => {
@@ -136,6 +148,7 @@ impl Fleet {
 
         let fleet_goal = self.fleet_goal.clone();
         let child_pid = slot.child_pid.clone();
+
         // Clear and share session_id for state persistence.
         // Use unwrap_or_else to handle a poisoned mutex (agent thread panicked
         // while holding the lock) -- recover rather than crashing the daemon.
@@ -148,7 +161,7 @@ impl Fleet {
         let handle = thread::Builder::new()
             .name(format!("agent-{name}"))
             .spawn(move || {
-                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx), child_pid, shared_session_id)
+                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), orchestrator_name.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx), child_pid, shared_session_id)
             });
 
         match handle {

@@ -56,6 +56,7 @@ pub fn run_agent_slot(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
     fleet_goal: Option<&str>,
+    orchestrator_name: Option<&str>,
     output_tx: mpsc::Sender<String>,
     update_tx: Option<mpsc::Sender<PilotUpdate>>,
     command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
@@ -64,7 +65,7 @@ pub fn run_agent_slot(
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
-    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, &output_tx, update_tx.as_ref(), command_rx.as_ref(), &child_pid, &shared_session_id) {
+    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, orchestrator_name, &output_tx, update_tx.as_ref(), command_rx.as_ref(), &child_pid, &shared_session_id) {
         Ok(result) => result,
         Err(e) => {
             error!(agent = name, error = %e, "agent lifecycle failed");
@@ -84,6 +85,7 @@ fn run_agent_slot_inner(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
     fleet_goal: Option<&str>,
+    orchestrator_name: Option<&str>,
     output_tx: &mpsc::Sender<String>,
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
@@ -237,6 +239,7 @@ fn run_agent_slot_inner(
 
     // 5. Compute task injection BEFORE spawn so CliArg can be folded into args.
     //    Orchestrator slots get a specialized prompt with review-cycle instructions.
+    //    Worker slots learn about the orchestrator so they follow its direction.
     let composed = if let Some(ref orch_config) = slot_config.orchestrator {
         Some(compose_orchestrator_prompt(
             fleet_goal,
@@ -252,6 +255,7 @@ fn run_agent_slot_inner(
             slot_config.agent_goal.as_deref(),
             slot_config.context.as_deref(),
             slot_config.task.as_deref(),
+            orchestrator_name,
         )
     };
     let injection = composed.as_ref().map(|p| driver.task_injection(p));
@@ -421,6 +425,7 @@ fn compose_prompt(
     agent_goal: Option<&str>,
     context: Option<&str>,
     task: Option<&str>,
+    orchestrator_name: Option<&str>,
 ) -> Option<String> {
     let mut sections = Vec::new();
 
@@ -438,6 +443,16 @@ fn compose_prompt(
     }
     if let Some(t) = task.filter(|s| !s.is_empty()) {
         sections.push(format!("## Task\n{t}"));
+    }
+    if let Some(orch) = orchestrator_name.filter(|s| !s.is_empty()) {
+        sections.push(format!(
+            "## Orchestrator\n\
+             You are being coordinated by an orchestrator agent named \"{orch}\". \
+             It periodically reviews your work, evaluates whether you are focused on \
+             high-value tasks, and may redirect you via messages. When the orchestrator \
+             sends you instructions, follow them -- it has visibility across the entire \
+             fleet and knows what work matters most."
+        ));
     }
 
     if sections.is_empty() {
@@ -626,6 +641,7 @@ mod tests {
             Some("Build the UI"),
             Some("Use React and TypeScript"),
             Some("Start with the homepage"),
+            None,
         );
         let text = result.unwrap();
         assert!(text.contains("## Fleet Mission\nBuild a chess app"));
@@ -637,24 +653,47 @@ mod tests {
 
     #[test]
     fn compose_prompt_task_only() {
-        let result = compose_prompt(None, None, None, None, Some("Do the thing"));
+        let result = compose_prompt(None, None, None, None, Some("Do the thing"), None);
         let text = result.unwrap();
         assert_eq!(text, "## Task\nDo the thing");
     }
 
     #[test]
     fn compose_prompt_all_empty_returns_none() {
-        assert!(compose_prompt(None, None, None, None, None).is_none());
-        assert!(compose_prompt(Some(""), Some(""), None, None, None).is_none());
+        assert!(compose_prompt(None, None, None, None, None, None).is_none());
+        assert!(compose_prompt(Some(""), Some(""), None, None, None, None).is_none());
     }
 
     #[test]
     fn compose_prompt_skips_empty_strings() {
-        let result = compose_prompt(Some("Mission"), None, Some(""), None, Some("Task"));
+        let result = compose_prompt(Some("Mission"), None, Some(""), None, Some("Task"), None);
         let text = result.unwrap();
         assert!(text.contains("## Fleet Mission\nMission"));
         assert!(!text.contains("Goal"));
         assert!(text.contains("## Task\nTask"));
+    }
+
+    #[test]
+    fn compose_prompt_with_orchestrator_name() {
+        let result = compose_prompt(
+            None,
+            Some("Frontend engineer"),
+            None,
+            None,
+            Some("Build the UI"),
+            Some("director"),
+        );
+        let text = result.unwrap();
+        assert!(text.contains("## Orchestrator"));
+        assert!(text.contains("\"director\""));
+        assert!(text.contains("follow them"));
+    }
+
+    #[test]
+    fn compose_prompt_no_orchestrator_section_when_none() {
+        let result = compose_prompt(None, None, None, None, Some("Task"), None);
+        let text = result.unwrap();
+        assert!(!text.contains("Orchestrator"));
     }
 
     #[test]

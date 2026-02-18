@@ -175,6 +175,9 @@ pub struct AgentSummary {
     /// Whether this agent needs human attention.
     #[serde(default)]
     pub attention_needed: bool,
+    /// Whether this agent is an orchestrator (vs a worker).
+    #[serde(default)]
+    pub is_orchestrator: bool,
 }
 
 /// Detailed status for a single agent, returned by AgentStatus.
@@ -467,6 +470,7 @@ mod tests {
             restart_count: 0,
             pending_count: 2,
             attention_needed: true,
+            is_orchestrator: false,
         };
         let json = serde_json::to_string(&summary).unwrap();
         let back: AgentSummary = serde_json::from_str(&json).unwrap();

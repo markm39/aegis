@@ -1712,6 +1712,7 @@ mod tests {
                 restart_count: 0,
                 pending_count: 0,
                 attention_needed: false,
+                is_orchestrator: false,
             },
             AgentSummary {
                 name: "beta".into(),
@@ -1722,6 +1723,7 @@ mod tests {
                 restart_count: 1,
                 pending_count: 0,
                 attention_needed: false,
+                is_orchestrator: false,
             },
             AgentSummary {
                 name: "gamma".into(),
@@ -1732,6 +1734,7 @@ mod tests {
                 restart_count: 5,
                 pending_count: 0,
                 attention_needed: false,
+                is_orchestrator: false,
             },
         ];
         app
