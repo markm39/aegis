@@ -72,14 +72,18 @@ Crate summary:
 - `aegis-monitor`: Audit TUI dashboard (ratatui)
 - `aegis-cli`: Binary entry point: hub TUI, fleet management, all CLI commands, wizard
 
-## Current Work in Progress
+## Current Status
 
-Multiple agents work on this codebase. Here is what is being built, to avoid duplication:
+### Implemented and Working
 
-- **Daemon fleet (aegis-daemon):** Multi-agent orchestration with agent drivers (ClaudeCode, Generic), lifecycle management, fleet state persistence, restart policies. Control protocol uses `DaemonCommand`/`DaemonResponse` over Unix socket. Fleet TUI connects to daemon for real-time status. The `handle_command` match arms for ApproveRequest, DenyRequest, NudgeAgent, and ListPending still need to be wired.
-- **Interactive TUI (aegis-cli/fleet_tui):** Input mode (`i`), pending prompts panel, approve/deny/nudge keys, attention indicators. Command bar (`:` mode) with tab completion for commands and agent names. Not yet implemented.
-- **Terminal spawning:** `:pop` and `:follow` commands to open agent output in separate terminal windows. Detection of tmux/iTerm2/Terminal.app. Not yet implemented.
-- **Telegram channel (aegis-channel):** Bidirectional Telegram bot. Outbound: pilot events formatted as MarkdownV2 with inline keyboard buttons. Inbound: `/status`, `/approve`, `/deny` commands parsed and forwarded to supervisor. DONE -- crate implemented and tested (28 tests).
+- **Daemon fleet (aegis-daemon):** Multi-agent orchestration with agent drivers (ClaudeCode, Generic), lifecycle management, fleet state persistence, restart policies. Control protocol (`DaemonCommand`/`DaemonResponse`) fully wired over Unix socket including ApproveRequest, DenyRequest, NudgeAgent, ListPending, AddAgent, RemoveAgent, FleetGoal, and AgentContext commands.
+- **Fleet TUI hub (aegis-cli/fleet_tui):** Unified hub accessible via bare `aegis` command. Works in offline mode (auto-reconnects when daemon starts). Features: agent table with pending count and attention indicators, detail view with output streaming, input mode (`i`), pending prompts panel with approve/deny/nudge keys, vim-style command bar (`:`) with tab completion for 30+ commands and agent names, scrollable help view, add-agent wizard (works offline), daemon control (`:daemon start/stop/init`).
+- **Terminal spawning:** `:pop`, `:follow`, `:monitor`, `:wrap`, `:pilot`, `:log`, `:config` and more spawn commands in new terminal windows. Detection of tmux/iTerm2/Terminal.app with macOS fallback.
+- **Telegram channel (aegis-channel):** Bidirectional Telegram bot with inline keyboard buttons for approve/deny. Fleet-level `/status`, `/goal`, `/context`, `/approve`, `/deny` commands.
+- **Onboarding wizard (aegis-cli/onboard_tui):** First-run ratatui TUI wizard that configures an agent, sets up Telegram, writes daemon.toml, and seamlessly transitions to the fleet TUI.
+
+### In Progress
+
 - **Packaging:** install.sh, Makefile, CI/CD (GitHub Actions), Homebrew formula, license files. Partially done.
 
 ## Multi-Agent Integration Rules
