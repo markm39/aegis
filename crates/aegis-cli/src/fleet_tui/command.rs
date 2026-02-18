@@ -307,20 +307,30 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         }
         "context" => {
             if arg1.is_empty() {
-                Err("usage: context <agent> [role|goal|context|task <value>]".into())
+                Err("usage: context <agent> [role|goal|context|task [value]]".into())
             } else if arg2.is_empty() {
                 // View mode: :context <agent>
                 Ok(Some(FleetCommand::Context { agent: arg1.into(), field: None, value: None }))
             } else {
-                // Set mode: :context <agent> <field> <value>
-                // arg2 contains "field value..." since we did splitn(3, ' ')
-                let (field, value) = match arg2.split_once(' ') {
-                    Some((f, v)) => (Some(f.to_string()), Some(v.to_string())),
-                    None => {
-                        return Err("usage: context <agent> <field> <value>".into());
+                // arg2 contains "field [value...]" since we did splitn(3, ' ')
+                match arg2.split_once(' ') {
+                    Some((f, v)) => {
+                        // Set mode: :context <agent> <field> <value>
+                        Ok(Some(FleetCommand::Context {
+                            agent: arg1.into(),
+                            field: Some(f.to_string()),
+                            value: Some(v.to_string()),
+                        }))
                     }
-                };
-                Ok(Some(FleetCommand::Context { agent: arg1.into(), field, value }))
+                    None => {
+                        // Clear mode: :context <agent> <field> (no value = clear)
+                        Ok(Some(FleetCommand::Context {
+                            agent: arg1.into(),
+                            field: Some(arg2.to_string()),
+                            value: Some(String::new()),
+                        }))
+                    }
+                }
             }
         }
         _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
@@ -426,6 +436,7 @@ pub fn help_text() -> &'static str {
      :approve <agent>         Approve first pending prompt\n\
      :config                  Edit daemon.toml in $EDITOR\n\
      :context <agent>         View agent context\n\
+     :context <a> <field>     Clear field\n\
      :context <a> <f> <val>   Set field (role/goal/context/task)\n\
      :daemon init             Create daemon.toml\n\
      :daemon reload           Reload config from daemon.toml\n\
@@ -990,6 +1001,19 @@ mod tests {
                 agent: "claude-1".into(),
                 field: Some("task".into()),
                 value: Some("Build the feature".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_context_clear_field() {
+        let result = parse("context claude-1 role").unwrap();
+        assert_eq!(
+            result,
+            Some(FleetCommand::Context {
+                agent: "claude-1".into(),
+                field: Some("role".into()),
+                value: Some(String::new()),
             })
         );
     }
