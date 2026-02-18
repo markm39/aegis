@@ -677,7 +677,10 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
 ///
 /// Produces Yellow text with an inverted Yellow cursor block at `cursor_pos`.
 fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
-    let pos = cursor_pos.min(text.len());
+    let mut pos = cursor_pos.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
     let mut spans = Vec::new();
     if pos > 0 {
         spans.push(Span::styled(
@@ -713,7 +716,10 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
 /// the inverted cursor block to the correct position. Each line becomes a
 /// separate `Line` so `Paragraph::wrap()` handles visual wrapping.
 fn build_multiline_input(text: &str, cursor_pos: usize) -> Vec<Line<'static>> {
-    let pos = cursor_pos.min(text.len());
+    let mut pos = cursor_pos.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
 
     if text.is_empty() {
         return vec![Line::from(Span::styled(

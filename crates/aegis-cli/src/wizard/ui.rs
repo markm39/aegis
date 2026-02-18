@@ -538,7 +538,10 @@ fn truncate_path(path: &str, max_len: usize) -> String {
 /// Produces Yellow text with an inverted Yellow cursor block at `cursor_pos`.
 /// If the cursor is at the end of text, a trailing block cursor is shown.
 fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
-    let pos = cursor_pos.min(text.len());
+    let mut pos = cursor_pos.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
     let mut spans = Vec::new();
     if pos > 0 {
         spans.push(Span::styled(

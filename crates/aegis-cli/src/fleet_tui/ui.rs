@@ -514,7 +514,10 @@ fn draw_pending_panel(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
 
 /// Render the text input bar at the bottom of the detail view.
 fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
-    let cursor_pos = app.input_cursor.min(app.input_buffer.len());
+    let mut cursor_pos = app.input_cursor.min(app.input_buffer.len());
+    while cursor_pos > 0 && !app.input_buffer.is_char_boundary(cursor_pos) {
+        cursor_pos -= 1;
+    }
     let before = &app.input_buffer[..cursor_pos];
     let (cursor_char, after) = if cursor_pos < app.input_buffer.len() {
         let ch = app.input_buffer[cursor_pos..].chars().next().unwrap();
@@ -593,7 +596,10 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
 /// Render the command bar (: mode) or command result.
 fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
     if app.command_mode {
-        let cursor_pos = app.command_cursor.min(app.command_buffer.len());
+        let mut cursor_pos = app.command_cursor.min(app.command_buffer.len());
+        while cursor_pos > 0 && !app.command_buffer.is_char_boundary(cursor_pos) {
+            cursor_pos -= 1;
+        }
         let before = &app.command_buffer[..cursor_pos];
         let (cursor_char, after) = if cursor_pos < app.command_buffer.len() {
             let ch = app.command_buffer[cursor_pos..].chars().next().unwrap();
@@ -836,7 +842,10 @@ fn draw_wizard_text(
     cursor: usize,
     area: ratatui::layout::Rect,
 ) {
-    let cursor_pos = cursor.min(text.len());
+    let mut cursor_pos = cursor.min(text.len());
+    while cursor_pos > 0 && !text.is_char_boundary(cursor_pos) {
+        cursor_pos -= 1;
+    }
     let before = &text[..cursor_pos];
     let (cursor_char, after) = if cursor_pos < text.len() {
         let ch = text[cursor_pos..].chars().next().unwrap();
