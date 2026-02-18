@@ -262,8 +262,10 @@ impl Fleet {
 
         let is_alive = slot.is_thread_alive();
 
-        // Mark disabled first
-        self.slots.get_mut(name).unwrap().config.enabled = false;
+        // Mark disabled first (second lookup needed: stop_agent borrows &mut self)
+        if let Some(slot) = self.slots.get_mut(name) {
+            slot.config.enabled = false;
+        }
 
         // Stop if currently running
         if is_alive {

@@ -144,7 +144,8 @@ fn run_agent_slot_inner(
         .as_ref()
         .is_some_and(|p| p.enabled)
     {
-        let proxy_config = aegis_config.usage_proxy.as_ref().unwrap();
+        let proxy_config = aegis_config.usage_proxy.as_ref()
+            .expect("usage_proxy checked via is_some_and above");
         let proxy = aegis_proxy::UsageProxy::new(
             Arc::clone(&store),
             name.clone(),
