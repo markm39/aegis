@@ -741,7 +741,7 @@ pub fn install(start_after: bool) -> anyhow::Result<()> {
             println!("Daemon started via launchctl.");
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            println!("launchctl load failed: {stderr}");
+            anyhow::bail!("launchctl load failed: {stderr}");
         }
     } else {
         println!("Start with: launchctl load {}", plist.display());

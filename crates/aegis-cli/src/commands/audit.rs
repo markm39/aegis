@@ -416,9 +416,14 @@ pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
     println!();
 
     loop {
-        let new_entries = store
-            .query_after_id(last_id)
-            .context("failed to poll for new entries")?;
+        let new_entries = match store.query_after_id(last_id) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("warning: failed to poll for new entries: {e}");
+                std::thread::sleep(WATCH_POLL);
+                continue;
+            }
+        };
 
         for (row_id, entry) in &new_entries {
             // Apply decision filter
@@ -494,9 +499,14 @@ fn export_follow(store: &AuditStore, format: &str) -> Result<()> {
     }
 
     loop {
-        let new_entries = store
-            .query_after_id(last_id)
-            .context("failed to poll for new entries")?;
+        let new_entries = match store.query_after_id(last_id) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("warning: failed to poll for new entries: {e}");
+                std::thread::sleep(EXPORT_FOLLOW_POLL);
+                continue;
+            }
+        };
 
         for (row_id, entry) in &new_entries {
             match format {
