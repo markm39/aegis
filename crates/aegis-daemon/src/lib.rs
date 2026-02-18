@@ -132,7 +132,7 @@ impl DaemonRuntime {
         let mut cmd_rx = control::spawn_control_server(
             self.config.control.socket_path.clone(),
             Arc::clone(&self.shutdown),
-        );
+        )?;
 
         // Start notification channel (Telegram) if configured
         if let Some(ref channel_config) = self.config.channel {

@@ -35,7 +35,7 @@ pub fn daemon_cmd_channel(buffer: usize) -> (DaemonCmdTx, DaemonCmdRx) {
 pub fn spawn_control_server(
     socket_path: PathBuf,
     shutdown: Arc<AtomicBool>,
-) -> DaemonCmdRx {
+) -> Result<DaemonCmdRx, String> {
     let (tx, rx) = daemon_cmd_channel(64);
 
     std::thread::Builder::new()
@@ -44,12 +44,12 @@ pub fn spawn_control_server(
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("failed to create tokio runtime for control server");
+                .expect("tokio runtime creation failed (out of memory?)");
             rt.block_on(serve(&socket_path, tx, shutdown));
         })
-        .expect("failed to spawn control server thread");
+        .map_err(|e| format!("failed to spawn control server thread: {e}"))?;
 
-    rx
+    Ok(rx)
 }
 
 /// Run the Unix socket server until shutdown.
