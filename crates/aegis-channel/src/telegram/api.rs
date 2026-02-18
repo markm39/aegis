@@ -78,7 +78,12 @@ impl TelegramApi {
                 "truncating Telegram message to {} chars",
                 Self::MAX_MESSAGE_LENGTH
             );
-            let mut truncated = text[..Self::MAX_MESSAGE_LENGTH - 15].to_string();
+            let max = Self::MAX_MESSAGE_LENGTH - 15;
+            let mut end = max;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut truncated = text[..end].to_string();
             truncated.push_str("\n...(truncated)");
             truncated
         } else {

@@ -55,7 +55,11 @@ fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
     // The prefix columns ([HH:MM:SS] [Allow] principal action) take ~50 chars,
     // leaving plenty of room for the reason in a standard 120+ col terminal.
     let reason = if entry.reason.len() > 120 {
-        format!("{}...", &entry.reason[..117])
+        let mut end = 117;
+        while end > 0 && !entry.reason.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &entry.reason[..end])
     } else {
         entry.reason.clone()
     };
