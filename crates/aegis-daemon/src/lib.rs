@@ -436,6 +436,22 @@ impl DaemonRuntime {
                 DaemonResponse::ok(format!("agent '{name}' added"))
             }
 
+            DaemonCommand::RemoveAgent { ref name } => {
+                if self.fleet.agent_status(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                // Stop if running
+                self.fleet.stop_agent(name);
+                // Remove from fleet
+                self.fleet.remove_agent(name);
+                // Remove from persisted config
+                self.config.agents.retain(|a| a.name != *name);
+                if let Err(e) = self.persist_config() {
+                    return DaemonResponse::error(format!("agent removed but failed to save config: {e}"));
+                }
+                DaemonResponse::ok(format!("agent '{name}' removed"))
+            }
+
             DaemonCommand::ApproveRequest { ref name, ref request_id } => {
                 let id = match uuid::Uuid::parse_str(request_id) {
                     Ok(id) => id,
@@ -1317,5 +1333,27 @@ mod tests {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
         let resp = runtime.handle_command(DaemonCommand::EnableAgent { name: "ghost".into() });
         assert!(!resp.ok);
+    }
+
+    #[test]
+    fn handle_command_remove_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1"), test_agent("a2")]);
+        assert_eq!(runtime.fleet.agent_count(), 2);
+        let resp = runtime.handle_command(DaemonCommand::RemoveAgent { name: "a1".into() });
+        assert!(resp.ok);
+        assert_eq!(runtime.fleet.agent_count(), 1);
+        assert!(runtime.fleet.agent_status("a1").is_none());
+        assert!(runtime.fleet.agent_status("a2").is_some());
+        // Config should also be updated
+        assert_eq!(runtime.config.agents.len(), 1);
+        assert_eq!(runtime.config.agents[0].name, "a2");
+    }
+
+    #[test]
+    fn handle_command_remove_unknown_agent() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::RemoveAgent { name: "ghost".into() });
+        assert!(!resp.ok);
+        assert_eq!(runtime.fleet.agent_count(), 1);
     }
 }

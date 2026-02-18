@@ -37,6 +37,8 @@ pub enum DaemonCommand {
         #[serde(default = "default_true")]
         start: bool,
     },
+    /// Remove an agent slot (stops it if running, removes from config, persists).
+    RemoveAgent { name: String },
     /// Approve a pending permission request for an agent.
     ApproveRequest { name: String, request_id: String },
     /// Deny a pending permission request for an agent.
@@ -322,6 +324,7 @@ mod tests {
                 }),
                 start: true,
             },
+            DaemonCommand::RemoveAgent { name: "claude-1".into() },
             DaemonCommand::ApproveRequest {
                 name: "claude-1".into(),
                 request_id: "550e8400-e29b-41d4-a716-446655440000".into(),

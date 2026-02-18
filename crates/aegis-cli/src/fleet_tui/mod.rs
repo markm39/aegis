@@ -962,19 +962,19 @@ impl FleetApp {
                 }
             }
             FleetCommand::Remove { agent } => {
-                match crate::commands::daemon::remove_agent(&agent) {
-                    Ok(()) => {
-                        // Trigger reload so daemon drops the agent from memory
-                        if self.connected {
-                            if let Some(client) = &self.client {
-                                let _ = client.send(&DaemonCommand::ReloadConfig);
-                            }
+                if self.connected {
+                    // Atomic removal via daemon: stops agent, removes from fleet, persists config
+                    self.send_and_show_result(DaemonCommand::RemoveAgent { name: agent });
+                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                } else {
+                    // Offline: edit daemon.toml directly
+                    match crate::commands::daemon::remove_agent(&agent) {
+                        Ok(()) => {
+                            self.set_result(format!("Removed '{agent}'."));
                         }
-                        self.set_result(format!("Removed '{agent}'."));
-                        self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
-                    }
-                    Err(e) => {
-                        self.set_result(format!("Failed to remove '{agent}': {e}"));
+                        Err(e) => {
+                            self.set_result(format!("Failed to remove '{agent}': {e}"));
+                        }
                     }
                 }
             }
