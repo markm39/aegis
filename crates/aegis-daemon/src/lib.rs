@@ -483,6 +483,10 @@ impl DaemonRuntime {
 
             DaemonCommand::AddAgent { ref config, start } => {
                 let name = config.name.clone();
+                // Validate agent name to prevent path traversal and injection.
+                if let Err(e) = aegis_types::validate_config_name(&name) {
+                    return DaemonResponse::error(format!("invalid agent name: {e}"));
+                }
                 if self.fleet.agent_status(&name).is_some() {
                     return DaemonResponse::error(format!("agent '{name}' already exists"));
                 }
