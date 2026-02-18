@@ -733,13 +733,15 @@ fn map_tool_use_to_action(tool_name: &str, tool_input: &serde_json::Value) -> Ac
 
 /// Tools that require human interaction and would stall a headless agent.
 ///
-/// When a daemon-managed agent tries to use these, we deny with a contextual
-/// prompt so the model proceeds autonomously instead of blocking forever.
+/// Only `AskUserQuestion` is blocked -- it genuinely waits for human input
+/// and would stall a headless agent indefinitely.
+///
+/// Plan mode tools (`EnterPlanMode`, `ExitPlanMode`) are intentionally allowed.
+/// Plan mode produces better results by giving CC time to research and design
+/// before implementing. With `--dangerously-skip-permissions`, `ExitPlanMode`
+/// auto-approves so the agent flows through plan -> implement without stalling.
 fn is_interactive_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode"
-    )
+    tool_name == "AskUserQuestion"
 }
 
 /// Compose a denial reason that guides the model to proceed autonomously.
@@ -788,23 +790,12 @@ fn compose_autonomy_prompt(
         }
     }
 
-    match tool_name {
-        "AskUserQuestion" => {
-            sections.push(
-                "Make decisions autonomously based on your role and context. \
-                 Do not ask clarifying questions -- use your best judgment and proceed."
-                    .to_string(),
-            );
-        }
-        "EnterPlanMode" | "ExitPlanMode" => {
-            sections.push(
-                "Execute directly without seeking plan approval. \
-                 You have full authority to implement within your role."
-                    .to_string(),
-            );
-        }
-        _ => {}
-    }
+    // Only AskUserQuestion is denied, so guidance is always about autonomous decisions.
+    sections.push(
+        "Make decisions autonomously based on your role and context. \
+         Do not ask clarifying questions -- use your best judgment and proceed."
+            .to_string(),
+    );
 
     sections.join(" ")
 }
@@ -1114,10 +1105,12 @@ mod tests {
     // ── Interactive tool interception tests ───────────────────────────
 
     #[test]
-    fn is_interactive_tool_detects_ask_user() {
+    fn is_interactive_tool_only_blocks_ask_user() {
         assert!(is_interactive_tool("AskUserQuestion"));
-        assert!(is_interactive_tool("EnterPlanMode"));
-        assert!(is_interactive_tool("ExitPlanMode"));
+        // Plan mode tools are allowed -- plan mode produces better results
+        // and auto-approves with --dangerously-skip-permissions.
+        assert!(!is_interactive_tool("EnterPlanMode"));
+        assert!(!is_interactive_tool("ExitPlanMode"));
         assert!(!is_interactive_tool("Bash"));
         assert!(!is_interactive_tool("Read"));
         assert!(!is_interactive_tool("Write"));
@@ -1166,10 +1159,11 @@ mod tests {
     }
 
     #[test]
-    fn compose_autonomy_prompt_plan_mode() {
-        let prompt = compose_autonomy_prompt("EnterPlanMode", None, None);
-        assert!(prompt.contains("Execute directly"));
-        assert!(prompt.contains("full authority"));
+    fn compose_autonomy_prompt_always_includes_judgment_guidance() {
+        // All denied tools (only AskUserQuestion) get the same guidance.
+        let prompt = compose_autonomy_prompt("AskUserQuestion", None, None);
+        assert!(prompt.contains("best judgment"));
+        assert!(prompt.contains("autonomous"));
     }
 
     #[test]
