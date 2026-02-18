@@ -38,6 +38,7 @@ use aegis_types::AgentStatus;
 
 use super::wizard::{AddAgentWizard, RestartChoice, ToolChoice, WizardStep};
 use super::{FleetApp, FleetView};
+use crate::tui_utils::truncate_str;
 
 /// Draw the fleet TUI to the terminal frame.
 pub fn draw(frame: &mut Frame, app: &FleetApp) {
@@ -1145,19 +1146,6 @@ fn truncate_path(path: &str, max: usize) -> String {
     }
 }
 
-/// Truncate a string with ellipsis. Safe for multi-byte UTF-8.
-fn truncate_str(s: &str, max: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max {
-        s.to_string()
-    } else if max <= 3 {
-        s.chars().take(max).collect()
-    } else {
-        let truncated: String = s.chars().take(max - 3).collect();
-        format!("{truncated}...")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,16 +1176,6 @@ mod tests {
         let t = truncate_path(p, 20);
         assert!(t.starts_with("..."));
         assert_eq!(t.len(), 20);
-    }
-
-    #[test]
-    fn truncate_str_short() {
-        assert_eq!(truncate_str("hello", 10), "hello");
-    }
-
-    #[test]
-    fn truncate_str_long() {
-        assert_eq!(truncate_str("hello world", 8), "hello...");
     }
 
     #[test]

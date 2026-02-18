@@ -25,6 +25,8 @@ use aegis_types::daemon::{
 };
 use aegis_types::AegisConfig;
 
+use crate::tui_utils::truncate_str;
+
 /// Initialize a daemon configuration file at `~/.aegis/daemon/daemon.toml`.
 pub fn init() -> anyhow::Result<()> {
     let config_path = daemon_config_path();
@@ -267,7 +269,7 @@ pub fn stop() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        println!("Daemon is not running.");
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
         return Ok(());
     }
 
@@ -291,7 +293,7 @@ pub(crate) fn stop_quiet() -> anyhow::Result<String> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        return Ok("Daemon is not running.".to_string());
+        return Ok("Daemon is not running. Start it with `aegis daemon start`.".to_string());
     }
 
     let response = client
@@ -393,7 +395,7 @@ pub fn status() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        println!("Daemon is not running.");
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
         return Ok(());
     }
 
@@ -423,7 +425,7 @@ pub fn agents() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        println!("Daemon is not running.");
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
         return Ok(());
     }
 
@@ -469,7 +471,7 @@ pub fn output(name: &str, lines: usize) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -501,7 +503,7 @@ pub fn send(name: &str, text: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -525,7 +527,7 @@ pub fn start_agent(name: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -548,7 +550,7 @@ pub fn stop_agent(name: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -571,7 +573,7 @@ pub fn restart_agent(name: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -594,7 +596,7 @@ pub fn approve(name: &str, request_id: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -618,7 +620,7 @@ pub fn deny(name: &str, request_id: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -642,7 +644,7 @@ pub fn nudge(name: &str, message: Option<&str>) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -666,7 +668,7 @@ pub fn pending(name: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -1122,7 +1124,7 @@ pub fn enable_agent(name: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -1145,7 +1147,7 @@ pub fn disable_agent(name: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -1168,7 +1170,7 @@ pub fn goal(text: Option<&str>) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     let response = client
@@ -1195,7 +1197,7 @@ pub fn context(
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
-        anyhow::bail!("Daemon is not running.");
+        anyhow::bail!("Daemon is not running. Start it with `aegis daemon start`.");
     }
 
     match (field, value) {
@@ -1253,14 +1255,3 @@ pub fn context(
     Ok(())
 }
 
-/// Truncate a string to `max_chars` characters, appending "..." if truncated.
-/// Safe for multi-byte UTF-8 (truncates at char boundaries, not bytes).
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
-        format!("{truncated}...")
-    }
-}

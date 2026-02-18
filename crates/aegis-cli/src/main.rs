@@ -3,6 +3,7 @@ mod fleet_tui;
 mod onboard_tui;
 mod pilot_tui;
 mod terminal;
+mod tui_utils;
 mod wizard;
 
 use std::path::PathBuf;

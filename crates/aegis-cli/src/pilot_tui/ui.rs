@@ -24,6 +24,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use super::{LineAnnotation, PilotApp, PilotMode};
+use crate::tui_utils::truncate_str;
 
 /// Draw the full pilot TUI to the terminal frame.
 pub fn draw(frame: &mut Frame, app: &PilotApp) {
@@ -454,17 +455,5 @@ mod tests {
         terminal
             .draw(|f| draw(f, &app))
             .expect("draw should not panic with small terminal");
-    }
-}
-
-/// Truncate a string to `max_chars` characters, appending "..." if truncated.
-/// Safe for multi-byte UTF-8 (truncates at char boundaries, not bytes).
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
-        format!("{truncated}...")
     }
 }

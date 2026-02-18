@@ -20,6 +20,7 @@ use aegis_types::AgentStatus;
 
 use self::event::{AppEvent, EventHandler};
 use self::wizard::AddAgentWizard;
+use crate::tui_utils::delete_word_backward_pos;
 
 /// How often to poll the daemon for updates (milliseconds).
 const TICK_RATE_MS: u64 = 200;
@@ -1593,21 +1594,6 @@ fn run_event_loop(
     Ok(())
 }
 
-/// Find the position for Ctrl+W (delete word backward).
-///
-/// Walks backward from `cursor` past any whitespace, then past non-whitespace,
-/// and returns the byte position where deletion should start.
-fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
-    text[..cursor]
-        .char_indices()
-        .rev()
-        .skip_while(|(_, c)| c.is_whitespace())
-        .skip_while(|(_, c)| !c.is_whitespace())
-        .map(|(i, c)| i + c.len_utf8())
-        .next()
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2476,15 +2462,6 @@ mod tests {
             kind: KeyEventKind::Press,
             state: crossterm::event::KeyEventState::empty(),
         }
-    }
-
-    #[test]
-    fn delete_word_backward_pos_basic() {
-        assert_eq!(delete_word_backward_pos("hello world", 11), 6);
-        assert_eq!(delete_word_backward_pos("hello world", 5), 0);
-        assert_eq!(delete_word_backward_pos("hello", 5), 0);
-        assert_eq!(delete_word_backward_pos("hello  world", 12), 7);
-        assert_eq!(delete_word_backward_pos("a b c", 5), 4);
     }
 
     #[test]

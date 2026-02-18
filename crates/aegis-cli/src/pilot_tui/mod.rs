@@ -22,6 +22,7 @@ use aegis_types::Decision;
 
 use self::bridge::SharedPilotState;
 use self::event::{AppEvent, EventHandler};
+use crate::tui_utils::delete_word_backward_pos;
 
 /// Maximum output lines to retain in the TUI buffer.
 const MAX_OUTPUT_LINES: usize = 2000;
@@ -565,18 +566,6 @@ fn run_event_loop(
         }
     }
     Ok(())
-}
-
-/// Find the position for Ctrl+W (delete word backward).
-fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
-    text[..cursor]
-        .char_indices()
-        .rev()
-        .skip_while(|(_, c)| c.is_whitespace())
-        .skip_while(|(_, c)| !c.is_whitespace())
-        .map(|(i, c)| i + c.len_utf8())
-        .next()
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

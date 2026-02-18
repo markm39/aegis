@@ -13,6 +13,7 @@ use aegis_types::config::ChannelConfig;
 use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig};
 
 use crate::fleet_tui::wizard::{RestartChoice, ToolChoice};
+use crate::tui_utils::delete_word_backward_pos;
 
 /// Steps in the onboarding wizard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,21 +813,6 @@ async fn run_telegram_worker(token: String, tx: mpsc::Sender<TelegramEvent>) {
             )));
         }
     }
-}
-
-/// Find the position for Ctrl+W (delete word backward).
-///
-/// Walks backward from `cursor` past any whitespace, then past non-whitespace,
-/// and returns the byte position where deletion should start.
-fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
-    text[..cursor]
-        .char_indices()
-        .rev()
-        .skip_while(|(_, c)| c.is_whitespace())
-        .skip_while(|(_, c)| !c.is_whitespace())
-        .map(|(i, c)| i + c.len_utf8())
-        .next()
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
