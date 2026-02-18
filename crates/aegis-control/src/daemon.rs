@@ -363,6 +363,9 @@ mod tests {
                 task: Some("Build the login page".into()),
             },
             DaemonCommand::GetAgentContext { name: "claude-1".into() },
+            DaemonCommand::EnableAgent { name: "claude-1".into() },
+            DaemonCommand::DisableAgent { name: "claude-1".into() },
+            DaemonCommand::ReloadConfig,
             DaemonCommand::Shutdown,
         ];
 

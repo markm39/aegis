@@ -406,8 +406,9 @@ impl FleetApp {
     pub fn handle_paste(&mut self, text: &str) {
         // Route paste to command bar if active
         if self.command_mode {
-            self.command_buffer.insert_str(self.command_cursor, text);
-            self.command_cursor += text.len();
+            let cleaned = text.replace(['\n', '\r'], " ");
+            self.command_buffer.insert_str(self.command_cursor, &cleaned);
+            self.command_cursor += cleaned.len();
             self.update_completions();
             return;
         }
