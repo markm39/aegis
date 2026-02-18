@@ -887,7 +887,11 @@ impl DaemonRuntime {
         }
 
         if let Err(e) = daemon_state.save() {
-            tracing::warn!(error = e, "failed to save daemon state");
+            tracing::warn!(error = %e, "failed to save daemon state, retrying");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if let Err(e2) = daemon_state.save() {
+                tracing::error!(error = %e2, "state save failed twice, persistence may be broken");
+            }
         }
     }
 }

@@ -136,8 +136,13 @@ impl Fleet {
 
         let fleet_goal = self.fleet_goal.clone();
         let child_pid = slot.child_pid.clone();
-        // Clear and share session_id for state persistence
-        *slot.session_id.lock().unwrap() = None;
+        // Clear and share session_id for state persistence.
+        // Use unwrap_or_else to handle a poisoned mutex (agent thread panicked
+        // while holding the lock) -- recover rather than crashing the daemon.
+        match slot.session_id.lock() {
+            Ok(mut guard) => *guard = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
+        }
         let shared_session_id = slot.session_id.clone();
 
         let handle = thread::Builder::new()
@@ -515,11 +520,17 @@ impl Fleet {
             return;
         }
 
+        // If the agent ran for >= 30 seconds, reset the crash counter since
+        // it was a "successful" run (not a fast crash loop).
+        let ran_briefly = run_duration.is_some_and(|d| d.as_secs() < 30);
+        if !ran_briefly {
+            slot.restart_count = 0;
+        }
+
         slot.restart_count += 1;
 
         // If the agent ran for less than 30 seconds, apply exponential backoff
         // to prevent crash loops from spinning hot.
-        let ran_briefly = run_duration.is_some_and(|d| d.as_secs() < 30);
         if ran_briefly {
             let delay_secs = 1u64
                 .checked_shl(slot.restart_count)
