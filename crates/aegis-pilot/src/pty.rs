@@ -165,8 +165,12 @@ impl PtySession {
     }
 
     /// Check if the child process is still alive.
+    ///
+    /// Uses `kill(pid, 0)` instead of `waitpid(WNOHANG)` to avoid reaping
+    /// the child -- reaping discards the exit status, which would cause the
+    /// subsequent `wait()` call to return ECHILD and default to exit code 0.
     pub fn is_alive(&self) -> bool {
-        matches!(waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)), Ok(WaitStatus::StillAlive))
+        signal::kill(self.child_pid, None).is_ok()
     }
 
     /// Wait for the child to exit and return its exit code.
