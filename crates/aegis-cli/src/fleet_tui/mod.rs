@@ -426,6 +426,10 @@ impl FleetApp {
                 self.wizard = Some(AddAgentWizard::new());
                 self.view = FleetView::AddAgent;
             }
+            KeyCode::Char('?') => {
+                self.help_scroll = 0;
+                self.view = FleetView::Help;
+            }
             KeyCode::Char(':') => {
                 self.enter_command_mode();
             }
@@ -463,6 +467,12 @@ impl FleetApp {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.help_scroll = self.help_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                self.help_scroll = (self.help_scroll + 20).min(help_lines.saturating_sub(1));
+            }
+            KeyCode::PageUp => {
+                self.help_scroll = self.help_scroll.saturating_sub(20);
             }
             KeyCode::Char('G') => {
                 self.help_scroll = help_lines.saturating_sub(1);
@@ -568,6 +578,22 @@ impl FleetApp {
             KeyCode::Char('g') | KeyCode::Home => {
                 self.detail_scroll = self.detail_output.len().saturating_sub(1);
             }
+            KeyCode::PageUp => {
+                if self.focus_pending {
+                    self.pending_selected = 0;
+                } else {
+                    self.detail_scroll += 20;
+                }
+            }
+            KeyCode::PageDown => {
+                if self.focus_pending {
+                    if !self.detail_pending.is_empty() {
+                        self.pending_selected = self.detail_pending.len() - 1;
+                    }
+                } else {
+                    self.detail_scroll = self.detail_scroll.saturating_sub(20);
+                }
+            }
             KeyCode::Char('i') => {
                 // Enter input mode
                 self.input_mode = true;
@@ -581,7 +607,7 @@ impl FleetApp {
                         name: self.detail_name.clone(),
                         request_id: pending.request_id.clone(),
                     };
-                    self.send_named_command(cmd);
+                    self.send_and_show_result(cmd);
                 }
             }
             KeyCode::Char('d') => {
@@ -591,7 +617,7 @@ impl FleetApp {
                         name: self.detail_name.clone(),
                         request_id: pending.request_id.clone(),
                     };
-                    self.send_named_command(cmd);
+                    self.send_and_show_result(cmd);
                 }
             }
             KeyCode::Char('n') => {
@@ -854,16 +880,16 @@ impl FleetApp {
                 self.view = FleetView::AddAgent;
             }
             FleetCommand::Start { agent } => {
-                self.send_named_command(DaemonCommand::StartAgent { name: agent });
+                self.send_and_show_result(DaemonCommand::StartAgent { name: agent });
             }
             FleetCommand::Stop { agent } => {
-                self.send_named_command(DaemonCommand::StopAgent { name: agent });
+                self.send_and_show_result(DaemonCommand::StopAgent { name: agent });
             }
             FleetCommand::Restart { agent } => {
-                self.send_named_command(DaemonCommand::RestartAgent { name: agent });
+                self.send_and_show_result(DaemonCommand::RestartAgent { name: agent });
             }
             FleetCommand::Send { agent, text } => {
-                self.send_named_command(DaemonCommand::SendToAgent { name: agent, text });
+                self.send_and_show_result(DaemonCommand::SendToAgent { name: agent, text });
             }
             FleetCommand::Approve { agent } => {
                 if let Some(request_id) = self.fetch_first_pending_id(&agent) {
@@ -871,7 +897,7 @@ impl FleetApp {
                         name: agent,
                         request_id,
                     };
-                    self.send_named_command(cmd);
+                    self.send_and_show_result(cmd);
                 } else {
                     self.command_result = Some(format!("no pending prompts for '{agent}'"));
                 }
@@ -882,13 +908,13 @@ impl FleetApp {
                         name: agent,
                         request_id,
                     };
-                    self.send_named_command(cmd);
+                    self.send_and_show_result(cmd);
                 } else {
                     self.command_result = Some(format!("no pending prompts for '{agent}'"));
                 }
             }
             FleetCommand::Nudge { agent, message } => {
-                self.send_named_command(DaemonCommand::NudgeAgent { name: agent, message });
+                self.send_and_show_result(DaemonCommand::NudgeAgent { name: agent, message });
             }
             FleetCommand::Pop { agent } => {
                 let cmd = format!("aegis daemon follow {agent}");
@@ -1987,6 +2013,42 @@ mod tests {
         app.handle_key(press(KeyCode::Char('q')));
         assert_eq!(app.view, FleetView::Overview);
         assert!(app.running, "q in help view should go back, not quit");
+    }
+
+    #[test]
+    fn question_mark_opens_help() {
+        let mut app = make_app();
+        app.handle_key(press(KeyCode::Char('?')));
+        assert_eq!(app.view, FleetView::Help);
+    }
+
+    #[test]
+    fn page_up_down_in_detail_view() {
+        let mut app = make_app();
+        app.view = FleetView::AgentDetail;
+        for i in 0..100 {
+            app.detail_output.push_back(format!("line {i}"));
+        }
+
+        // PageUp scrolls up by 20
+        app.handle_key(press(KeyCode::PageUp));
+        assert_eq!(app.detail_scroll, 20);
+
+        // PageDown scrolls down by 20
+        app.handle_key(press(KeyCode::PageDown));
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn page_up_down_in_help_view() {
+        let mut app = make_app();
+        app.view = FleetView::Help;
+
+        app.handle_key(press(KeyCode::PageDown));
+        assert_eq!(app.help_scroll, 20);
+
+        app.handle_key(press(KeyCode::PageUp));
+        assert_eq!(app.help_scroll, 0);
     }
 
     fn ctrl_c() -> KeyEvent {
