@@ -460,7 +460,7 @@ pub fn validate_config_name(name: &str) -> Result<(), AegisError> {
     if name.is_empty() {
         return Err(AegisError::ConfigError("name cannot be empty".into()));
     }
-    if name == "." || name == ".." {
+    if name.chars().all(|c| c == '.') {
         return Err(AegisError::ConfigError(format!(
             "name cannot be {name:?}"
         )));
@@ -694,6 +694,7 @@ mod tests {
         assert!(validate_config_name("foo/bar").is_err());
         assert!(validate_config_name("..").is_err());
         assert!(validate_config_name(".").is_err());
+        assert!(validate_config_name("...").is_err());
         assert!(validate_config_name("foo\\bar").is_err());
     }
 

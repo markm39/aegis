@@ -261,7 +261,7 @@ impl DaemonClient {
     /// indefinitely if the daemon hangs. This is critical for the fleet TUI,
     /// which polls every second -- a hanging read would freeze the entire UI.
     pub fn send(&self, command: &DaemonCommand) -> Result<DaemonResponse, String> {
-        use std::io::{BufRead, BufReader, Read, Write};
+        use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixStream;
 
         let stream = UnixStream::connect(&self.socket_path)
@@ -284,9 +284,9 @@ impl DaemonClient {
         writer.flush()
             .map_err(|e| format!("failed to flush: {e}"))?;
 
-        let reader = BufReader::new(stream);
+        let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        reader.take(1_000_000).read_line(&mut line)
+        reader.read_line(&mut line)
             .map_err(|e| format!("failed to read response: {e}"))?;
 
         serde_json::from_str(&line)
