@@ -843,7 +843,7 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
 
     if !stdout_log.exists() && !stderr_log.exists() {
         println!("No daemon logs found in {}", log_dir.display());
-        println!("Logs are created when running via launchd.");
+        println!("Logs are created when the daemon runs (via `start` or `launchd`).");
         return Ok(());
     }
 

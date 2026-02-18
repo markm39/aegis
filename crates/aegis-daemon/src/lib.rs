@@ -768,10 +768,26 @@ impl DaemonRuntime {
     }
 
     /// Persist the current daemon config to daemon.toml.
+    ///
+    /// Uses atomic write (write to temp file, then rename) to prevent
+    /// corruption if the process is interrupted mid-write.
     fn persist_config(&self) -> Result<(), String> {
+        use std::sync::atomic::AtomicU64;
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let toml_str = self.config.to_toml().map_err(|e| e.to_string())?;
         let config_path = aegis_types::daemon::daemon_config_path();
-        std::fs::write(&config_path, toml_str).map_err(|e| e.to_string())
+
+        // Write to a uniquely-named sibling temp file, then rename for crash safety.
+        // The atomic counter prevents races when tests run in parallel.
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = config_path.with_extension(format!("toml.{n}.tmp"));
+        std::fs::write(&tmp_path, &toml_str)
+            .map_err(|e| format!("failed to write temp config: {e}"))?;
+        std::fs::rename(&tmp_path, &config_path)
+            .map_err(|e| format!("failed to atomically replace config: {e}"))?;
+
+        Ok(())
     }
 
     /// Save current state to disk.
