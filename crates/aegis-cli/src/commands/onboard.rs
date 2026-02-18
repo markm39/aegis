@@ -62,17 +62,15 @@ pub fn run() -> anyhow::Result<()> {
     }
     println!();
 
-    // Optionally start daemon + fleet TUI
+    // Start daemon if requested, then always open fleet TUI hub.
+    // The fleet TUI works in offline mode and auto-connects when daemon starts.
     if result.start_daemon {
-        crate::commands::daemon::start()?;
-        println!();
-        crate::fleet_tui::run_fleet_tui()?;
-    } else {
-        println!("Run `aegis daemon start` when ready.");
-        println!("Then `aegis` to open the fleet dashboard.");
+        if let Err(e) = crate::commands::daemon::start() {
+            eprintln!("Warning: failed to start daemon: {e}");
+        }
     }
 
-    Ok(())
+    crate::fleet_tui::run_fleet_tui()
 }
 
 /// Prompt for agent tool type from a numbered menu.

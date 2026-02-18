@@ -1,9 +1,9 @@
 //! Default action when `aegis` is invoked with no subcommand.
 //!
-//! Branches based on what's configured and what's running:
-//! - Daemon running -> fleet dashboard (live agent management)
-//! - Audit configs exist -> monitor dashboard
-//! - Nothing configured -> setup wizard
+//! Routing:
+//! 1. daemon.toml exists or daemon running -> fleet TUI hub (offline-capable)
+//! 2. Legacy audit configs only -> monitor dashboard
+//! 3. Nothing configured -> onboard wizard -> fleet TUI hub
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -15,33 +15,33 @@ use aegis_monitor::DashboardConfig;
 use crate::commands::init::{dirs_from_env, load_config_from_dir};
 
 /// Run the default action for bare `aegis` invocation.
+///
+/// Routing logic:
+/// 1. daemon.toml exists OR daemon running -> fleet TUI hub (works offline, auto-reconnects)
+/// 2. Legacy audit configs (no daemon.toml) -> monitor dashboard
+/// 3. Nothing configured -> onboard wizard (which transitions to fleet TUI when done)
 pub fn run() -> Result<()> {
     let home = dirs_from_env()?;
     let aegis_dir = home.join(".aegis");
 
+    let has_daemon_config = aegis_types::daemon::daemon_config_path().exists();
     let daemon_running = DaemonClient::default_path().is_running();
-    let has_audit = has_configs(&aegis_dir);
 
-    match (daemon_running, has_audit) {
-        // Daemon is running: always prefer the fleet dashboard
-        (true, _) => {
-            crate::fleet_tui::run_fleet_tui()
-        }
-        // No daemon, but audit configs exist: show monitor
-        (false, true) => {
-            let configs = build_dashboard_configs(&aegis_dir);
-            if configs.is_empty() {
-                println!("No Aegis configurations found.");
-                println!("Run `aegis init` or `aegis wrap -- <command>` to get started.");
-                return Ok(());
-            }
-            aegis_monitor::run_dashboard(configs).context("dashboard exited with error")
-        }
-        // Nothing at all: unified onboard wizard
-        (false, false) => {
-            crate::commands::onboard::run()
+    if has_daemon_config || daemon_running {
+        // Fleet TUI hub -- works in offline mode, auto-connects when daemon starts
+        return crate::fleet_tui::run_fleet_tui();
+    }
+
+    // Legacy audit-only configs (no daemon.toml): monitor dashboard
+    if has_configs(&aegis_dir) {
+        let configs = build_dashboard_configs(&aegis_dir);
+        if !configs.is_empty() {
+            return aegis_monitor::run_dashboard(configs).context("dashboard exited with error");
         }
     }
+
+    // Nothing configured: onboard wizard (transitions to fleet TUI when done)
+    crate::commands::onboard::run()
 }
 
 /// Check whether any aegis configurations exist.

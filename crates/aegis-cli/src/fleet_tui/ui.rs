@@ -122,27 +122,33 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
         Span::styled(" Aegis Fleet ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         connection_span,
-        Span::styled("]  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{running} running"),
-            Style::default().fg(Color::Green),
-        ),
-        Span::styled(" / ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{total} total"),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled("  PID: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{}", app.daemon_pid),
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::styled("  Uptime: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format_duration(app.daemon_uptime_secs),
-            Style::default().fg(Color::Cyan),
-        ),
+        Span::styled("]", Style::default().fg(Color::DarkGray)),
     ];
+
+    if app.connected {
+        header_spans.extend([
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{running} running"),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(" / ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{total} total"),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled("  PID: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", app.daemon_pid),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::styled("  Uptime: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format_duration(app.daemon_uptime_secs),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]);
+    }
 
     if let Some(ref goal) = app.fleet_goal {
         header_spans.push(Span::styled("  Goal: ", Style::default().fg(Color::DarkGray)));
@@ -170,7 +176,7 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         } else if let Some(ref err) = app.last_error {
             err.as_str()
         } else {
-            "Connecting to daemon..."
+            "Daemon not running. Type :daemon start to begin, or :help for commands."
         };
 
         let empty = Paragraph::new(msg)
@@ -247,22 +253,39 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
 
 /// Render the overview status bar with keybindings.
 fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
-    let mut spans = vec![
-        Span::styled(" j/k", Style::default().fg(Color::Yellow)),
-        Span::styled(": navigate  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Yellow)),
-        Span::styled(": output  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("s", Style::default().fg(Color::Green)),
-        Span::styled(": start  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("x", Style::default().fg(Color::Red)),
-        Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("r", Style::default().fg(Color::Yellow)),
-        Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("a", Style::default().fg(Color::Cyan)),
-        Span::styled(": add  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("q", Style::default().fg(Color::DarkGray)),
-        Span::styled(": quit (daemon stays running)", Style::default().fg(Color::DarkGray)),
-    ];
+    let mut spans = if app.connected {
+        vec![
+            Span::styled(" j/k", Style::default().fg(Color::Yellow)),
+            Span::styled(": navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::Yellow)),
+            Span::styled(": output  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("s", Style::default().fg(Color::Green)),
+            Span::styled(": start  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("x", Style::default().fg(Color::Red)),
+            Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("r", Style::default().fg(Color::Yellow)),
+            Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("a", Style::default().fg(Color::Cyan)),
+            Span::styled(": add  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("q", Style::default().fg(Color::DarkGray)),
+            Span::styled(": quit (daemon stays running)", Style::default().fg(Color::DarkGray)),
+        ]
+    } else {
+        vec![
+            Span::styled(" :daemon start", Style::default().fg(Color::Green)),
+            Span::styled("  ", Style::default()),
+            Span::styled(":pilot", Style::default().fg(Color::Yellow)),
+            Span::styled("  ", Style::default()),
+            Span::styled(":wrap", Style::default().fg(Color::Yellow)),
+            Span::styled("  ", Style::default()),
+            Span::styled(":log", Style::default().fg(Color::Yellow)),
+            Span::styled("  ", Style::default()),
+            Span::styled(":help", Style::default().fg(Color::Cyan)),
+            Span::styled("  ", Style::default()),
+            Span::styled("q", Style::default().fg(Color::DarkGray)),
+            Span::styled(": quit", Style::default().fg(Color::DarkGray)),
+        ]
+    };
 
     if let Some(ref err) = app.last_error {
         spans.push(Span::styled("  ", Style::default()));

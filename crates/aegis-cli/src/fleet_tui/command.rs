@@ -72,12 +72,18 @@ pub enum FleetCommand {
     Goal { text: Option<String> },
     /// View or set agent context fields (role, goal, context).
     Context { agent: String, field: Option<String>, value: Option<String> },
+    /// Start the daemon in the background.
+    DaemonStart,
+    /// Stop the running daemon.
+    DaemonStop,
+    /// Create daemon.toml if it doesn't exist.
+    DaemonInit,
 }
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "alerts", "approve", "config", "context", "deny", "diff", "follow", "goal",
-    "help", "hook", "list", "log", "logs", "monitor", "nudge", "pending", "pilot",
+    "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "follow",
+    "goal", "help", "hook", "list", "log", "logs", "monitor", "nudge", "pending", "pilot",
     "policy", "pop", "quit", "remove", "report", "restart", "run", "send", "start",
     "status", "stop", "telegram", "use", "watch", "wrap",
 ];
@@ -150,6 +156,15 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Err("usage: approve <agent>".into())
             } else {
                 Ok(Some(FleetCommand::Approve { agent: arg1.into() }))
+            }
+        }
+        "daemon" => {
+            match arg1 {
+                "start" => Ok(Some(FleetCommand::DaemonStart)),
+                "stop" => Ok(Some(FleetCommand::DaemonStop)),
+                "init" => Ok(Some(FleetCommand::DaemonInit)),
+                "" => Err("usage: daemon start|stop|init".into()),
+                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init")),
             }
         }
         "deny" => {
@@ -270,10 +285,14 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
     }
 }
 
+/// Subcommands for `:daemon`.
+const DAEMON_SUBCOMMANDS: &[&str] = &["init", "start", "stop"];
+
 /// Complete the current command buffer, returning possible completions.
 ///
 /// - If the buffer has no space, complete command names.
-/// - If the buffer has one space and the command takes an agent, complete agent names.
+/// - If the command is `daemon`, complete with daemon subcommands.
+/// - If the command takes an agent name, complete agent names.
 pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
     let trimmed = buffer.trim_start();
 
@@ -286,18 +305,27 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
             .map(|name| name.to_string())
             .collect()
     } else {
-        // Complete agent name for commands that take one
         let mut parts = trimmed.splitn(2, ' ');
         let cmd = parts.next().unwrap_or("");
-        let agent_prefix = parts.next().unwrap_or("").trim();
+        let sub_prefix = parts.next().unwrap_or("").trim();
 
+        // Complete daemon subcommands
+        if cmd == "daemon" {
+            return DAEMON_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub_prefix))
+                .map(|s| s.to_string())
+                .collect();
+        }
+
+        // Complete agent name for commands that take one
         if !AGENT_COMMANDS.contains(&cmd) {
             return Vec::new();
         }
 
         agent_names
             .iter()
-            .filter(|name| name.starts_with(agent_prefix))
+            .filter(|name| name.starts_with(sub_prefix))
             .cloned()
             .collect()
     }
@@ -327,6 +355,9 @@ pub fn help_text() -> &'static str {
      :config                  Edit daemon.toml in $EDITOR\n\
      :context <agent>         View agent context\n\
      :context <a> <f> <val>   Set context field (role/goal/context)\n\
+     :daemon init             Create daemon.toml\n\
+     :daemon start            Start daemon in background\n\
+     :daemon stop             Stop running daemon\n\
      :deny <agent>            Deny first pending prompt\n\
      :diff <s1> <s2>          Compare two audit sessions\n\
      :follow <agent>          Drill into agent output\n\
@@ -734,5 +765,62 @@ mod tests {
         let agents = vec!["claude-1".to_string(), "codex-1".to_string()];
         let c = completions("pending cl", &agents);
         assert_eq!(c, vec!["claude-1"]);
+    }
+
+    #[test]
+    fn parse_daemon_start() {
+        assert_eq!(
+            parse("daemon start").unwrap(),
+            Some(FleetCommand::DaemonStart)
+        );
+    }
+
+    #[test]
+    fn parse_daemon_stop() {
+        assert_eq!(
+            parse("daemon stop").unwrap(),
+            Some(FleetCommand::DaemonStop)
+        );
+    }
+
+    #[test]
+    fn parse_daemon_init() {
+        assert_eq!(
+            parse("daemon init").unwrap(),
+            Some(FleetCommand::DaemonInit)
+        );
+    }
+
+    #[test]
+    fn parse_daemon_missing_sub() {
+        assert!(parse("daemon").is_err());
+    }
+
+    #[test]
+    fn parse_daemon_unknown_sub() {
+        assert!(parse("daemon bogus").is_err());
+    }
+
+    #[test]
+    fn completions_daemon_subcommands() {
+        let agents = vec![];
+        let c = completions("daemon ", &agents);
+        assert!(c.contains(&"init".to_string()));
+        assert!(c.contains(&"start".to_string()));
+        assert!(c.contains(&"stop".to_string()));
+    }
+
+    #[test]
+    fn completions_daemon_prefix() {
+        let agents = vec![];
+        let c = completions("daemon st", &agents);
+        assert_eq!(c, vec!["start", "stop"]);
+    }
+
+    #[test]
+    fn completions_daemon_in_command_list() {
+        let agents = vec![];
+        let c = completions("da", &agents);
+        assert!(c.contains(&"daemon".to_string()));
     }
 }

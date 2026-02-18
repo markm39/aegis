@@ -954,6 +954,42 @@ impl FleetApp {
                     }
                 }
             }
+            FleetCommand::DaemonStart => {
+                match crate::commands::daemon::start() {
+                    Ok(()) => {
+                        self.command_result = Some("Daemon starting...".into());
+                        self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                    }
+                    Err(e) => {
+                        self.command_result = Some(format!("Failed to start daemon: {e}"));
+                    }
+                }
+            }
+            FleetCommand::DaemonStop => {
+                if !self.connected {
+                    self.command_result = Some("Daemon is not running.".into());
+                } else {
+                    match crate::commands::daemon::stop() {
+                        Ok(()) => {
+                            self.command_result = Some("Daemon shutdown requested.".into());
+                            self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                        }
+                        Err(e) => {
+                            self.command_result = Some(format!("Failed to stop daemon: {e}"));
+                        }
+                    }
+                }
+            }
+            FleetCommand::DaemonInit => {
+                match crate::commands::daemon::init() {
+                    Ok(()) => {
+                        self.command_result = Some("Created daemon.toml.".into());
+                    }
+                    Err(e) => {
+                        self.command_result = Some(format!("{e}"));
+                    }
+                }
+            }
         }
     }
 
@@ -1036,16 +1072,12 @@ fn format_uptime(secs: u64) -> String {
 }
 
 /// Run the fleet TUI, connecting to the daemon at the default socket path.
+///
+/// Works in both connected and disconnected modes. When the daemon is not
+/// running, the TUI starts in offline mode and auto-reconnects when the
+/// daemon becomes available (poll_daemon retries every POLL_INTERVAL_MS).
 pub fn run_fleet_tui() -> Result<()> {
     let client = DaemonClient::default_path();
-
-    // Quick check that daemon is reachable
-    if !client.is_running() {
-        anyhow::bail!(
-            "daemon is not running. Start it with `aegis daemon start` or `aegis daemon run`."
-        );
-    }
-
     run_fleet_tui_with_client(client)
 }
 
