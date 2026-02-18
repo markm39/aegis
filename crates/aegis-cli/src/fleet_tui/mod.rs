@@ -720,9 +720,13 @@ impl FleetApp {
                 });
             }
             KeyCode::Char('p') => {
-                // Pop agent output into new terminal
+                // Pop agent into new terminal (tmux attach if available)
                 let agent = self.detail_name.clone();
-                let cmd = format!("aegis daemon follow {agent}");
+                let cmd = self.agents.iter()
+                    .find(|a| a.name == agent)
+                    .and_then(|a| a.attach_command.as_ref())
+                    .map(|parts| parts.join(" "))
+                    .unwrap_or_else(|| format!("aegis daemon follow {agent}"));
                 self.spawn_terminal(&cmd, &format!("Opened '{agent}' in new terminal"));
             }
             KeyCode::Char(':') => {
