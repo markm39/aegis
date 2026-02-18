@@ -20,16 +20,17 @@ const MAX_LINE_LENGTH: usize = 1024 * 1024;
 
 /// Channel type for sending commands from the socket server to the daemon loop.
 ///
-/// Each command includes a oneshot sender for the response. The daemon main
-/// loop calls `try_recv()` (sync-safe) to drain pending commands on each tick.
+/// Uses `std::sync::mpsc` so the daemon main loop can call `recv_timeout()`
+/// to wake immediately on incoming commands instead of sleeping between ticks.
+/// `std::sync::mpsc::Sender::send()` is non-blocking and safe from async code.
 pub type DaemonCmdTx =
-    tokio::sync::mpsc::Sender<(DaemonCommand, tokio::sync::oneshot::Sender<DaemonResponse>)>;
+    std::sync::mpsc::Sender<(DaemonCommand, tokio::sync::oneshot::Sender<DaemonResponse>)>;
 pub type DaemonCmdRx =
-    tokio::sync::mpsc::Receiver<(DaemonCommand, tokio::sync::oneshot::Sender<DaemonResponse>)>;
+    std::sync::mpsc::Receiver<(DaemonCommand, tokio::sync::oneshot::Sender<DaemonResponse>)>;
 
 /// Create a command channel pair for daemon control.
-pub fn daemon_cmd_channel(buffer: usize) -> (DaemonCmdTx, DaemonCmdRx) {
-    tokio::sync::mpsc::channel(buffer)
+pub fn daemon_cmd_channel() -> (DaemonCmdTx, DaemonCmdRx) {
+    std::sync::mpsc::channel()
 }
 
 /// Spawn the control socket server in a background thread.
@@ -40,7 +41,7 @@ pub fn spawn_control_server(
     socket_path: PathBuf,
     shutdown: Arc<AtomicBool>,
 ) -> Result<DaemonCmdRx, String> {
-    let (tx, rx) = daemon_cmd_channel(64);
+    let (tx, rx) = daemon_cmd_channel();
 
     std::thread::Builder::new()
         .name("daemon-control".into())
@@ -175,7 +176,7 @@ async fn handle_connection(
         };
 
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        if cmd_tx.send((command, resp_tx)).await.is_err() {
+        if cmd_tx.send((command, resp_tx)).is_err() {
             let resp = DaemonResponse::error("daemon main loop disconnected");
             let mut json = serde_json::to_string(&resp).unwrap_or_default();
             json.push('\n');

@@ -180,45 +180,68 @@ impl DaemonRuntime {
         self.fleet.start_all();
 
         // Main loop
+        //
+        // Uses recv_timeout instead of sleep so the daemon wakes immediately
+        // when a command arrives from the fleet TUI or other clients. Heavy
+        // work (fleet tick, channel drain, state save) is rate-limited to ~1s.
         let tick_interval = Duration::from_secs(1);
         let state_save_interval = Duration::from_secs(30);
         let mut last_state_save = Instant::now();
+        let mut last_tick = Instant::now();
 
         while !self.shutdown.load(Ordering::Relaxed) {
-            // Drain pending control commands (non-blocking)
-            self.drain_commands(&mut cmd_rx);
-
-            // Drain inbound commands from the notification channel
-            self.drain_channel_commands();
-
-            // Check if the channel thread has exited (panic or unexpected exit)
-            if let Some(handle) = &self.channel_thread {
-                if handle.is_finished() {
-                    let handle = self.channel_thread.take().unwrap();
-                    match handle.join() {
-                        Ok(()) => tracing::warn!("notification channel thread exited unexpectedly"),
-                        Err(_) => tracing::error!("notification channel thread panicked"),
-                    }
-                    // Clear senders so we don't keep trying to send to a dead thread
-                    self.channel_tx = None;
-                    self.channel_cmd_rx = None;
+            // Block until a command arrives OR the remaining tick interval expires.
+            // This makes the daemon respond to commands instantly instead of
+            // sleeping for up to 1 second.
+            let timeout = tick_interval.saturating_sub(last_tick.elapsed());
+            match cmd_rx.recv_timeout(timeout) {
+                Ok((cmd, reply_tx)) => {
+                    let response = self.handle_command(cmd);
+                    let _ = reply_tx.send(response);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    warn!("control channel disconnected");
+                    break;
                 }
             }
 
-            // Tick the fleet (check for exits, apply restart policies)
-            let notable_events = self.fleet.tick();
+            // Drain any additional commands that queued up
+            self.drain_commands(&mut cmd_rx);
 
-            // Forward notable events to the notification channel
-            self.forward_to_channel(notable_events);
+            // Fleet tick + heavy work only at ~1s intervals
+            if last_tick.elapsed() >= tick_interval {
+                // Drain inbound commands from the notification channel
+                self.drain_channel_commands();
 
-            // Periodically save state
-            if last_state_save.elapsed() >= state_save_interval {
-                self.save_state();
-                last_state_save = Instant::now();
+                // Check if the channel thread has exited (panic or unexpected exit)
+                if let Some(handle) = &self.channel_thread {
+                    if handle.is_finished() {
+                        let handle = self.channel_thread.take().unwrap();
+                        match handle.join() {
+                            Ok(()) => tracing::warn!("notification channel thread exited unexpectedly"),
+                            Err(_) => tracing::error!("notification channel thread panicked"),
+                        }
+                        // Clear senders so we don't keep trying to send to a dead thread
+                        self.channel_tx = None;
+                        self.channel_cmd_rx = None;
+                    }
+                }
+
+                // Tick the fleet (check for exits, apply restart policies)
+                let notable_events = self.fleet.tick();
+
+                // Forward notable events to the notification channel
+                self.forward_to_channel(notable_events);
+
+                // Periodically save state
+                if last_state_save.elapsed() >= state_save_interval {
+                    self.save_state();
+                    last_state_save = Instant::now();
+                }
+
+                last_tick = Instant::now();
             }
-
-            // Sleep until next tick
-            std::thread::sleep(tick_interval);
         }
 
         info!("daemon shutting down");
