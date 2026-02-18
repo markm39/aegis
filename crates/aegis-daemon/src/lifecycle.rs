@@ -331,8 +331,10 @@ fn run_agent_slot_inner(
         let timeout = std::time::Duration::from_secs(15);
         match session.wait_for_output(timeout) {
             Ok(true) => {
-                // Give the TUI a moment to finish its initial render
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                // Claude Code takes several seconds after first output to fully
+                // initialize its Ink TUI and be ready for input. 500ms is not
+                // enough -- the input field isn't active yet.
+                std::thread::sleep(std::time::Duration::from_secs(3));
             }
             Ok(false) => {
                 warn!(agent = name, "agent produced no output after 15s, injecting prompt anyway");

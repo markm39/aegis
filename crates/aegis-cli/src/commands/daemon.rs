@@ -1207,13 +1207,32 @@ pub fn follow(name: &str) -> anyhow::Result<()> {
         anyhow::bail!("daemon is not running. Start it with `aegis daemon start`.");
     }
 
-    // Verify agent exists
-    let resp = client.send(&DaemonCommand::AgentStatus { name: name.into() })
+    // Verify agent exists and check for tmux attach support
+    let resp = client.send(&DaemonCommand::ListAgents)
         .map_err(|e| anyhow::anyhow!(e))?;
-    if !resp.ok {
-        anyhow::bail!("{}", resp.message);
+    if let Some(data) = &resp.data {
+        if let Ok(agents) = serde_json::from_value::<Vec<aegis_control::daemon::AgentSummary>>(data.clone()) {
+            if let Some(agent) = agents.iter().find(|a| a.name == name) {
+                if let Some(ref attach_cmd) = agent.attach_command {
+                    if attach_cmd.len() >= 2 {
+                        // Attach directly to the tmux session for the real TUI
+                        eprintln!("Attaching to '{name}' tmux session (Ctrl+B D to detach)...");
+                        let status = std::process::Command::new(&attach_cmd[0])
+                            .args(&attach_cmd[1..])
+                            .status()?;
+                        if !status.success() {
+                            anyhow::bail!("tmux attach failed with {status}");
+                        }
+                        return Ok(());
+                    }
+                }
+            } else {
+                anyhow::bail!("unknown agent: {name}");
+            }
+        }
     }
 
+    // Fallback: stream captured output lines (no tmux)
     eprintln!("Following output from '{name}' (Ctrl+C to stop)...");
 
     let mut last_line_count = 0;

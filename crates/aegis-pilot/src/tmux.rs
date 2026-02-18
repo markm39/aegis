@@ -267,6 +267,11 @@ impl AgentSession for TmuxSession {
             return Err(AegisError::PilotError("tmux paste-buffer failed".into()));
         }
 
+        // Give the TUI time to process the pasted text before pressing Enter.
+        // Without this delay, Claude Code may not have finished ingesting the
+        // paste event and Enter gets lost.
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
         // Press Enter to submit
         self.tmux_send_special("Enter")
     }
