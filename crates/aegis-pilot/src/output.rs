@@ -12,6 +12,9 @@ use crate::ansi;
 ///
 /// Accepts raw byte chunks from the PTY, splits them into lines, strips
 /// ANSI escape codes, and retains only the most recent `capacity` lines.
+/// Maximum partial line size before forced flush (1 MB).
+const MAX_PARTIAL_SIZE: usize = 1024 * 1024;
+
 pub struct OutputBuffer {
     /// Stripped lines (ring buffer).
     lines: VecDeque<String>,
@@ -46,6 +49,13 @@ impl OutputBuffer {
                 completed.push(stripped);
             } else {
                 self.partial.push(byte);
+                // Force-flush if partial line exceeds limit (e.g. progress bars using \r)
+                if self.partial.len() >= MAX_PARTIAL_SIZE {
+                    let raw_line = std::mem::take(&mut self.partial);
+                    let stripped = ansi::strip_ansi(&raw_line);
+                    self.push_line(stripped.clone());
+                    completed.push(stripped);
+                }
             }
         }
 

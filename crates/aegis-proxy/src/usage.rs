@@ -348,6 +348,11 @@ async fn handle_streaming_response(
                 Ok(chunk) => {
                     // Parse SSE events from the chunk
                     line_buf.extend_from_slice(&chunk);
+                    // Cap buffer at 10 MB to prevent unbounded growth on missing newlines
+                    if line_buf.len() > 10 * 1024 * 1024 {
+                        tracing::warn!("SSE line buffer exceeded 10 MB, clearing");
+                        line_buf.clear();
+                    }
                     parse_sse_lines(&mut line_buf, &mut accumulator);
 
                     // Forward the chunk to the client

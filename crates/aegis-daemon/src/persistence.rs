@@ -64,6 +64,15 @@ pub fn plist_path() -> PathBuf {
         .join("com.aegis.daemon.plist")
 }
 
+/// Escape XML special characters for safe interpolation into plist XML.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 /// Generate a launchd plist XML string for the daemon.
 ///
 /// The plist configures:
@@ -76,6 +85,10 @@ pub fn generate_launchd_plist(aegis_binary: &str) -> String {
     let stdout_log = daemon_dir.join("stdout.log");
     let stderr_log = daemon_dir.join("stderr.log");
 
+    let binary_escaped = escape_xml(aegis_binary);
+    let stdout_escaped = escape_xml(&stdout_log.display().to_string());
+    let stderr_escaped = escape_xml(&stderr_log.display().to_string());
+
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -85,7 +98,7 @@ pub fn generate_launchd_plist(aegis_binary: &str) -> String {
     <string>com.aegis.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{aegis_binary}</string>
+        <string>{binary_escaped}</string>
         <string>daemon</string>
         <string>run</string>
         <string>--launchd</string>
@@ -97,13 +110,11 @@ pub fn generate_launchd_plist(aegis_binary: &str) -> String {
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>{stdout}</string>
+    <string>{stdout_escaped}</string>
     <key>StandardErrorPath</key>
-    <string>{stderr}</string>
+    <string>{stderr_escaped}</string>
 </dict>
-</plist>"#,
-        stdout = stdout_log.display(),
-        stderr = stderr_log.display(),
+</plist>"#
     )
 }
 
@@ -137,8 +148,9 @@ pub fn uninstall_launchd() -> Result<(), String> {
 /// Spawn `caffeinate -i -w <pid>` to prevent idle sleep while the daemon runs.
 ///
 /// The `-w` flag ties caffeinate to the daemon's PID -- when the daemon exits,
-/// caffeinate exits too. Returns the caffeinate child's PID.
-pub fn start_caffeinate() -> Result<u32, String> {
+/// caffeinate exits too. Returns the child handle so the caller can reap it
+/// during shutdown (preventing zombie processes on long-running daemons).
+pub fn start_caffeinate() -> Result<std::process::Child, String> {
     let daemon_pid = std::process::id();
     let child = std::process::Command::new("caffeinate")
         .args(["-i", "-w", &daemon_pid.to_string()])
@@ -147,9 +159,8 @@ pub fn start_caffeinate() -> Result<u32, String> {
         .spawn()
         .map_err(|e| format!("failed to spawn caffeinate: {e}"))?;
 
-    let pid = child.id();
-    tracing::info!(caffeinate_pid = pid, daemon_pid, "caffeinate started");
-    Ok(pid)
+    tracing::info!(caffeinate_pid = child.id(), daemon_pid, "caffeinate started");
+    Ok(child)
 }
 
 #[cfg(test)]

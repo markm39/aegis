@@ -155,9 +155,9 @@ fn format_deny(format: HookFormat, tool_name: &str, reason: &str) -> serde_json:
 /// expected format. Falls back to allow if the daemon is unreachable (matching
 /// the `--dangerously-skip-permissions` baseline).
 pub fn pre_tool_use() -> anyhow::Result<()> {
-    // Read the hook payload from stdin
+    // Read the hook payload from stdin (capped at 10 MB to prevent memory exhaustion)
     let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
+    io::stdin().take(10 * 1024 * 1024).read_to_string(&mut input)?;
 
     let payload: serde_json::Value = serde_json::from_str(&input)
         .unwrap_or_else(|_| serde_json::Value::Null);

@@ -64,6 +64,18 @@ pub async fn serve(
         .map_err(|e| format!("HTTP server error: {e}"))
 }
 
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Check API key if one is configured.
 fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, Json<CommandResponse>)> {
     if state.api_key.is_empty() {
@@ -76,7 +88,7 @@ fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, 
         .unwrap_or("");
 
     let expected = format!("Bearer {}", state.api_key);
-    if auth != expected {
+    if !constant_time_eq(auth.as_bytes(), expected.as_bytes()) {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(CommandResponse::error("invalid or missing API key")),

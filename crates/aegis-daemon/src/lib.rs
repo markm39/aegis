@@ -132,8 +132,9 @@ impl DaemonRuntime {
             }
         }
 
-        // Optionally start caffeinate
-        let _caffeinate_pid = if self.config.persistence.prevent_sleep {
+        // Optionally start caffeinate (keep handle alive until function returns;
+        // caffeinate self-terminates via -w when daemon PID exits)
+        let _caffeinate_child = if self.config.persistence.prevent_sleep {
             Some(persistence::start_caffeinate()?)
         } else {
             None
