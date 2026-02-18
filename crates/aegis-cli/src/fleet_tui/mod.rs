@@ -109,6 +109,8 @@ pub struct FleetApp {
     pub completion_idx: Option<usize>,
     /// Error/result message from last command execution.
     pub command_result: Option<String>,
+    /// When the command result was set (for auto-clear after timeout).
+    pub command_result_at: Option<Instant>,
 
     // -- Fleet goal --
     /// Fleet-wide goal (fetched from daemon).
@@ -159,6 +161,7 @@ impl FleetApp {
             command_completions: Vec::new(),
             completion_idx: None,
             command_result: None,
+            command_result_at: None,
             fleet_goal: None,
             wizard: None,
             help_scroll: 0,
@@ -347,8 +350,13 @@ impl FleetApp {
             return;
         }
 
-        // Clear command result on any keypress (so it fades after one action)
-        self.command_result = None;
+        // Clear stale command results (auto-clear after 5 seconds).
+        if let Some(at) = self.command_result_at {
+            if at.elapsed().as_secs() >= 5 {
+                self.command_result = None;
+                self.command_result_at = None;
+            }
+        }
 
         // Input mode intercepts all keys
         if self.input_mode {
@@ -496,12 +504,12 @@ impl FleetApp {
             // Offline: write directly to daemon.toml
             match self.add_agent_to_config(config) {
                 Ok(name) => {
-                    self.command_result = Some(format!(
+                    self.set_result(format!(
                         "Added '{name}' to daemon.toml. Start daemon with :daemon start."
                     ));
                 }
                 Err(e) => {
-                    self.command_result = Some(format!("Failed to add agent: {e}"));
+                    self.set_result(format!("Failed to add agent: {e}"));
                 }
             }
         }
@@ -650,10 +658,10 @@ impl FleetApp {
                 let cmd = format!("aegis daemon follow {agent}");
                 match crate::terminal::spawn_in_terminal(&cmd) {
                     Ok(()) => {
-                        self.command_result = Some(format!("Opened '{agent}' in new terminal"));
+                        self.set_result(format!("Opened '{agent}' in new terminal"));
                     }
                     Err(e) => {
-                        self.command_result = Some(e);
+                        self.set_result(e);
                     }
                 }
             }
@@ -720,6 +728,7 @@ impl FleetApp {
         self.command_completions.clear();
         self.completion_idx = None;
         self.command_result = None;
+        self.command_result_at = None;
         self.history_index = None;
     }
 
@@ -866,7 +875,7 @@ impl FleetApp {
             Ok(Some(cmd)) => self.dispatch_command(cmd),
             Ok(None) => {}
             Err(e) => {
-                self.command_result = Some(e);
+                self.set_result(e);
             }
         }
     }
@@ -899,7 +908,7 @@ impl FleetApp {
                     };
                     self.send_and_show_result(cmd);
                 } else {
-                    self.command_result = Some(format!("no pending prompts for '{agent}'"));
+                    self.set_result(format!("no pending prompts for '{agent}'"));
                 }
             }
             FleetCommand::Deny { agent } => {
@@ -910,7 +919,7 @@ impl FleetApp {
                     };
                     self.send_and_show_result(cmd);
                 } else {
-                    self.command_result = Some(format!("no pending prompts for '{agent}'"));
+                    self.set_result(format!("no pending prompts for '{agent}'"));
                 }
             }
             FleetCommand::Nudge { agent, message } => {
@@ -920,26 +929,26 @@ impl FleetApp {
                 let cmd = format!("aegis daemon follow {agent}");
                 match crate::terminal::spawn_in_terminal(&cmd) {
                     Ok(()) => {
-                        self.command_result = Some(format!("Opened '{agent}' in new terminal"));
+                        self.set_result(format!("Opened '{agent}' in new terminal"));
                     }
                     Err(e) => {
-                        self.command_result = Some(e);
+                        self.set_result(e);
                     }
                 }
             }
             FleetCommand::Monitor => {
                 match crate::terminal::spawn_in_terminal("aegis monitor") {
                     Ok(()) => {
-                        self.command_result = Some("Opened monitor in new terminal".into());
+                        self.set_result("Opened monitor in new terminal");
                     }
                     Err(e) => {
-                        self.command_result = Some(e);
+                        self.set_result(e);
                     }
                 }
             }
             FleetCommand::Follow { agent } => {
                 if !self.agents.iter().any(|a| a.name == agent) && self.connected {
-                    self.command_result = Some(format!("unknown agent: '{agent}'"));
+                    self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
                     self.detail_name = agent;
                     self.detail_output.clear();
@@ -961,11 +970,11 @@ impl FleetApp {
                                 let _ = client.send(&DaemonCommand::ReloadConfig);
                             }
                         }
-                        self.command_result = Some(format!("Removed '{agent}'."));
+                        self.set_result(format!("Removed '{agent}'."));
                         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                     }
                     Err(e) => {
-                        self.command_result = Some(format!("Failed to remove '{agent}': {e}"));
+                        self.set_result(format!("Failed to remove '{agent}': {e}"));
                     }
                 }
             }
@@ -979,7 +988,7 @@ impl FleetApp {
                 // Show status as command result
                 let running = self.running_count();
                 let total = self.agents.len();
-                self.command_result = Some(format!(
+                self.set_result(format!(
                     "{running} running / {total} total, daemon PID {}, uptime {}",
                     self.daemon_pid,
                     format_uptime(self.daemon_uptime_secs),
@@ -1000,7 +1009,7 @@ impl FleetApp {
             }
             FleetCommand::Pending { agent } => {
                 if !self.agents.iter().any(|a| a.name == agent) && self.connected {
-                    self.command_result = Some(format!("unknown agent: '{agent}'"));
+                    self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
                     self.detail_name = agent;
                     self.detail_output.clear();
@@ -1087,7 +1096,7 @@ impl FleetApp {
                             "goal" => (None, Some(v), None),
                             "context" => (None, None, Some(v)),
                             _ => {
-                                self.command_result = Some(format!(
+                                self.set_result(format!(
                                     "unknown field '{f}'. Use: role, goal, or context"
                                 ));
                                 return;
@@ -1108,25 +1117,25 @@ impl FleetApp {
             FleetCommand::DaemonStart => {
                 match crate::commands::daemon::start() {
                     Ok(()) => {
-                        self.command_result = Some("Daemon starting...".into());
+                        self.set_result("Daemon starting...");
                         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                     }
                     Err(e) => {
-                        self.command_result = Some(format!("Failed to start daemon: {e}"));
+                        self.set_result(format!("Failed to start daemon: {e}"));
                     }
                 }
             }
             FleetCommand::DaemonStop => {
                 if !self.connected {
-                    self.command_result = Some("Daemon is not running.".into());
+                    self.set_result("Daemon is not running.");
                 } else {
                     match crate::commands::daemon::stop() {
                         Ok(()) => {
-                            self.command_result = Some("Daemon shutdown requested.".into());
+                            self.set_result("Daemon shutdown requested.");
                             self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
-                            self.command_result = Some(format!("Failed to stop daemon: {e}"));
+                            self.set_result(format!("Failed to stop daemon: {e}"));
                         }
                     }
                 }
@@ -1134,20 +1143,20 @@ impl FleetApp {
             FleetCommand::DaemonInit => {
                 match crate::commands::daemon::init() {
                     Ok(()) => {
-                        self.command_result = Some("Created daemon.toml.".into());
+                        self.set_result("Created daemon.toml.");
                     }
                     Err(e) => {
-                        self.command_result = Some(format!("{e}"));
+                        self.set_result(format!("{e}"));
                     }
                 }
             }
             FleetCommand::DaemonReload => {
                 if !self.connected {
-                    self.command_result = Some("Daemon is not running.".into());
+                    self.set_result("Daemon is not running.");
                 } else if let Some(client) = &self.client {
                     match client.send(&DaemonCommand::ReloadConfig) {
                         Ok(resp) => {
-                            self.command_result = Some(resp.message);
+                            self.set_result(resp.message);
                             self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
@@ -1158,7 +1167,7 @@ impl FleetApp {
             }
             FleetCommand::DaemonRestart => {
                 if !self.connected {
-                    self.command_result = Some("Daemon is not running. Use :daemon start.".into());
+                    self.set_result("Daemon is not running. Use :daemon start.");
                 } else {
                     // Stop first, then start
                     let stop_result = crate::commands::daemon::stop();
@@ -1168,27 +1177,27 @@ impl FleetApp {
                             std::thread::sleep(std::time::Duration::from_millis(500));
                             match crate::commands::daemon::start() {
                                 Ok(()) => {
-                                    self.command_result = Some("Daemon restarting...".into());
+                                    self.set_result("Daemon restarting...");
                                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                                 }
                                 Err(e) => {
-                                    self.command_result = Some(format!("Stopped, but failed to restart: {e}"));
+                                    self.set_result(format!("Stopped, but failed to restart: {e}"));
                                 }
                             }
                         }
                         Err(e) => {
-                            self.command_result = Some(format!("Failed to stop daemon: {e}"));
+                            self.set_result(format!("Failed to stop daemon: {e}"));
                         }
                     }
                 }
             }
             FleetCommand::DaemonStatus => {
                 if !self.connected {
-                    self.command_result = Some("Daemon is not running (offline mode).".into());
+                    self.set_result("Daemon is not running (offline mode).");
                 } else {
                     let running = self.running_count();
                     let total = self.agents.len();
-                    self.command_result = Some(format!(
+                    self.set_result(format!(
                         "{running} running / {total} total, PID {}, uptime {}",
                         self.daemon_pid,
                         format_uptime(self.daemon_uptime_secs),
@@ -1233,7 +1242,7 @@ impl FleetApp {
             match client.send(&cmd) {
                 Ok(resp) => {
                     if resp.ok {
-                        self.command_result = Some(resp.message);
+                        self.set_result(resp.message);
                     } else {
                         self.last_error = Some(resp.message);
                     }
@@ -1259,7 +1268,7 @@ impl FleetApp {
                     let goal = data["agent_goal"].as_str().unwrap_or("(none)");
                     let context = data["context"].as_str().unwrap_or("(none)");
                     let task = data["task"].as_str().unwrap_or("(none)");
-                    self.command_result = Some(format!(
+                    self.set_result(format!(
                         "role={role}  goal={goal}  context={context}  task={task}"
                     ));
                 }
@@ -1296,11 +1305,17 @@ impl FleetApp {
         pending.first().map(|p| p.request_id.clone())
     }
 
+    /// Set the command result message with a timestamp for auto-clear.
+    fn set_result(&mut self, msg: impl Into<String>) {
+        self.command_result = Some(msg.into());
+        self.command_result_at = Some(Instant::now());
+    }
+
     /// Spawn a command in a new terminal and set the result message.
     fn spawn_terminal(&mut self, cmd: &str, msg: &str) {
         match crate::terminal::spawn_in_terminal(cmd) {
-            Ok(()) => self.command_result = Some(msg.into()),
-            Err(e) => self.command_result = Some(e),
+            Ok(()) => self.set_result(msg),
+            Err(e) => self.set_result(e),
         }
     }
 
@@ -1962,12 +1977,34 @@ mod tests {
     }
 
     #[test]
-    fn command_result_clears_on_next_key() {
+    fn command_result_persists_across_keypress() {
+        let mut app = make_app();
+        app.set_result("recent result");
+
+        // Pressing a key should NOT clear a recent result
+        app.handle_key(press(KeyCode::Char('j')));
+        assert!(app.command_result.is_some());
+    }
+
+    #[test]
+    fn command_result_clears_after_timeout() {
         let mut app = make_app();
         app.command_result = Some("old result".into());
+        // Set the timestamp to 6 seconds ago (past the 5s threshold)
+        app.command_result_at = Some(Instant::now() - std::time::Duration::from_secs(6));
 
-        // Any key clears the result
+        // Keypress should clear the stale result
         app.handle_key(press(KeyCode::Char('j')));
+        assert!(app.command_result.is_none());
+    }
+
+    #[test]
+    fn command_result_clears_on_entering_command_mode() {
+        let mut app = make_app();
+        app.set_result("some result");
+
+        // Entering command mode clears the result immediately
+        app.handle_key(press(KeyCode::Char(':')));
         assert!(app.command_result.is_none());
     }
 
