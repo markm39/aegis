@@ -423,12 +423,15 @@ impl Fleet {
                 self.tick_slot(name);
             }
 
-            // Check if backoff has expired and agent should be restarted
+            // Check if backoff has expired and agent should be restarted.
+            // Also verify the agent is still enabled -- a disabled agent's backoff
+            // should just be cleared, not trigger a restart.
             let ready = self
                 .slots
                 .get(name)
                 .is_some_and(|s| {
-                    s.backoff_until.is_some_and(|t| std::time::Instant::now() >= t)
+                    s.config.enabled
+                        && s.backoff_until.is_some_and(|t| std::time::Instant::now() >= t)
                 });
 
             if ready {

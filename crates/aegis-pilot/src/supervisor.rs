@@ -465,7 +465,11 @@ fn handle_command(
         SupervisorCommand::Approve { request_id } => {
             if let Some(info) = pending.remove(&request_id) {
                 pty.send_line(&info.approve_response)?;
+                let was_stalled = stall.nudge_count() > 0;
                 stall.activity();
+                if was_stalled {
+                    send_update(update_tx, PilotUpdate::StallResolved);
+                }
                 stats.approved += 1;
                 send_update(update_tx, PilotUpdate::PendingResolved {
                     request_id,
@@ -479,7 +483,11 @@ fn handle_command(
         SupervisorCommand::Deny { request_id } => {
             if let Some(info) = pending.remove(&request_id) {
                 pty.send_line(&info.deny_response)?;
+                let was_stalled = stall.nudge_count() > 0;
                 stall.activity();
+                if was_stalled {
+                    send_update(update_tx, PilotUpdate::StallResolved);
+                }
                 stats.denied += 1;
 
                 std::thread::sleep(Duration::from_millis(500));
@@ -496,7 +504,11 @@ fn handle_command(
         }
         SupervisorCommand::SendInput { text } => {
             pty.send_line(&text)?;
+            let was_stalled = stall.nudge_count() > 0;
             stall.activity();
+            if was_stalled {
+                send_update(update_tx, PilotUpdate::StallResolved);
+            }
             info!(text, "input sent to agent via command");
         }
         SupervisorCommand::Nudge { message } => {
