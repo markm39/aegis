@@ -24,7 +24,7 @@ Aegis adds the missing layers:
 | SIEM export | No | Yes (JSON, JSONL, CSV, CEF) |
 | Compliance reporting | No | Yes |
 | Remote control (Telegram) | No | Yes |
-| Multi-agent fleet management | No | Yes (daemon) |
+| Multi-agent fleet management | No | Yes (daemon + orchestrator) |
 
 ## Install
 
@@ -78,13 +78,15 @@ Three commands. Full audit trail.
 
 Running `aegis` opens the fleet dashboard -- a full-screen TUI where you manage all your agents:
 
-- See every agent's status, output, and pending permission requests
+- See every agent's status, output, pending count, and attention indicators
 - Approve or deny permission prompts with a single keystroke
-- Send input to agents, nudge stalled ones, start/stop/restart
-- Type `:` for a command palette with tab completion
+- Send input to agents, nudge stalled ones, start/stop/restart/enable/disable
+- Set fleet goals and per-agent context (role, goal, task) at runtime
+- Type `:` for a command palette with tab completion (30+ commands)
 - Pop agent output into separate terminal windows
+- Tab to jump to the next agent needing attention
 
-When you're away from the terminal, configure [Telegram notifications](#telegram-remote-control) to approve requests from your phone.
+When you're away from the terminal, configure [Telegram notifications](#telegram-remote-control) to approve requests from your phone. The Telegram bot sends notifications for pending prompts, stall nudges, and agent exits.
 
 The hub is the primary interface. Individual subcommands (`aegis pilot`, `aegis wrap`, `aegis daemon`) work standalone for scripting and automation.
 
@@ -220,18 +222,20 @@ bot_token = "123456:ABC..."
 chat_id = 987654321
 ```
 
-Aegis sends you notifications when agents need approval, stall, or exit. Pending permission requests include inline [Approve] / [Deny] buttons for one-tap responses.
+The daemon forwards notable events -- pending permission prompts, stall nudges, attention alerts, and agent exits. Pending permission requests include inline [Approve] / [Deny] buttons for one-tap responses.
 
 Available Telegram commands:
 
 | Command | Action |
 |---|---|
-| `/status` | Check agent status |
+| `/status` | Check fleet/agent status |
 | `/approve <id>` | Approve a pending request |
 | `/deny <id>` | Deny a pending request |
 | `/output [N]` | View recent agent output (default 20 lines) |
 | `/input <text>` | Send text to agent stdin |
 | `/nudge` | Nudge a stalled agent |
+| `/goal [text]` | Get or set fleet-wide goal |
+| `/context <agent>` | View agent context |
 | `/stop` | Stop the agent |
 | `/help` | List all commands |
 
@@ -270,8 +274,18 @@ aegis daemon agents
 # View agent output
 aegis daemon output claude-1 --lines 50
 
+# Stream agent output in real time (like tail -f)
+aegis daemon follow claude-1
+
 # Send input to an agent
 aegis daemon send claude-1 "implement the login page"
+
+# Enable/disable agents without removing them
+aegis daemon enable claude-1
+aegis daemon disable claude-2
+
+# Restart a specific agent
+aegis daemon restart claude-1
 
 # Stop a specific agent
 aegis daemon stop-agent claude-1
@@ -279,6 +293,51 @@ aegis daemon stop-agent claude-1
 # Stop the daemon
 aegis daemon stop
 ```
+
+### Fleet Goals and Agent Context
+
+Assign a fleet-wide goal and per-agent context to coordinate multi-agent workflows:
+
+```bash
+# Set a fleet-wide goal
+aegis daemon goal "Ship the v2 auth system by Friday"
+
+# Set agent role, goal, context, and task
+aegis daemon context claude-1 --role "Backend engineer" \
+  --goal "Implement OAuth2 provider" \
+  --task "Add token refresh endpoint"
+
+# View agent context
+aegis daemon context claude-1
+```
+
+These fields are persisted to `daemon.toml` and included in autonomy prompts when agents request interactive input. They're also available to orchestrator agents (see below).
+
+### Orchestrator Agents
+
+An orchestrator is a special agent that periodically reviews the fleet and directs other agents. Configure one by adding an `[agents.<name>.orchestrator]` section:
+
+```toml
+[agents.lead]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Tech lead"
+
+[agents.lead.orchestrator]
+review_interval_secs = 300
+managed_agents = []  # empty = manage all non-orchestrator agents
+```
+
+The orchestrator receives a fleet snapshot (agent status, recent output, attention flags, pending counts) at each review interval and can issue commands to redirect the team.
+
+### Crash Recovery
+
+The daemon is resilient to crashes and restarts:
+
+- **Exponential backoff** for crash loops -- agents that crash within 30 seconds get increasing delays (2, 4, 8... up to 60s) before restart
+- **State persistence** -- session IDs and restart counts survive daemon restarts via `~/.aegis/daemon/state.json`
+- **Graceful shutdown** -- SIGTERM with 5-second timeout, escalating to SIGKILL
+- **Atomic config writes** -- temp file + fsync + rename prevents corruption on power loss
 
 ## Architecture
 
@@ -312,13 +371,14 @@ aegis pilot -- CMD                aegis run -- CMD
                                           +--> TUI dashboard (ratatui)
 ```
 
-Six layers:
+Seven layers:
 1. **Policy Engine** -- Cedar 4.x policies define what agents can do (default-deny)
 2. **Cedar-to-SBPL Compiler** -- Translates Cedar policies into macOS Seatbelt profiles at launch
 3. **Isolation Boundary** -- macOS Seatbelt (`sandbox-exec`) enforces at the kernel level
 4. **Pilot Supervisor** -- PTY-based agent supervision with prompt detection, auto-approval, and stall nudging
-5. **Observer** -- FSEvents filesystem monitoring with snapshot diffing for complete coverage
-6. **Audit Ledger** -- Append-only, SHA-256 hash-chained SQLite log with session tracking
+5. **Fleet Daemon** -- Multi-agent orchestration with crash recovery, exponential backoff, and orchestrator agents
+6. **Observer** -- FSEvents filesystem monitoring with snapshot diffing for complete coverage
+7. **Audit Ledger** -- Append-only, SHA-256 hash-chained SQLite log with session tracking
 
 ## CLI Reference
 
@@ -362,7 +422,12 @@ Six layers:
 | `aegis daemon nudge <name> [message]` | Nudge stalled agent |
 | `aegis daemon pending <name>` | List pending prompts |
 | `aegis daemon follow <name>` | Stream agent output in real time |
+| `aegis daemon enable <name>` | Enable a disabled agent |
+| `aegis daemon disable <name>` | Disable an agent (stops if running) |
+| `aegis daemon restart <name>` | Restart a specific agent |
 | `aegis daemon stop-agent <name>` | Stop a specific agent |
+| `aegis daemon goal [text]` | Get or set fleet-wide goal |
+| `aegis daemon context <name> [--role R] [--goal G] [--context C] [--task T]` | Get or set agent context |
 
 ## Cedar Policy Reference
 
@@ -407,7 +472,7 @@ permit(
 
 ## Configuration Reference
 
-`~/.aegis/NAME/aegis.toml`:
+### Agent config: `~/.aegis/NAME/aegis.toml`
 
 ```toml
 name = "my-agent"
@@ -448,6 +513,44 @@ bot_token = "123456:ABC-DEF..."
 chat_id = 987654321
 ```
 
+### Daemon config: `~/.aegis/daemon/daemon.toml`
+
+```toml
+# Fleet-wide goal (optional)
+fleet_goal = "Ship the v2 auth system by Friday"
+
+[agents.claude-1]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Backend engineer"
+agent_goal = "Implement OAuth2 provider"
+context = "Using axum web framework, PostgreSQL"
+task = "Add token refresh endpoint"
+
+[agents.claude-2]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Frontend engineer"
+agent_goal = "Build the settings UI"
+task = "Add OAuth callback page"
+
+# Optional: designate an agent as fleet orchestrator
+[agents.lead]
+tool = "ClaudeCode"
+working_dir = "~/my-project"
+role = "Tech lead"
+
+[agents.lead.orchestrator]
+review_interval_secs = 300    # How often to review fleet state
+managed_agents = []           # Empty = manage all non-orchestrator agents
+
+# Telegram notifications (optional)
+[channel]
+type = "telegram"
+bot_token = "123456:ABC-DEF..."
+chat_id = 987654321
+```
+
 ## Crate Structure
 
 | Crate | Description |
@@ -462,8 +565,9 @@ chat_id = 987654321
 | `aegis-control` | Control plane: Unix socket + HTTP servers, command protocol |
 | `aegis-alert` | Webhook alert dispatching |
 | `aegis-channel` | Bidirectional messaging (Telegram, etc.) |
-| `aegis-daemon` | Multi-agent fleet orchestration |
+| `aegis-daemon` | Multi-agent fleet orchestration with crash recovery |
 | `aegis-monitor` | Real-time ratatui TUI dashboard |
+| `aegis-harness` | PTY-based TUI integration test harness |
 | `aegis-cli` | Binary entry point, all CLI commands, pilot TUI |
 
 ## Building from Source
