@@ -363,14 +363,8 @@ impl AddAgentWizard {
                     }
                     WizardStep::Name => {
                         let trimmed = self.name.trim();
-                        if trimmed.is_empty() {
-                            self.validation_error = Some("Name cannot be empty".into());
-                            return true;
-                        }
-                        if !trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-                            self.validation_error = Some(
-                                "Name may only contain letters, digits, hyphens, and underscores".into()
-                            );
+                        if let Err(e) = aegis_types::validate_config_name(trimmed) {
+                            self.validation_error = Some(format!("{e}"));
                             return true;
                         }
                         self.validation_error = None;

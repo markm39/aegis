@@ -315,12 +315,12 @@ fn smoke_test_config_name_validation() {
 
     aegis_cmd(home).args(["setup"]).assert().success();
 
-    // Path traversal in config name should be rejected
+    // Path traversal in config name should be rejected (caught by character validation)
     aegis_cmd(home)
         .args(["run", "--config", "../etc/passwd", "--", "echo", "bad"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("path separator"));
+        .stderr(predicate::str::contains("invalid config name"));
 }
 
 #[test]

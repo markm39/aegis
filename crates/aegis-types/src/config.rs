@@ -458,22 +458,20 @@ pub struct AegisConfig {
 #[must_use = "validation result must be checked to prevent path traversal"]
 pub fn validate_config_name(name: &str) -> Result<(), AegisError> {
     if name.is_empty() {
-        return Err(AegisError::ConfigError("config name cannot be empty".into()));
-    }
-    if name.contains('/') || name.contains('\\') {
-        return Err(AegisError::ConfigError(format!(
-            "config name contains path separator: {name:?}"
-        )));
+        return Err(AegisError::ConfigError("name cannot be empty".into()));
     }
     if name == "." || name == ".." {
         return Err(AegisError::ConfigError(format!(
-            "config name cannot be {name:?}"
+            "name cannot be {name:?}"
         )));
     }
-    if name.chars().any(|c| c.is_control()) {
-        return Err(AegisError::ConfigError(format!(
-            "config name contains control characters: {name:?}"
-        )));
+    // Allow alphanumeric, hyphens, underscores, and dots.
+    // This keeps names safe for TOML, command bar tab-completion,
+    // daemon protocol, and filesystem paths.
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(AegisError::ConfigError(
+            "name may only contain letters, digits, hyphens, underscores, and dots".into()
+        ));
     }
     Ok(())
 }
@@ -703,6 +701,14 @@ mod tests {
     fn validate_config_name_rejects_control_chars() {
         assert!(validate_config_name("foo\nbar").is_err());
         assert!(validate_config_name("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn validate_config_name_rejects_special_chars() {
+        assert!(validate_config_name("bad name").is_err());
+        assert!(validate_config_name("bad[name").is_err());
+        assert!(validate_config_name("name=value").is_err());
+        assert!(validate_config_name("agent.v1").is_ok()); // dots OK
     }
 
     #[test]
