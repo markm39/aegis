@@ -572,7 +572,9 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         Span::styled("x", Style::default().fg(Color::Red)),
         Span::styled(": stop  ", Style::default().fg(Color::DarkGray)),
         Span::styled("r", Style::default().fg(Color::Yellow)),
-        Span::styled(": restart", Style::default().fg(Color::DarkGray)),
+        Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(":", Style::default().fg(Color::Cyan)),
+        Span::styled(": command", Style::default().fg(Color::DarkGray)),
     ]);
 
     if app.detail_attention {
