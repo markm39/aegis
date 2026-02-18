@@ -393,7 +393,7 @@ pub fn help_text() -> &'static str {
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
      :pop <agent>             Open agent in new terminal\n\
-     :quit                    Quit TUI\n\
+     :quit / :q               Quit TUI\n\
      :remove <agent>          Remove agent from config\n\
      :report                  Compliance report\n\
      :restart <agent>         Restart agent\n\

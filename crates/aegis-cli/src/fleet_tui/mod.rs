@@ -938,15 +938,19 @@ impl FleetApp {
                 }
             }
             FleetCommand::Follow { agent } => {
-                self.detail_name = agent;
-                self.detail_output.clear();
-                self.detail_scroll = 0;
-                self.detail_pending.clear();
-                self.pending_selected = 0;
-                self.focus_pending = false;
-                self.detail_attention = false;
-                self.view = FleetView::AgentDetail;
-                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                if !self.agents.iter().any(|a| a.name == agent) && self.connected {
+                    self.command_result = Some(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.detail_name = agent;
+                    self.detail_output.clear();
+                    self.detail_scroll = 0;
+                    self.detail_pending.clear();
+                    self.pending_selected = 0;
+                    self.focus_pending = false;
+                    self.detail_attention = false;
+                    self.view = FleetView::AgentDetail;
+                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                }
             }
             FleetCommand::Remove { agent } => {
                 match crate::commands::daemon::remove_agent(&agent) {
@@ -995,16 +999,19 @@ impl FleetApp {
                 );
             }
             FleetCommand::Pending { agent } => {
-                // Switch to agent's detail view with focus on pending panel
-                self.detail_name = agent;
-                self.detail_output.clear();
-                self.detail_scroll = 0;
-                self.detail_pending.clear();
-                self.pending_selected = 0;
-                self.focus_pending = true;
-                self.detail_attention = false;
-                self.view = FleetView::AgentDetail;
-                self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                if !self.agents.iter().any(|a| a.name == agent) && self.connected {
+                    self.command_result = Some(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.detail_name = agent;
+                    self.detail_output.clear();
+                    self.detail_scroll = 0;
+                    self.detail_pending.clear();
+                    self.pending_selected = 0;
+                    self.focus_pending = true;
+                    self.detail_attention = false;
+                    self.view = FleetView::AgentDetail;
+                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                }
             }
             FleetCommand::Wrap { cmd } => {
                 self.spawn_terminal(
@@ -2037,6 +2044,33 @@ mod tests {
         // PageDown scrolls down by 20
         app.handle_key(press(KeyCode::PageDown));
         assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn follow_nonexistent_agent_shows_error() {
+        let mut app = make_app();
+        app.connected = true;
+        app.command_mode = true;
+        app.command_buffer = "follow nonexistent".into();
+        app.command_cursor = 18;
+
+        app.handle_key(press(KeyCode::Enter));
+        // Should stay in overview (not switch to detail)
+        assert_eq!(app.view, FleetView::Overview);
+        assert!(app.command_result.as_ref().unwrap().contains("unknown agent"));
+    }
+
+    #[test]
+    fn follow_existing_agent_switches_view() {
+        let mut app = make_app();
+        app.connected = true;
+        app.command_mode = true;
+        app.command_buffer = "follow alpha".into();
+        app.command_cursor = 12;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.view, FleetView::AgentDetail);
+        assert_eq!(app.detail_name, "alpha");
     }
 
     #[test]

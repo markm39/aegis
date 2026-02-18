@@ -338,7 +338,7 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         .iter()
         .find(|a| a.name == app.detail_name)
         .map(|a| status_display(&a.status))
-        .unwrap_or(("Unknown", Color::DarkGray));
+        .unwrap_or(("Unknown".into(), Color::DarkGray));
 
     let agent_summary = app
         .agents
@@ -1029,14 +1029,16 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
 }
 
 /// Get display text and color for an agent status.
-fn status_display(status: &AgentStatus) -> (&'static str, Color) {
+fn status_display(status: &AgentStatus) -> (String, Color) {
     match status {
-        AgentStatus::Running { .. } => ("Running", Color::Green),
-        AgentStatus::Stopped { .. } => ("Stopped", Color::DarkGray),
-        AgentStatus::Pending => ("Pending", Color::Cyan),
-        AgentStatus::Crashed { .. } => ("Crashed", Color::Yellow),
-        AgentStatus::Failed { .. } => ("Failed", Color::Red),
-        AgentStatus::Disabled => ("Disabled", Color::DarkGray),
+        AgentStatus::Running { .. } => ("Running".into(), Color::Green),
+        AgentStatus::Stopped { .. } => ("Stopped".into(), Color::DarkGray),
+        AgentStatus::Pending => ("Pending".into(), Color::Cyan),
+        AgentStatus::Crashed { restart_in_secs, .. } => {
+            (format!("Crashed ({restart_in_secs}s)"), Color::Yellow)
+        }
+        AgentStatus::Failed { .. } => ("Failed".into(), Color::Red),
+        AgentStatus::Disabled => ("Disabled".into(), Color::DarkGray),
     }
 }
 
@@ -1118,7 +1120,7 @@ mod tests {
         assert_eq!(status_display(&AgentStatus::Running { pid: 1 }).0, "Running");
         assert_eq!(status_display(&AgentStatus::Stopped { exit_code: 0 }).0, "Stopped");
         assert_eq!(status_display(&AgentStatus::Pending).0, "Pending");
-        assert_eq!(status_display(&AgentStatus::Crashed { exit_code: 1, restart_in_secs: 5 }).0, "Crashed");
+        assert_eq!(status_display(&AgentStatus::Crashed { exit_code: 1, restart_in_secs: 5 }).0, "Crashed (5s)");
         assert_eq!(status_display(&AgentStatus::Failed { exit_code: 1, restart_count: 3 }).0, "Failed");
         assert_eq!(status_display(&AgentStatus::Disabled).0, "Disabled");
     }
