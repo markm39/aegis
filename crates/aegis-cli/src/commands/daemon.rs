@@ -796,18 +796,16 @@ pub fn remove_agent(name: &str) -> anyhow::Result<()> {
 
     println!("Removed agent '{name}' from {}", config_path.display());
 
-    // If daemon is running, stop the agent
+    // If daemon is running, reload config so the agent is fully removed
     let client = DaemonClient::default_path();
     if client.is_running() {
-        let resp = client.send(&DaemonCommand::StopAgent { name: name.into() });
+        let resp = client.send(&DaemonCommand::ReloadConfig);
         match resp {
-            Ok(r) if r.ok => println!("Agent '{name}' stopped in running daemon."),
+            Ok(r) if r.ok => println!("Agent '{name}' removed from running daemon."),
             Ok(r) => println!("Daemon responded: {}", r.message),
             Err(e) => println!("Could not notify running daemon: {e}"),
         }
     }
-
-    println!("Run 'aegis daemon reload' to apply changes, or 'aegis daemon restart' to fully restart.");
 
     Ok(())
 }

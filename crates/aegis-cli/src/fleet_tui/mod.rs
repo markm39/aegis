@@ -925,7 +925,13 @@ impl FleetApp {
             FleetCommand::Remove { agent } => {
                 match crate::commands::daemon::remove_agent(&agent) {
                     Ok(()) => {
-                        self.command_result = Some(format!("Removed '{agent}' from config and stopped in daemon."));
+                        // Trigger reload so daemon drops the agent from memory
+                        if self.connected {
+                            if let Some(client) = &self.client {
+                                let _ = client.send(&DaemonCommand::ReloadConfig);
+                            }
+                        }
+                        self.command_result = Some(format!("Removed '{agent}'."));
                         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                     }
                     Err(e) => {
