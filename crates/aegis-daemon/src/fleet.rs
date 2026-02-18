@@ -1119,4 +1119,26 @@ mod tests {
 
         assert!(fleet.enable_agent("ghost").is_err());
     }
+
+    #[test]
+    fn restart_disabled_agent_returns_error() {
+        let mut slot_config = test_slot_config("off");
+        slot_config.enabled = false;
+        let config = test_daemon_config(vec![slot_config]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        let err = fleet.restart_agent("off").unwrap_err();
+        assert!(err.contains("disabled"), "expected disabled error, got: {err}");
+    }
+
+    #[test]
+    fn restart_unknown_agent_returns_error() {
+        let config = test_daemon_config(vec![]);
+        let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
+        let mut fleet = Fleet::new(&config, aegis);
+
+        let err = fleet.restart_agent("ghost").unwrap_err();
+        assert!(err.contains("unknown"), "expected unknown error, got: {err}");
+    }
 }
