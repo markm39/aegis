@@ -130,6 +130,16 @@ pub fn run(launchd: bool) -> anyhow::Result<()> {
 
 /// Start the daemon in the background.
 pub fn start() -> anyhow::Result<()> {
+    // Verify daemon.toml exists before spawning background process
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!(
+            "No daemon config found at {}.\n\
+             Create one with `aegis daemon init` or run the onboard wizard.",
+            config_path.display()
+        );
+    }
+
     // Check for an existing daemon
     if let Some(pid) = persistence::read_pid() {
         if persistence::is_process_alive(pid) {
