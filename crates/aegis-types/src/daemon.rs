@@ -66,6 +66,35 @@ pub struct AgentSlotConfig {
     /// Whether this slot is enabled. Disabled slots are skipped on daemon start.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// If set, this agent acts as a fleet orchestrator that reviews and
+    /// directs other agents instead of writing code itself.
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorConfig>,
+}
+
+/// Configuration for an agent acting as the fleet orchestrator.
+///
+/// The orchestrator periodically reviews other agents' work (git log, output,
+/// test results), evaluates whether they're doing high-value work, and
+/// redirects them when they go off track. It also verifies output visually
+/// (launching TUIs, screenshotting web apps).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OrchestratorConfig {
+    /// How often (seconds) the orchestrator reviews agent progress. Default: 300.
+    #[serde(default = "default_review_interval")]
+    pub review_interval_secs: u64,
+    /// Path to a backlog/roadmap file that defines priorities.
+    /// The orchestrator reads this to decide what work matters.
+    #[serde(default)]
+    pub backlog_path: Option<PathBuf>,
+    /// Names of agents this orchestrator manages.
+    /// If empty, manages all non-orchestrator agents in the fleet.
+    #[serde(default)]
+    pub managed_agents: Vec<String>,
+}
+
+fn default_review_interval() -> u64 {
+    300
 }
 
 fn default_max_restarts() -> u32 {
@@ -222,6 +251,8 @@ pub enum AgentStatus {
         /// Total number of restarts attempted.
         restart_count: u32,
     },
+    /// Agent is being stopped (SIGTERM sent, waiting for exit).
+    Stopping,
     /// Slot is disabled in configuration.
     Disabled,
 }
@@ -238,6 +269,7 @@ impl std::fmt::Display for AgentStatus {
             AgentStatus::Failed { exit_code, restart_count } => {
                 write!(f, "Failed (exit {exit_code}, {restart_count} restarts)")
             }
+            AgentStatus::Stopping => write!(f, "Stopping"),
             AgentStatus::Disabled => write!(f, "Disabled"),
         }
     }
@@ -322,6 +354,7 @@ mod tests {
                 restart: RestartPolicy::OnFailure,
                 max_restarts: 5,
                 enabled: true,
+                orchestrator: None,
             }],
         };
 

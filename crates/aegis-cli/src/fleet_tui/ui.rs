@@ -1146,6 +1146,7 @@ fn status_display(status: &AgentStatus) -> (String, Color) {
             (format!("Crashed ({restart_in_secs}s)"), Color::Yellow)
         }
         AgentStatus::Failed { .. } => ("Failed".into(), Color::Red),
+        AgentStatus::Stopping => ("Stopping".into(), Color::Yellow),
         AgentStatus::Disabled => ("Disabled".into(), Color::DarkGray),
     }
 }
@@ -1201,6 +1202,7 @@ mod tests {
         assert_eq!(status_display(&AgentStatus::Pending).0, "Pending");
         assert_eq!(status_display(&AgentStatus::Crashed { exit_code: 1, restart_in_secs: 5 }).0, "Crashed (5s)");
         assert_eq!(status_display(&AgentStatus::Failed { exit_code: 1, restart_count: 3 }).0, "Failed");
+        assert_eq!(status_display(&AgentStatus::Stopping).0, "Stopping");
         assert_eq!(status_display(&AgentStatus::Disabled).0, "Disabled");
     }
 

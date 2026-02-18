@@ -181,6 +181,10 @@ impl Fleet {
     /// Sends SIGTERM to the child process, waits up to 5 seconds for
     /// graceful exit, then escalates to SIGKILL. This prevents
     /// `handle.join()` from blocking indefinitely on hung processes.
+    /// Signal an agent to stop (non-blocking).
+    ///
+    /// Sends SIGTERM and sets the status to `Stopping`. The `tick()` loop
+    /// handles joining the thread after exit, escalating to SIGKILL if needed.
     pub fn stop_agent(&mut self, name: &str) {
         let slot = match self.slots.get_mut(name) {
             Some(s) => s,
@@ -190,6 +194,11 @@ impl Fleet {
             }
         };
 
+        // If already stopping or not running, nothing to do.
+        if slot.thread_handle.is_none() {
+            return;
+        }
+
         // Send SIGTERM to the child process if we know the PID.
         let pid = slot.child_pid.load(Ordering::Acquire);
         let raw_pid = i32::try_from(pid).ok().filter(|&p| p > 0);
@@ -198,60 +207,8 @@ impl Fleet {
             let _ = signal::kill(Pid::from_raw(p), Signal::SIGTERM);
         }
 
-        if let Some(handle) = slot.thread_handle.take() {
-            info!(agent = name, "waiting for agent thread (5s timeout)");
-
-            // Poll is_finished() with a 5-second timeout for graceful shutdown.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while std::time::Instant::now() < deadline && !handle.is_finished() {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-
-            if !handle.is_finished() {
-                if let Some(p) = raw_pid {
-                    warn!(agent = name, pid, "SIGTERM timeout, sending SIGKILL");
-                    let _ = signal::kill(Pid::from_raw(p), Signal::SIGKILL);
-                }
-
-                // Give it another 2 seconds after SIGKILL.
-                let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                while std::time::Instant::now() < kill_deadline && !handle.is_finished() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
-
-            if handle.is_finished() {
-                match handle.join() {
-                    Ok(result) => {
-                        info!(
-                            agent = name,
-                            exit_code = ?result.exit_code,
-                            "agent stopped"
-                        );
-                        slot.status = AgentStatus::Stopped {
-                            exit_code: result.exit_code.unwrap_or(-1),
-                        };
-                    }
-                    Err(_) => {
-                        error!(agent = name, "agent thread panicked");
-                        slot.status = AgentStatus::Failed {
-                            exit_code: -1,
-                            restart_count: slot.restart_count,
-                        };
-                    }
-                }
-            } else {
-                // Thread is truly stuck (shouldn't happen after SIGKILL).
-                // Leak the handle rather than blocking the daemon forever.
-                error!(agent = name, "agent thread did not exit after SIGKILL, detaching");
-                slot.status = AgentStatus::Failed {
-                    exit_code: -1,
-                    restart_count: slot.restart_count,
-                };
-            }
-        }
-
-        slot.started_at = None;
+        slot.status = AgentStatus::Stopping;
+        slot.stop_signaled_at = Some(std::time::Instant::now());
     }
 
     /// Enable an agent slot so it can be started.
@@ -411,6 +368,24 @@ impl Fleet {
                 }
             }
 
+            // Escalate SIGTERM -> SIGKILL after 5 seconds for stopping agents.
+            if let Some(slot) = self.slots.get(name) {
+                if let Some(signaled_at) = slot.stop_signaled_at {
+                    if signaled_at.elapsed() >= std::time::Duration::from_secs(5) {
+                        let pid = slot.child_pid.load(Ordering::Acquire);
+                        let raw_pid = i32::try_from(pid).ok().filter(|&p| p > 0);
+                        if let Some(p) = raw_pid {
+                            warn!(agent = name, pid, "SIGTERM timeout, sending SIGKILL");
+                            let _ = signal::kill(Pid::from_raw(p), Signal::SIGKILL);
+                        }
+                        // Only escalate once: clear the signal timestamp.
+                        if let Some(slot) = self.slots.get_mut(name) {
+                            slot.stop_signaled_at = None;
+                        }
+                    }
+                }
+            }
+
             // Check if the thread has finished
             let needs_join = self
                 .slots
@@ -502,11 +477,23 @@ impl Fleet {
         // How long did the agent actually run?
         let run_duration = slot.started_at.map(|t| t.elapsed());
         slot.started_at = None;
+        slot.stop_signaled_at = None;
 
         // Clear dead channels (senders dropped when thread exited).
         slot.output_rx = None;
         slot.command_tx = None;
         slot.update_rx = None;
+
+        // If a restart was requested (via restart_agent), skip the policy
+        // evaluation and start immediately.
+        if slot.pending_restart {
+            slot.pending_restart = false;
+            slot.restart_count = 0;
+            slot.status = AgentStatus::Pending;
+            info!(agent = name, "pending restart: starting agent");
+            self.start_agent(name);
+            return;
+        }
 
         // Never restart a disabled agent.
         if !slot.config.enabled {
@@ -670,14 +657,24 @@ impl Fleet {
             return Err(format!("agent '{name}' is disabled, enable it first"));
         }
 
-        self.stop_agent(name);
+        let is_running = slot.thread_handle.is_some();
 
-        // Clear backoff so the restart isn't deferred.
+        // Set flags before calling stop_agent (which borrows &mut self).
         if let Some(slot) = self.slots.get_mut(name) {
             slot.backoff_until = None;
+            if is_running {
+                slot.pending_restart = true;
+            }
         }
 
-        self.start_agent(name);
+        if is_running {
+            // Signal stop; tick loop will auto-restart due to pending_restart.
+            self.stop_agent(name);
+        } else {
+            // Not running -- just start directly.
+            self.start_agent(name);
+        }
+
         Ok(())
     }
 
@@ -729,6 +726,7 @@ mod tests {
             restart: RestartPolicy::OnFailure,
             max_restarts: 5,
             enabled: true,
+            orchestrator: None,
         }
     }
 

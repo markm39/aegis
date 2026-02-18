@@ -29,6 +29,7 @@ use tracing::{info, warn};
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
+    OrchestratorAgentView, OrchestratorSnapshot,
     PendingPromptSummary, ToolUseVerdict,
 };
 use aegis_types::{Action, ActionKind, Decision};
@@ -488,12 +489,12 @@ impl DaemonRuntime {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
                 }
                 self.fleet.stop_agent(name);
-                DaemonResponse::ok(format!("agent '{name}' stopped"))
+                DaemonResponse::ok(format!("stopping '{name}'"))
             }
 
             DaemonCommand::RestartAgent { ref name } => {
                 match self.fleet.restart_agent(name) {
-                    Ok(()) => DaemonResponse::ok(format!("agent '{name}' restarted")),
+                    Ok(()) => DaemonResponse::ok(format!("restarting '{name}'")),
                     Err(e) => DaemonResponse::error(e),
                 }
             }
@@ -803,6 +804,60 @@ impl DaemonRuntime {
 
             DaemonCommand::ReloadConfig => {
                 self.reload_config()
+            }
+
+            DaemonCommand::OrchestratorContext { ref agents, output_lines } => {
+                let line_count = output_lines.unwrap_or(30);
+                let all_names = self.fleet.agent_names_sorted();
+
+                // Determine which agents to include
+                let target_names: Vec<&String> = if agents.is_empty() {
+                    // All non-orchestrator agents
+                    all_names.iter()
+                        .filter(|name| {
+                            self.fleet.agent_config(name)
+                                .map(|c| c.orchestrator.is_none())
+                                .unwrap_or(true)
+                        })
+                        .collect()
+                } else {
+                    all_names.iter()
+                        .filter(|name| agents.contains(name))
+                        .collect()
+                };
+
+                let agent_views: Vec<OrchestratorAgentView> = target_names
+                    .iter()
+                    .filter_map(|name| {
+                        let slot = self.fleet.slot(name)?;
+                        let config = self.fleet.agent_config(name)?;
+                        let recent_output = self.fleet
+                            .agent_output(name, line_count)
+                            .unwrap_or_default();
+
+                        Some(OrchestratorAgentView {
+                            name: (*name).clone(),
+                            status: slot.status.clone(),
+                            role: config.role.clone(),
+                            agent_goal: config.agent_goal.clone(),
+                            task: config.task.clone(),
+                            recent_output,
+                            uptime_secs: slot.uptime_secs(),
+                            attention_needed: slot.attention_needed,
+                            pending_count: slot.pending_prompts.len(),
+                        })
+                    })
+                    .collect();
+
+                let snapshot = OrchestratorSnapshot {
+                    fleet_goal: self.config.goal.clone(),
+                    agents: agent_views,
+                };
+
+                match serde_json::to_value(&snapshot) {
+                    Ok(data) => DaemonResponse::ok_with_data("orchestrator context", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
             }
 
             DaemonCommand::Shutdown => {
@@ -1189,6 +1244,7 @@ mod tests {
             restart: RestartPolicy::OnFailure,
             max_restarts: 5,
             enabled: true,
+            orchestrator: None,
         }
     }
 
@@ -1493,6 +1549,7 @@ mod tests {
             restart: RestartPolicy::OnFailure,
             max_restarts: 5,
             enabled: true,
+            orchestrator: None,
         };
 
         let prompt = compose_autonomy_prompt(
@@ -1796,6 +1853,57 @@ mod tests {
         assert_eq!(runtime.fleet.agent_count(), 1);
         assert!(runtime.fleet.agent_status("a1").is_none());
         assert!(runtime.fleet.agent_status("a2").is_some());
+    }
+
+    #[test]
+    fn handle_command_orchestrator_context_all_agents() {
+        let mut runtime = test_runtime(vec![test_agent("worker-1"), test_agent("worker-2")]);
+        let resp = runtime.handle_command(DaemonCommand::OrchestratorContext {
+            agents: vec![],
+            output_lines: None,
+        });
+        assert!(resp.ok);
+        let snapshot: OrchestratorSnapshot =
+            serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(snapshot.agents.len(), 2);
+        // Sorted alphabetically
+        assert_eq!(snapshot.agents[0].name, "worker-1");
+        assert_eq!(snapshot.agents[1].name, "worker-2");
+    }
+
+    #[test]
+    fn handle_command_orchestrator_context_filters_orchestrator() {
+        use aegis_types::daemon::OrchestratorConfig;
+        let mut orch = test_agent("orchestrator");
+        orch.orchestrator = Some(OrchestratorConfig::default());
+        let mut runtime = test_runtime(vec![orch, test_agent("worker-1")]);
+        let resp = runtime.handle_command(DaemonCommand::OrchestratorContext {
+            agents: vec![],
+            output_lines: None,
+        });
+        assert!(resp.ok);
+        let snapshot: OrchestratorSnapshot =
+            serde_json::from_value(resp.data.unwrap()).unwrap();
+        // Should only contain the worker, not the orchestrator
+        assert_eq!(snapshot.agents.len(), 1);
+        assert_eq!(snapshot.agents[0].name, "worker-1");
+    }
+
+    #[test]
+    fn handle_command_orchestrator_context_specific_agents() {
+        let mut runtime = test_runtime(vec![
+            test_agent("a1"), test_agent("a2"), test_agent("a3"),
+        ]);
+        let resp = runtime.handle_command(DaemonCommand::OrchestratorContext {
+            agents: vec!["a1".into(), "a3".into()],
+            output_lines: Some(10),
+        });
+        assert!(resp.ok);
+        let snapshot: OrchestratorSnapshot =
+            serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(snapshot.agents.len(), 2);
+        assert_eq!(snapshot.agents[0].name, "a1");
+        assert_eq!(snapshot.agents[1].name, "a3");
     }
 
     #[test]

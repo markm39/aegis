@@ -85,6 +85,13 @@ pub struct AgentSlot {
     /// Shared audit session ID. The lifecycle thread writes this after starting
     /// the audit session so that state persistence can record it for crash recovery.
     pub session_id: Arc<Mutex<Option<uuid::Uuid>>>,
+    /// When SIGTERM was sent to initiate a stop. Used by `tick()` to escalate
+    /// to SIGKILL after a timeout. `None` means no stop is in progress.
+    pub stop_signaled_at: Option<Instant>,
+    /// If true, the agent should be restarted after it finishes stopping.
+    /// Set by `restart_agent` so the tick loop can start the agent once the
+    /// thread has exited.
+    pub pending_restart: bool,
 }
 
 impl AgentSlot {
@@ -114,6 +121,8 @@ impl AgentSlot {
             backoff_until: None,
             child_pid: Arc::new(AtomicU32::new(0)),
             session_id: Arc::new(Mutex::new(None)),
+            stop_signaled_at: None,
+            pending_restart: false,
         }
     }
 
@@ -257,6 +266,7 @@ mod tests {
             restart: RestartPolicy::OnFailure,
             max_restarts: 5,
             enabled: true,
+            orchestrator: None,
         }
     }
 
