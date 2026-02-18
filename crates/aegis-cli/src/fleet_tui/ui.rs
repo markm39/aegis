@@ -293,6 +293,8 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             Span::styled(": restart  ", Style::default().fg(Color::DarkGray)),
             Span::styled("a", Style::default().fg(Color::Cyan)),
             Span::styled(": add  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab", Style::default().fg(Color::Magenta)),
+            Span::styled(": next attn  ", Style::default().fg(Color::DarkGray)),
             Span::styled(":", Style::default().fg(Color::Yellow)),
             Span::styled(": commands  ", Style::default().fg(Color::DarkGray)),
             Span::styled("?", Style::default().fg(Color::Cyan)),

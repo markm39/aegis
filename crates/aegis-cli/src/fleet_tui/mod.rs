@@ -474,6 +474,10 @@ impl FleetApp {
                 self.wizard = Some(AddAgentWizard::new());
                 self.view = FleetView::AddAgent;
             }
+            KeyCode::Tab => {
+                // Jump to next agent with pending prompts (wrap around)
+                self.jump_to_next_attention();
+            }
             KeyCode::Char('?') => {
                 self.help_scroll = 0;
                 self.view = FleetView::Help;
@@ -1451,6 +1455,23 @@ impl FleetApp {
     /// Returns true if we're disconnected (can't validate) or if the agent exists.
     fn agent_exists(&self, name: &str) -> bool {
         !self.connected || self.agents.iter().any(|a| a.name == name)
+    }
+
+    /// Jump selection to the next agent that needs attention (has pending prompts).
+    /// Wraps around if needed. Shows a message if no agents need attention.
+    fn jump_to_next_attention(&mut self) {
+        if self.agents.is_empty() {
+            return;
+        }
+        let start = (self.agent_selected + 1) % self.agents.len();
+        for offset in 0..self.agents.len() {
+            let idx = (start + offset) % self.agents.len();
+            if self.agents[idx].attention_needed || self.agents[idx].pending_count > 0 {
+                self.agent_selected = idx;
+                return;
+            }
+        }
+        self.set_result("No agents need attention");
     }
 
     /// Send a command to the daemon and show the response message as command_result.
@@ -2692,5 +2713,47 @@ mod tests {
         app.cycle_completion_back();
         assert!(!app.command_completions.is_empty());
         assert!(app.completion_idx.is_some());
+    }
+
+    #[test]
+    fn jump_to_next_attention_finds_agent() {
+        let mut app = make_app();
+        // Set beta to have pending prompts
+        app.agents[1].pending_count = 2;
+        app.agent_selected = 0; // start at alpha
+
+        app.jump_to_next_attention();
+        assert_eq!(app.agent_selected, 1); // jumped to beta
+    }
+
+    #[test]
+    fn jump_to_next_attention_wraps_around() {
+        let mut app = make_app();
+        app.agents[0].attention_needed = true;
+        app.agent_selected = 2; // start at gamma (last)
+
+        app.jump_to_next_attention();
+        assert_eq!(app.agent_selected, 0); // wrapped to alpha
+    }
+
+    #[test]
+    fn jump_to_next_attention_no_agents_needing_attention() {
+        let mut app = make_app();
+        app.agent_selected = 0;
+
+        app.jump_to_next_attention();
+        // Should show a message, not crash
+        assert!(app.command_result.is_some());
+        assert!(app.command_result.as_ref().unwrap().contains("No agents need attention"));
+    }
+
+    #[test]
+    fn tab_key_jumps_to_attention() {
+        let mut app = make_app();
+        app.agents[2].pending_count = 1;
+        app.agent_selected = 0;
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.agent_selected, 2); // jumped to gamma
     }
 }
