@@ -256,9 +256,22 @@ impl Drop for PtySession {
             Ok(WaitStatus::StillAlive)
         ) {
             let _ = signal::kill(self.child_pid, Signal::SIGTERM);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            // Reap if it exited; if not, it becomes an orphan (init adopts it).
-            let _ = waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG));
+
+            // Poll for up to 2 seconds for graceful exit before resorting to SIGKILL.
+            // Agent processes (like Claude Code) may need time to clean up.
+            for _ in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if !matches!(
+                    waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)),
+                    Ok(WaitStatus::StillAlive)
+                ) {
+                    return; // Reaped successfully
+                }
+            }
+
+            // Still alive after 2s: force kill and block until reaped.
+            let _ = signal::kill(self.child_pid, Signal::SIGKILL);
+            let _ = waitpid(self.child_pid, None);
         }
         // OwnedFd closes the master fd automatically when dropped.
     }

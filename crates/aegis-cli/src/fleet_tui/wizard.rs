@@ -543,7 +543,8 @@ impl AddAgentWizard {
     /// Check if the wizard has enough data to produce a valid config.
     pub fn is_valid(&self) -> bool {
         let wd = self.working_dir.trim();
-        let base = !self.name.trim().is_empty()
+        let name_valid = aegis_types::validate_config_name(self.name.trim()).is_ok();
+        let base = name_valid
             && !wd.is_empty()
             && std::path::Path::new(wd).is_dir();
         if self.is_custom_tool() {
@@ -1051,6 +1052,24 @@ mod tests {
         wiz.name = "test".into();
         wiz.working_dir = "  ".into();
         assert!(!wiz.is_valid());
+    }
+
+    #[test]
+    fn wizard_is_valid_rejects_invalid_name_format() {
+        let mut wiz = AddAgentWizard::new();
+        wiz.working_dir = "/tmp".into();
+
+        // Names with spaces should be invalid
+        wiz.name = "has spaces".into();
+        assert!(!wiz.is_valid(), "name with spaces should be invalid");
+
+        // Names with special chars should be invalid
+        wiz.name = "bad@name!".into();
+        assert!(!wiz.is_valid(), "name with special chars should be invalid");
+
+        // Valid kebab-case name
+        wiz.name = "my-agent".into();
+        assert!(wiz.is_valid());
     }
 
     #[test]
