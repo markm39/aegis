@@ -780,6 +780,24 @@ impl FleetApp {
                 self.view = FleetView::AgentDetail;
                 self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
             }
+            FleetCommand::Remove { agent } => {
+                // Stop the agent first, then advise to remove from config
+                self.send_named_command(DaemonCommand::StopAgent { name: agent.clone() });
+                self.command_result = Some(format!(
+                    "Stopped '{agent}'. Run `aegis daemon remove {agent}` to remove from config."
+                ));
+            }
+            FleetCommand::Config => {
+                self.command_result = Some(
+                    "Config editing requires exiting the TUI. Run: aegis daemon config edit".into()
+                );
+            }
+            FleetCommand::Telegram => {
+                self.command_result = Some(
+                    "Run `aegis telegram status` to view, `aegis telegram setup` to configure, \
+                     `aegis telegram disable` to remove.".into()
+                );
+            }
             FleetCommand::Status => {
                 // Show status as command result
                 let running = self.running_count();

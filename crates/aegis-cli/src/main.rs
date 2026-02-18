@@ -496,6 +496,10 @@ enum AlertCommands {
 enum TelegramCommands {
     /// Interactive setup wizard for the Telegram bot
     Setup,
+    /// Show current Telegram configuration status
+    Status,
+    /// Remove Telegram notifications from the config
+    Disable,
 }
 
 #[derive(Subcommand, Debug)]
@@ -537,6 +541,21 @@ enum DaemonCommands {
 
     /// List all agent slots and their status
     Agents,
+
+    /// Daemon configuration management
+    Config {
+        #[command(subcommand)]
+        action: DaemonConfigCommands,
+    },
+
+    /// Add a new agent interactively
+    Add,
+
+    /// Remove an agent from the configuration
+    Remove {
+        /// Agent name to remove
+        name: String,
+    },
 
     /// Show recent output from an agent
     Output {
@@ -630,6 +649,16 @@ enum DaemonCommands {
         #[arg(long)]
         follow: bool,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum DaemonConfigCommands {
+    /// Show the daemon configuration (daemon.toml)
+    Show,
+    /// Open daemon.toml in $EDITOR
+    Edit,
+    /// Print the path to daemon.toml
+    Path,
 }
 
 /// Resolve config name: use provided value or fall back to current config.
@@ -896,6 +925,8 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Telegram { action } => match action {
             TelegramCommands::Setup => commands::telegram::run(),
+            TelegramCommands::Status => commands::telegram::status(),
+            TelegramCommands::Disable => commands::telegram::disable(),
         },
         Commands::Fleet => {
             fleet_tui::run_fleet_tui()
@@ -907,6 +938,13 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Stop => commands::daemon::stop(),
             DaemonCommands::Status => commands::daemon::status(),
             DaemonCommands::Agents => commands::daemon::agents(),
+            DaemonCommands::Config { action } => match action {
+                DaemonConfigCommands::Show => commands::daemon::config_show(),
+                DaemonConfigCommands::Edit => commands::daemon::config_edit(),
+                DaemonConfigCommands::Path => commands::daemon::config_path(),
+            },
+            DaemonCommands::Add => commands::daemon::add_agent(),
+            DaemonCommands::Remove { name } => commands::daemon::remove_agent(&name),
             DaemonCommands::Output { name, lines } => {
                 commands::daemon::output(&name, lines)
             }
@@ -2173,6 +2211,85 @@ mod tests {
         match cli.command.unwrap() {
             Commands::Telegram { action: TelegramCommands::Setup } => {}
             _ => panic!("expected Telegram Setup command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_telegram_status() {
+        let cli = Cli::try_parse_from(["aegis", "telegram", "status"]);
+        assert!(cli.is_ok(), "should parse telegram status: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Telegram { action: TelegramCommands::Status } => {}
+            _ => panic!("expected Telegram Status command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_telegram_disable() {
+        let cli = Cli::try_parse_from(["aegis", "telegram", "disable"]);
+        assert!(cli.is_ok(), "should parse telegram disable: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Telegram { action: TelegramCommands::Disable } => {}
+            _ => panic!("expected Telegram Disable command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_config_show() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "config", "show"]);
+        assert!(cli.is_ok(), "should parse daemon config show: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Show } } => {}
+            _ => panic!("expected Daemon Config Show command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_config_edit() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "config", "edit"]);
+        assert!(cli.is_ok(), "should parse daemon config edit: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Edit } } => {}
+            _ => panic!("expected Daemon Config Edit command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_config_path() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "config", "path"]);
+        assert!(cli.is_ok(), "should parse daemon config path: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Path } } => {}
+            _ => panic!("expected Daemon Config Path command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_add() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "add"]);
+        assert!(cli.is_ok(), "should parse daemon add: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Add } => {}
+            _ => panic!("expected Daemon Add command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_remove() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "remove", "claude-1"]);
+        assert!(cli.is_ok(), "should parse daemon remove: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon { action: DaemonCommands::Remove { name } } => {
+                assert_eq!(name, "claude-1");
+            }
+            _ => panic!("expected Daemon Remove command"),
         }
     }
 

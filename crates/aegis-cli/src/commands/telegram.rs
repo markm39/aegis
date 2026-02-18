@@ -160,6 +160,75 @@ pub(crate) async fn discover_chat_id(api: &TelegramApi, bot_username: &str) -> a
     bail!("timed out waiting for a message -- send a message to @{bot_username} and try again");
 }
 
+/// Show current Telegram configuration status.
+pub fn status() -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        println!("No daemon config found. Run `aegis` to set up.");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let config = DaemonConfig::from_toml(&content)
+        .with_context(|| format!("failed to parse {}", config_path.display()))?;
+
+    match &config.channel {
+        Some(ChannelConfig::Telegram(tg)) => {
+            println!("Telegram: configured");
+            // Don't print the full token for security
+            let token_preview = if tg.bot_token.len() > 10 {
+                format!("{}...", &tg.bot_token[..10])
+            } else {
+                "(set)".to_string()
+            };
+            println!("  Bot token:       {token_preview}");
+            println!("  Chat ID:         {}", tg.chat_id);
+            println!("  Poll timeout:    {}s", tg.poll_timeout_secs);
+            println!("  Group commands:  {}", if tg.allow_group_commands { "enabled" } else { "disabled" });
+            println!();
+            println!("To reconfigure: aegis telegram setup");
+            println!("To disable:     aegis telegram disable");
+        }
+        None => {
+            println!("Telegram: not configured");
+            println!();
+            println!("To set up: aegis telegram setup");
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove Telegram configuration from daemon.toml.
+pub fn disable() -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        println!("No daemon config found. Nothing to disable.");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let mut config = DaemonConfig::from_toml(&content)
+        .with_context(|| format!("failed to parse {}", config_path.display()))?;
+
+    if config.channel.is_none() {
+        println!("Telegram is not configured. Nothing to disable.");
+        return Ok(());
+    }
+
+    config.channel = None;
+    let toml_str = config.to_toml().context("failed to serialize config")?;
+    std::fs::write(&config_path, &toml_str)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+    println!("Telegram notifications disabled.");
+    println!("Restart the daemon for changes to take effect.");
+
+    Ok(())
+}
+
 /// Write the Telegram config into `daemon.toml`, merging with existing config.
 pub(crate) fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> {
     let dir = daemon_dir();

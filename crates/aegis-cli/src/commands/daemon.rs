@@ -543,6 +543,229 @@ pub fn uninstall() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Show the daemon configuration (daemon.toml).
+pub fn config_show() -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!(
+            "No daemon config found at {}.\nRun `aegis` to set up, or `aegis daemon init` for a skeleton config.",
+            config_path.display()
+        );
+    }
+
+    let content = std::fs::read_to_string(&config_path)?;
+    let config = DaemonConfig::from_toml(&content)?;
+
+    println!("Daemon configuration: {}", config_path.display());
+    println!();
+
+    // Agents
+    if config.agents.is_empty() {
+        println!("Agents: (none)");
+    } else {
+        println!("Agents:");
+        for agent in &config.agents {
+            let tool = tool_display_name(&agent.tool);
+            let status = if agent.enabled { "enabled" } else { "disabled" };
+            println!("  {} ({}, {}):", agent.name, tool, status);
+            println!("    Dir:      {}", agent.working_dir.display());
+            if let Some(task) = &agent.task {
+                println!("    Task:     {task}");
+            }
+            println!("    Restart:  {:?} (max {})", agent.restart, agent.max_restarts);
+        }
+    }
+    println!();
+
+    // Channel
+    match &config.channel {
+        Some(aegis_types::config::ChannelConfig::Telegram(tg)) => {
+            println!("Telegram:");
+            println!("  Chat ID:     {}", tg.chat_id);
+            println!("  Poll timeout: {}s", tg.poll_timeout_secs);
+            // Don't print the full token for security
+            let token_preview = if tg.bot_token.len() > 10 {
+                format!("{}...", &tg.bot_token[..10])
+            } else {
+                "(set)".to_string()
+            };
+            println!("  Bot token:   {token_preview}");
+        }
+        None => {
+            println!("Telegram: not configured");
+        }
+    }
+    println!();
+
+    // Control
+    println!("Control socket: {}", config.control.socket_path.display());
+
+    Ok(())
+}
+
+/// Open the daemon configuration in $EDITOR.
+pub fn config_edit() -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!(
+            "No daemon config found at {}.\nRun `aegis` to set up, or `aegis daemon init` for a skeleton config.",
+            config_path.display()
+        );
+    }
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+    let status = std::process::Command::new(&editor)
+        .arg(&config_path)
+        .status()
+        .map_err(|e| anyhow::anyhow!("failed to launch editor '{editor}': {e}"))?;
+
+    if !status.success() {
+        anyhow::bail!("editor exited with code {}", status.code().unwrap_or(-1));
+    }
+
+    // Validate the edited config
+    let content = std::fs::read_to_string(&config_path)?;
+    match DaemonConfig::from_toml(&content) {
+        Ok(cfg) => {
+            println!("Configuration saved and validated ({} agent(s)).", cfg.agents.len());
+            println!("Restart the daemon for changes to take effect: aegis daemon stop && aegis daemon start");
+        }
+        Err(e) => {
+            println!("WARNING: config may be invalid after editing: {e}");
+            println!("Run 'aegis daemon config show' to inspect.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Print the path to daemon.toml (for scripting).
+pub fn config_path() -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    println!("{}", config_path.display());
+    Ok(())
+}
+
+/// Add a new agent interactively and persist to daemon.toml.
+///
+/// Prompts for tool, name, working dir, and task (same flow as the onboard
+/// wizard), then appends the agent to daemon.toml and optionally notifies the
+/// running daemon.
+pub fn add_agent() -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!(
+            "No daemon config found at {}.\nRun `aegis` to set up first.",
+            config_path.display()
+        );
+    }
+
+    println!("Add a new agent");
+    println!("===============");
+    println!();
+
+    let tool = crate::commands::onboard::prompt_tool()?;
+    let name = crate::commands::onboard::prompt_agent_name()?;
+    let working_dir = crate::commands::onboard::prompt_working_dir()?;
+    let task = crate::commands::onboard::prompt_task()?;
+
+    let slot = AgentSlotConfig {
+        name: name.clone(),
+        tool: tool.clone(),
+        working_dir: working_dir.clone(),
+        task: task.clone(),
+        pilot: None,
+        restart: RestartPolicy::OnFailure,
+        max_restarts: 5,
+        enabled: true,
+    };
+
+    // Load existing config, append agent, save
+    let content = std::fs::read_to_string(&config_path)?;
+    let mut config = DaemonConfig::from_toml(&content)?;
+
+    // Check for name collision
+    if config.agents.iter().any(|a| a.name == name) {
+        anyhow::bail!("agent '{name}' already exists in daemon.toml");
+    }
+
+    config.agents.push(slot.clone());
+    let toml_str = config.to_toml()?;
+    std::fs::write(&config_path, &toml_str)?;
+
+    let tool_name = tool_display_name(&slot.tool);
+    println!();
+    println!("Added agent '{name}' ({tool_name}) to {}", config_path.display());
+
+    // If daemon is running, notify it
+    let client = DaemonClient::default_path();
+    if client.is_running() {
+        let resp = client.send(&DaemonCommand::AddAgent {
+            config: Box::new(slot),
+            start: true,
+        });
+        match resp {
+            Ok(r) if r.ok => println!("Agent '{name}' started in running daemon."),
+            Ok(r) => println!("Daemon responded: {}", r.message),
+            Err(e) => println!("Could not notify running daemon: {e}\nRestart the daemon to pick up the new agent."),
+        }
+    } else {
+        println!("Daemon is not running. Start it with: aegis daemon start");
+    }
+
+    Ok(())
+}
+
+/// Remove an agent from daemon.toml (does not affect the running daemon).
+pub fn remove_agent(name: &str) -> anyhow::Result<()> {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        anyhow::bail!("No daemon config found at {}.", config_path.display());
+    }
+
+    let content = std::fs::read_to_string(&config_path)?;
+    let mut config = DaemonConfig::from_toml(&content)?;
+
+    let before = config.agents.len();
+    config.agents.retain(|a| a.name != name);
+
+    if config.agents.len() == before {
+        anyhow::bail!("agent '{name}' not found in daemon.toml");
+    }
+
+    let toml_str = config.to_toml()?;
+    std::fs::write(&config_path, &toml_str)?;
+
+    println!("Removed agent '{name}' from {}", config_path.display());
+
+    // If daemon is running, stop the agent
+    let client = DaemonClient::default_path();
+    if client.is_running() {
+        let resp = client.send(&DaemonCommand::StopAgent { name: name.into() });
+        match resp {
+            Ok(r) if r.ok => println!("Agent '{name}' stopped in running daemon."),
+            Ok(r) => println!("Daemon responded: {}", r.message),
+            Err(e) => println!("Could not notify running daemon: {e}"),
+        }
+    }
+
+    println!("Restart the daemon to fully apply: aegis daemon stop && aegis daemon start");
+
+    Ok(())
+}
+
+/// Human-readable display name for a tool config.
+pub(crate) fn tool_display_name(tool: &AgentToolConfig) -> &str {
+    match tool {
+        AgentToolConfig::ClaudeCode { .. } => "Claude Code",
+        AgentToolConfig::Codex { .. } => "Codex",
+        AgentToolConfig::OpenClaw { .. } => "OpenClaw",
+        AgentToolConfig::Cursor { .. } => "Cursor",
+        AgentToolConfig::Custom { .. } => "Custom",
+    }
+}
+
 /// Tail daemon logs.
 pub fn logs(follow: bool) -> anyhow::Result<()> {
     let log_dir = daemon_dir();

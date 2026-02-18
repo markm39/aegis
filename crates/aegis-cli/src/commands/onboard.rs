@@ -88,7 +88,7 @@ pub fn run() -> anyhow::Result<()> {
 
     // Summary
     println!("Setup complete!");
-    println!("  Agent: {} ({})", name, tool_display_name(&tool));
+    println!("  Agent: {} ({})", name, super::daemon::tool_display_name(&tool));
     println!("  Dir:   {}", working_dir.display());
     if let Some(t) = &task {
         println!("  Task:  {t}");
@@ -109,7 +109,7 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 /// Prompt for agent tool type from a numbered menu.
-fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
+pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
     println!("  What tool?");
     println!("    [1] Claude Code");
     println!("    [2] Codex");
@@ -150,7 +150,7 @@ fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
 }
 
 /// Prompt for agent name, defaulting to CWD basename.
-fn prompt_agent_name() -> anyhow::Result<String> {
+pub(crate) fn prompt_agent_name() -> anyhow::Result<String> {
     let default = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -166,7 +166,7 @@ fn prompt_agent_name() -> anyhow::Result<String> {
 }
 
 /// Prompt for working directory, defaulting to CWD.
-fn prompt_working_dir() -> anyhow::Result<PathBuf> {
+pub(crate) fn prompt_working_dir() -> anyhow::Result<PathBuf> {
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."));
     let default = cwd.display().to_string();
@@ -182,7 +182,7 @@ fn prompt_working_dir() -> anyhow::Result<PathBuf> {
 }
 
 /// Prompt for an optional task string.
-fn prompt_task() -> anyhow::Result<Option<String>> {
+pub(crate) fn prompt_task() -> anyhow::Result<Option<String>> {
     let task = prompt("  Task (optional, press Enter to skip)", "")?;
     if task.is_empty() {
         Ok(None)
@@ -266,20 +266,10 @@ fn confirm(label: &str, default: bool) -> anyhow::Result<bool> {
     }
 }
 
-/// Human-readable display name for a tool config.
-fn tool_display_name(tool: &AgentToolConfig) -> &str {
-    match tool {
-        AgentToolConfig::ClaudeCode { .. } => "Claude Code",
-        AgentToolConfig::Codex { .. } => "Codex",
-        AgentToolConfig::OpenClaw { .. } => "OpenClaw",
-        AgentToolConfig::Cursor { .. } => "Cursor",
-        AgentToolConfig::Custom { .. } => "Custom",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::daemon::tool_display_name;
 
     #[test]
     fn tool_display_names() {

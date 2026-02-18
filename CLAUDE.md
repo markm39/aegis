@@ -20,6 +20,17 @@ The north star: running `aegis` opens a unified interactive hub -- like running 
 
 When making design decisions, optimize for the hub experience first. New features should be accessible from the TUI and command bar, not just as CLI subcommands.
 
+### Mandatory: Everything Configurable from the TUI
+
+Every setting, configuration, and management action MUST be accessible from the fleet TUI command bar (`:` mode). If a user can do it with `aegis <subcommand>`, they must also be able to do it from the TUI without exiting. This includes:
+
+- **Agent lifecycle:** `:add`, `:remove`, `:start`, `:stop`, `:restart`
+- **Agent interaction:** `:send`, `:approve`, `:deny`, `:nudge`, `:follow`, `:pop`
+- **Configuration:** `:config` (edit daemon.toml), `:telegram` (view/manage notifications)
+- **Monitoring:** `:status`, `:monitor`
+
+When adding a new CLI subcommand, you MUST also add a corresponding TUI command bar entry in `fleet_tui/command.rs`. No exceptions. The TUI is the primary interface -- CLI subcommands exist for scripting, not as the main way to interact with Aegis.
+
 ## Architecture
 
 Crate dependency flow:

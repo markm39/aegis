@@ -8,6 +8,8 @@
 pub enum FleetCommand {
     /// Open the add-agent wizard.
     Add,
+    /// Remove an agent from the config.
+    Remove { agent: String },
     /// Start an agent.
     Start { agent: String },
     /// Stop an agent.
@@ -30,6 +32,10 @@ pub enum FleetCommand {
     Monitor,
     /// Show daemon status summary.
     Status,
+    /// Open daemon config in $EDITOR (suspends TUI).
+    Config,
+    /// Show/manage Telegram settings.
+    Telegram,
     /// Show help for all commands.
     Help,
     /// Quit the TUI.
@@ -38,13 +44,13 @@ pub enum FleetCommand {
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "approve", "deny", "follow", "help", "monitor", "nudge",
-    "pop", "quit", "restart", "send", "start", "status", "stop",
+    "add", "approve", "config", "deny", "follow", "help", "monitor", "nudge",
+    "pop", "quit", "remove", "restart", "send", "start", "status", "stop", "telegram",
 ];
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
-    "approve", "deny", "follow", "nudge", "pop", "restart", "send", "start", "stop",
+    "approve", "deny", "follow", "nudge", "pop", "remove", "restart", "send", "start", "stop",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -64,6 +70,15 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 
     match cmd {
         "add" => Ok(Some(FleetCommand::Add)),
+        "remove" => {
+            if arg1.is_empty() {
+                Err("usage: remove <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Remove { agent: arg1.into() }))
+            }
+        }
+        "config" => Ok(Some(FleetCommand::Config)),
+        "telegram" => Ok(Some(FleetCommand::Telegram)),
         "start" => {
             if arg1.is_empty() {
                 Err("usage: start <agent>".into())
@@ -193,7 +208,8 @@ pub fn apply_completion(buffer: &str, completion: &str) -> String {
 
 /// Help text listing all available commands.
 pub fn help_text() -> &'static str {
-    ":add                     Open add-agent wizard\n\
+    ":add                     Add a new agent\n\
+     :remove <agent>          Remove agent from config\n\
      :start <agent>           Start agent\n\
      :stop <agent>            Stop agent\n\
      :restart <agent>         Restart agent\n\
@@ -203,6 +219,8 @@ pub fn help_text() -> &'static str {
      :nudge <agent> [msg]     Nudge stalled agent\n\
      :follow <agent>          Drill into agent output\n\
      :pop <agent>             Open agent in new terminal\n\
+     :config                  Edit daemon.toml in $EDITOR\n\
+     :telegram                Show Telegram config status\n\
      :monitor                 Open monitor in new terminal\n\
      :status                  Daemon status summary\n\
      :help                    Show this help\n\
@@ -334,6 +352,29 @@ mod tests {
     fn parse_quit() {
         assert_eq!(parse("quit").unwrap(), Some(FleetCommand::Quit));
         assert_eq!(parse("q").unwrap(), Some(FleetCommand::Quit));
+    }
+
+    #[test]
+    fn parse_remove() {
+        assert_eq!(
+            parse("remove claude-1").unwrap(),
+            Some(FleetCommand::Remove { agent: "claude-1".into() })
+        );
+    }
+
+    #[test]
+    fn parse_remove_missing_agent() {
+        assert!(parse("remove").is_err());
+    }
+
+    #[test]
+    fn parse_config() {
+        assert_eq!(parse("config").unwrap(), Some(FleetCommand::Config));
+    }
+
+    #[test]
+    fn parse_telegram() {
+        assert_eq!(parse("telegram").unwrap(), Some(FleetCommand::Telegram));
     }
 
     #[test]
