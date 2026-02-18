@@ -40,19 +40,53 @@ use super::wizard::{AddAgentWizard, AgentTypeChoice, RestartChoice, ToolChoice, 
 use super::{FleetApp, FleetView};
 use crate::tui_utils::truncate_str;
 
+/// Maximum content lines before a wrapping text input stops growing.
+const MAX_INPUT_WRAP_LINES: u16 = 6;
+
+/// Estimate how many terminal rows a bordered text input needs when its content
+/// wraps. Returns total widget height (content lines + 2 for borders), capped
+/// at `max_content_lines` to prevent consuming the whole screen.
+fn wrapped_input_height(content_len: usize, area_width: u16, max_content_lines: u16) -> u16 {
+    let usable = area_width.saturating_sub(2) as usize;
+    if usable == 0 {
+        return 3;
+    }
+    let lines = if content_len == 0 {
+        1
+    } else {
+        content_len.div_ceil(usable)
+    };
+    (lines as u16).min(max_content_lines) + 2
+}
+
 /// Draw the fleet TUI to the terminal frame.
 pub fn draw(frame: &mut Frame, app: &FleetApp) {
     // If command mode is active, add a command bar at the bottom
     let has_command = app.command_mode || app.command_result.is_some();
 
+    let cmd_bar_height = if has_command {
+        if app.command_mode {
+            // `:` prefix (1) + buffer + cursor placeholder (1)
+            let content_len = 1 + app.command_buffer.len() + 1;
+            wrapped_input_height(content_len, frame.area().width, MAX_INPUT_WRAP_LINES)
+        } else if let Some(ref result) = app.command_result {
+            let content_len = 1 + result.len();
+            wrapped_input_height(content_len, frame.area().width, MAX_INPUT_WRAP_LINES)
+        } else {
+            3
+        }
+    } else {
+        3
+    };
+
     let chunks = if has_command {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Header
-                Constraint::Min(0),   // Main content
-                Constraint::Length(3), // Status bar
-                Constraint::Length(3), // Command bar
+                Constraint::Length(3),              // Header
+                Constraint::Min(0),                // Main content
+                Constraint::Length(3),              // Status bar
+                Constraint::Length(cmd_bar_height), // Command bar (dynamic)
             ])
             .split(frame.area())
     } else {
@@ -76,10 +110,13 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
             draw_detail_header(frame, app, chunks[0]);
 
             if app.input_mode {
-                // Split main area into output + input bar
+                // Split main area into output + input bar (dynamic height)
+                let content_len = 3 + app.input_buffer.len() + 1; // " > " + buffer + cursor
+                let input_height =
+                    wrapped_input_height(content_len, chunks[1].width, MAX_INPUT_WRAP_LINES);
                 let detail_chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(0), Constraint::Length(3)])
+                    .constraints([Constraint::Min(0), Constraint::Length(input_height)])
                     .split(chunks[1]);
                 draw_detail_main(frame, app, detail_chunks[0]);
                 draw_input_bar(frame, app, detail_chunks[1]);
@@ -592,12 +629,14 @@ fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
         Span::styled(after, Style::default().fg(Color::White)),
     ]);
 
-    let bar = Paragraph::new(line).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Send Input ")
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
+    let bar = Paragraph::new(line)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Send Input ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
     frame.render_widget(bar, area);
 }
 
@@ -703,17 +742,20 @@ fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
             spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
         }
 
-        let bar = Paragraph::new(Line::from(spans)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
-        );
+        let bar = Paragraph::new(Line::from(spans))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            );
         frame.render_widget(bar, area);
     } else if let Some(ref result) = app.command_result {
         let bar = Paragraph::new(Span::styled(
             format!(" {result}"),
             Style::default().fg(Color::DarkGray),
         ))
+        .wrap(Wrap { trim: false })
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -986,6 +1028,7 @@ fn draw_wizard_text(
         Line::from(""),
         input_line,
     ])
+    .wrap(Wrap { trim: false })
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -1508,5 +1551,76 @@ mod tests {
         // Cursor in second line
         let lines = build_multiline_input(text, 8, text_style, cursor_style);
         assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn wrapped_input_height_basic() {
+        // 80-wide area, 2 borders = 78 usable columns
+        assert_eq!(wrapped_input_height(0, 80, 6), 3);   // empty: 1 line + 2 borders
+        assert_eq!(wrapped_input_height(78, 80, 6), 3);  // exactly 1 line
+        assert_eq!(wrapped_input_height(79, 80, 6), 4);  // wraps to 2 lines
+        assert_eq!(wrapped_input_height(156, 80, 6), 4); // exactly 2 lines
+        assert_eq!(wrapped_input_height(157, 80, 6), 5); // wraps to 3 lines
+    }
+
+    #[test]
+    fn wrapped_input_height_capped() {
+        // Very long content should be capped at max_content_lines + 2
+        assert_eq!(wrapped_input_height(10000, 80, 6), 8); // 6 + 2
+    }
+
+    #[test]
+    fn wrapped_input_height_narrow() {
+        // width=5, usable=3: ceil(10/3)=4, min(4,6)=4, +2=6
+        assert_eq!(wrapped_input_height(10, 5, 6), 6);
+        // width=2, usable=0: fallback to 3
+        assert_eq!(wrapped_input_height(10, 2, 6), 3);
+        // width=0: fallback to 3
+        assert_eq!(wrapped_input_height(10, 0, 6), 3);
+    }
+
+    #[test]
+    fn draw_does_not_panic_long_command_buffer() {
+        let mut app = FleetApp::new(None);
+        app.command_mode = true;
+        app.command_buffer = "goal ".to_string() + &"x".repeat(200);
+        app.command_cursor = app.command_buffer.len();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_long_input_buffer() {
+        let mut app = FleetApp::new(None);
+        app.view = FleetView::AgentDetail;
+        app.detail_name = "test-agent".into();
+        app.input_mode = true;
+        app.input_buffer = "x".repeat(200);
+        app.input_cursor = 200;
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_long_command_result() {
+        let mut app = FleetApp::new(None);
+        app.command_result = Some("x".repeat(200));
+        app.command_result_at = Some(std::time::Instant::now());
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn draw_does_not_panic_long_command_narrow_terminal() {
+        let mut app = FleetApp::new(None);
+        app.command_mode = true;
+        app.command_buffer = "x".repeat(50);
+        app.command_cursor = 50;
+        let backend = ratatui::backend::TestBackend::new(20, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
     }
 }
