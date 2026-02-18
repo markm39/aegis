@@ -122,6 +122,11 @@ impl DaemonRuntime {
         // Check for previous state and recover (close orphaned audit sessions)
         if let Some(prev_state) = DaemonState::load() {
             state::recover_from_crash(&prev_state, &self.aegis_config.ledger_path);
+            // Restore restart counts from previous daemon instance so
+            // max_restarts guards carry across daemon restarts.
+            for agent_state in &prev_state.agents {
+                self.fleet.restore_restart_count(&agent_state.name, agent_state.restart_count);
+            }
         }
 
         // Optionally start caffeinate
@@ -849,10 +854,11 @@ impl DaemonRuntime {
 
         for name in self.fleet.agent_names() {
             if let Some(slot) = self.fleet.slot(&name) {
+                let sid = slot.session_id.lock().ok().and_then(|g| *g);
                 daemon_state.agents.push(state::AgentState {
                     name: name.clone(),
                     was_running: slot.is_thread_alive(),
-                    session_id: None,
+                    session_id: sid,
                     restart_count: slot.restart_count,
                 });
             }

@@ -82,6 +82,9 @@ pub struct AgentSlot {
     /// PTY so that `stop_agent()` can send SIGTERM without blocking on join.
     /// A value of 0 means the child hasn't been spawned yet.
     pub child_pid: Arc<AtomicU32>,
+    /// Shared audit session ID. The lifecycle thread writes this after starting
+    /// the audit session so that state persistence can record it for crash recovery.
+    pub session_id: Arc<Mutex<Option<uuid::Uuid>>>,
 }
 
 impl AgentSlot {
@@ -110,6 +113,7 @@ impl AgentSlot {
             stall_attention: false,
             backoff_until: None,
             child_pid: Arc::new(AtomicU32::new(0)),
+            session_id: Arc::new(Mutex::new(None)),
         }
     }
 

@@ -136,11 +136,14 @@ impl Fleet {
 
         let fleet_goal = self.fleet_goal.clone();
         let child_pid = slot.child_pid.clone();
+        // Clear and share session_id for state persistence
+        *slot.session_id.lock().unwrap() = None;
+        let shared_session_id = slot.session_id.clone();
 
         let handle = thread::Builder::new()
             .name(format!("agent-{name}"))
             .spawn(move || {
-                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx), child_pid)
+                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx), child_pid, shared_session_id)
             });
 
         match handle {
@@ -592,6 +595,17 @@ impl Fleet {
         let mut names: Vec<String> = self.slots.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// Restore the restart count for an agent from a previous daemon state.
+    ///
+    /// Called during startup to carry restart counts across daemon restarts,
+    /// ensuring `max_restarts` guards are enforced across the lifetime of
+    /// the agent configuration (not just a single daemon process).
+    pub fn restore_restart_count(&mut self, name: &str, count: u32) {
+        if let Some(slot) = self.slots.get_mut(name) {
+            slot.restart_count = count;
+        }
     }
 
     /// Add a new agent slot at runtime.

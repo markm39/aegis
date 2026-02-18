@@ -51,6 +51,7 @@ pub struct SlotResult {
 /// - `command_rx`: optional channel for receiving commands (approve, deny, input)
 ///
 /// Returns a `SlotResult` when the agent exits.
+#[allow(clippy::too_many_arguments)]
 pub fn run_agent_slot(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
@@ -59,10 +60,11 @@ pub fn run_agent_slot(
     update_tx: Option<mpsc::Sender<PilotUpdate>>,
     command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
     child_pid: Arc<AtomicU32>,
+    shared_session_id: Arc<std::sync::Mutex<Option<uuid::Uuid>>>,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
-    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, &output_tx, update_tx.as_ref(), command_rx.as_ref(), &child_pid) {
+    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, &output_tx, update_tx.as_ref(), command_rx.as_ref(), &child_pid, &shared_session_id) {
         Ok(result) => result,
         Err(e) => {
             error!(agent = name, error = %e, "agent lifecycle failed");
@@ -77,6 +79,7 @@ pub fn run_agent_slot(
 }
 
 /// Inner implementation that returns Result for cleaner error handling.
+#[allow(clippy::too_many_arguments)]
 fn run_agent_slot_inner(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
@@ -85,6 +88,7 @@ fn run_agent_slot_inner(
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
     child_pid: &AtomicU32,
+    shared_session_id: &std::sync::Mutex<Option<uuid::Uuid>>,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
     info!(agent = name, "agent lifecycle starting");
@@ -122,6 +126,11 @@ fn run_agent_slot_inner(
     };
 
     info!(agent = name, session_id = %session_id, "audit session started");
+
+    // Share session_id back to the main thread for state persistence
+    if let Ok(mut guard) = shared_session_id.lock() {
+        *guard = Some(session_id);
+    }
 
     // 3. Start filesystem observer
     let observer_session = aegis_observer::start_observer(
