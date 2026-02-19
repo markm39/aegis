@@ -1294,7 +1294,7 @@ impl FleetApp {
                                     Ok(resp) if resp.ok => {
                                         if let Some(data) = resp.data {
                                             match serde_json::from_value::<ToolActionExecution>(
-                                                data,
+                                                data["execution"].clone(),
                                             ) {
                                                 Ok(exec) => {
                                                     self.set_result(format!(

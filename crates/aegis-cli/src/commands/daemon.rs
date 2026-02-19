@@ -867,7 +867,7 @@ pub fn tool_action(name: &str, action_json: &str) -> anyhow::Result<()> {
     }
 
     if let Some(data) = response.data {
-        let execution: ToolActionExecution = serde_json::from_value(data)
+        let execution: ToolActionExecution = serde_json::from_value(data["execution"].clone())
             .map_err(|e| anyhow::anyhow!("failed to parse tool action result: {e}"))?;
         println!("Tool action result for '{name}':");
         println!("  Action:    {}", execution.result.action);
