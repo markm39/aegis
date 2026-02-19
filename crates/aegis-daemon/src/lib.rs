@@ -14,6 +14,7 @@
 //! - [`state`]: crash recovery via persistent state.json
 
 pub mod control;
+pub mod dashboard;
 pub mod fleet;
 pub mod lifecycle;
 pub mod ndjson_fmt;
@@ -34,9 +35,10 @@ use tracing::{info, warn};
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
-    DaemonResponse, FramePayload, OrchestratorAgentView, OrchestratorSnapshot,
-    PendingPromptSummary, RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation,
-    ToolActionExecution, ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
+    DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
+    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
+    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, ToolActionExecution,
+    ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_ledger::AuditStore;
@@ -51,7 +53,7 @@ use crate::fleet::Fleet;
 use crate::slot::NotableEvent;
 use crate::state::DaemonState;
 use crate::tool_contract::render_orchestrator_tool_contract;
-use crate::toolkit_runtime::{ToolkitOutput, ToolkitRuntime};
+use crate::toolkit_runtime::{ToolkitOutput, ToolkitRuntime, TuiRuntimeBridge};
 
 const FRAME_RING_CAPACITY: usize = 5;
 const CAPTURE_DEFAULT_FPS: u16 = 30;
@@ -62,6 +64,41 @@ struct CachedFrame {
     payload: FramePayload,
     frame_id: u64,
     captured_at: Instant,
+}
+
+struct FleetTuiBridge<'a> {
+    fleet: &'a Fleet,
+    default_target: &'a str,
+}
+
+impl TuiRuntimeBridge for FleetTuiBridge<'_> {
+    fn snapshot(&self, session_id: &str) -> Result<TuiToolData, String> {
+        let target = if session_id.is_empty() {
+            self.default_target
+        } else {
+            session_id
+        };
+        let lines = self.fleet.agent_output(target, 200)?;
+        Ok(TuiToolData::Snapshot {
+            target: target.to_string(),
+            text: lines.join("\n"),
+            cursor: [0, 0],
+            size: [0, 0],
+        })
+    }
+
+    fn send_input(&self, session_id: &str, text: &str) -> Result<TuiToolData, String> {
+        let target = if session_id.is_empty() {
+            self.default_target
+        } else {
+            session_id
+        };
+        self.fleet.send_to_agent(target, text)?;
+        Ok(TuiToolData::Input {
+            target: target.to_string(),
+            sent: true,
+        })
+    }
 }
 
 struct FrameRing {
@@ -111,6 +148,24 @@ fn hook_fail_open_enabled() -> bool {
             matches!(v.as_str(), "1" | "true" | "yes" | "on")
         })
         .unwrap_or(false)
+}
+
+fn status_label(status: &AgentStatus) -> String {
+    match status {
+        AgentStatus::Pending => "pending".to_string(),
+        AgentStatus::Running { pid } => format!("running (pid {pid})"),
+        AgentStatus::Stopped { exit_code } => format!("stopped (exit {exit_code})"),
+        AgentStatus::Crashed {
+            exit_code,
+            restart_in_secs,
+        } => format!("crashed (exit {exit_code}, restart in {restart_in_secs}s)"),
+        AgentStatus::Failed {
+            exit_code,
+            restart_count,
+        } => format!("failed (exit {exit_code}, restarts {restart_count})"),
+        AgentStatus::Stopping => "stopping".to_string(),
+        AgentStatus::Disabled => "disabled".to_string(),
+    }
 }
 
 /// Compute runtime capability and policy-mediation coverage for an agent slot.
@@ -194,6 +249,10 @@ pub struct DaemonRuntime {
     last_tool_actions: std::collections::HashMap<String, ToolActionExecution>,
     /// Optional computer-use runtime for orchestrator actions.
     toolkit_runtime: Option<ToolkitRuntime>,
+    /// Dashboard listen address (if enabled).
+    dashboard_listen: Option<String>,
+    /// Dashboard access token (if enabled).
+    dashboard_token: Option<String>,
 }
 
 impl DaemonRuntime {
@@ -247,17 +306,9 @@ impl DaemonRuntime {
             capture_streams: HashMap::new(),
             last_tool_actions: HashMap::new(),
             toolkit_runtime: None,
+            dashboard_listen: None,
+            dashboard_token: None,
         }
-    }
-
-    fn ensure_toolkit_runtime(&mut self) -> Result<&mut ToolkitRuntime, String> {
-        if self.toolkit_runtime.is_none() {
-            self.toolkit_runtime = Some(ToolkitRuntime::new(&self.config.toolkit)?);
-        }
-        Ok(self
-            .toolkit_runtime
-            .as_mut()
-            .expect("toolkit runtime just initialized"))
     }
 
     fn stop_capture_stream(&mut self, name: &str) {
@@ -283,6 +334,12 @@ impl DaemonRuntime {
         if stream.region != *region {
             return None;
         }
+        let ring = stream.frames.lock().ok()?;
+        ring.latest().cloned()
+    }
+
+    fn latest_cached_frame_any(&self, name: &str) -> Option<CachedFrame> {
+        let stream = self.capture_streams.get(name)?;
         let ring = stream.frames.lock().ok()?;
         ring.latest().cloned()
     }
@@ -398,7 +455,8 @@ impl DaemonRuntime {
             }
             ToolAction::BrowserNavigate { .. }
             | ToolAction::BrowserSnapshot { .. }
-            | ToolAction::BrowserProfileStart { .. } => {
+            | ToolAction::BrowserProfileStart { .. }
+            | ToolAction::BrowserProfileStop { .. } => {
                 if !toolkit.browser.enabled {
                     return Err("browser actions are disabled by daemon toolkit config".to_string());
                 }
@@ -537,10 +595,33 @@ impl DaemonRuntime {
         };
 
         // Start control socket server
-        let mut cmd_rx = control::spawn_control_server(
+        let (cmd_tx, mut cmd_rx) = control::spawn_control_server(
             self.config.control.socket_path.clone(),
             Arc::clone(&self.shutdown),
         )?;
+
+        // Start dashboard server (read-only web UI)
+        if self.config.dashboard.enabled && !self.config.dashboard.listen.trim().is_empty() {
+            let token = if self.config.dashboard.api_key.trim().is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                self.config.dashboard.api_key.clone()
+            };
+            let listen = self.config.dashboard.listen.clone();
+            if let Err(e) = dashboard::spawn_dashboard_server(
+                listen.clone(),
+                token.clone(),
+                cmd_tx.clone(),
+                Arc::clone(&self.shutdown),
+            ) {
+                warn!(error = %e, "failed to start dashboard server");
+            } else {
+                let url = format!("http://{listen}/?token={token}");
+                info!(%url, "dashboard server started");
+                self.dashboard_listen = Some(listen);
+                self.dashboard_token = Some(token);
+            }
+        }
 
         // Start notification channel (Telegram) if configured
         if let Some(ref channel_config) = self.config.channel {
@@ -1146,6 +1227,16 @@ impl DaemonRuntime {
                 }
             }
 
+            DaemonCommand::StopBrowserProfile {
+                ref name,
+                ref session_id,
+            } => self.handle_command(DaemonCommand::ExecuteToolAction {
+                name: name.clone(),
+                action: ToolAction::BrowserProfileStop {
+                    session_id: session_id.clone(),
+                },
+            }),
+
             DaemonCommand::ExecuteToolAction {
                 ref name,
                 ref action,
@@ -1246,171 +1337,6 @@ impl DaemonRuntime {
                     return DaemonResponse::ok_with_data("deny", data);
                 }
 
-                if let ToolAction::TuiSnapshot { session_id } = action {
-                    let target = if session_id.is_empty() { name } else { session_id };
-                    let text = match self.fleet.agent_output(target, 200) {
-                        Ok(lines) => lines.join("\n"),
-                        Err(e) => {
-                            let execution = ToolActionExecution {
-                                result: aegis_toolkit::contract::ToolResult {
-                                    action: mapping.cedar_action.to_string(),
-                                    risk_tag: mapping.risk_tag,
-                                    capture_latency_ms: None,
-                                    input_latency_ms: None,
-                                    frame_id: None,
-                                    window_id: None,
-                                    session_id: Some(target.to_string()),
-                                    note: Some(format!("deny: tui snapshot failed ({e})")),
-                                },
-                                risk_tag: mapping.risk_tag,
-                            };
-                            self.last_tool_actions
-                                .insert(name.clone(), execution.clone());
-                            let denied_reason = format!("tui snapshot failed ({e})");
-                            self.append_runtime_audit(
-                                cedar_action.clone(),
-                                self.runtime_provenance(
-                                    name,
-                                    RuntimeOperation::ExecuteToolAction,
-                                    action,
-                                    "deny",
-                                    &denied_reason,
-                                    &execution,
-                                ),
-                            );
-                            let data = serde_json::to_value(ToolActionOutcome {
-                                execution,
-                                frame: None,
-                                tui: None,
-                                browser: None,
-                            })
-                            .unwrap_or(serde_json::Value::Null);
-                            return DaemonResponse::ok_with_data("deny", data);
-                        }
-                    };
-
-                    let execution = ToolActionExecution {
-                        result: aegis_toolkit::contract::ToolResult {
-                            action: mapping.cedar_action.to_string(),
-                            risk_tag: mapping.risk_tag,
-                            capture_latency_ms: None,
-                            input_latency_ms: None,
-                            frame_id: None,
-                            window_id: None,
-                            session_id: Some(target.to_string()),
-                            note: Some(format!("allow: {reason}")),
-                        },
-                        risk_tag: mapping.risk_tag,
-                    };
-                    self.last_tool_actions.insert(
-                        name.clone(),
-                        execution.clone(),
-                    );
-                    self.append_runtime_audit(
-                        cedar_action.clone(),
-                        self.runtime_provenance(
-                            name,
-                            RuntimeOperation::ExecuteToolAction,
-                            action,
-                            "allow",
-                            &reason,
-                            &execution,
-                        ),
-                    );
-                    let data = serde_json::to_value(ToolActionOutcome {
-                        execution,
-                        frame: None,
-                        tui: Some(TuiToolData::Snapshot {
-                            target: target.to_string(),
-                            text,
-                            cursor: [0, 0],
-                            size: [0, 0],
-                        }),
-                        browser: None,
-                    })
-                    .unwrap_or(serde_json::Value::Null);
-                    return DaemonResponse::ok_with_data("allow", data);
-                }
-
-                if let ToolAction::TuiInput { session_id, text } = action {
-                    let target = if session_id.is_empty() { name } else { session_id };
-                    if let Err(e) = self.fleet.send_to_agent(target, text) {
-                        let execution = ToolActionExecution {
-                            result: aegis_toolkit::contract::ToolResult {
-                                action: mapping.cedar_action.to_string(),
-                                risk_tag: mapping.risk_tag,
-                                capture_latency_ms: None,
-                                input_latency_ms: None,
-                                frame_id: None,
-                                window_id: None,
-                                session_id: Some(target.to_string()),
-                                note: Some(format!("deny: tui input failed ({e})")),
-                            },
-                            risk_tag: mapping.risk_tag,
-                        };
-                        self.last_tool_actions
-                            .insert(name.clone(), execution.clone());
-                        let denied_reason = format!("tui input failed ({e})");
-                        self.append_runtime_audit(
-                            cedar_action.clone(),
-                            self.runtime_provenance(
-                                name,
-                                RuntimeOperation::ExecuteToolAction,
-                                action,
-                                "deny",
-                                &denied_reason,
-                                &execution,
-                            ),
-                        );
-                        let data = serde_json::to_value(ToolActionOutcome {
-                            execution,
-                            frame: None,
-                            tui: None,
-                            browser: None,
-                        })
-                        .unwrap_or(serde_json::Value::Null);
-                        return DaemonResponse::ok_with_data("deny", data);
-                    }
-
-                    let execution = ToolActionExecution {
-                        result: aegis_toolkit::contract::ToolResult {
-                            action: mapping.cedar_action.to_string(),
-                            risk_tag: mapping.risk_tag,
-                            capture_latency_ms: None,
-                            input_latency_ms: None,
-                            frame_id: None,
-                            window_id: None,
-                            session_id: Some(target.to_string()),
-                            note: Some(format!("allow: {reason}")),
-                        },
-                        risk_tag: mapping.risk_tag,
-                    };
-                    self.last_tool_actions
-                        .insert(name.clone(), execution.clone());
-                    self.append_runtime_audit(
-                        cedar_action.clone(),
-                        self.runtime_provenance(
-                            name,
-                            RuntimeOperation::ExecuteToolAction,
-                            action,
-                            "allow",
-                            &reason,
-                            &execution,
-                        ),
-                    );
-                    let data = serde_json::to_value(ToolActionOutcome {
-                        execution,
-                        frame: None,
-                        tui: Some(TuiToolData::Input {
-                            target: target.to_string(),
-                            sent: true,
-                        }),
-                        browser: None,
-                    })
-                    .unwrap_or(serde_json::Value::Null);
-                    return DaemonResponse::ok_with_data("allow", data);
-                }
-
                 if let ToolAction::ScreenCapture { region, .. } = action {
                     if let Some(cached) = self.latest_cached_frame(name, region) {
                         let age_ms = cached.captured_at.elapsed().as_millis() as u64;
@@ -1454,65 +1380,77 @@ impl DaemonRuntime {
                     }
                 }
 
-                let runtime = match self.ensure_toolkit_runtime() {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let execution = ToolActionExecution {
-                            result: aegis_toolkit::contract::ToolResult {
-                                action: mapping.cedar_action.to_string(),
+                if self.toolkit_runtime.is_none() {
+                    match ToolkitRuntime::new(&self.config.toolkit) {
+                        Ok(rt) => self.toolkit_runtime = Some(rt),
+                        Err(e) => {
+                            let execution = ToolActionExecution {
+                                result: aegis_toolkit::contract::ToolResult {
+                                    action: mapping.cedar_action.to_string(),
+                                    risk_tag: mapping.risk_tag,
+                                    capture_latency_ms: None,
+                                    input_latency_ms: None,
+                                    frame_id: None,
+                                    window_id: None,
+                                    session_id: self
+                                        .capture_sessions
+                                        .get(name)
+                                        .map(|s| s.session_id.clone()),
+                                    note: Some(format!("deny: runtime unavailable ({e})")),
+                                },
                                 risk_tag: mapping.risk_tag,
-                                capture_latency_ms: None,
-                                input_latency_ms: None,
-                                frame_id: None,
-                                window_id: None,
-                                session_id: self
-                                    .capture_sessions
-                                    .get(name)
-                                    .map(|s| s.session_id.clone()),
-                                note: Some(format!("deny: runtime unavailable ({e})")),
-                            },
-                            risk_tag: mapping.risk_tag,
-                        };
-                        self.last_tool_actions
-                            .insert(name.clone(), execution.clone());
-                        let denied_reason = format!("runtime unavailable ({e})");
-                        self.append_runtime_audit(
-                            cedar_action.clone(),
-                            self.runtime_provenance(
-                                name,
-                                RuntimeOperation::ExecuteToolAction,
-                                action,
-                                "deny",
-                                &denied_reason,
-                                &execution,
-                            ),
-                        );
-                        let data = serde_json::to_value(ToolActionOutcome {
-                            execution,
-                            frame: None,
-                            tui: None,
-                            browser: match action {
-                                ToolAction::BrowserNavigate { session_id, .. }
-                                | ToolAction::BrowserSnapshot { session_id, .. }
-                                | ToolAction::BrowserProfileStart { session_id, .. } => {
-                                    Some(BrowserToolData {
-                                        session_id: session_id.clone(),
-                                        backend: "cdp".to_string(),
-                                        available: false,
-                                        note: "browser backend unavailable".to_string(),
-                                        screenshot_base64: None,
-                                        ws_url: self.config.toolkit.browser.cdp_ws_url.clone(),
-                                    })
-                                }
-                                _ => None,
-                            },
-                        })
-                        .unwrap_or(serde_json::Value::Null);
-                        return DaemonResponse::ok_with_data("deny", data);
+                            };
+                            self.last_tool_actions
+                                .insert(name.clone(), execution.clone());
+                            let denied_reason = format!("runtime unavailable ({e})");
+                            self.append_runtime_audit(
+                                cedar_action.clone(),
+                                self.runtime_provenance(
+                                    name,
+                                    RuntimeOperation::ExecuteToolAction,
+                                    action,
+                                    "deny",
+                                    &denied_reason,
+                                    &execution,
+                                ),
+                            );
+                            let data = serde_json::to_value(ToolActionOutcome {
+                                execution,
+                                frame: None,
+                                tui: None,
+                                browser: match action {
+                                    ToolAction::BrowserNavigate { session_id, .. }
+                                    | ToolAction::BrowserSnapshot { session_id, .. }
+                                    | ToolAction::BrowserProfileStart { session_id, .. }
+                                    | ToolAction::BrowserProfileStop { session_id, .. } => {
+                                        Some(BrowserToolData {
+                                            session_id: session_id.clone(),
+                                            backend: "cdp".to_string(),
+                                            available: false,
+                                            note: "browser backend unavailable".to_string(),
+                                            screenshot_base64: None,
+                                            ws_url: self.config.toolkit.browser.cdp_ws_url.clone(),
+                                        })
+                                    }
+                                    _ => None,
+                                },
+                            })
+                            .unwrap_or(serde_json::Value::Null);
+                            return DaemonResponse::ok_with_data("deny", data);
+                        }
                     }
-                };
+                }
 
-                let mut output: ToolkitOutput = match runtime.execute(action) {
+                let bridge = FleetTuiBridge {
+                    fleet: &self.fleet,
+                    default_target: name,
+                };
+                let mut output: ToolkitOutput = match self
+                    .toolkit_runtime
+                    .as_mut()
+                    .expect("toolkit runtime initialized")
+                    .execute_with_tui_bridge(action, Some(&bridge))
+                {
                     Ok(output) => output,
                     Err(e) => {
                         let execution = ToolActionExecution {
@@ -1552,7 +1490,8 @@ impl DaemonRuntime {
                             browser: match action {
                                 ToolAction::BrowserNavigate { session_id, .. }
                                 | ToolAction::BrowserSnapshot { session_id, .. }
-                                | ToolAction::BrowserProfileStart { session_id, .. } => {
+                                | ToolAction::BrowserProfileStart { session_id, .. }
+                                | ToolAction::BrowserProfileStop { session_id, .. } => {
                                     Some(BrowserToolData {
                                         session_id: session_id.clone(),
                                         backend: "cdp".to_string(),
@@ -1589,7 +1528,7 @@ impl DaemonRuntime {
                 let data = serde_json::to_value(ToolActionOutcome {
                     execution: output.execution,
                     frame: output.frame,
-                    tui: None,
+                    tui: output.tui,
                     browser: output.browser,
                 })
                 .unwrap_or(serde_json::Value::Null);
@@ -1785,10 +1724,8 @@ impl DaemonRuntime {
                     },
                     risk_tag: risk,
                 };
-                self.last_tool_actions.insert(
-                    name.clone(),
-                    execution.clone(),
-                );
+                self.last_tool_actions
+                    .insert(name.clone(), execution.clone());
                 self.append_runtime_audit(
                     cedar_action,
                     self.runtime_provenance(
@@ -1844,10 +1781,8 @@ impl DaemonRuntime {
                         },
                         risk_tag: risk,
                     };
-                    self.last_tool_actions.insert(
-                        name.clone(),
-                        execution.clone(),
-                    );
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
                     self.append_runtime_audit(
                         cedar_action,
                         self.runtime_provenance(
@@ -1878,10 +1813,8 @@ impl DaemonRuntime {
                             },
                             risk_tag: risk,
                         };
-                        self.last_tool_actions.insert(
-                            name.clone(),
-                            execution.clone(),
-                        );
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
                         self.append_runtime_audit(
                             cedar_action,
                             self.runtime_provenance(
@@ -1910,10 +1843,8 @@ impl DaemonRuntime {
                             },
                             risk_tag: risk,
                         };
-                        self.last_tool_actions.insert(
-                            name.clone(),
-                            execution.clone(),
-                        );
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
                         self.append_runtime_audit(
                             cedar_action.clone(),
                             self.runtime_provenance(
@@ -1942,10 +1873,8 @@ impl DaemonRuntime {
                             },
                             risk_tag: risk,
                         };
-                        self.last_tool_actions.insert(
-                            name.clone(),
-                            execution.clone(),
-                        );
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
                         self.append_runtime_audit(
                             cedar_action,
                             self.runtime_provenance(
@@ -1962,7 +1891,10 @@ impl DaemonRuntime {
                 }
             }
 
-            DaemonCommand::LatestCaptureFrame { ref name, ref region } => {
+            DaemonCommand::LatestCaptureFrame {
+                ref name,
+                ref region,
+            } => {
                 if self.fleet.slot(name).is_none() {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
                 }
@@ -1989,6 +1921,109 @@ impl DaemonRuntime {
                         }
                     }
                     None => DaemonResponse::error("no cached frame available"),
+                }
+            }
+
+            DaemonCommand::DashboardStatus => {
+                let enabled = self.dashboard_listen.is_some() && self.dashboard_token.is_some();
+                let listen = self.dashboard_listen.clone().unwrap_or_default();
+                let base_url = if enabled && !listen.is_empty() {
+                    Some(format!("http://{listen}"))
+                } else {
+                    None
+                };
+                let payload = DashboardStatus {
+                    enabled,
+                    listen,
+                    base_url,
+                    token: self.dashboard_token.clone(),
+                };
+                match serde_json::to_value(payload) {
+                    Ok(data) => DaemonResponse::ok_with_data("dashboard status", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::DashboardSnapshot => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                let mut agents = Vec::new();
+                for name in self.fleet.agent_names_sorted() {
+                    let status = self
+                        .fleet
+                        .agent_status(&name)
+                        .map(status_label)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let tool = self
+                        .fleet
+                        .agent_tool_name(&name)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let config = self.fleet.agent_config(&name);
+                    let role = config.and_then(|c| c.role.clone());
+                    let goal = config.and_then(|c| c.agent_goal.clone());
+
+                    let pending_prompts = match self.fleet.list_pending(&name) {
+                        Ok(list) => list
+                            .iter()
+                            .take(3)
+                            .map(|p| DashboardPendingPrompt {
+                                request_id: p.request_id.to_string(),
+                                raw_prompt: p.raw_prompt.clone(),
+                                received_at_ms: p.received_at.elapsed().as_millis(),
+                            })
+                            .collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    let pending_count = self.fleet.agent_pending_count(&name);
+
+                    let last_output = self.fleet.agent_output(&name, 50).unwrap_or_default();
+
+                    let (last_tool_action, last_tool_decision, last_tool_note) =
+                        if let Some(last) = self.last_tool_actions.get(&name) {
+                            let decision = last.result.note.as_deref().map(|note| {
+                                if note.starts_with("allow:") {
+                                    "allow".to_string()
+                                } else {
+                                    "deny".to_string()
+                                }
+                            });
+                            (
+                                Some(last.result.action.clone()),
+                                decision,
+                                last.result.note.clone(),
+                            )
+                        } else {
+                            (None, None, None)
+                        };
+
+                    let latest_frame_age_ms = self
+                        .latest_cached_frame_any(&name)
+                        .map(|f| f.captured_at.elapsed().as_millis() as u64);
+
+                    agents.push(DashboardAgent {
+                        name,
+                        status,
+                        tool,
+                        role,
+                        goal,
+                        pending_count,
+                        pending_prompts,
+                        last_tool_action,
+                        last_tool_decision,
+                        last_tool_note,
+                        last_output,
+                        latest_frame_age_ms,
+                    });
+                }
+                let snapshot = DashboardSnapshot {
+                    timestamp_ms: now,
+                    agents,
+                };
+                match serde_json::to_value(snapshot) {
+                    Ok(data) => DaemonResponse::ok_with_data("dashboard snapshot", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                 }
             }
 
@@ -2568,17 +2603,23 @@ fn compose_autonomy_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aegis_control::daemon::{CaptureSessionRequest, LatestCaptureFrame};
+    use aegis_policy::builtin::ORCHESTRATOR_COMPUTER_USE;
+    use aegis_toolkit::contract::InputAction;
     use aegis_toolkit::contract::{MouseButton, ToolAction};
     use aegis_types::daemon::{
         AgentSlotConfig, AgentToolConfig, DaemonControlConfig, PersistenceConfig, RestartPolicy,
     };
     use std::path::PathBuf;
+    use std::time::Duration;
+    use tempfile::TempDir;
 
     fn test_runtime(agents: Vec<AgentSlotConfig>) -> DaemonRuntime {
         let config = DaemonConfig {
             goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
+            dashboard: Default::default(),
             alerts: vec![],
             agents,
             channel: None,
@@ -2829,7 +2870,10 @@ mod tests {
         let data = resp.data.unwrap();
         let outcome: ToolActionOutcome = serde_json::from_value(data).unwrap();
         assert_eq!(outcome.execution.result.action, "MouseClick");
-        assert_eq!(outcome.execution.risk_tag, outcome.execution.result.risk_tag);
+        assert_eq!(
+            outcome.execution.risk_tag,
+            outcome.execution.result.risk_tag
+        );
         let note = outcome.execution.result.note.unwrap_or_default();
         assert!(note.contains("deny"));
     }
@@ -2884,6 +2928,158 @@ mod tests {
         });
         assert!(!resp.ok);
         assert!(resp.message.contains("denied"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires local browser + macOS permissions (screen recording/accessibility)"]
+    fn live_browser_automation_writes_runtime_provenance() {
+        if std::env::var("AEGIS_LIVE_AUTOMATION_TEST").ok().as_deref() != Some("1") {
+            eprintln!("set AEGIS_LIVE_AUTOMATION_TEST=1 to run live automation integration test");
+            return;
+        }
+
+        let tmp = TempDir::new().expect("create temp dir");
+        let base = tmp.path().join("live-automation");
+        let policy_dir = base.join("policies");
+        std::fs::create_dir_all(&policy_dir).expect("create policy dir");
+        std::fs::write(policy_dir.join("default.cedar"), ORCHESTRATOR_COMPUTER_USE)
+            .expect("write policy");
+
+        let mut config = DaemonConfig {
+            goal: None,
+            persistence: PersistenceConfig::default(),
+            control: DaemonControlConfig::default(),
+            dashboard: Default::default(),
+            alerts: vec![],
+            agents: vec![test_agent("orch")],
+            channel: None,
+            toolkit: Default::default(),
+        };
+        config.toolkit.loop_executor.halt_on_high_risk = false;
+        config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
+
+        let aegis_config = AegisConfig::default_for("live-orch", &base);
+        let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
+
+        let start_capture = runtime.handle_command(DaemonCommand::StartCaptureSession {
+            name: "orch".to_string(),
+            request: CaptureSessionRequest {
+                target_fps: 30,
+                region: None,
+            },
+        });
+        assert!(
+            start_capture.ok,
+            "capture start failed: {}",
+            start_capture.message
+        );
+        let capture_started: CaptureSessionStarted = serde_json::from_value(
+            start_capture
+                .data
+                .expect("capture start response should include session payload"),
+        )
+        .expect("parse capture session response");
+
+        let start_browser = runtime.handle_command(DaemonCommand::ExecuteToolAction {
+            name: "orch".to_string(),
+            action: ToolAction::BrowserProfileStart {
+                session_id: "live-web".to_string(),
+                headless: true,
+                url: Some("https://example.com".to_string()),
+            },
+        });
+        assert!(
+            start_browser.ok,
+            "browser start failed: {}",
+            start_browser.message
+        );
+
+        let batch = runtime.handle_command(DaemonCommand::ExecuteToolBatch {
+            name: "orch".to_string(),
+            actions: vec![
+                ToolAction::BrowserNavigate {
+                    session_id: "live-web".to_string(),
+                    url: "https://example.com".to_string(),
+                },
+                ToolAction::InputBatch {
+                    actions: vec![
+                        InputAction::MouseClick {
+                            x: 20,
+                            y: 20,
+                            button: MouseButton::Left,
+                        },
+                        InputAction::TypeText {
+                            text: "aegis live test".to_string(),
+                        },
+                        InputAction::Wait { duration_ms: 150 },
+                    ],
+                },
+            ],
+            max_actions: Some(4),
+        });
+        assert!(batch.ok, "batch failed: {}", batch.message);
+
+        let mut latest_ok = false;
+        for _ in 0..20 {
+            let latest = runtime.handle_command(DaemonCommand::LatestCaptureFrame {
+                name: "orch".to_string(),
+                region: None,
+            });
+            if latest.ok {
+                let payload: LatestCaptureFrame =
+                    serde_json::from_value(latest.data.expect("latest frame payload"))
+                        .expect("parse latest frame");
+                assert!(payload.frame_id > 0);
+                assert!(payload.frame.width > 0);
+                assert!(payload.frame.height > 0);
+                latest_ok = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(latest_ok, "latest-frame never returned a cached frame");
+
+        let stop_browser = runtime.handle_command(DaemonCommand::StopBrowserProfile {
+            name: "orch".to_string(),
+            session_id: "live-web".to_string(),
+        });
+        assert!(
+            stop_browser.ok,
+            "browser stop failed: {}",
+            stop_browser.message
+        );
+
+        let stop_capture = runtime.handle_command(DaemonCommand::StopCaptureSession {
+            name: "orch".to_string(),
+            session_id: capture_started.session_id,
+        });
+        assert!(
+            stop_capture.ok,
+            "capture stop failed: {}",
+            stop_capture.message
+        );
+
+        let store = AuditStore::open(&aegis_config.ledger_path).expect("open audit ledger");
+        let entries = store.query_last(200).expect("query audit entries");
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.action_kind.contains("RuntimeComputerUse")),
+            "expected RuntimeComputerUse audit entries"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.action_kind.contains("BrowserProfileStart")),
+            "expected BrowserProfileStart provenance in audit entries"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.action_kind.contains("BrowserProfileStop")),
+            "expected BrowserProfileStop provenance in audit entries"
+        );
     }
 
     #[test]

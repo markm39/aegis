@@ -18,15 +18,16 @@ use std::sync::atomic::Ordering;
 use anyhow::Context;
 use tracing::info;
 
+use crate::terminal::open_url;
 use aegis_control::daemon::{
-    CaptureSessionRequest, DaemonClient, DaemonCommand, LatestCaptureFrame, ToolActionOutcome,
-    ToolBatchOutcome,
+    CaptureSessionRequest, DaemonClient, DaemonCommand, DashboardStatus, LatestCaptureFrame,
+    ToolActionOutcome, ToolBatchOutcome,
 };
 use aegis_daemon::persistence;
 use aegis_toolkit::contract::ToolAction;
 use aegis_types::daemon::{
     daemon_config_path, daemon_dir, AgentSlotConfig, AgentToolConfig, DaemonConfig,
-    DaemonControlConfig, PersistenceConfig, RestartPolicy,
+    DaemonControlConfig, DashboardConfig, PersistenceConfig, RestartPolicy,
 };
 use aegis_types::AegisConfig;
 
@@ -50,6 +51,7 @@ pub fn init() -> anyhow::Result<()> {
         goal: None,
         persistence: PersistenceConfig::default(),
         control: DaemonControlConfig::default(),
+        dashboard: DashboardConfig::default(),
         alerts: vec![],
         agents: vec![AgentSlotConfig {
             name: "claude-1".into(),
@@ -110,6 +112,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         goal: None,
         persistence: PersistenceConfig::default(),
         control: DaemonControlConfig::default(),
+        dashboard: DashboardConfig::default(),
         alerts: vec![],
         agents: vec![AgentSlotConfig {
             name: "claude-1".to_string(),
@@ -962,6 +965,43 @@ pub fn browser_profile(
     Ok(())
 }
 
+/// Stop a managed browser profile for an agent.
+pub fn browser_profile_stop(name: &str, session_id: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::StopBrowserProfile {
+            name: name.to_string(),
+            session_id: session_id.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to stop browser profile: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let outcome: ToolActionOutcome = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse browser profile stop result: {e}"))?;
+        if let Some(browser) = outcome.browser {
+            println!("Browser profile for '{name}':");
+            println!("  Session:   {}", browser.session_id);
+            println!("  Backend:   {}", browser.backend);
+            println!("  Note:      {}", browser.note);
+        } else {
+            println!("Browser profile stopped.");
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute a short tool-action batch payload for an agent.
 pub fn tool_batch(name: &str, actions_json: &str, max_actions: Option<u8>) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
@@ -1101,6 +1141,55 @@ pub fn latest_frame(
         );
     }
 
+    Ok(())
+}
+
+/// Fetch dashboard status (URL/token) from the daemon.
+pub fn dashboard_status() -> anyhow::Result<DashboardStatus> {
+    let client = DaemonClient::default_path();
+    let response = client
+        .send(&DaemonCommand::DashboardStatus)
+        .map_err(|e| anyhow::anyhow!("failed to fetch dashboard status: {e}"))?;
+
+    if !response.ok {
+        anyhow::bail!("Error: {}", response.message);
+    }
+    let data = response
+        .data
+        .ok_or_else(|| anyhow::anyhow!("no dashboard status payload returned"))?;
+    let status: DashboardStatus = serde_json::from_value(data)
+        .map_err(|e| anyhow::anyhow!("failed to parse dashboard status: {e}"))?;
+    Ok(status)
+}
+
+/// Open the dashboard URL in a browser (or print it).
+pub fn dashboard(open: bool, url_only: bool) -> anyhow::Result<()> {
+    let status = dashboard_status()?;
+    if !status.enabled {
+        println!("Dashboard is disabled.");
+        return Ok(());
+    }
+    let base = status
+        .base_url
+        .unwrap_or_else(|| format!("http://{}", status.listen));
+    let url = if let Some(token) = status.token {
+        format!("{base}/?token={token}")
+    } else {
+        format!("{base}/")
+    };
+
+    if url_only {
+        println!("{url}");
+        return Ok(());
+    }
+    if open {
+        if let Err(e) = open_url(&url) {
+            println!("{e}");
+            println!("Open manually: {url}");
+        }
+    } else {
+        println!("{url}");
+    }
     Ok(())
 }
 

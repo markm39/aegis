@@ -712,6 +712,18 @@ enum DaemonCommands {
         height: Option<u32>,
     },
 
+    /// Open the read-only dashboard web UI
+    #[command(name = "dashboard")]
+    Dashboard {
+        /// Open in browser
+        #[arg(long)]
+        open: bool,
+
+        /// Print URL only
+        #[arg(long)]
+        url_only: bool,
+    },
+
     /// Start a managed browser profile for an agent
     #[command(name = "browser-profile")]
     BrowserProfile {
@@ -728,6 +740,16 @@ enum DaemonCommands {
         /// Optional URL to open
         #[arg(long)]
         url: Option<String>,
+    },
+
+    /// Stop a managed browser profile for an agent
+    #[command(name = "browser-profile-stop")]
+    BrowserProfileStop {
+        /// Agent name
+        name: String,
+
+        /// Browser session id
+        session_id: String,
     },
 
     /// Follow (tail) agent output in real time
@@ -1158,6 +1180,12 @@ fn main() -> anyhow::Result<()> {
                 headless,
                 url,
             } => commands::daemon::browser_profile(&name, &session_id, headless, url.as_deref()),
+            DaemonCommands::Dashboard { open, url_only } => {
+                commands::daemon::dashboard(open, url_only)
+            }
+            DaemonCommands::BrowserProfileStop { name, session_id } => {
+                commands::daemon::browser_profile_stop(&name, &session_id)
+            }
             DaemonCommands::Follow { name } => commands::daemon::follow(&name),
             DaemonCommands::Enable { name } => commands::daemon::enable_agent(&name),
             DaemonCommands::Disable { name } => commands::daemon::disable_agent(&name),
@@ -2551,6 +2579,27 @@ mod tests {
             "https://example.com",
         ]);
         assert!(cli.is_ok(), "should parse daemon browser-profile: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_daemon_browser_profile_stop() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "browser-profile-stop",
+            "claude-1",
+            "browser-1",
+        ]);
+        assert!(
+            cli.is_ok(),
+            "should parse daemon browser-profile-stop: {cli:?}"
+        );
+    }
+
+    #[test]
+    fn cli_parse_daemon_dashboard() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "dashboard", "--open"]);
+        assert!(cli.is_ok(), "should parse daemon dashboard: {cli:?}");
     }
 
     #[test]

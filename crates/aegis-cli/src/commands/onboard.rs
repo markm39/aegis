@@ -62,9 +62,11 @@ pub fn run() -> anyhow::Result<()> {
         goal: result.fleet_goal,
         persistence: PersistenceConfig::default(),
         control: DaemonControlConfig::default(),
+        dashboard: Default::default(),
         alerts: vec![],
         agents,
         channel: result.channel,
+        toolkit: Default::default(),
     };
 
     let config_path = daemon_config_path();
@@ -192,7 +194,7 @@ mod tests {
     use super::*;
     use crate::commands::daemon::tool_display_name;
     use aegis_types::config::{ChannelConfig, TelegramConfig};
-    use aegis_types::daemon::{AgentSlotConfig, RestartPolicy};
+    use aegis_types::daemon::{AgentSlotConfig, DashboardConfig, RestartPolicy};
 
     #[test]
     fn tool_display_names() {
@@ -231,6 +233,7 @@ mod tests {
             goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
+            dashboard: DashboardConfig::default(),
             alerts: vec![],
             agents: vec![AgentSlotConfig {
                 name: "test-agent".into(),
@@ -254,6 +257,7 @@ mod tests {
                 isolation: None,
             }],
             channel: None,
+            toolkit: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -297,6 +301,7 @@ mod tests {
                 poll_timeout_secs: 30,
                 allow_group_commands: false,
             })),
+            toolkit: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

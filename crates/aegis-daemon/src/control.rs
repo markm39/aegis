@@ -40,8 +40,9 @@ pub fn daemon_cmd_channel() -> (DaemonCmdTx, DaemonCmdRx) {
 pub fn spawn_control_server(
     socket_path: PathBuf,
     shutdown: Arc<AtomicBool>,
-) -> Result<DaemonCmdRx, String> {
+) -> Result<(DaemonCmdTx, DaemonCmdRx), String> {
     let (tx, rx) = daemon_cmd_channel();
+    let thread_tx = tx.clone();
 
     std::thread::Builder::new()
         .name("daemon-control".into())
@@ -50,19 +51,15 @@ pub fn spawn_control_server(
                 .enable_all()
                 .build()
                 .expect("tokio runtime creation failed (out of memory?)");
-            rt.block_on(serve(&socket_path, tx, shutdown));
+            rt.block_on(serve(&socket_path, thread_tx, shutdown));
         })
         .map_err(|e| format!("failed to spawn control server thread: {e}"))?;
 
-    Ok(rx)
+    Ok((tx, rx))
 }
 
 /// Run the Unix socket server until shutdown.
-async fn serve(
-    socket_path: &Path,
-    cmd_tx: DaemonCmdTx,
-    shutdown: Arc<AtomicBool>,
-) {
+async fn serve(socket_path: &Path, cmd_tx: DaemonCmdTx, shutdown: Arc<AtomicBool>) {
     // Ensure the parent directory exists
     if let Some(parent) = socket_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -106,11 +103,8 @@ async fn serve(
         }
 
         // Accept with a timeout so we can check shutdown periodically
-        let accept = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            listener.accept(),
-        )
-        .await;
+        let accept =
+            tokio::time::timeout(std::time::Duration::from_secs(1), listener.accept()).await;
 
         match accept {
             Ok(Ok((stream, _addr))) => {

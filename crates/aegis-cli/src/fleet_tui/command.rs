@@ -33,6 +33,8 @@ pub enum FleetCommand {
     Pop { agent: String },
     /// Open the monitor TUI in a new terminal window.
     Monitor,
+    /// Open the web dashboard in a browser.
+    Dashboard,
     /// Show daemon status summary.
     Status,
     /// Open daemon config in $EDITOR in a new terminal window.
@@ -55,6 +57,12 @@ pub enum FleetCommand {
     Capabilities { agent: String },
     /// Execute a computer-use tool action from JSON payload.
     Tool { agent: String, action_json: String },
+    /// Execute a short computer-use tool batch from JSON payload.
+    ToolBatch {
+        agent: String,
+        actions_json: String,
+        max_actions: Option<u8>,
+    },
     /// Start a capture session for an agent.
     CaptureStart {
         agent: String,
@@ -62,6 +70,8 @@ pub enum FleetCommand {
     },
     /// Stop the active capture session for an agent.
     CaptureStop { agent: String, session_id: String },
+    /// Stop a managed browser profile for an agent.
+    BrowserProfileStop { agent: String, session_id: String },
     /// Wrap a command with Aegis observability in a new terminal.
     Wrap { cmd: String },
     /// Run a sandboxed command in a new terminal.
@@ -135,6 +145,7 @@ const COMMAND_NAMES: &[&str] = &[
     "approve",
     "capture-start",
     "capture-stop",
+    "browser-profile-stop",
     "capabilities",
     "config",
     "context",
@@ -153,6 +164,7 @@ const COMMAND_NAMES: &[&str] = &[
     "log",
     "logs",
     "monitor",
+    "dashboard",
     "nudge",
     "orch",
     "pending",
@@ -172,6 +184,7 @@ const COMMAND_NAMES: &[&str] = &[
     "status",
     "stop",
     "tool",
+    "tool-batch",
     "telegram",
     "use",
     "verify",
@@ -184,6 +197,7 @@ const AGENT_COMMANDS: &[&str] = &[
     "approve",
     "capture-start",
     "capture-stop",
+    "browser-profile-stop",
     "capabilities",
     "context",
     "deny",
@@ -198,6 +212,7 @@ const AGENT_COMMANDS: &[&str] = &[
     "send",
     "start",
     "stop",
+    "tool-batch",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -316,6 +331,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "monitor" => Ok(Some(FleetCommand::Monitor)),
+        "dashboard" => Ok(Some(FleetCommand::Dashboard)),
         "status" => Ok(Some(FleetCommand::Status)),
         "help" => Ok(Some(FleetCommand::Help)),
         "quit" | "q" => Ok(Some(FleetCommand::Quit)),
@@ -345,6 +361,23 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }))
             }
         }
+        "tool-batch" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                Err("usage: tool-batch <agent> <actions-json> [max-actions]".into())
+            } else {
+                let mut split = arg2.splitn(2, ' ');
+                let actions_json = split.next().unwrap_or("").to_string();
+                let max_actions = split
+                    .next()
+                    .and_then(|s| s.trim().parse::<u8>().ok())
+                    .filter(|n| *n > 0);
+                Ok(Some(FleetCommand::ToolBatch {
+                    agent: arg1.into(),
+                    actions_json,
+                    max_actions,
+                }))
+            }
+        }
         "capture-start" => {
             if arg1.is_empty() {
                 Err("usage: capture-start <agent> [target-fps]".into())
@@ -368,6 +401,16 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Err("usage: capture-stop <agent> <session-id>".into())
             } else {
                 Ok(Some(FleetCommand::CaptureStop {
+                    agent: arg1.into(),
+                    session_id: arg2.into(),
+                }))
+            }
+        }
+        "browser-profile-stop" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                Err("usage: browser-profile-stop <agent> <session-id>".into())
+            } else {
+                Ok(Some(FleetCommand::BrowserProfileStop {
                     agent: arg1.into(),
                     session_id: arg2.into(),
                 }))
@@ -615,13 +658,16 @@ pub fn help_text() -> &'static str {
      :log                     Recent audit entries\n\
      :logs                    Daemon log output\n\
      :monitor                 Open monitor in new terminal\n\
+     :dashboard               Open web dashboard\n\
      :nudge <agent> [msg]     Nudge stalled agent\n\
      :orch                    Orchestrator fleet overview\n\
      :pending <agent>         Show pending prompts\n\
      :capabilities <agent>    Runtime capability/mediation profile\n\
      :tool <agent> <json>     Execute computer-use ToolAction JSON\n\
+     :tool-batch <a> <json> [n] Execute computer-use ToolAction batch\n\
      :capture-start <a> [fps] Start capture session for agent\n\
      :capture-stop <a> <sid>  Stop capture session by id\n\
+     :browser-profile-stop <a> <sid> Stop managed browser profile\n\
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
      :pop <agent>             Open agent in new terminal\n\
@@ -842,6 +888,11 @@ mod tests {
     }
 
     #[test]
+    fn parse_dashboard() {
+        assert_eq!(parse("dashboard").unwrap(), Some(FleetCommand::Dashboard));
+    }
+
+    #[test]
     fn completions_command_names() {
         let agents = vec![];
         let c = completions("st", &agents);
@@ -948,6 +999,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_batch() {
+        assert_eq!(
+            parse("tool-batch claude-1 [{\"action\":\"mouse_move\",\"x\":1,\"y\":2}] 3").unwrap(),
+            Some(FleetCommand::ToolBatch {
+                agent: "claude-1".into(),
+                actions_json: "[{\"action\":\"mouse_move\",\"x\":1,\"y\":2}]".into(),
+                max_actions: Some(3),
+            })
+        );
+    }
+
+    #[test]
     fn parse_capture_start() {
         assert_eq!(
             parse("capture-start claude-1 45").unwrap(),
@@ -965,6 +1028,17 @@ mod tests {
             Some(FleetCommand::CaptureStop {
                 agent: "claude-1".into(),
                 session_id: "cap-123".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_browser_profile_stop() {
+        assert_eq!(
+            parse("browser-profile-stop claude-1 browser-1").unwrap(),
+            Some(FleetCommand::BrowserProfileStop {
+                agent: "claude-1".into(),
+                session_id: "browser-1".into(),
             })
         );
     }

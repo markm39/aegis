@@ -48,9 +48,37 @@ pub fn spawn_in_terminal(command: &str) -> Result<(), String> {
         TerminalBackend::Tmux => spawn_tmux(command),
         TerminalBackend::ITerm2 => spawn_iterm2(command),
         TerminalBackend::TerminalApp => spawn_terminal_app(command),
-        TerminalBackend::Unsupported => {
-            Err(format!("No supported terminal detected. Run in another terminal:\n  {command}"))
-        }
+        TerminalBackend::Unsupported => Err(format!(
+            "No supported terminal detected. Run in another terminal:\n  {command}"
+        )),
+    }
+}
+
+/// Open a URL in the system default browser.
+pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .status()
+            .map_err(|e| format!("failed to open browser: {e}"))?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()
+            .map_err(|e| format!("failed to open browser: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .status()
+            .map_err(|e| format!("failed to open browser: {e}"))?;
+        Ok(())
     }
 }
 
@@ -172,7 +200,10 @@ mod tests {
 
     #[test]
     fn escape_applescript_no_special_chars() {
-        assert_eq!(escape_applescript("aegis daemon status"), "aegis daemon status");
+        assert_eq!(
+            escape_applescript("aegis daemon status"),
+            "aegis daemon status"
+        );
     }
 
     #[test]
@@ -210,10 +241,7 @@ mod tests {
 
     #[test]
     fn escape_applescript_tabs() {
-        assert_eq!(
-            escape_applescript("col1\tcol2"),
-            "col1\\tcol2"
-        );
+        assert_eq!(escape_applescript("col1\tcol2"), "col1\\tcol2");
     }
 
     #[test]

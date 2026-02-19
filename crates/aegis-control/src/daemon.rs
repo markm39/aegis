@@ -80,6 +80,8 @@ pub enum DaemonCommand {
         #[serde(default)]
         max_actions: Option<u8>,
     },
+    /// Stop a managed browser profile session for an agent.
+    StopBrowserProfile { name: String, session_id: String },
     /// Start a streaming capture session for the given runtime/agent.
     StartCaptureSession {
         name: String,
@@ -93,6 +95,10 @@ pub enum DaemonCommand {
         #[serde(default)]
         region: Option<CaptureRegion>,
     },
+    /// Return dashboard status (URL/token) for local web UI.
+    DashboardStatus,
+    /// Snapshot payload for dashboard updates.
+    DashboardSnapshot,
     /// Get or set the fleet-wide goal.
     FleetGoal {
         /// If Some, sets the fleet goal. If None, returns the current goal.
@@ -421,6 +427,46 @@ pub struct BrowserToolData {
     pub ws_url: Option<String>,
 }
 
+/// Dashboard status payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DashboardStatus {
+    pub enabled: bool,
+    pub listen: String,
+    pub base_url: Option<String>,
+    pub token: Option<String>,
+}
+
+/// Dashboard snapshot payload for live UI updates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DashboardSnapshot {
+    pub timestamp_ms: u128,
+    pub agents: Vec<DashboardAgent>,
+}
+
+/// Per-agent row in the dashboard snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DashboardAgent {
+    pub name: String,
+    pub status: String,
+    pub tool: String,
+    pub role: Option<String>,
+    pub goal: Option<String>,
+    pub pending_count: usize,
+    pub pending_prompts: Vec<DashboardPendingPrompt>,
+    pub last_tool_action: Option<String>,
+    pub last_tool_decision: Option<String>,
+    pub last_tool_note: Option<String>,
+    pub last_output: Vec<String>,
+    pub latest_frame_age_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DashboardPendingPrompt {
+    pub request_id: String,
+    pub raw_prompt: String,
+    pub received_at_ms: u128,
+}
+
 /// Runtime operation category used for typed audit provenance.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -676,6 +722,10 @@ mod tests {
                     },
                 ],
                 max_actions: Some(2),
+            },
+            DaemonCommand::StopBrowserProfile {
+                name: "claude-1".into(),
+                session_id: "browser-1".into(),
             },
             DaemonCommand::StartCaptureSession {
                 name: "claude-1".into(),

@@ -40,6 +40,9 @@ pub struct DaemonConfig {
     /// Control plane (Unix socket + optional HTTP) settings.
     #[serde(default)]
     pub control: DaemonControlConfig,
+    /// Local read-only dashboard server settings.
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
     /// Global alert rules applied to all agents.
     #[serde(default)]
     pub alerts: Vec<AlertRule>,
@@ -65,6 +68,32 @@ pub struct ToolkitConfig {
     pub browser: ToolkitBrowserConfig,
     #[serde(default)]
     pub loop_executor: ToolkitLoopExecutorConfig,
+}
+
+/// Local dashboard server settings for read-only monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DashboardConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_dashboard_listen")]
+    pub listen: String,
+    /// Optional static API token (empty = random per boot).
+    #[serde(default)]
+    pub api_key: String,
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen: default_dashboard_listen(),
+            api_key: String::new(),
+        }
+    }
+}
+
+fn default_dashboard_listen() -> String {
+    "127.0.0.1:9845".to_string()
 }
 
 /// Screen capture runtime settings.
@@ -513,6 +542,7 @@ mod tests {
             goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
+            dashboard: DashboardConfig::default(),
             alerts: vec![],
             channel: None,
             toolkit: ToolkitConfig::default(),

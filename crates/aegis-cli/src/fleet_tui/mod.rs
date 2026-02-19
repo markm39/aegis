@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{
     AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
-    PendingPromptSummary, RuntimeCapabilities, ToolActionOutcome,
+    PendingPromptSummary, RuntimeCapabilities, ToolActionOutcome, ToolBatchOutcome,
 };
 use aegis_toolkit::contract::ToolAction;
 use aegis_types::AgentStatus;
@@ -601,9 +601,11 @@ impl FleetApp {
                 goal: None,
                 persistence: aegis_types::daemon::PersistenceConfig::default(),
                 control: aegis_types::daemon::DaemonControlConfig::default(),
+                dashboard: Default::default(),
                 alerts: vec![],
                 agents: vec![],
                 channel: None,
+                toolkit: Default::default(),
             }
         };
 
@@ -1135,6 +1137,12 @@ impl FleetApp {
             FleetCommand::Monitor => {
                 self.spawn_terminal("aegis monitor", "Opened monitor in new terminal");
             }
+            FleetCommand::Dashboard => {
+                self.spawn_terminal(
+                    "aegis daemon dashboard --open",
+                    "Opened dashboard in browser",
+                );
+            }
             FleetCommand::Follow { agent } => {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
@@ -1329,6 +1337,56 @@ impl FleetApp {
                     }
                 }
             }
+            FleetCommand::ToolBatch {
+                agent,
+                actions_json,
+                max_actions,
+            } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else {
+                    match serde_json::from_str::<Vec<ToolAction>>(&actions_json) {
+                        Ok(actions) => {
+                            if let Some(client) = &self.client {
+                                match client.send(&DaemonCommand::ExecuteToolBatch {
+                                    name: agent.clone(),
+                                    actions,
+                                    max_actions,
+                                }) {
+                                    Ok(resp) if resp.ok => {
+                                        if let Some(data) = resp.data {
+                                            match serde_json::from_value::<ToolBatchOutcome>(data) {
+                                                Ok(batch) => {
+                                                    let reason = batch
+                                                        .halted_reason
+                                                        .unwrap_or_else(|| "completed".to_string());
+                                                    self.set_result(format!(
+                                                        "{agent}: batch executed={} ({reason})",
+                                                        batch.executed
+                                                    ));
+                                                }
+                                                Err(e) => self.set_result(format!(
+                                                    "failed to parse tool batch result: {e}"
+                                                )),
+                                            }
+                                        } else {
+                                            self.set_result(format!("{agent}: tool batch sent"));
+                                        }
+                                    }
+                                    Ok(resp) => {
+                                        self.set_result(format!("failed: {}", resp.message))
+                                    }
+                                    Err(e) => self
+                                        .set_result(format!("failed to execute tool batch: {e}")),
+                                }
+                            }
+                        }
+                        Err(e) => self.set_result(format!("invalid ToolAction batch JSON: {e}")),
+                    }
+                }
+            }
             FleetCommand::CaptureStart { agent, target_fps } => {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
@@ -1376,6 +1434,23 @@ impl FleetApp {
                         }
                         Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
                         Err(e) => self.set_result(format!("failed to stop capture: {e}")),
+                    }
+                }
+            }
+            FleetCommand::BrowserProfileStop { agent, session_id } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::StopBrowserProfile {
+                        name: agent.clone(),
+                        session_id: session_id.clone(),
+                    }) {
+                        Ok(resp) if resp.ok => self
+                            .set_result(format!("{agent}: browser profile stopped ({session_id})")),
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to stop browser profile: {e}")),
                     }
                 }
             }
