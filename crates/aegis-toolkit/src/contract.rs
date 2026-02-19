@@ -1,0 +1,220 @@
+//! Phase-0 contract for orchestrator computer-use loops.
+//!
+//! Defines the action taxonomy, risk tags, and latency envelope so runtime
+//! implementations can stay policy-gated and measurable.
+
+use serde::{Deserialize, Serialize};
+
+/// Latency targets for high-speed sense/act loops.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FastLoopEnvelope {
+    /// Target capture cadence in frames per second.
+    pub target_fps: u16,
+    /// Median capture latency budget in milliseconds.
+    pub max_capture_latency_ms: u16,
+    /// Median input latency budget in milliseconds.
+    pub max_input_latency_ms: u16,
+    /// Lower bound for micro-actions per plan step.
+    pub min_micro_actions: u8,
+    /// Upper bound for micro-actions per plan step.
+    pub max_micro_actions: u8,
+}
+
+impl FastLoopEnvelope {
+    /// Default operational envelope for orchestrator computer-use.
+    pub const fn default_contract() -> Self {
+        Self {
+            target_fps: 30,
+            max_capture_latency_ms: 100,
+            max_input_latency_ms: 50,
+            min_micro_actions: 3,
+            max_micro_actions: 10,
+        }
+    }
+}
+
+/// Risk class used by policy/approval layers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskTag {
+    Low,
+    Medium,
+    High,
+}
+
+/// Declarative actions that the orchestrator runtime may attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ToolAction {
+    ScreenCapture {
+        region: Option<CaptureRegion>,
+        target_fps: u16,
+    },
+    WindowFocus {
+        app_id: String,
+        window_id: Option<u64>,
+    },
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseClick {
+        x: i32,
+        y: i32,
+        button: MouseButton,
+    },
+    MouseDrag {
+        from_x: i32,
+        from_y: i32,
+        to_x: i32,
+        to_y: i32,
+    },
+    KeyPress {
+        keys: Vec<String>,
+    },
+    TypeText {
+        text: String,
+    },
+    TuiSnapshot {
+        session_id: String,
+    },
+    TuiInput {
+        session_id: String,
+        text: String,
+    },
+    BrowserNavigate {
+        session_id: String,
+        url: String,
+    },
+    BrowserSnapshot {
+        session_id: String,
+        include_screenshot: bool,
+    },
+}
+
+impl ToolAction {
+    /// Stable policy identifier for Cedar/action logs.
+    pub fn policy_action_name(&self) -> &'static str {
+        match self {
+            ToolAction::ScreenCapture { .. } => "ScreenCapture",
+            ToolAction::WindowFocus { .. } => "WindowFocus",
+            ToolAction::MouseMove { .. } => "MouseMove",
+            ToolAction::MouseClick { .. } => "MouseClick",
+            ToolAction::MouseDrag { .. } => "MouseDrag",
+            ToolAction::KeyPress { .. } => "KeyPress",
+            ToolAction::TypeText { .. } => "TypeText",
+            ToolAction::TuiSnapshot { .. } => "TuiSnapshot",
+            ToolAction::TuiInput { .. } => "TuiInput",
+            ToolAction::BrowserNavigate { .. } => "BrowserNavigate",
+            ToolAction::BrowserSnapshot { .. } => "BrowserSnapshot",
+        }
+    }
+
+    /// Risk class for policy defaulting and approval UX.
+    pub fn risk_tag(&self) -> RiskTag {
+        match self {
+            ToolAction::ScreenCapture { .. }
+            | ToolAction::MouseMove { .. }
+            | ToolAction::TuiSnapshot { .. }
+            | ToolAction::BrowserSnapshot { .. } => RiskTag::Low,
+            ToolAction::MouseClick { .. }
+            | ToolAction::MouseDrag { .. }
+            | ToolAction::KeyPress { .. }
+            | ToolAction::TypeText { .. }
+            | ToolAction::TuiInput { .. } => RiskTag::Medium,
+            ToolAction::WindowFocus { .. } | ToolAction::BrowserNavigate { .. } => RiskTag::High,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CaptureRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// Runtime execution metadata for auditing and SLO checks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolResult {
+    pub action: String,
+    pub risk_tag: RiskTag,
+    pub capture_latency_ms: Option<u64>,
+    pub input_latency_ms: Option<u64>,
+    pub frame_id: Option<u64>,
+    pub window_id: Option<u64>,
+    pub session_id: Option<String>,
+    pub note: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_envelope_matches_phase_zero_targets() {
+        let env = FastLoopEnvelope::default_contract();
+        assert_eq!(env.target_fps, 30);
+        assert_eq!(env.max_capture_latency_ms, 100);
+        assert_eq!(env.max_input_latency_ms, 50);
+        assert_eq!(env.min_micro_actions, 3);
+        assert_eq!(env.max_micro_actions, 10);
+    }
+
+    #[test]
+    fn tool_action_roundtrip_serde() {
+        let action = ToolAction::MouseClick {
+            x: 120,
+            y: 340,
+            button: MouseButton::Left,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let back: ToolAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(action, back);
+    }
+
+    #[test]
+    fn risk_tags_map_as_expected() {
+        assert_eq!(
+            ToolAction::ScreenCapture {
+                region: None,
+                target_fps: 30
+            }
+            .risk_tag(),
+            RiskTag::Low
+        );
+        assert_eq!(
+            ToolAction::TypeText {
+                text: "hello".into()
+            }
+            .risk_tag(),
+            RiskTag::Medium
+        );
+        assert_eq!(
+            ToolAction::BrowserNavigate {
+                session_id: "s1".into(),
+                url: "https://example.com".into()
+            }
+            .risk_tag(),
+            RiskTag::High
+        );
+    }
+
+    #[test]
+    fn policy_action_name_is_stable() {
+        let action = ToolAction::TuiInput {
+            session_id: "abc".into(),
+            text: "i".into(),
+        };
+        assert_eq!(action.policy_action_name(), "TuiInput");
+    }
+}
