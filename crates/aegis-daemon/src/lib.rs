@@ -31,9 +31,10 @@ use tracing::{info, warn};
 
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
-    AgentDetail, AgentSummary, CaptureSessionStarted, DaemonCommand, DaemonPing, DaemonResponse,
-    OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary, RuntimeCapabilities,
-    ToolActionExecution, ToolUseVerdict,
+    AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
+    DaemonResponse, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
+    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, ToolActionExecution,
+    ToolActionOutcome, ToolUseVerdict, TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_ledger::AuditStore;
@@ -234,24 +235,19 @@ impl DaemonRuntime {
         (cedar_action, decision, reason)
     }
 
-    fn append_runtime_audit(
-        &self,
-        action: Action,
-        decision: &str,
-        reason: &str,
-        provenance: serde_json::Value,
-    ) {
+    fn append_runtime_audit(&self, action: Action, provenance: RuntimeAuditProvenance) {
         let audit_action = Action {
             kind: ActionKind::ToolCall {
                 tool: "RuntimeComputerUse".to_string(),
-                args: provenance,
+                args: serde_json::to_value(&provenance)
+                    .unwrap_or_else(|_| serde_json::json!({ "serialization_error": true })),
             },
             ..action
         };
-        let verdict = if decision == "allow" {
-            Verdict::allow(audit_action.id, reason.to_string(), None)
+        let verdict = if provenance.decision == "allow" {
+            Verdict::allow(audit_action.id, provenance.reason.clone(), None)
         } else {
-            Verdict::deny(audit_action.id, reason.to_string(), None)
+            Verdict::deny(audit_action.id, provenance.reason.clone(), None)
         };
 
         match AuditStore::open(&self.aegis_config.ledger_path) {
@@ -263,6 +259,27 @@ impl DaemonRuntime {
             Err(e) => {
                 warn!(?e, "failed to open audit ledger for runtime entry");
             }
+        }
+    }
+
+    fn runtime_provenance(
+        &self,
+        agent: &str,
+        operation: RuntimeOperation,
+        tool_action: &ToolAction,
+        decision: &str,
+        reason: &str,
+        outcome: &ToolActionExecution,
+    ) -> RuntimeAuditProvenance {
+        RuntimeAuditProvenance {
+            agent: agent.to_string(),
+            operation,
+            tool_action: tool_action.clone(),
+            cedar_action: tool_action.policy_action_name().to_string(),
+            risk_tag: outcome.risk_tag,
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+            outcome: outcome.clone(),
         }
     }
 
@@ -926,22 +943,23 @@ impl DaemonRuntime {
                         .insert(name.clone(), execution.clone());
                     self.append_runtime_audit(
                         cedar_action.clone(),
-                        "deny",
-                        &reason,
-                        serde_json::json!({
-                            "agent": name,
-                            "operation": "execute_tool_action",
-                            "tool_action": action,
-                            "risk_tag": mapping.risk_tag,
-                            "outcome": execution,
-                        }),
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::ExecuteToolAction,
+                            action,
+                            "deny",
+                            &reason,
+                            &execution,
+                        ),
                     );
 
-                    let data = serde_json::json!({
-                        "execution": execution,
-                        "frame": serde_json::Value::Null,
-                        "tui": serde_json::Value::Null,
-                    });
+                    let data = serde_json::to_value(ToolActionOutcome {
+                        execution,
+                        frame: None,
+                        tui: None,
+                        browser: None,
+                    })
+                    .unwrap_or(serde_json::Value::Null);
                     return DaemonResponse::ok_with_data("deny", data);
                 }
 
@@ -965,23 +983,25 @@ impl DaemonRuntime {
                             };
                             self.last_tool_actions
                                 .insert(name.clone(), execution.clone());
+                            let denied_reason = format!("tui snapshot failed ({e})");
                             self.append_runtime_audit(
                                 cedar_action.clone(),
-                                "deny",
-                                &format!("tui snapshot failed ({e})"),
-                                serde_json::json!({
-                                    "agent": name,
-                                    "operation": "execute_tool_action",
-                                    "tool_action": action,
-                                    "risk_tag": mapping.risk_tag,
-                                    "outcome": execution,
-                                }),
+                                self.runtime_provenance(
+                                    name,
+                                    RuntimeOperation::ExecuteToolAction,
+                                    action,
+                                    "deny",
+                                    &denied_reason,
+                                    &execution,
+                                ),
                             );
-                            let data = serde_json::json!({
-                                "execution": execution,
-                                "frame": serde_json::Value::Null,
-                                "tui": serde_json::Value::Null,
-                            });
+                            let data = serde_json::to_value(ToolActionOutcome {
+                                execution,
+                                frame: None,
+                                tui: None,
+                                browser: None,
+                            })
+                            .unwrap_or(serde_json::Value::Null);
                             return DaemonResponse::ok_with_data("deny", data);
                         }
                     };
@@ -1003,26 +1023,27 @@ impl DaemonRuntime {
                         .insert(name.clone(), execution.clone());
                     self.append_runtime_audit(
                         cedar_action.clone(),
-                        "allow",
-                        &reason,
-                        serde_json::json!({
-                            "agent": name,
-                            "operation": "execute_tool_action",
-                            "tool_action": action,
-                            "risk_tag": mapping.risk_tag,
-                            "outcome": execution,
-                        }),
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::ExecuteToolAction,
+                            action,
+                            "allow",
+                            &reason,
+                            &execution,
+                        ),
                     );
-                    let data = serde_json::json!({
-                        "execution": execution,
-                        "frame": serde_json::Value::Null,
-                        "tui": {
-                            "target": target,
-                            "text": text,
-                            "cursor": [0, 0],
-                            "size": [0, 0]
-                        }
-                    });
+                    let data = serde_json::to_value(ToolActionOutcome {
+                        execution,
+                        frame: None,
+                        tui: Some(TuiToolData::Snapshot {
+                            target: target.to_string(),
+                            text,
+                            cursor: [0, 0],
+                            size: [0, 0],
+                        }),
+                        browser: None,
+                    })
+                    .unwrap_or(serde_json::Value::Null);
                     return DaemonResponse::ok_with_data("allow", data);
                 }
 
@@ -1044,23 +1065,25 @@ impl DaemonRuntime {
                         };
                         self.last_tool_actions
                             .insert(name.clone(), execution.clone());
+                        let denied_reason = format!("tui input failed ({e})");
                         self.append_runtime_audit(
                             cedar_action.clone(),
-                            "deny",
-                            &format!("tui input failed ({e})"),
-                            serde_json::json!({
-                                "agent": name,
-                                "operation": "execute_tool_action",
-                                "tool_action": action,
-                                "risk_tag": mapping.risk_tag,
-                                "outcome": execution,
-                            }),
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::ExecuteToolAction,
+                                action,
+                                "deny",
+                                &denied_reason,
+                                &execution,
+                            ),
                         );
-                        let data = serde_json::json!({
-                            "execution": execution,
-                            "frame": serde_json::Value::Null,
-                            "tui": serde_json::Value::Null,
-                        });
+                        let data = serde_json::to_value(ToolActionOutcome {
+                            execution,
+                            frame: None,
+                            tui: None,
+                            browser: None,
+                        })
+                        .unwrap_or(serde_json::Value::Null);
                         return DaemonResponse::ok_with_data("deny", data);
                     }
 
@@ -1081,24 +1104,25 @@ impl DaemonRuntime {
                         .insert(name.clone(), execution.clone());
                     self.append_runtime_audit(
                         cedar_action.clone(),
-                        "allow",
-                        &reason,
-                        serde_json::json!({
-                            "agent": name,
-                            "operation": "execute_tool_action",
-                            "tool_action": action,
-                            "risk_tag": mapping.risk_tag,
-                            "outcome": execution,
-                        }),
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::ExecuteToolAction,
+                            action,
+                            "allow",
+                            &reason,
+                            &execution,
+                        ),
                     );
-                    let data = serde_json::json!({
-                        "execution": execution,
-                        "frame": serde_json::Value::Null,
-                        "tui": {
-                            "target": target,
-                            "sent": true
-                        }
-                    });
+                    let data = serde_json::to_value(ToolActionOutcome {
+                        execution,
+                        frame: None,
+                        tui: Some(TuiToolData::Input {
+                            target: target.to_string(),
+                            sent: true,
+                        }),
+                        browser: None,
+                    })
+                    .unwrap_or(serde_json::Value::Null);
                     return DaemonResponse::ok_with_data("allow", data);
                 }
 
@@ -1123,23 +1147,37 @@ impl DaemonRuntime {
                         };
                         self.last_tool_actions
                             .insert(name.clone(), execution.clone());
+                        let denied_reason = format!("runtime unavailable ({e})");
                         self.append_runtime_audit(
                             cedar_action.clone(),
-                            "deny",
-                            &format!("runtime unavailable ({e})"),
-                            serde_json::json!({
-                                "agent": name,
-                                "operation": "execute_tool_action",
-                                "tool_action": action,
-                                "risk_tag": mapping.risk_tag,
-                                "outcome": execution,
-                            }),
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::ExecuteToolAction,
+                                action,
+                                "deny",
+                                &denied_reason,
+                                &execution,
+                            ),
                         );
-                        let data = serde_json::json!({
-                            "execution": execution,
-                            "frame": serde_json::Value::Null,
-                            "tui": serde_json::Value::Null,
-                        });
+                        let data = serde_json::to_value(ToolActionOutcome {
+                            execution,
+                            frame: None,
+                            tui: None,
+                            browser: match action {
+                                ToolAction::BrowserNavigate { session_id, .. }
+                                | ToolAction::BrowserSnapshot { session_id, .. } => {
+                                    Some(BrowserToolData {
+                                        session_id: session_id.clone(),
+                                        backend: "cdp".to_string(),
+                                        available: false,
+                                        note: "browser backend unavailable".to_string(),
+                                        screenshot_base64: None,
+                                    })
+                                }
+                                _ => None,
+                            },
+                        })
+                        .unwrap_or(serde_json::Value::Null);
                         return DaemonResponse::ok_with_data("deny", data);
                     }
                 };
@@ -1165,23 +1203,38 @@ impl DaemonRuntime {
                         };
                         self.last_tool_actions
                             .insert(name.clone(), execution.clone());
+                        let denied_reason = format!("runtime error ({e})");
                         self.append_runtime_audit(
                             cedar_action.clone(),
-                            "deny",
-                            &format!("runtime error ({e})"),
-                            serde_json::json!({
-                                "agent": name,
-                                "operation": "execute_tool_action",
-                                "tool_action": action,
-                                "risk_tag": mapping.risk_tag,
-                                "outcome": execution,
-                            }),
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::ExecuteToolAction,
+                                action,
+                                "deny",
+                                &denied_reason,
+                                &execution,
+                            ),
                         );
-                        let data = serde_json::json!({
-                            "execution": execution,
-                            "frame": serde_json::Value::Null,
-                            "tui": serde_json::Value::Null,
-                        });
+                        let data = serde_json::to_value(ToolActionOutcome {
+                            execution,
+                            frame: None,
+                            tui: None,
+                            browser: match action {
+                                ToolAction::BrowserNavigate { session_id, .. }
+                                | ToolAction::BrowserSnapshot { session_id, .. } => {
+                                    Some(BrowserToolData {
+                                        session_id: session_id.clone(),
+                                        backend: "cdp".to_string(),
+                                        available: false,
+                                        note: "browser action denied: CDP backend unavailable"
+                                            .to_string(),
+                                        screenshot_base64: None,
+                                    })
+                                }
+                                _ => None,
+                            },
+                        })
+                        .unwrap_or(serde_json::Value::Null);
                         return DaemonResponse::ok_with_data("deny", data);
                     }
                 };
@@ -1190,23 +1243,24 @@ impl DaemonRuntime {
                 self.last_tool_actions
                     .insert(name.clone(), output.execution.clone());
                 self.append_runtime_audit(
-                    cedar_action,
-                    "allow",
-                    &reason,
-                    serde_json::json!({
-                        "agent": name,
-                        "operation": "execute_tool_action",
-                        "tool_action": action,
-                        "risk_tag": mapping.risk_tag,
-                        "outcome": output.execution,
-                    }),
+                    cedar_action.clone(),
+                    self.runtime_provenance(
+                        name,
+                        RuntimeOperation::ExecuteToolAction,
+                        action,
+                        "allow",
+                        &reason,
+                        &output.execution,
+                    ),
                 );
 
-                let data = serde_json::json!({
-                    "execution": output.execution,
-                    "frame": output.frame,
-                    "tui": serde_json::Value::Null,
-                });
+                let data = serde_json::to_value(ToolActionOutcome {
+                    execution: output.execution,
+                    frame: output.frame,
+                    tui: None,
+                    browser: output.browser,
+                })
+                .unwrap_or(serde_json::Value::Null);
                 DaemonResponse::ok_with_data("allow", data)
             }
 
@@ -1230,31 +1284,33 @@ impl DaemonRuntime {
                 let (cedar_action, decision, reason) =
                     self.evaluate_runtime_tool_action(name, &screen_action);
                 if decision == "deny" {
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: "CaptureStart".to_string(),
+                            risk_tag: risk,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: None,
+                            note: Some(format!("deny: {reason}")),
+                        },
+                        risk_tag: risk,
+                    };
                     self.last_tool_actions.insert(
                         name.clone(),
-                        ToolActionExecution {
-                            result: aegis_toolkit::contract::ToolResult {
-                                action: "CaptureStart".to_string(),
-                                risk_tag: risk,
-                                capture_latency_ms: None,
-                                input_latency_ms: None,
-                                frame_id: None,
-                                window_id: None,
-                                session_id: None,
-                                note: Some(format!("deny: {reason}")),
-                            },
-                            risk_tag: risk,
-                        },
+                        execution.clone(),
                     );
                     self.append_runtime_audit(
                         cedar_action,
-                        "deny",
-                        &reason,
-                        serde_json::json!({
-                            "agent": name,
-                            "operation": "capture_start",
-                            "request": request,
-                        }),
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::StartCaptureSession,
+                            &screen_action,
+                            "deny",
+                            &reason,
+                            &execution,
+                        ),
                     );
                     return DaemonResponse::error(format!("capture start denied: {reason}"));
                 }
@@ -1264,32 +1320,33 @@ impl DaemonRuntime {
                     target_fps: request.target_fps,
                 };
                 self.capture_sessions.insert(name.clone(), session.clone());
+                let execution = ToolActionExecution {
+                    result: aegis_toolkit::contract::ToolResult {
+                        action: "CaptureStart".to_string(),
+                        risk_tag: risk,
+                        capture_latency_ms: None,
+                        input_latency_ms: None,
+                        frame_id: None,
+                        window_id: None,
+                        session_id: Some(session.session_id.clone()),
+                        note: Some(format!("allow: {reason}")),
+                    },
+                    risk_tag: risk,
+                };
                 self.last_tool_actions.insert(
                     name.clone(),
-                    ToolActionExecution {
-                        result: aegis_toolkit::contract::ToolResult {
-                            action: "CaptureStart".to_string(),
-                            risk_tag: risk,
-                            capture_latency_ms: None,
-                            input_latency_ms: None,
-                            frame_id: None,
-                            window_id: None,
-                            session_id: Some(session.session_id.clone()),
-                            note: Some(format!("allow: {reason}")),
-                        },
-                        risk_tag: risk,
-                    },
+                    execution.clone(),
                 );
                 self.append_runtime_audit(
                     cedar_action,
-                    "allow",
-                    &reason,
-                    serde_json::json!({
-                        "agent": name,
-                        "operation": "capture_start",
-                        "request": request,
-                        "session": session,
-                    }),
+                    self.runtime_provenance(
+                        name,
+                        RuntimeOperation::StartCaptureSession,
+                        &screen_action,
+                        "allow",
+                        &reason,
+                        &execution,
+                    ),
                 );
                 match serde_json::to_value(&session) {
                     Ok(data) => DaemonResponse::ok_with_data("capture session started", data),
@@ -1317,9 +1374,72 @@ impl DaemonRuntime {
                 let (cedar_action, decision, reason) =
                     self.evaluate_runtime_tool_action(name, &stop_action);
                 if decision == "deny" {
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: "CaptureStop".to_string(),
+                            risk_tag: risk,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: Some(session_id.clone()),
+                            note: Some(format!("deny: {reason}")),
+                        },
+                        risk_tag: risk,
+                    };
                     self.last_tool_actions.insert(
                         name.clone(),
-                        ToolActionExecution {
+                        execution.clone(),
+                    );
+                    self.append_runtime_audit(
+                        cedar_action,
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::StopCaptureSession,
+                            &stop_action,
+                            "deny",
+                            &reason,
+                            &execution,
+                        ),
+                    );
+                    return DaemonResponse::error(format!("capture stop denied: {reason}"));
+                }
+                match self.capture_sessions.get(name) {
+                    Some(s) if s.session_id == *session_id => {
+                        self.capture_sessions.remove(name);
+                        let execution = ToolActionExecution {
+                            result: aegis_toolkit::contract::ToolResult {
+                                action: "CaptureStop".to_string(),
+                                risk_tag: risk,
+                                capture_latency_ms: None,
+                                input_latency_ms: None,
+                                frame_id: None,
+                                window_id: None,
+                                session_id: Some(session_id.clone()),
+                                note: Some(format!("allow: {reason}")),
+                            },
+                            risk_tag: risk,
+                        };
+                        self.last_tool_actions.insert(
+                            name.clone(),
+                            execution.clone(),
+                        );
+                        self.append_runtime_audit(
+                            cedar_action,
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::StopCaptureSession,
+                                &stop_action,
+                                "allow",
+                                &reason,
+                                &execution,
+                            ),
+                        );
+                        DaemonResponse::ok("capture session stopped")
+                    }
+                    Some(_) => {
+                        let reason = format!("session mismatch for '{name}': {session_id}");
+                        let execution = ToolActionExecution {
                             result: aegis_toolkit::contract::ToolResult {
                                 action: "CaptureStop".to_string(),
                                 risk_tag: risk,
@@ -1331,108 +1451,53 @@ impl DaemonRuntime {
                                 note: Some(format!("deny: {reason}")),
                             },
                             risk_tag: risk,
-                        },
-                    );
-                    self.append_runtime_audit(
-                        cedar_action,
-                        "deny",
-                        &reason,
-                        serde_json::json!({
-                            "agent": name,
-                            "operation": "capture_stop",
-                            "session_id": session_id,
-                        }),
-                    );
-                    return DaemonResponse::error(format!("capture stop denied: {reason}"));
-                }
-                match self.capture_sessions.get(name) {
-                    Some(s) if s.session_id == *session_id => {
-                        self.capture_sessions.remove(name);
+                        };
                         self.last_tool_actions.insert(
                             name.clone(),
-                            ToolActionExecution {
-                                result: aegis_toolkit::contract::ToolResult {
-                                    action: "CaptureStop".to_string(),
-                                    risk_tag: risk,
-                                    capture_latency_ms: None,
-                                    input_latency_ms: None,
-                                    frame_id: None,
-                                    window_id: None,
-                                    session_id: Some(session_id.clone()),
-                                    note: Some(format!("allow: {reason}")),
-                                },
-                                risk_tag: risk,
-                            },
-                        );
-                        self.append_runtime_audit(
-                            cedar_action,
-                            "allow",
-                            &reason,
-                            serde_json::json!({
-                                "agent": name,
-                                "operation": "capture_stop",
-                                "session_id": session_id,
-                            }),
-                        );
-                        DaemonResponse::ok("capture session stopped")
-                    }
-                    Some(_) => {
-                        let reason = format!("session mismatch for '{name}': {session_id}");
-                        self.last_tool_actions.insert(
-                            name.clone(),
-                            ToolActionExecution {
-                                result: aegis_toolkit::contract::ToolResult {
-                                    action: "CaptureStop".to_string(),
-                                    risk_tag: risk,
-                                    capture_latency_ms: None,
-                                    input_latency_ms: None,
-                                    frame_id: None,
-                                    window_id: None,
-                                    session_id: Some(session_id.clone()),
-                                    note: Some(format!("deny: {reason}")),
-                                },
-                                risk_tag: risk,
-                            },
+                            execution.clone(),
                         );
                         self.append_runtime_audit(
                             cedar_action.clone(),
-                            "deny",
-                            &reason,
-                            serde_json::json!({
-                                "agent": name,
-                                "operation": "capture_stop",
-                                "session_id": session_id,
-                            }),
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::StopCaptureSession,
+                                &stop_action,
+                                "deny",
+                                &reason,
+                                &execution,
+                            ),
                         );
                         DaemonResponse::error(reason)
                     }
                     None => {
                         let reason = format!("no active capture session for '{name}'");
+                        let execution = ToolActionExecution {
+                            result: aegis_toolkit::contract::ToolResult {
+                                action: "CaptureStop".to_string(),
+                                risk_tag: risk,
+                                capture_latency_ms: None,
+                                input_latency_ms: None,
+                                frame_id: None,
+                                window_id: None,
+                                session_id: Some(session_id.clone()),
+                                note: Some(format!("deny: {reason}")),
+                            },
+                            risk_tag: risk,
+                        };
                         self.last_tool_actions.insert(
                             name.clone(),
-                            ToolActionExecution {
-                                result: aegis_toolkit::contract::ToolResult {
-                                    action: "CaptureStop".to_string(),
-                                    risk_tag: risk,
-                                    capture_latency_ms: None,
-                                    input_latency_ms: None,
-                                    frame_id: None,
-                                    window_id: None,
-                                    session_id: Some(session_id.clone()),
-                                    note: Some(format!("deny: {reason}")),
-                                },
-                                risk_tag: risk,
-                            },
+                            execution.clone(),
                         );
                         self.append_runtime_audit(
                             cedar_action,
-                            "deny",
-                            &reason,
-                            serde_json::json!({
-                                "agent": name,
-                                "operation": "capture_stop",
-                                "session_id": session_id,
-                            }),
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::StopCaptureSession,
+                                &stop_action,
+                                "deny",
+                                &reason,
+                                &execution,
+                            ),
                         );
                         DaemonResponse::error(reason)
                     }
@@ -2273,10 +2338,10 @@ mod tests {
         });
         assert!(resp.ok);
         let data = resp.data.unwrap();
-        let execution: ToolActionExecution = serde_json::from_value(data["execution"].clone()).unwrap();
-        assert_eq!(execution.result.action, "MouseClick");
-        assert_eq!(execution.risk_tag, execution.result.risk_tag);
-        let note = execution.result.note.unwrap_or_default();
+        let outcome: ToolActionOutcome = serde_json::from_value(data).unwrap();
+        assert_eq!(outcome.execution.result.action, "MouseClick");
+        assert_eq!(outcome.execution.risk_tag, outcome.execution.result.risk_tag);
+        let note = outcome.execution.result.note.unwrap_or_default();
         assert!(note.contains("deny"));
     }
 

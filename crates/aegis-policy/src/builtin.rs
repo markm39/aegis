@@ -141,6 +141,29 @@ permit(
 /// where Aegis logs all file operations but enforces no restrictions.
 pub const PERMIT_ALL: &str = r#"permit(principal, action, resource);"#;
 
+/// Orchestrator computer-use baseline policy:
+/// permits only known runtime ToolCall actions used by Aegis computer-use.
+pub const ORCHESTRATOR_COMPUTER_USE: &str = r#"
+permit(
+    principal,
+    action == Aegis::Action::"ToolCall",
+    resource
+)
+when {
+    resource.path == "ScreenCapture" ||
+    resource.path == "WindowFocus" ||
+    resource.path == "MouseMove" ||
+    resource.path == "MouseClick" ||
+    resource.path == "MouseDrag" ||
+    resource.path == "KeyPress" ||
+    resource.path == "TypeText" ||
+    resource.path == "TuiSnapshot" ||
+    resource.path == "TuiInput" ||
+    resource.path == "BrowserNavigate" ||
+    resource.path == "BrowserSnapshot"
+};
+"#;
+
 /// Look up a built-in policy by name.
 ///
 /// Supported names:
@@ -156,6 +179,7 @@ pub fn get_builtin_policy(name: &str) -> Option<&'static str> {
         "allow-read-write" => Some(ALLOW_READ_WRITE),
         "ci-runner" => Some(CI_RUNNER),
         "data-science" => Some(DATA_SCIENCE),
+        "orchestrator-computer-use" => Some(ORCHESTRATOR_COMPUTER_USE),
         "permit-all" => Some(PERMIT_ALL),
         _ => None,
     }
@@ -169,6 +193,7 @@ pub fn list_builtin_policies() -> &'static [&'static str] {
         "allow-read-write",
         "ci-runner",
         "data-science",
+        "orchestrator-computer-use",
         "permit-all",
     ]
 }
@@ -226,6 +251,7 @@ mod tests {
         assert!(names.contains(&"allow-read-write"));
         assert!(names.contains(&"ci-runner"));
         assert!(names.contains(&"data-science"));
+        assert!(names.contains(&"orchestrator-computer-use"));
         assert!(names.contains(&"permit-all"));
     }
 

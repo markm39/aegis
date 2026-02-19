@@ -10,12 +10,13 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use aegis_policy::builtin::{
-    ALLOW_READ_ONLY, ALLOW_READ_WRITE, CI_RUNNER, DATA_SCIENCE, DEFAULT_DENY, PERMIT_ALL,
+    ALLOW_READ_ONLY, ALLOW_READ_WRITE, CI_RUNNER, DATA_SCIENCE, DEFAULT_DENY,
+    ORCHESTRATOR_COMPUTER_USE, PERMIT_ALL,
 };
 use aegis_policy::PolicyEngine;
 use aegis_types::{Action, ActionKind, Decision};
 
-use common::{dir_list_action, file_read_action, file_write_action};
+use common::{dir_list_action, file_read_action, file_write_action, tool_call_action};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -80,7 +81,11 @@ fn test_permit_all_allows_file_read() {
     let action = file_read_action("agent-1", "/tmp/data.csv");
     let verdict = engine.evaluate(&action);
 
-    assert_eq!(verdict.decision, Decision::Allow, "permit-all should allow FileRead");
+    assert_eq!(
+        verdict.decision,
+        Decision::Allow,
+        "permit-all should allow FileRead"
+    );
 }
 
 #[test]
@@ -180,6 +185,28 @@ fn test_permit_all_allows_all_action_kinds() {
             action.kind
         );
     }
+}
+
+#[test]
+fn test_orchestrator_computer_use_policy_limits_tool_names() {
+    let engine = PolicyEngine::from_policies(ORCHESTRATOR_COMPUTER_USE, None)
+        .expect("should create orchestrator-computer-use engine");
+
+    let allowed = tool_call_action("orch-1", "MouseClick");
+    let allowed_verdict = engine.evaluate(&allowed);
+    assert_eq!(
+        allowed_verdict.decision,
+        Decision::Allow,
+        "known computer-use tool should be allowed"
+    );
+
+    let denied = tool_call_action("orch-1", "Bash");
+    let denied_verdict = engine.evaluate(&denied);
+    assert_eq!(
+        denied_verdict.decision,
+        Decision::Deny,
+        "unknown tool call should be denied"
+    );
 }
 
 #[test]
@@ -295,7 +322,11 @@ fn test_allow_read_write_permits_files_denies_network() {
             path: PathBuf::from("/tmp/newdir"),
         },
     ));
-    assert_eq!(dir_create.decision, Decision::Allow, "should allow DirCreate");
+    assert_eq!(
+        dir_create.decision,
+        Decision::Allow,
+        "should allow DirCreate"
+    );
 
     // Network should be denied
     let net = engine.evaluate(&Action::new(
@@ -358,8 +389,8 @@ fn test_ci_runner_matches_allow_read_write() {
 
 #[test]
 fn test_data_science_permits_network_denies_toolcall() {
-    let engine = PolicyEngine::from_policies(DATA_SCIENCE, None)
-        .expect("should create data-science engine");
+    let engine =
+        PolicyEngine::from_policies(DATA_SCIENCE, None).expect("should create data-science engine");
 
     // Files should be allowed
     let read = engine.evaluate(&file_read_action("agent-1", "/data/dataset.csv"));
@@ -398,8 +429,7 @@ fn test_policy_from_fixture_file() {
     let policy_path = tmpdir.path().join("read-only.cedar");
     std::fs::write(&policy_path, fixture_content).expect("should write fixture policy");
 
-    let engine =
-        PolicyEngine::new(tmpdir.path(), None).expect("should create engine from fixture");
+    let engine = PolicyEngine::new(tmpdir.path(), None).expect("should create engine from fixture");
 
     let read_verdict = engine.evaluate(&file_read_action("agent-1", "/data/file.csv"));
     assert_eq!(

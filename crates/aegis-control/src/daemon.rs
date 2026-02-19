@@ -326,6 +326,72 @@ pub struct ToolActionExecution {
     pub risk_tag: RiskTag,
 }
 
+/// One full response payload from `ExecuteToolAction`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolActionOutcome {
+    pub execution: ToolActionExecution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<FramePayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tui: Option<TuiToolData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserToolData>,
+}
+
+/// Encoded screen frame payload returned from capture actions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FramePayload {
+    pub width: u32,
+    pub height: u32,
+    pub rgba_base64: String,
+}
+
+/// TUI-specific result payload for TUI actions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TuiToolData {
+    Snapshot {
+        target: String,
+        text: String,
+        cursor: [u16; 2],
+        size: [u16; 2],
+    },
+    Input { target: String, sent: bool },
+}
+
+/// Browser-specific result payload for browser actions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserToolData {
+    pub session_id: String,
+    pub backend: String,
+    pub available: bool,
+    pub note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot_base64: Option<String>,
+}
+
+/// Runtime operation category used for typed audit provenance.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOperation {
+    ExecuteToolAction,
+    StartCaptureSession,
+    StopCaptureSession,
+}
+
+/// Typed provenance payload persisted for runtime computer-use audit entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeAuditProvenance {
+    pub agent: String,
+    pub operation: RuntimeOperation,
+    pub tool_action: ToolAction,
+    pub cedar_action: String,
+    pub risk_tag: RiskTag,
+    pub decision: String,
+    pub reason: String,
+    pub outcome: ToolActionExecution,
+}
+
 /// Bulk fleet snapshot returned by `OrchestratorContext`.
 ///
 /// Contains everything an orchestrator agent needs for one review cycle:
@@ -747,5 +813,74 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: CaptureSessionRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn tool_action_outcome_roundtrip() {
+        let outcome = ToolActionOutcome {
+            execution: ToolActionExecution {
+                result: ToolResult {
+                    action: "ScreenCapture".into(),
+                    risk_tag: RiskTag::Low,
+                    capture_latency_ms: Some(12),
+                    input_latency_ms: None,
+                    frame_id: Some(9),
+                    window_id: None,
+                    session_id: Some("cap-1".into()),
+                    note: Some("allow: test".into()),
+                },
+                risk_tag: RiskTag::Low,
+            },
+            frame: Some(FramePayload {
+                width: 2,
+                height: 2,
+                rgba_base64: "AQIDBA==".into(),
+            }),
+            tui: Some(TuiToolData::Input {
+                target: "agent-1".into(),
+                sent: true,
+            }),
+            browser: Some(BrowserToolData {
+                session_id: "browser-1".into(),
+                backend: "cdp".into(),
+                available: false,
+                note: "backend unavailable".into(),
+                screenshot_base64: None,
+            }),
+        };
+
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: ToolActionOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, outcome);
+    }
+
+    #[test]
+    fn runtime_audit_provenance_roundtrip() {
+        let provenance = RuntimeAuditProvenance {
+            agent: "worker-1".into(),
+            operation: RuntimeOperation::ExecuteToolAction,
+            tool_action: ToolAction::MouseMove { x: 1, y: 2 },
+            cedar_action: "MouseMove".into(),
+            risk_tag: RiskTag::Low,
+            decision: "allow".into(),
+            reason: "policy permit".into(),
+            outcome: ToolActionExecution {
+                result: ToolResult {
+                    action: "MouseMove".into(),
+                    risk_tag: RiskTag::Low,
+                    capture_latency_ms: None,
+                    input_latency_ms: Some(3),
+                    frame_id: None,
+                    window_id: None,
+                    session_id: None,
+                    note: Some("allow: policy permit".into()),
+                },
+                risk_tag: RiskTag::Low,
+            },
+        };
+
+        let json = serde_json::to_string(&provenance).unwrap();
+        let back: RuntimeAuditProvenance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, provenance);
     }
 }

@@ -61,3 +61,14 @@ pub fn net_connect_action(principal: &str, host: &str, port: u16) -> Action {
         },
     )
 }
+
+/// Create a ToolCall action.
+pub fn tool_call_action(principal: &str, tool: &str) -> Action {
+    Action::new(
+        principal,
+        ActionKind::ToolCall {
+            tool: tool.to_string(),
+            args: serde_json::Value::Null,
+        },
+    )
+}

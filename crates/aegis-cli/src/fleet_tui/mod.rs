@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{
     AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
-    PendingPromptSummary, RuntimeCapabilities, ToolActionExecution,
+    PendingPromptSummary, RuntimeCapabilities, ToolActionOutcome,
 };
 use aegis_toolkit::contract::ToolAction;
 use aegis_types::AgentStatus;
@@ -1293,15 +1293,18 @@ impl FleetApp {
                                 }) {
                                     Ok(resp) if resp.ok => {
                                         if let Some(data) = resp.data {
-                                            match serde_json::from_value::<ToolActionExecution>(
-                                                data["execution"].clone(),
-                                            ) {
-                                                Ok(exec) => {
+                                            match serde_json::from_value::<ToolActionOutcome>(data)
+                                            {
+                                                Ok(outcome) => {
                                                     self.set_result(format!(
                                                         "{agent}: {} {:?} ({})",
-                                                        exec.result.action,
-                                                        exec.risk_tag,
-                                                        exec.result.note.unwrap_or_default()
+                                                        outcome.execution.result.action,
+                                                        outcome.execution.risk_tag,
+                                                        outcome
+                                                            .execution
+                                                            .result
+                                                            .note
+                                                            .unwrap_or_default()
                                                     ));
                                                 }
                                                 Err(e) => self.set_result(format!(

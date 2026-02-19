@@ -19,7 +19,7 @@ use anyhow::Context;
 use tracing::info;
 
 use aegis_control::daemon::{
-    CaptureSessionRequest, DaemonClient, DaemonCommand, ToolActionExecution,
+    CaptureSessionRequest, DaemonClient, DaemonCommand, ToolActionOutcome,
 };
 use aegis_daemon::persistence;
 use aegis_toolkit::contract::ToolAction;
@@ -867,18 +867,25 @@ pub fn tool_action(name: &str, action_json: &str) -> anyhow::Result<()> {
     }
 
     if let Some(data) = response.data {
-        let execution: ToolActionExecution = serde_json::from_value(data["execution"].clone())
+        let outcome: ToolActionOutcome = serde_json::from_value(data)
             .map_err(|e| anyhow::anyhow!("failed to parse tool action result: {e}"))?;
         println!("Tool action result for '{name}':");
-        println!("  Action:    {}", execution.result.action);
-        println!("  Risk:      {:?}", execution.risk_tag);
+        println!("  Action:    {}", outcome.execution.result.action);
+        println!("  Risk:      {:?}", outcome.execution.risk_tag);
         println!(
             "  Note:      {}",
-            execution
+            outcome
+                .execution
                 .result
                 .note
                 .unwrap_or_else(|| "(none)".to_string())
         );
+        if let Some(browser) = outcome.browser {
+            println!(
+                "  Browser:   backend={} available={} ({})",
+                browser.backend, browser.available, browser.note
+            );
+        }
     }
 
     Ok(())

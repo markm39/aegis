@@ -11,20 +11,17 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use aegis_ledger::AuditStore;
-use aegis_policy::builtin::ALLOW_READ_ONLY;
+use aegis_policy::builtin::{ALLOW_READ_ONLY, ORCHESTRATOR_COMPUTER_USE};
 use aegis_policy::PolicyEngine;
 use aegis_types::{
     AegisConfig, Decision, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
 };
 
-use common::{dir_list_action, file_read_action, file_write_action};
+use common::{dir_list_action, file_read_action, file_write_action, tool_call_action};
 
 /// Set up a temporary aegis directory structure mimicking `aegis init`.
 /// Returns (TempDir, policies_dir, sandbox_dir, ledger_path, config_path).
-fn setup_aegis_dir(
-    name: &str,
-    policy_text: &str,
-) -> (TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+fn setup_aegis_dir(name: &str, policy_text: &str) -> (TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     let tmpdir = TempDir::new().expect("should create temp dir for aegis init");
     let base = tmpdir.path().join(name);
 
@@ -60,8 +57,8 @@ fn test_full_lifecycle_read_only_policy() {
         setup_aegis_dir("test-agent", read_only_policy);
 
     // Step 2: Initialize PolicyEngine and AuditStore
-    let engine = PolicyEngine::new(&policies_dir, None)
-        .expect("should create policy engine from init dir");
+    let engine =
+        PolicyEngine::new(&policies_dir, None).expect("should create policy engine from init dir");
     let mut store = AuditStore::open(&ledger_path).expect("should open audit store");
 
     // Step 3: Simulate the run flow
@@ -117,9 +114,7 @@ fn test_full_lifecycle_read_only_policy() {
     assert_eq!(denies.len(), 1, "should have 1 Deny entry");
 
     // Step 5: Verify hash chain integrity
-    let report = store
-        .verify_integrity()
-        .expect("should verify integrity");
+    let report = store.verify_integrity().expect("should verify integrity");
     assert!(
         report.valid,
         "hash chain should be valid: {}",
@@ -148,8 +143,7 @@ permit(
     let (_tmpdir, policies_dir, _sandbox_dir, ledger_path, _config_path) =
         setup_aegis_dir("e2e-agent", policy);
 
-    let engine =
-        PolicyEngine::new(&policies_dir, None).expect("should create policy engine");
+    let engine = PolicyEngine::new(&policies_dir, None).expect("should create policy engine");
     let mut store = AuditStore::open(&ledger_path).expect("should open audit store");
 
     // FileRead -> Allow
@@ -177,17 +171,42 @@ permit(
 }
 
 #[test]
+fn test_full_lifecycle_orchestrator_computer_use_policy() {
+    let (_tmpdir, policies_dir, _sandbox_dir, ledger_path, _config_path) =
+        setup_aegis_dir("orch-runtime", ORCHESTRATOR_COMPUTER_USE);
+
+    let engine = PolicyEngine::new(&policies_dir, None).expect("should create policy engine");
+    let mut store = AuditStore::open(&ledger_path).expect("should open audit store");
+
+    let allowed = tool_call_action("orch-runtime", "ScreenCapture");
+    let allowed_verdict = engine.evaluate(&allowed);
+    assert_eq!(allowed_verdict.decision, Decision::Allow);
+    store
+        .append(&allowed, &allowed_verdict)
+        .expect("should log allowed tool call");
+
+    let denied = tool_call_action("orch-runtime", "Bash");
+    let denied_verdict = engine.evaluate(&denied);
+    assert_eq!(denied_verdict.decision, Decision::Deny);
+    store
+        .append(&denied, &denied_verdict)
+        .expect("should log denied tool call");
+
+    let all_entries = store.query_last(10).expect("should query all entries");
+    assert_eq!(all_entries.len(), 2);
+    let report = store.verify_integrity().expect("should verify integrity");
+    assert!(report.valid, "hash chain should be valid: {}", report.message);
+}
+
+#[test]
 fn test_config_serialization_roundtrip() {
     let tmpdir = TempDir::new().expect("should create temp dir");
     let base = tmpdir.path().join("roundtrip-agent");
 
     let original = AegisConfig::default_for("roundtrip-agent", &base);
-    let toml_str = original
-        .to_toml()
-        .expect("should serialize config to TOML");
+    let toml_str = original.to_toml().expect("should serialize config to TOML");
 
-    let parsed = AegisConfig::from_toml(&toml_str)
-        .expect("should deserialize config from TOML");
+    let parsed = AegisConfig::from_toml(&toml_str).expect("should deserialize config from TOML");
 
     assert_eq!(parsed.name, original.name);
     assert_eq!(parsed.sandbox_dir, original.sandbox_dir);
@@ -198,12 +217,14 @@ fn test_config_serialization_roundtrip() {
 #[test]
 fn test_config_from_fixture_file() {
     let fixture_content = include_str!("../fixtures/configs/test-config.toml");
-    let config = AegisConfig::from_toml(fixture_content)
-        .expect("should parse fixture config TOML");
+    let config = AegisConfig::from_toml(fixture_content).expect("should parse fixture config TOML");
 
     assert_eq!(config.name, "test-agent");
     assert_eq!(config.sandbox_dir, PathBuf::from("/tmp/aegis-test/sandbox"));
-    assert_eq!(config.ledger_path, PathBuf::from("/tmp/aegis-test/audit.db"));
+    assert_eq!(
+        config.ledger_path,
+        PathBuf::from("/tmp/aegis-test/audit.db")
+    );
     assert_eq!(
         config.policy_paths,
         vec![PathBuf::from("/tmp/aegis-test/policies")]
@@ -225,10 +246,8 @@ fn test_init_structure_matches_config() {
     assert!(policy_file.exists(), "default.cedar should exist");
 
     // Verify the config can be loaded and points to the right paths
-    let config_content =
-        std::fs::read_to_string(&config_path).expect("should read config file");
-    let config = AegisConfig::from_toml(&config_content)
-        .expect("should parse config TOML");
+    let config_content = std::fs::read_to_string(&config_path).expect("should read config file");
+    let config = AegisConfig::from_toml(&config_content).expect("should parse config TOML");
 
     assert_eq!(config.name, "structure-test");
     // The ledger doesn't exist yet as a file, but the path should match
@@ -240,8 +259,7 @@ fn test_e2e_multiple_agents_audit_separation() {
     let (_tmpdir, policies_dir, _sandbox_dir, ledger_path, _config_path) =
         setup_aegis_dir("multi-agent", "permit(principal, action, resource);");
 
-    let engine =
-        PolicyEngine::new(&policies_dir, None).expect("should create engine");
+    let engine = PolicyEngine::new(&policies_dir, None).expect("should create engine");
     let mut store = AuditStore::open(&ledger_path).expect("should open store");
 
     // Agent alpha performs 3 actions
@@ -296,8 +314,7 @@ fn test_e2e_policy_reload_mid_session() {
     std::fs::write(&policy_file, "forbid(principal, action, resource);")
         .expect("should write deny-all policy");
 
-    let mut engine =
-        PolicyEngine::new(&policies_dir, None).expect("should create deny engine");
+    let mut engine = PolicyEngine::new(&policies_dir, None).expect("should create deny engine");
     let mut store = AuditStore::open(&ledger_path).expect("should open store");
 
     // Action under deny-all
