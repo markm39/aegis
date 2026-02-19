@@ -2026,6 +2026,9 @@ impl DaemonRuntime {
                     Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                 }
             }
+            DaemonCommand::TelegramSnapshot { .. } => DaemonResponse::error(
+                "telegram snapshots are not available in the control API; use the Telegram channel",
+            ),
 
             DaemonCommand::FleetGoal { ref goal } => {
                 match goal {
