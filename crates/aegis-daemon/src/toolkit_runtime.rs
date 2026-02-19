@@ -37,7 +37,7 @@ impl ToolkitRuntime {
         {
             let helper = aegis_toolkit::macos_helper()
                 .map_err(|e| format!("macos helper unavailable: {e}"))?;
-            return Ok(Self { helper });
+            Ok(Self { helper })
         }
         #[cfg(not(target_os = "macos"))]
         {

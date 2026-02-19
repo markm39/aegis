@@ -937,10 +937,169 @@ impl DaemonRuntime {
                         }),
                     );
 
-                    return match serde_json::to_value(&execution) {
-                        Ok(data) => DaemonResponse::ok_with_data("deny", data),
-                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    let data = serde_json::json!({
+                        "execution": execution,
+                        "frame": serde_json::Value::Null,
+                        "tui": serde_json::Value::Null,
+                    });
+                    return DaemonResponse::ok_with_data("deny", data);
+                }
+
+                if let ToolAction::TuiSnapshot { session_id } = action {
+                    let target = if session_id.is_empty() { name } else { session_id };
+                    let text = match self.fleet.agent_output(target, 200) {
+                        Ok(lines) => lines.join("\n"),
+                        Err(e) => {
+                            let execution = ToolActionExecution {
+                                result: aegis_toolkit::contract::ToolResult {
+                                    action: mapping.cedar_action.to_string(),
+                                    risk_tag: mapping.risk_tag,
+                                    capture_latency_ms: None,
+                                    input_latency_ms: None,
+                                    frame_id: None,
+                                    window_id: None,
+                                    session_id: Some(target.to_string()),
+                                    note: Some(format!("deny: tui snapshot failed ({e})")),
+                                },
+                                risk_tag: mapping.risk_tag,
+                            };
+                            self.last_tool_actions
+                                .insert(name.clone(), execution.clone());
+                            self.append_runtime_audit(
+                                cedar_action.clone(),
+                                "deny",
+                                &format!("tui snapshot failed ({e})"),
+                                serde_json::json!({
+                                    "agent": name,
+                                    "operation": "execute_tool_action",
+                                    "tool_action": action,
+                                    "risk_tag": mapping.risk_tag,
+                                    "outcome": execution,
+                                }),
+                            );
+                            let data = serde_json::json!({
+                                "execution": execution,
+                                "frame": serde_json::Value::Null,
+                                "tui": serde_json::Value::Null,
+                            });
+                            return DaemonResponse::ok_with_data("deny", data);
+                        }
                     };
+
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: mapping.cedar_action.to_string(),
+                            risk_tag: mapping.risk_tag,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: Some(target.to_string()),
+                            note: Some(format!("allow: {reason}")),
+                        },
+                        risk_tag: mapping.risk_tag,
+                    };
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
+                    self.append_runtime_audit(
+                        cedar_action.clone(),
+                        "allow",
+                        &reason,
+                        serde_json::json!({
+                            "agent": name,
+                            "operation": "execute_tool_action",
+                            "tool_action": action,
+                            "risk_tag": mapping.risk_tag,
+                            "outcome": execution,
+                        }),
+                    );
+                    let data = serde_json::json!({
+                        "execution": execution,
+                        "frame": serde_json::Value::Null,
+                        "tui": {
+                            "target": target,
+                            "text": text,
+                            "cursor": [0, 0],
+                            "size": [0, 0]
+                        }
+                    });
+                    return DaemonResponse::ok_with_data("allow", data);
+                }
+
+                if let ToolAction::TuiInput { session_id, text } = action {
+                    let target = if session_id.is_empty() { name } else { session_id };
+                    if let Err(e) = self.fleet.send_to_agent(target, text) {
+                        let execution = ToolActionExecution {
+                            result: aegis_toolkit::contract::ToolResult {
+                                action: mapping.cedar_action.to_string(),
+                                risk_tag: mapping.risk_tag,
+                                capture_latency_ms: None,
+                                input_latency_ms: None,
+                                frame_id: None,
+                                window_id: None,
+                                session_id: Some(target.to_string()),
+                                note: Some(format!("deny: tui input failed ({e})")),
+                            },
+                            risk_tag: mapping.risk_tag,
+                        };
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
+                        self.append_runtime_audit(
+                            cedar_action.clone(),
+                            "deny",
+                            &format!("tui input failed ({e})"),
+                            serde_json::json!({
+                                "agent": name,
+                                "operation": "execute_tool_action",
+                                "tool_action": action,
+                                "risk_tag": mapping.risk_tag,
+                                "outcome": execution,
+                            }),
+                        );
+                        let data = serde_json::json!({
+                            "execution": execution,
+                            "frame": serde_json::Value::Null,
+                            "tui": serde_json::Value::Null,
+                        });
+                        return DaemonResponse::ok_with_data("deny", data);
+                    }
+
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: mapping.cedar_action.to_string(),
+                            risk_tag: mapping.risk_tag,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: Some(target.to_string()),
+                            note: Some(format!("allow: {reason}")),
+                        },
+                        risk_tag: mapping.risk_tag,
+                    };
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
+                    self.append_runtime_audit(
+                        cedar_action.clone(),
+                        "allow",
+                        &reason,
+                        serde_json::json!({
+                            "agent": name,
+                            "operation": "execute_tool_action",
+                            "tool_action": action,
+                            "risk_tag": mapping.risk_tag,
+                            "outcome": execution,
+                        }),
+                    );
+                    let data = serde_json::json!({
+                        "execution": execution,
+                        "frame": serde_json::Value::Null,
+                        "tui": {
+                            "target": target,
+                            "sent": true
+                        }
+                    });
+                    return DaemonResponse::ok_with_data("allow", data);
                 }
 
                 let runtime = match self.ensure_toolkit_runtime() {
@@ -976,10 +1135,12 @@ impl DaemonRuntime {
                                 "outcome": execution,
                             }),
                         );
-                        return match serde_json::to_value(&execution) {
-                            Ok(data) => DaemonResponse::ok_with_data("deny", data),
-                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
-                        };
+                        let data = serde_json::json!({
+                            "execution": execution,
+                            "frame": serde_json::Value::Null,
+                            "tui": serde_json::Value::Null,
+                        });
+                        return DaemonResponse::ok_with_data("deny", data);
                     }
                 };
 
@@ -1016,10 +1177,12 @@ impl DaemonRuntime {
                                 "outcome": execution,
                             }),
                         );
-                        return match serde_json::to_value(&execution) {
-                            Ok(data) => DaemonResponse::ok_with_data("deny", data),
-                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
-                        };
+                        let data = serde_json::json!({
+                            "execution": execution,
+                            "frame": serde_json::Value::Null,
+                            "tui": serde_json::Value::Null,
+                        });
+                        return DaemonResponse::ok_with_data("deny", data);
                     }
                 };
 
@@ -1042,6 +1205,7 @@ impl DaemonRuntime {
                 let data = serde_json::json!({
                     "execution": output.execution,
                     "frame": output.frame,
+                    "tui": serde_json::Value::Null,
                 });
                 DaemonResponse::ok_with_data("allow", data)
             }
@@ -2108,7 +2272,8 @@ mod tests {
             },
         });
         assert!(resp.ok);
-        let execution: ToolActionExecution = serde_json::from_value(resp.data.unwrap()).unwrap();
+        let data = resp.data.unwrap();
+        let execution: ToolActionExecution = serde_json::from_value(data["execution"].clone()).unwrap();
         assert_eq!(execution.result.action, "MouseClick");
         assert_eq!(execution.risk_tag, execution.result.risk_tag);
         let note = execution.result.note.unwrap_or_default();
