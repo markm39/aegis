@@ -555,7 +555,7 @@ pub fn output(name: &str, lines: usize) -> anyhow::Result<()> {
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
             for line in &output_lines {
-                writeln!(out, "{line}")?;
+                writeln!(out, "{}", colorize_line(line))?;
             }
         }
     }
@@ -1203,6 +1203,57 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Apply ANSI colors to a formatted output line for terminal display.
+///
+/// Matches the same patterns as the fleet TUI's `draw_agent_output` coloring.
+fn colorize_line(line: &str) -> String {
+    // ANSI color codes: \x1b[38;2;R;G;Bm for RGB, \x1b[0m to reset
+    const RESET: &str = "\x1b[0m";
+    const GREEN: &str = "\x1b[32m";
+    const RED: &str = "\x1b[31m";
+    const YELLOW: &str = "\x1b[33m";
+    const MAGENTA: &str = "\x1b[35m";
+    const CYAN: &str = "\x1b[36m";
+    const DIM: &str = "\x1b[2m";
+    const HOT_PINK: &str = "\x1b[38;2;253;93;177m";    // CC bash border
+    const PURPLE_BLUE: &str = "\x1b[38;2;177;185;249m"; // CC permission/search
+    const CLAUDE: &str = "\x1b[38;2;215;119;87m";       // CC brand
+
+    let color = if line.contains("[APPROVED]") {
+        GREEN
+    } else if line.contains("[DENIED]") {
+        RED
+    } else if line.contains("[PENDING]") {
+        YELLOW
+    } else if line.contains("[NUDGE") {
+        MAGENTA
+    } else if line.starts_with("> Bash:") {
+        HOT_PINK
+    } else if line.starts_with("> Read:")
+        || line.starts_with("> Write:")
+        || line.starts_with("> Edit:")
+        || line.starts_with("> Glob:")
+    {
+        CYAN
+    } else if line.starts_with("> Grep:") || line.starts_with("> WebSearch:") {
+        PURPLE_BLUE
+    } else if line.starts_with("> Task:") {
+        CLAUDE
+    } else if line.starts_with("> ") {
+        DIM
+    } else if line.starts_with("Done (") {
+        GREEN
+    } else if line.starts_with("Error:") {
+        RED
+    } else if line.starts_with("Session started") || line.starts_with("--- ") {
+        DIM
+    } else {
+        return line.to_string();
+    };
+
+    format!("{color}{line}{RESET}")
+}
+
 /// Follow (tail) an agent's output in real time.
 ///
 /// Polls the daemon every 200ms for new output lines and prints them.
@@ -1264,9 +1315,9 @@ pub fn follow(name: &str) -> anyhow::Result<()> {
                     if let Ok(lines) = serde_json::from_value::<Vec<String>>(data) {
                         let total = lines.len();
                         if total > last_line_count {
-                            // Print new lines only
+                            // Print new lines with ANSI coloring
                             for line in &lines[last_line_count..] {
-                                println!("{line}");
+                                println!("{}", colorize_line(line));
                             }
                             last_line_count = total;
                         }
