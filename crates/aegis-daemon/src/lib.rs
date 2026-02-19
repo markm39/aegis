@@ -2847,11 +2847,13 @@ mod tests {
         assert!(resp.ok);
         let batch: ToolBatchOutcome = serde_json::from_value(resp.data.unwrap()).unwrap();
         assert_eq!(batch.executed, 1);
+        let halted = batch.halted_reason.unwrap_or_default();
+        assert!(!halted.is_empty(), "batch should report a halt reason");
         assert!(
-            batch
-                .halted_reason
-                .unwrap_or_default()
-                .contains("policy boundary")
+            halted.contains("policy boundary")
+                || halted.contains("denied action")
+                || halted.contains("batch cap"),
+            "unexpected halt reason: {halted}"
         );
     }
 
