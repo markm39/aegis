@@ -56,11 +56,17 @@ pub fn render_orchestrator_tool_contract(
          Command patterns and canonical JSON:\n\
          - Capture stream: `aegis daemon capture-start <agent> --fps <n>`\n\
          - Latest frame: `aegis daemon latest-frame <agent>`\n\
+         - TUI snapshot: `aegis daemon tool <agent> '{{\"action\":\"tui_snapshot\",\"session_id\":\"<agent-or-session>\"}}'`\n\
+         - TUI input: `aegis daemon tool <agent> '{{\"action\":\"tui_input\",\"session_id\":\"<agent-or-session>\",\"text\":\"help\"}}'`\n\
          - Single action: `aegis daemon tool <agent> '{{\"action\":\"screen_capture\",\"target_fps\":30}}'`\n\
          - Input batch: `aegis daemon tool-batch <agent> '[{{\"action\":\"input_batch\",\"actions\":[{{\"kind\":\"mouse_move\",\"x\":640,\"y\":360}},{{\"kind\":\"mouse_click\",\"x\":640,\"y\":360,\"button\":\"left\"}},{{\"kind\":\"wait\",\"duration_ms\":150}}]}}]' --max-actions 3`\n\
          - Browser profile: `aegis daemon browser-profile <agent> <session_id> --headless --url https://example.com`\n\
+         - Browser profile stop: `aegis daemon browser-profile-stop <agent> <session_id>`\n\
          - Browser navigate: `aegis daemon tool <agent> '{{\"action\":\"browser_navigate\",\"session_id\":\"web-1\",\"url\":\"https://example.com\"}}'`\n\
          - Browser snapshot: `aegis daemon tool <agent> '{{\"action\":\"browser_snapshot\",\"session_id\":\"web-1\",\"include_screenshot\":true}}'`\n\n\
+         Runtime notes:\n\
+         - For `tui_snapshot` and `tui_input`, empty `session_id` targets the current agent.\n\
+         - Managed browser profiles should be explicitly stopped when no longer needed.\n\n\
          Compliance contract:\n\
          - Every computer-use action is Cedar-evaluated and may be denied.\n\
          - Fail closed: if policy/runtime path is unavailable, action is denied.\n\

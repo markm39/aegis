@@ -767,7 +767,10 @@ fn compose_orchestrator_prompt(
          - `aegis daemon tool-batch <agent> '<json-array>' --max-actions N` -- run micro-action batch\n\
          - `aegis daemon capture-start <agent> --fps <n>` -- start frame stream cache\n\
          - `aegis daemon latest-frame <agent>` -- fetch most recent cached frame\n\
+         - `aegis daemon tool <agent> '{\"action\":\"tui_snapshot\",\"session_id\":\"<id>\"}'` -- read terminal state via runtime fast path\n\
+         - `aegis daemon tool <agent> '{\"action\":\"tui_input\",\"session_id\":\"<id>\",\"text\":\"...\"}'` -- send terminal input via runtime fast path\n\
          - `aegis daemon browser-profile <agent> <session_id> [--headless] [--url <u>]` -- start managed browser profile\n\
+         - `aegis daemon browser-profile-stop <agent> <session_id>` -- stop managed browser profile\n\
          - `aegis send <agent> \"message\"` -- send text to agent stdin\n\
          - `aegis context <agent> task \"new task\"` -- update agent's task\n\
          - `aegis context <agent> role \"new role\"` -- update agent's role\n\

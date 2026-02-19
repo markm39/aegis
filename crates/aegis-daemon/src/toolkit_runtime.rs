@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 
-use aegis_control::daemon::{BrowserToolData, FramePayload, ToolActionExecution};
+use aegis_control::daemon::{BrowserToolData, FramePayload, ToolActionExecution, TuiToolData};
 use aegis_toolkit::capture::CaptureRequest;
 use aegis_toolkit::contract::{MouseButton as ContractMouseButton, ToolAction, ToolResult};
 use aegis_toolkit::input::{InputProvider, KeyPress, MouseButton, MouseClick, MouseMove, TypeText};
@@ -29,7 +29,13 @@ use url::Url;
 pub struct ToolkitOutput {
     pub execution: ToolActionExecution,
     pub frame: Option<FramePayload>,
+    pub tui: Option<TuiToolData>,
     pub browser: Option<BrowserToolData>,
+}
+
+pub trait TuiRuntimeBridge {
+    fn snapshot(&self, session_id: &str) -> Result<TuiToolData, String>;
+    fn send_input(&self, session_id: &str, text: &str) -> Result<TuiToolData, String>;
 }
 
 pub struct ToolkitRuntime {
@@ -61,6 +67,14 @@ impl ToolkitRuntime {
     }
 
     pub fn execute(&mut self, action: &ToolAction) -> Result<ToolkitOutput, String> {
+        self.execute_with_tui_bridge(action, None)
+    }
+
+    pub fn execute_with_tui_bridge(
+        &mut self,
+        action: &ToolAction,
+        tui_bridge: Option<&dyn TuiRuntimeBridge>,
+    ) -> Result<ToolkitOutput, String> {
         let mapping = map_tool_action(action);
         let mut result = ToolResult {
             action: mapping.cedar_action.to_string(),
@@ -74,6 +88,7 @@ impl ToolkitRuntime {
         };
 
         let mut frame_payload: Option<FramePayload> = None;
+        let mut tui_payload: Option<TuiToolData> = None;
         let mut browser_payload: Option<BrowserToolData> = None;
 
         match action {
@@ -155,8 +170,23 @@ impl ToolkitRuntime {
                 self.type_text(text).map_err(|e| e.to_string())?;
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
-            ToolAction::TuiSnapshot { .. } | ToolAction::TuiInput { .. } => {
-                return Err("tui runtime not implemented".to_string());
+            ToolAction::TuiSnapshot { session_id } => {
+                let bridge =
+                    tui_bridge.ok_or_else(|| "tui runtime bridge unavailable".to_string())?;
+                let started = Instant::now();
+                let tui_data = bridge.snapshot(session_id)?;
+                result.capture_latency_ms = Some(started.elapsed().as_millis() as u64);
+                result.session_id = Some(tui_target(&tui_data).to_string());
+                tui_payload = Some(tui_data);
+            }
+            ToolAction::TuiInput { session_id, text } => {
+                let bridge =
+                    tui_bridge.ok_or_else(|| "tui runtime bridge unavailable".to_string())?;
+                let started = Instant::now();
+                let tui_data = bridge.send_input(session_id, text)?;
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                result.session_id = Some(tui_target(&tui_data).to_string());
+                tui_payload = Some(tui_data);
             }
             ToolAction::BrowserNavigate { session_id, url } => {
                 if !self.config.browser.enabled {
@@ -229,8 +259,10 @@ impl ToolkitRuntime {
                             "Page.captureScreenshot",
                             serde_json::json!({ "format": "png" }),
                         )?;
-                        screenshot_base64 =
-                            res.get("data").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        screenshot_base64 = res
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                     }
                     Ok(())
                 });
@@ -293,6 +325,39 @@ impl ToolkitRuntime {
                     ws_url: Some(ws_url),
                 });
             }
+            ToolAction::BrowserProfileStop { session_id } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
+                let started = Instant::now();
+                let stopped = self.stop_managed_browser(session_id);
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                result.session_id = Some(session_id.clone());
+                browser_payload = Some(BrowserToolData {
+                    session_id: session_id.clone(),
+                    backend: "cdp".to_string(),
+                    available: false,
+                    note: if stopped {
+                        "browser profile stopped".to_string()
+                    } else {
+                        "browser profile not active".to_string()
+                    },
+                    screenshot_base64: None,
+                    ws_url: None,
+                });
+            }
             ToolAction::InputBatch { actions } => {
                 if !self.config.input.enabled {
                     return Err("input actions are disabled by daemon toolkit config".to_string());
@@ -312,6 +377,7 @@ impl ToolkitRuntime {
         Ok(ToolkitOutput {
             execution,
             frame: frame_payload,
+            tui: tui_payload,
             browser: browser_payload,
         })
     }
@@ -431,7 +497,10 @@ impl ToolkitRuntime {
         }
     }
 
-    fn apply_input_action(&self, action: &aegis_toolkit::contract::InputAction) -> Result<(), ToolkitError> {
+    fn apply_input_action(
+        &self,
+        action: &aegis_toolkit::contract::InputAction,
+    ) -> Result<(), ToolkitError> {
         use aegis_toolkit::contract::InputAction;
         match action {
             InputAction::MouseMove { x, y } => self.move_mouse(*x, *y),
@@ -472,7 +541,7 @@ impl ToolkitRuntime {
             })
             .collect();
         for id in expired {
-            self.stop_managed_browser(&id);
+            let _ = self.stop_managed_browser(&id);
         }
     }
 
@@ -487,9 +556,8 @@ impl ToolkitRuntime {
                     .managed_browsers
                     .get(session_id)
                     .map(|browser| browser.ws_url.as_str());
-                let (client, endpoint) = CdpClient::connect(
-                    ws_override.or(self.config.browser.cdp_ws_url.as_deref()),
-                )?;
+                let (client, endpoint) =
+                    CdpClient::connect(ws_override.or(self.config.browser.cdp_ws_url.as_deref()))?;
                 self.browser_sessions.insert(
                     session_id.to_string(),
                     BrowserSession {
@@ -517,7 +585,7 @@ impl ToolkitRuntime {
     pub fn shutdown(&mut self) {
         let ids: Vec<String> = self.managed_browsers.keys().cloned().collect();
         for id in ids {
-            self.stop_managed_browser(&id);
+            let _ = self.stop_managed_browser(&id);
         }
         self.browser_sessions.clear();
     }
@@ -533,8 +601,7 @@ impl ToolkitRuntime {
             return Ok(browser.ws_url.clone());
         }
 
-        let (child, ws_url, data_dir) =
-            self.spawn_managed_browser(session_id, headless, url)?;
+        let (child, ws_url, data_dir) = self.spawn_managed_browser(session_id, headless, url)?;
         let (client, endpoint) = CdpClient::connect(Some(&ws_url))?;
         self.browser_sessions.insert(
             session_id.to_string(),
@@ -556,11 +623,16 @@ impl ToolkitRuntime {
         Ok(endpoint)
     }
 
-    fn stop_managed_browser(&mut self, session_id: &str) {
+    fn stop_managed_browser(&mut self, session_id: &str) -> bool {
+        let mut stopped = false;
         if let Some(mut browser) = self.managed_browsers.remove(session_id) {
             let _ = browser.child.kill();
+            stopped = true;
         }
-        self.browser_sessions.remove(session_id);
+        if self.browser_sessions.remove(session_id).is_some() {
+            stopped = true;
+        }
+        stopped
     }
 
     fn spawn_managed_browser(
@@ -638,6 +710,12 @@ impl ToolkitRuntime {
     }
 }
 
+fn tui_target(data: &TuiToolData) -> &str {
+    match data {
+        TuiToolData::Snapshot { target, .. } | TuiToolData::Input { target, .. } => target,
+    }
+}
+
 struct BrowserSession {
     client: CdpClient,
     #[allow(dead_code)]
@@ -695,18 +773,12 @@ fn wait_for_cdp_ws(port: u16, timeout: Duration) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let url = format!("http://127.0.0.1:{port}/json/version");
     while Instant::now() < deadline {
-        match reqwest::blocking::get(&url) {
-            Ok(resp) => {
-                if let Ok(value) = resp.json::<serde_json::Value>() {
-                    if let Some(ws) = value
-                        .get("webSocketDebuggerUrl")
-                        .and_then(|v| v.as_str())
-                    {
-                        return Ok(ws.to_string());
-                    }
+        if let Ok(resp) = reqwest::blocking::get(&url) {
+            if let Ok(value) = resp.json::<serde_json::Value>() {
+                if let Some(ws) = value.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
+                    return Ok(ws.to_string());
                 }
             }
-            Err(_) => {}
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -737,7 +809,11 @@ impl CdpClient {
         Ok((Self { socket, next_id: 1 }, ws_url))
     }
 
-    fn call(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    fn call(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -774,7 +850,10 @@ impl CdpClient {
                 return Err(format!("cdp error: {error}"));
             }
 
-            return Ok(value.get("result").cloned().unwrap_or(serde_json::Value::Null));
+            return Ok(value
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null));
         }
     }
 }

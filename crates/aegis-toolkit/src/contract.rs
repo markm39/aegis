@@ -97,6 +97,9 @@ pub enum ToolAction {
         #[serde(default)]
         url: Option<String>,
     },
+    BrowserProfileStop {
+        session_id: String,
+    },
     InputBatch {
         actions: Vec<InputAction>,
     },
@@ -118,6 +121,7 @@ impl ToolAction {
             ToolAction::BrowserNavigate { .. } => "BrowserNavigate",
             ToolAction::BrowserSnapshot { .. } => "BrowserSnapshot",
             ToolAction::BrowserProfileStart { .. } => "BrowserProfileStart",
+            ToolAction::BrowserProfileStop { .. } => "BrowserProfileStop",
             ToolAction::InputBatch { .. } => "InputBatch",
         }
     }
@@ -136,8 +140,11 @@ impl ToolAction {
             | ToolAction::TuiInput { .. } => RiskTag::Medium,
             ToolAction::WindowFocus { .. }
             | ToolAction::BrowserNavigate { .. }
-            | ToolAction::BrowserProfileStart { .. } => RiskTag::High,
-            ToolAction::InputBatch { actions } => max_risk_tag(actions.iter().map(InputAction::risk_tag)),
+            | ToolAction::BrowserProfileStart { .. }
+            | ToolAction::BrowserProfileStop { .. } => RiskTag::High,
+            ToolAction::InputBatch { actions } => {
+                max_risk_tag(actions.iter().map(InputAction::risk_tag))
+            }
         }
     }
 }
@@ -166,17 +173,30 @@ fn risk_rank(tag: RiskTag) -> u8 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputAction {
-    MouseMove { x: i32, y: i32 },
-    MouseClick { x: i32, y: i32, button: MouseButton },
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseClick {
+        x: i32,
+        y: i32,
+        button: MouseButton,
+    },
     MouseDrag {
         from_x: i32,
         from_y: i32,
         to_x: i32,
         to_y: i32,
     },
-    KeyPress { keys: Vec<String> },
-    TypeText { text: String },
-    Wait { duration_ms: u64 },
+    KeyPress {
+        keys: Vec<String>,
+    },
+    TypeText {
+        text: String,
+    },
+    Wait {
+        duration_ms: u64,
+    },
 }
 
 impl InputAction {
@@ -252,9 +272,7 @@ mod tests {
         let action = ToolAction::InputBatch {
             actions: vec![
                 InputAction::MouseMove { x: 1, y: 2 },
-                InputAction::TypeText {
-                    text: "hi".into(),
-                },
+                InputAction::TypeText { text: "hi".into() },
                 InputAction::Wait { duration_ms: 10 },
             ],
         };
@@ -293,6 +311,13 @@ mod tests {
                 session_id: "s2".into(),
                 headless: false,
                 url: None,
+            }
+            .risk_tag(),
+            RiskTag::High
+        );
+        assert_eq!(
+            ToolAction::BrowserProfileStop {
+                session_id: "s2".into(),
             }
             .risk_tag(),
             RiskTag::High

@@ -786,6 +786,7 @@ mod tests {
             goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
+            dashboard: Default::default(),
             alerts: vec![],
             agents,
             channel: None,

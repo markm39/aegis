@@ -273,6 +273,7 @@ mod tests {
             goal: None,
             persistence: PersistenceConfig::default(),
             control: DaemonControlConfig::default(),
+            dashboard: DashboardConfig::default(),
             alerts: vec![],
             agents: vec![AgentSlotConfig {
                 name: "my-agent".into(),

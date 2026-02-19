@@ -29,6 +29,8 @@ Primary action families:
 - Capture: `ScreenCapture`, `TuiSnapshot`, `BrowserSnapshot`
 - Input: `MouseMove`, `MouseClick`, `MouseDrag`, `KeyPress`, `TypeText`, `TuiInput`
 - Focus/navigation: `WindowFocus`, `BrowserNavigate`
+- Browser session control: `BrowserProfileStart`, `BrowserProfileStop`
+- Batched micro-actions: `InputBatch`
 
 Each action exposes:
 

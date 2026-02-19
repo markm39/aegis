@@ -160,7 +160,10 @@ when {
     resource.path == "TuiSnapshot" ||
     resource.path == "TuiInput" ||
     resource.path == "BrowserNavigate" ||
-    resource.path == "BrowserSnapshot"
+    resource.path == "BrowserSnapshot" ||
+    resource.path == "BrowserProfileStart" ||
+    resource.path == "BrowserProfileStop" ||
+    resource.path == "InputBatch"
 };
 "#;
 
