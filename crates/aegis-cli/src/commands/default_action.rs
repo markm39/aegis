@@ -59,7 +59,7 @@ fn has_configs(aegis_dir: &std::path::Path) -> bool {
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().unwrap_or_default();
-                if name != "wraps" && name != "current" && name != "daemon" && path.join(aegis_types::CONFIG_FILENAME).exists() {
+                if name != "wraps" && name != "current" && path.join(aegis_types::CONFIG_FILENAME).exists() {
                     return true;
                 }
             }
@@ -86,7 +86,7 @@ fn build_dashboard_configs(aegis_dir: &std::path::Path) -> Vec<DashboardConfig> 
 
     // Scan init configs: ~/.aegis/*/aegis.toml (skip "wraps" and "current")
     scan_dashboard_configs(aegis_dir, &mut configs, |name| {
-        name != "wraps" && name != "current" && name != "daemon"
+        name != "wraps" && name != "current"
     });
 
     // Scan wrap configs: ~/.aegis/wraps/*/aegis.toml
@@ -145,7 +145,7 @@ pub fn most_recent_config() -> Result<String> {
 
     // Scan init configs
     scan_for_recent(&aegis_dir, &mut best, |name| {
-        name != "wraps" && name != "current" && name != "daemon"
+        name != "wraps" && name != "current"
     });
 
     // Scan wrap configs

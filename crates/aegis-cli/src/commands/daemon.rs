@@ -161,9 +161,15 @@ pub fn run(launchd: bool) -> anyhow::Result<()> {
         info!("running in launchd mode");
     }
 
-    // Create base AegisConfig for the fleet
+    // Create base AegisConfig for the fleet and write it so subcommands
+    // (aegis monitor, aegis log, etc.) can discover it.
     let aegis_dir = daemon_dir();
     let aegis_config = AegisConfig::default_for("daemon", &aegis_dir);
+    if let Ok(toml_str) = aegis_config.to_toml() {
+        let _ = std::fs::write(aegis_dir.join("aegis.toml"), &toml_str);
+    }
+    // Set "daemon" as the active config so subcommands find it by default.
+    let _ = crate::commands::use_config::set_current("daemon");
 
     let mut runtime = aegis_daemon::DaemonRuntime::new(config, aegis_config);
     let shutdown = runtime.shutdown_flag();
