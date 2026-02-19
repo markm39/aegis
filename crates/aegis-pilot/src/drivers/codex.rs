@@ -1,13 +1,13 @@
 //! Codex driver.
 //!
-//! Spawns `codex` in a PTY. In headless mode, uses
-//! `--approval-mode full-auto`. One-shot mode uses `codex exec -q "prompt"`.
+//! Spawns `codex` in JSON exec mode for structured output and resume support.
 
 use std::path::Path;
 
 use crate::adapter::AgentAdapter;
-use crate::adapters::codex::CodexAdapter;
-use crate::driver::{AgentDriver, SpawnStrategy, TaskInjection};
+use crate::adapters::codex_json::CodexJsonAdapter;
+use crate::driver::{AgentDriver, ProcessKind, SpawnStrategy, TaskInjection};
+use crate::session::ToolKind;
 
 /// Driver for OpenAI Codex CLI.
 pub struct CodexDriver {
@@ -26,26 +26,10 @@ impl AgentDriver for CodexDriver {
 
     fn spawn_strategy(&self, _working_dir: &Path) -> SpawnStrategy {
         let mut args = Vec::new();
-
-        if self.one_shot {
-            args.push("exec".to_string());
+        // JSON exec uses a dedicated protocol; only keep relevant flags here.
+        if self.approval_mode == "full-auto" {
+            args.push("--full-auto".to_string());
         }
-
-        // Approval mode: "suggest" (default), "auto-edit", or "full-auto"
-        match self.approval_mode.as_str() {
-            "full-auto" => {
-                args.push("--approval-mode".to_string());
-                args.push("full-auto".to_string());
-            }
-            "auto-edit" => {
-                args.push("--approval-mode".to_string());
-                args.push("auto-edit".to_string());
-            }
-            _ => {
-                // "suggest" is the default, no flag needed
-            }
-        }
-
         args.extend(self.extra_args.iter().cloned());
 
         let mut env = Vec::new();
@@ -58,32 +42,28 @@ impl AgentDriver for CodexDriver {
             socket_path.to_string_lossy().into_owned(),
         ));
 
-        SpawnStrategy::Pty {
+        SpawnStrategy::Process {
             command: "codex".to_string(),
             args,
             env,
+            kind: ProcessKind::Json { tool: ToolKind::Codex },
         }
     }
 
     fn create_adapter(&self) -> Option<Box<dyn AgentAdapter>> {
         if self.approval_mode == "full-auto" {
-            // No prompts in full-auto mode
             None
         } else {
-            Some(Box::new(CodexAdapter::new()))
+            Some(Box::new(CodexJsonAdapter::new()))
         }
     }
 
     fn task_injection(&self, task: &str) -> TaskInjection {
-        if self.one_shot {
-            TaskInjection::CliArg {
-                flag: "-q".to_string(),
-                value: task.to_string(),
-            }
-        } else {
-            TaskInjection::Stdin {
-                text: task.to_string(),
-            }
+        // JSON exec reads the initial prompt from arguments; the lifecycle
+        // extracts the value to pass to the JSON session spawn.
+        TaskInjection::CliArg {
+            flag: "-p".to_string(),
+            value: task.to_string(),
         }
     }
 
@@ -107,11 +87,11 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { command, args, .. } => {
+            SpawnStrategy::Process { command, args, .. } => {
                 assert_eq!(command, "codex");
                 assert!(args.is_empty());
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 
@@ -125,11 +105,10 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { args, .. } => {
-                assert!(args.contains(&"--approval-mode".to_string()));
-                assert!(args.contains(&"full-auto".to_string()));
+            SpawnStrategy::Process { args, .. } => {
+                assert!(args.contains(&"--full-auto".to_string()));
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 
@@ -143,10 +122,10 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { args, .. } => {
-                assert_eq!(args[0], "exec");
+            SpawnStrategy::Process { args, .. } => {
+                assert!(args.is_empty());
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 
@@ -160,11 +139,11 @@ mod tests {
         };
         let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
         match strategy {
-            SpawnStrategy::Pty { env, .. } => {
+            SpawnStrategy::Process { env, .. } => {
                 assert!(env.contains(&("AEGIS_AGENT_NAME".to_string(), "codex-1".to_string())));
                 assert!(env.iter().any(|(k, _)| k == "AEGIS_SOCKET_PATH"));
             }
-            _ => panic!("expected Pty strategy"),
+            _ => panic!("expected Process strategy"),
         }
     }
 

@@ -6,6 +6,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod codex_json;
 pub mod generic;
 pub mod passthrough;
 

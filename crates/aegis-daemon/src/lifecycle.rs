@@ -20,7 +20,10 @@ use tracing::{error, info, warn};
 use aegis_ledger::AuditStore;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
+use aegis_pilot::driver::ProcessKind;
 use aegis_pilot::json_stream::JsonStreamSession;
+use aegis_pilot::jsonl::{CodexJsonProtocol, JsonlSession};
+use aegis_pilot::session::ToolKind;
 use aegis_pilot::pty::PtySession;
 use aegis_pilot::session::AgentSession;
 use aegis_pilot::tmux::TmuxSession;
@@ -271,9 +274,9 @@ fn run_agent_slot_inner(
     };
 
     let session: Box<dyn AgentSession> = match strategy {
-        SpawnStrategy::Process { command, args, mut env } => {
-            // Process strategy: use JsonStreamSession (structured JSON I/O).
-            // The prompt is passed as -p arg and output comes as NDJSON.
+        SpawnStrategy::Process { command, args, mut env, kind } => {
+            // Process strategy: JSONL sessions with structured output (Claude/Codex),
+            // or detached GUI tools (Cursor).
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
                 env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
@@ -281,11 +284,49 @@ fn run_agent_slot_inner(
             }
 
             let prompt = prompt_text.as_deref().unwrap_or("");
-            info!(agent = name, command = command, "spawning agent via JsonStreamSession");
-            Box::new(
-                JsonStreamSession::spawn(name, &command, &args, &working_dir, &env, prompt)
-                    .map_err(|e| format!("failed to spawn json-stream session for {name}: {e}"))?,
-            )
+            match kind {
+                ProcessKind::Json { tool: ToolKind::ClaudeCode } => {
+                    info!(agent = name, command = command, "spawning agent via JsonStreamSession");
+                    Box::new(
+                        JsonStreamSession::spawn(name, &command, &args, &working_dir, &env, prompt)
+                            .map_err(|e| format!("failed to spawn json-stream session for {name}: {e}"))?,
+                    )
+                }
+                ProcessKind::Json { tool: ToolKind::Codex } => {
+                    info!(agent = name, command = command, "spawning agent via Codex JSON session");
+                    let protocol = CodexJsonProtocol;
+                    Box::new(
+                        JsonlSession::spawn(name, protocol, &command, &args, &working_dir, &env, prompt)
+                            .map_err(|e| format!("failed to spawn codex json session for {name}: {e}"))?,
+                    )
+                }
+                ProcessKind::Detached => {
+                    info!(agent = name, command = command, "spawning detached process");
+                    let mut cmd = std::process::Command::new(&command);
+                    cmd.args(&args).current_dir(&working_dir).envs(env);
+                    cmd.stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    let _child = cmd.spawn()
+                        .map_err(|e| format!("failed to spawn detached process for {name}: {e}"))?;
+
+                    // Stop usage proxy, observer, end session
+                    if let Some(handle) = usage_proxy_handle {
+                        let _ = handle.shutdown_tx.send(true);
+                    }
+                    if let Err(e) = aegis_observer::stop_observer(observer_session) {
+                        warn!(agent = name, error = %e, "failed to stop observer");
+                    }
+                    end_session(&store, &session_id, 0);
+
+                    return Ok(SlotResult {
+                        name: name.clone(),
+                        exit_code: Some(0),
+                        stats: PilotStats::default(),
+                        session_id: Some(session_id),
+                    });
+                }
+            }
         }
         SpawnStrategy::Pty { command, mut args, mut env } => {
             // PTY strategy: legacy path for non-Claude-Code agents.
@@ -384,19 +425,7 @@ fn run_agent_slot_inner(
     // Publish the child PID so stop_agent() can send SIGTERM.
     child_pid.store(session.pid(), Ordering::Release);
 
-    // Store the attach command if the session supports external attach.
-    if let Some(attach_cmd) = session.attach_command() {
-        if let Some(tx) = update_tx {
-            let _ = tx.send(PilotUpdate::AttachCommand(attach_cmd));
-        }
-    }
-
-    // Publish the CC session ID for --resume follow-up messages.
-    if let Some(cc_id) = session.cc_session_id() {
-        if let Some(tx) = update_tx {
-            let _ = tx.send(PilotUpdate::SessionId(cc_id.to_string()));
-        }
-    }
+    // Attach/session info is published by the supervisor as it becomes available.
 
     info!(agent = name, pid = session.pid(), "running supervisor loop");
 

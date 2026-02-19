@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::adapter::{AgentAdapter, ScanResult};
 use crate::output::OutputBuffer;
-use crate::session::AgentSession;
+use crate::session::{AgentSession, StreamKind};
 use crate::stall::{StallAction, StallDetector};
 
 /// Statistics collected during a pilot session.
@@ -112,8 +112,11 @@ pub enum PilotUpdate {
     /// The session supports external attach (e.g., tmux, or `claude --resume`).
     /// Contains the command components to attach (e.g., ["claude", "--resume", "<id>"]).
     AttachCommand(Vec<String>),
-    /// The Claude Code session ID for `--resume` follow-up messages.
-    SessionId(String),
+    /// Session metadata (stream kind + optional session id).
+    SessionInfo {
+        kind: StreamKind,
+        session_id: Option<String>,
+    },
 }
 
 /// Commands sent to the supervisor from the TUI or control plane.
@@ -179,6 +182,8 @@ pub fn run(
     let mut stats = PilotStats::default();
     let mut read_buf = [0u8; 8192];
     let mut pending: HashMap<Uuid, PendingInfo> = HashMap::new();
+    let mut last_session_id: Option<String> = None;
+    let mut attach_sent = false;
 
     let poll_timeout_ms = std::cmp::max(
         std::cmp::min(
@@ -201,7 +206,35 @@ pub fn run(
         "pilot supervisor started"
     );
 
+    // Publish stream kind/session id if available at start.
+    if let Some(tx) = update_tx {
+        let info = PilotUpdate::SessionInfo {
+            kind: pty.stream_kind(),
+            session_id: pty.session_id(),
+        };
+        let _ = tx.send(info);
+    }
+
     loop {
+        if let Some(tx) = update_tx {
+            // Attach command may become available later (e.g., after session id is known).
+            if !attach_sent {
+                if let Some(cmd) = pty.attach_command() {
+                    let _ = tx.send(PilotUpdate::AttachCommand(cmd));
+                    attach_sent = true;
+                }
+            }
+
+            let current_id = pty.session_id();
+            if current_id.is_some() && current_id != last_session_id {
+                last_session_id = current_id.clone();
+                let _ = tx.send(PilotUpdate::SessionInfo {
+                    kind: pty.stream_kind(),
+                    session_id: current_id,
+                });
+            }
+        }
+
         // Poll for data from the PTY
         let readable = pty.poll_readable(poll_timeout_ms)?;
 

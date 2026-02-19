@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use crate::adapter::AgentAdapter;
+use crate::session::ToolKind;
 
 /// How to spawn an agent process.
 #[derive(Debug, Clone)]
@@ -23,9 +24,19 @@ pub enum SpawnStrategy {
         command: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
+        kind: ProcessKind,
     },
     /// Agent is already running externally (observe-only).
     External,
+}
+
+/// How to treat a non-PTY process.
+#[derive(Debug, Clone)]
+pub enum ProcessKind {
+    /// JSONL/structured stream that can be formatted and resumed.
+    Json { tool: ToolKind },
+    /// Detached GUI/utility process (spawn and do not supervise).
+    Detached,
 }
 
 /// How to inject a task/prompt into an agent.

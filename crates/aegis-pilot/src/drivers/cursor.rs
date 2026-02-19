@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use crate::adapter::AgentAdapter;
-use crate::driver::{AgentDriver, SpawnStrategy, TaskInjection};
+use crate::driver::{AgentDriver, ProcessKind, SpawnStrategy, TaskInjection};
 
 /// Driver for Cursor editor.
 ///
@@ -47,6 +47,7 @@ impl AgentDriver for CursorDriver {
                 command: "cursor".to_string(),
                 args: vec![working_dir.to_string_lossy().to_string()],
                 env,
+                kind: ProcessKind::Detached,
             }
         }
     }

@@ -17,6 +17,7 @@ pub mod control;
 pub mod fleet;
 pub mod lifecycle;
 pub mod ndjson_fmt;
+pub mod stream_fmt;
 pub mod persistence;
 pub mod slot;
 pub mod state;

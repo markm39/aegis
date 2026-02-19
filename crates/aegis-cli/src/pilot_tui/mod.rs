@@ -219,7 +219,7 @@ impl PilotApp {
                 self.sync_shared(|s| s.stats = stats.clone());
                 self.stats = stats.clone();
             }
-            PilotUpdate::AttachCommand(_) | PilotUpdate::SessionId(_) => {
+            PilotUpdate::AttachCommand(_) | PilotUpdate::SessionInfo { .. } => {
                 // Only relevant for fleet TUI, not standalone pilot TUI.
             }
         }

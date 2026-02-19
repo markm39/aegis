@@ -6,6 +6,21 @@
 
 use aegis_types::AegisError;
 
+/// Supported JSON stream tool kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    ClaudeCode,
+    Codex,
+}
+
+/// Output stream type for an agent session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamKind {
+    #[default]
+    Plain,
+    Json { tool: ToolKind },
+}
+
 /// Trait for an agent process session (PTY, tmux, etc.).
 ///
 /// Provides the minimal interface the supervisor needs: reading output,
@@ -43,15 +58,19 @@ pub trait AgentSession {
     /// The child's process ID.
     fn pid(&self) -> u32;
 
+    /// Identify the output stream type for formatting.
+    fn stream_kind(&self) -> StreamKind {
+        StreamKind::Plain
+    }
+
     /// If the session supports external attach (e.g., tmux), return the
     /// attach command components. Returns None for direct PTY sessions.
     fn attach_command(&self) -> Option<Vec<String>> {
         None
     }
 
-    /// If this is a Claude Code JSON stream session, return the CC session ID
-    /// for `--resume` follow-up messages. Returns None for PTY/tmux sessions.
-    fn cc_session_id(&self) -> Option<&str> {
+    /// If this is a JSON stream session, return the session ID for follow-ups.
+    fn session_id(&self) -> Option<String> {
         None
     }
 }

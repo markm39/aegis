@@ -13,7 +13,8 @@
 use std::path::Path;
 
 use crate::adapter::AgentAdapter;
-use crate::driver::{AgentDriver, SpawnStrategy, TaskInjection};
+use crate::driver::{AgentDriver, ProcessKind, SpawnStrategy, TaskInjection};
+use crate::session::ToolKind;
 
 /// Driver for Claude Code CLI.
 pub struct ClaudeCodeDriver {
@@ -50,6 +51,7 @@ impl AgentDriver for ClaudeCodeDriver {
             command: "claude".to_string(),
             args,
             env,
+            kind: ProcessKind::Json { tool: ToolKind::ClaudeCode },
         }
     }
 

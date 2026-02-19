@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus};
+use aegis_pilot::session::StreamKind;
 
 use crate::lifecycle::SlotResult;
 
@@ -96,9 +97,10 @@ pub struct AgentSlot {
     /// stores the command components needed to attach. Used by `:pop` to open
     /// the agent in a new terminal.
     pub attach_command: Option<Vec<String>>,
-    /// Claude Code session ID for `--resume` follow-up messages.
-    /// Set when the agent uses `JsonStreamSession`.
-    pub cc_session_id: Option<String>,
+    /// Output stream type (plain or JSON tool stream).
+    pub stream_kind: StreamKind,
+    /// Session ID for JSON streams that support resume.
+    pub tool_session_id: Option<String>,
 }
 
 impl AgentSlot {
@@ -131,7 +133,8 @@ impl AgentSlot {
             stop_signaled_at: None,
             pending_restart: false,
             attach_command: None,
-            cc_session_id: None,
+            stream_kind: StreamKind::Plain,
+            tool_session_id: None,
         }
     }
 
@@ -149,8 +152,8 @@ impl AgentSlot {
 
     /// Drain new output lines from the channel into the recent_output buffer.
     ///
-    /// For Claude Code agents (identified by `cc_session_id`), raw NDJSON lines
-    /// are formatted into human-readable display lines before storage.
+    /// For JSON stream agents, raw JSONL lines are formatted into
+    /// human-readable display lines before storage.
     ///
     /// Returns the number of new lines drained.
     pub fn drain_output(&self) -> usize {
@@ -164,11 +167,11 @@ impl AgentSlot {
             Err(_) => return 0,
         };
 
-        let is_cc = self.cc_session_id.is_some();
+        let stream_kind = self.stream_kind;
         let mut count = 0;
         while let Ok(line) = rx.try_recv() {
-            if is_cc {
-                let formatted = crate::ndjson_fmt::format_ndjson_line(&line);
+            if stream_kind != StreamKind::Plain {
+                let formatted = crate::stream_fmt::format_stream_line(&stream_kind, &line);
                 for fline in formatted {
                     if buf.len() >= self.output_capacity {
                         buf.pop_front();
@@ -246,8 +249,11 @@ impl AgentSlot {
                 PilotUpdate::AttachCommand(cmd) => {
                     self.attach_command = Some(cmd);
                 }
-                PilotUpdate::SessionId(id) => {
-                    self.cc_session_id = Some(id);
+                PilotUpdate::SessionInfo { kind, session_id } => {
+                    self.stream_kind = kind;
+                    if let Some(id) = session_id {
+                        self.tool_session_id = Some(id);
+                    }
                 }
                 // OutputLine, PromptDecided are handled elsewhere
                 _ => {}

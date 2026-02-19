@@ -21,7 +21,7 @@ use nix::unistd::Pid;
 
 use aegis_types::AegisError;
 
-use crate::session::AgentSession;
+use crate::session::{AgentSession, StreamKind, ToolKind};
 
 /// Shell-quote a string with single quotes for safe shell expansion.
 fn shell_quote(s: &str) -> String {
@@ -334,8 +334,12 @@ impl AgentSession for JsonStreamSession {
         ])
     }
 
-    fn cc_session_id(&self) -> Option<&str> {
-        Some(&self.session_id)
+    fn stream_kind(&self) -> StreamKind {
+        StreamKind::Json { tool: ToolKind::ClaudeCode }
+    }
+
+    fn session_id(&self) -> Option<String> {
+        Some(self.session_id.clone())
     }
 }
 
