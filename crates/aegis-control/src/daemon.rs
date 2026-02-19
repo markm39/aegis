@@ -273,6 +273,24 @@ pub struct RuntimeCapabilities {
     pub policy_mediation: String,
     /// One-line explanation of mediation coverage.
     pub mediation_note: String,
+    /// Active capture session id (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_capture_session_id: Option<String>,
+    /// Target FPS for active capture session (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_capture_target_fps: Option<u16>,
+    /// Last tool action name observed for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_action: Option<String>,
+    /// Last tool action risk tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_risk_tag: Option<RiskTag>,
+    /// Last tool action decision (`allow` or `deny`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_decision: Option<String>,
+    /// Last tool action note/reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_note: Option<String>,
 }
 
 /// Parameters used to start a capture stream.
@@ -697,6 +715,12 @@ mod tests {
             headless: true,
             policy_mediation: "partial".into(),
             mediation_note: "OpenClaw hook bridge not yet implemented".into(),
+            active_capture_session_id: Some("cap-1".into()),
+            active_capture_target_fps: Some(30),
+            last_tool_action: Some("MouseClick".into()),
+            last_tool_risk_tag: Some(RiskTag::Medium),
+            last_tool_decision: Some("deny".into()),
+            last_tool_note: Some("runtime unavailable".into()),
         };
         let json = serde_json::to_string(&caps).unwrap();
         let back: RuntimeCapabilities = serde_json::from_str(&json).unwrap();
@@ -704,6 +728,8 @@ mod tests {
         assert_eq!(back.tool, "OpenClaw");
         assert!(back.headless);
         assert_eq!(back.policy_mediation, "partial");
+        assert_eq!(back.active_capture_target_fps, Some(30));
+        assert_eq!(back.last_tool_decision.as_deref(), Some("deny"));
     }
 
     #[test]

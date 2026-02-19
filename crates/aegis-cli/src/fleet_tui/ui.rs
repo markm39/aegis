@@ -506,6 +506,40 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             Style::default().fg(med_color).add_modifier(Modifier::BOLD),
         ));
         header_spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+
+        if let Some(session_id) = &caps.active_capture_session_id {
+            let fps = caps.active_capture_target_fps.unwrap_or(0);
+            header_spans.push(Span::styled(
+                format!("  [capture:{session_id}@{fps}fps]"),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+
+        if let Some(action) = &caps.last_tool_action {
+            let decision = caps
+                .last_tool_decision
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string();
+            let decision_color = if decision == "allow" {
+                Color::Green
+            } else {
+                Color::Yellow
+            };
+            header_spans.push(Span::styled(
+                "  [tool:",
+                Style::default().fg(Color::DarkGray),
+            ));
+            header_spans.push(Span::styled(action, Style::default().fg(Color::White)));
+            header_spans.push(Span::styled(" ", Style::default().fg(Color::DarkGray)));
+            header_spans.push(Span::styled(
+                decision,
+                Style::default()
+                    .fg(decision_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            header_spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+        }
     }
 
     let header_line = Line::from(header_spans);

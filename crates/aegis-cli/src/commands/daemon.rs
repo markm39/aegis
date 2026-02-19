@@ -18,8 +18,11 @@ use std::sync::atomic::Ordering;
 use anyhow::Context;
 use tracing::info;
 
-use aegis_control::daemon::{DaemonClient, DaemonCommand};
+use aegis_control::daemon::{
+    CaptureSessionRequest, DaemonClient, DaemonCommand, ToolActionExecution,
+};
 use aegis_daemon::persistence;
+use aegis_toolkit::contract::ToolAction;
 use aegis_types::daemon::{
     daemon_config_path, daemon_dir, AgentSlotConfig, AgentToolConfig, DaemonConfig,
     DaemonControlConfig, PersistenceConfig, RestartPolicy,
@@ -818,6 +821,125 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
         println!("  Headless:          {}", caps.headless);
         println!("  Policy mediation:  {}", caps.policy_mediation);
         println!("  Note:              {}", caps.mediation_note);
+        if let Some(session_id) = caps.active_capture_session_id {
+            println!(
+                "  Capture session:   {} ({} fps)",
+                session_id,
+                caps.active_capture_target_fps.unwrap_or(0)
+            );
+        }
+        if let Some(action) = caps.last_tool_action {
+            println!("  Last tool action:  {action}");
+        }
+        if let Some(decision) = caps.last_tool_decision {
+            println!("  Last decision:     {decision}");
+        }
+        if let Some(note) = caps.last_tool_note {
+            println!("  Last note:         {note}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute a computer-use ToolAction payload for an agent.
+pub fn tool_action(name: &str, action_json: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let action: ToolAction = serde_json::from_str(action_json)
+        .map_err(|e| anyhow::anyhow!("invalid ToolAction JSON: {e}"))?;
+
+    let response = client
+        .send(&DaemonCommand::ExecuteToolAction {
+            name: name.to_string(),
+            action,
+        })
+        .map_err(|e| anyhow::anyhow!("failed to execute tool action: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let execution: ToolActionExecution = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse tool action result: {e}"))?;
+        println!("Tool action result for '{name}':");
+        println!("  Action:    {}", execution.result.action);
+        println!("  Risk:      {:?}", execution.risk_tag);
+        println!(
+            "  Note:      {}",
+            execution
+                .result
+                .note
+                .unwrap_or_else(|| "(none)".to_string())
+        );
+    }
+
+    Ok(())
+}
+
+/// Start a capture session for an agent.
+pub fn capture_start(name: &str, fps: u16) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::StartCaptureSession {
+            name: name.to_string(),
+            request: CaptureSessionRequest {
+                target_fps: fps,
+                region: None,
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("failed to start capture session: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let started: aegis_control::daemon::CaptureSessionStarted = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse capture session response: {e}"))?;
+        println!(
+            "Capture started for '{name}': {} ({} fps)",
+            started.session_id, started.target_fps
+        );
+    }
+
+    Ok(())
+}
+
+/// Stop a capture session for an agent.
+pub fn capture_stop(name: &str, session_id: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::StopCaptureSession {
+            name: name.to_string(),
+            session_id: session_id.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to stop capture session: {e}"))?;
+
+    if response.ok {
+        println!("Capture session stopped for '{name}': {session_id}");
+    } else {
+        println!("Error: {}", response.message);
     }
 
     Ok(())

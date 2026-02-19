@@ -53,6 +53,15 @@ pub enum FleetCommand {
     Pending { agent: String },
     /// Show runtime capability/mediation profile for an agent.
     Capabilities { agent: String },
+    /// Execute a computer-use tool action from JSON payload.
+    Tool { agent: String, action_json: String },
+    /// Start a capture session for an agent.
+    CaptureStart {
+        agent: String,
+        target_fps: Option<u16>,
+    },
+    /// Stop the active capture session for an agent.
+    CaptureStop { agent: String, session_id: String },
     /// Wrap a command with Aegis observability in a new terminal.
     Wrap { cmd: String },
     /// Run a sandboxed command in a new terminal.
@@ -124,6 +133,8 @@ const COMMAND_NAMES: &[&str] = &[
     "add",
     "alerts",
     "approve",
+    "capture-start",
+    "capture-stop",
     "capabilities",
     "config",
     "context",
@@ -160,6 +171,7 @@ const COMMAND_NAMES: &[&str] = &[
     "start",
     "status",
     "stop",
+    "tool",
     "telegram",
     "use",
     "verify",
@@ -170,6 +182,8 @@ const COMMAND_NAMES: &[&str] = &[
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
     "approve",
+    "capture-start",
+    "capture-stop",
     "capabilities",
     "context",
     "deny",
@@ -319,6 +333,44 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Err("usage: capabilities <agent>".into())
             } else {
                 Ok(Some(FleetCommand::Capabilities { agent: arg1.into() }))
+            }
+        }
+        "tool" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                Err("usage: tool <agent> <action-json>".into())
+            } else {
+                Ok(Some(FleetCommand::Tool {
+                    agent: arg1.into(),
+                    action_json: arg2.into(),
+                }))
+            }
+        }
+        "capture-start" => {
+            if arg1.is_empty() {
+                Err("usage: capture-start <agent> [target-fps]".into())
+            } else if arg2.is_empty() {
+                Ok(Some(FleetCommand::CaptureStart {
+                    agent: arg1.into(),
+                    target_fps: None,
+                }))
+            } else {
+                let fps = arg2
+                    .parse::<u16>()
+                    .map_err(|_| "capture-start target-fps must be a number".to_string())?;
+                Ok(Some(FleetCommand::CaptureStart {
+                    agent: arg1.into(),
+                    target_fps: Some(fps),
+                }))
+            }
+        }
+        "capture-stop" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                Err("usage: capture-stop <agent> <session-id>".into())
+            } else {
+                Ok(Some(FleetCommand::CaptureStop {
+                    agent: arg1.into(),
+                    session_id: arg2.into(),
+                }))
             }
         }
         "wrap" => {
@@ -567,6 +619,9 @@ pub fn help_text() -> &'static str {
      :orch                    Orchestrator fleet overview\n\
      :pending <agent>         Show pending prompts\n\
      :capabilities <agent>    Runtime capability/mediation profile\n\
+     :tool <agent> <json>     Execute computer-use ToolAction JSON\n\
+     :capture-start <a> [fps] Start capture session for agent\n\
+     :capture-stop <a> <sid>  Stop capture session by id\n\
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
      :pop <agent>             Open agent in new terminal\n\
@@ -877,6 +932,41 @@ mod tests {
     #[test]
     fn parse_capabilities_missing_agent() {
         assert!(parse("capabilities").is_err());
+    }
+
+    #[test]
+    fn parse_tool() {
+        assert_eq!(
+            parse("tool claude-1 {\"action\":\"mouse_click\",\"x\":1,\"y\":2,\"button\":\"left\"}")
+                .unwrap(),
+            Some(FleetCommand::Tool {
+                agent: "claude-1".into(),
+                action_json: "{\"action\":\"mouse_click\",\"x\":1,\"y\":2,\"button\":\"left\"}"
+                    .into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_capture_start() {
+        assert_eq!(
+            parse("capture-start claude-1 45").unwrap(),
+            Some(FleetCommand::CaptureStart {
+                agent: "claude-1".into(),
+                target_fps: Some(45),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_capture_stop() {
+        assert_eq!(
+            parse("capture-stop claude-1 cap-123").unwrap(),
+            Some(FleetCommand::CaptureStop {
+                agent: "claude-1".into(),
+                session_id: "cap-123".into(),
+            })
+        );
     }
 
     #[test]

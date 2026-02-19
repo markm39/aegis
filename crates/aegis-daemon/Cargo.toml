@@ -12,6 +12,7 @@ aegis-policy = { path = "../aegis-policy" }
 aegis-ledger = { path = "../aegis-ledger" }
 aegis-observer = { path = "../aegis-observer" }
 aegis-control = { path = "../aegis-control" }
+aegis-toolkit = { workspace = true }
 aegis-alert = { path = "../aegis-alert" }
 aegis-channel = { path = "../aegis-channel" }
 aegis-proxy = { workspace = true }
@@ -22,6 +23,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+base64 = { workspace = true }
 anyhow = { workspace = true }
 nix = { workspace = true }
 libc = { workspace = true }
@@ -29,4 +31,3 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-aegis-toolkit = { workspace = true }

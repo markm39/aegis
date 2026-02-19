@@ -21,6 +21,7 @@ pub mod persistence;
 pub mod slot;
 pub mod state;
 pub mod stream_fmt;
+pub mod toolkit_runtime;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -30,10 +31,12 @@ use tracing::{info, warn};
 
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
-    AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse, OrchestratorAgentView,
-    OrchestratorSnapshot, PendingPromptSummary, RuntimeCapabilities, ToolUseVerdict,
+    AgentDetail, AgentSummary, CaptureSessionStarted, DaemonCommand, DaemonPing, DaemonResponse,
+    OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary, RuntimeCapabilities,
+    ToolActionExecution, ToolUseVerdict,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
+use aegis_toolkit::policy::map_tool_action;
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
 use aegis_types::{Action, ActionKind, Decision};
@@ -42,6 +45,7 @@ use crate::control::DaemonCmdRx;
 use crate::fleet::Fleet;
 use crate::slot::NotableEvent;
 use crate::state::DaemonState;
+use crate::toolkit_runtime::{ToolkitOutput, ToolkitRuntime};
 
 /// Whether hook policy checks should fail open on control/policy failures.
 ///
@@ -94,6 +98,12 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
         headless,
         policy_mediation,
         mediation_note,
+        active_capture_session_id: None,
+        active_capture_target_fps: None,
+        last_tool_action: None,
+        last_tool_risk_tag: None,
+        last_tool_decision: None,
+        last_tool_note: None,
     }
 }
 
@@ -117,6 +127,12 @@ pub struct DaemonRuntime {
     policy_engine: Option<aegis_policy::PolicyEngine>,
     /// Aegis config (needed for policy reload).
     aegis_config: AegisConfig,
+    /// Active capture sessions keyed by agent name.
+    capture_sessions: std::collections::HashMap<String, CaptureSessionStarted>,
+    /// Last tool-action execution metadata keyed by agent name.
+    last_tool_actions: std::collections::HashMap<String, ToolActionExecution>,
+    /// Optional computer-use runtime for orchestrator actions.
+    toolkit_runtime: Option<ToolkitRuntime>,
 }
 
 impl DaemonRuntime {
@@ -166,7 +182,20 @@ impl DaemonRuntime {
             channel_thread: None,
             policy_engine,
             aegis_config,
+            capture_sessions: std::collections::HashMap::new(),
+            last_tool_actions: std::collections::HashMap::new(),
+            toolkit_runtime: None,
         }
+    }
+
+    fn ensure_toolkit_runtime(&mut self) -> Result<&mut ToolkitRuntime, String> {
+        if self.toolkit_runtime.is_none() {
+            self.toolkit_runtime = Some(ToolkitRuntime::new()?);
+        }
+        Ok(self
+            .toolkit_runtime
+            .as_mut()
+            .expect("toolkit runtime just initialized"))
     }
 
     /// Run the daemon main loop. Blocks until shutdown is signaled.
@@ -767,7 +796,28 @@ impl DaemonRuntime {
                     Some(s) => s,
                     None => return DaemonResponse::error(format!("unknown agent: {name}")),
                 };
-                let caps = runtime_capabilities(&slot.config);
+                let mut caps = runtime_capabilities(&slot.config);
+                if let Some(session) = self.capture_sessions.get(name) {
+                    caps.active_capture_session_id = Some(session.session_id.clone());
+                    caps.active_capture_target_fps = Some(session.target_fps);
+                }
+                if let Some(last) = self.last_tool_actions.get(name) {
+                    caps.last_tool_action = Some(last.result.action.clone());
+                    caps.last_tool_risk_tag = Some(last.risk_tag);
+                    caps.last_tool_note = last.result.note.clone();
+                    caps.last_tool_decision = last
+                        .result
+                        .note
+                        .as_deref()
+                        .map(|n| {
+                            if n.starts_with("allow:") {
+                                "allow"
+                            } else {
+                                "deny"
+                            }
+                        })
+                        .map(str::to_string);
+                }
                 match serde_json::to_value(&caps) {
                     Ok(data) => DaemonResponse::ok_with_data("runtime capabilities", data),
                     Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
@@ -778,33 +828,169 @@ impl DaemonRuntime {
                 ref name,
                 ref action,
             } => {
-                let _ = name;
-                let _ = action;
-                DaemonResponse::error(
-                    "computer-use runtime unavailable; denied by fail-closed policy mediation",
-                )
+                if self.fleet.slot(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+
+                let mapping = map_tool_action(action);
+                let cedar_action = Action::new(
+                    name.clone(),
+                    ActionKind::ToolCall {
+                        tool: mapping.cedar_action.to_string(),
+                        args: serde_json::json!({
+                            "risk_tag": mapping.risk_tag,
+                            "action": action
+                        }),
+                    },
+                );
+
+                let (decision, reason) = match &self.policy_engine {
+                    Some(engine) => {
+                        let verdict = engine.evaluate(&cedar_action);
+                        match verdict.decision {
+                            Decision::Allow => ("allow".to_string(), verdict.reason),
+                            Decision::Deny => ("deny".to_string(), verdict.reason),
+                        }
+                    }
+                    None => (
+                        "deny".to_string(),
+                        "policy engine unavailable; denied by fail-closed runtime policy"
+                            .to_string(),
+                    ),
+                };
+
+                if decision == "deny" {
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: mapping.cedar_action.to_string(),
+                            risk_tag: mapping.risk_tag,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: self
+                                .capture_sessions
+                                .get(name)
+                                .map(|s| s.session_id.clone()),
+                            note: Some(format!("deny: {reason}")),
+                        },
+                        risk_tag: mapping.risk_tag,
+                    };
+
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
+
+                    return match serde_json::to_value(&execution) {
+                        Ok(data) => DaemonResponse::ok_with_data("deny", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    };
+                }
+
+                let runtime = match self.ensure_toolkit_runtime() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        let execution = ToolActionExecution {
+                            result: aegis_toolkit::contract::ToolResult {
+                                action: mapping.cedar_action.to_string(),
+                                risk_tag: mapping.risk_tag,
+                                capture_latency_ms: None,
+                                input_latency_ms: None,
+                                frame_id: None,
+                                window_id: None,
+                                session_id: self
+                                    .capture_sessions
+                                    .get(name)
+                                    .map(|s| s.session_id.clone()),
+                                note: Some(format!("deny: runtime unavailable ({e})")),
+                            },
+                            risk_tag: mapping.risk_tag,
+                        };
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
+                        return match serde_json::to_value(&execution) {
+                            Ok(data) => DaemonResponse::ok_with_data("deny", data),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        };
+                    }
+                };
+
+                let mut output: ToolkitOutput = match runtime.execute(action) {
+                    Ok(output) => output,
+                    Err(e) => {
+                        let execution = ToolActionExecution {
+                            result: aegis_toolkit::contract::ToolResult {
+                                action: mapping.cedar_action.to_string(),
+                                risk_tag: mapping.risk_tag,
+                                capture_latency_ms: None,
+                                input_latency_ms: None,
+                                frame_id: None,
+                                window_id: None,
+                                session_id: self
+                                    .capture_sessions
+                                    .get(name)
+                                    .map(|s| s.session_id.clone()),
+                                note: Some(format!("deny: runtime error ({e})")),
+                            },
+                            risk_tag: mapping.risk_tag,
+                        };
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
+                        return match serde_json::to_value(&execution) {
+                            Ok(data) => DaemonResponse::ok_with_data("deny", data),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        };
+                    }
+                };
+
+                output.execution.result.note = Some(format!("allow: {reason}"));
+                self.last_tool_actions
+                    .insert(name.clone(), output.execution.clone());
+
+                let data = serde_json::json!({
+                    "execution": output.execution,
+                    "frame": output.frame,
+                });
+                DaemonResponse::ok_with_data("allow", data)
             }
 
             DaemonCommand::StartCaptureSession {
                 ref name,
                 ref request,
             } => {
-                let _ = name;
-                let _ = request;
-                DaemonResponse::error(
-                    "capture runtime unavailable; denied by fail-closed policy mediation",
-                )
+                if self.fleet.slot(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+
+                let session = CaptureSessionStarted {
+                    session_id: format!("cap-{}", uuid::Uuid::new_v4()),
+                    target_fps: request.target_fps,
+                };
+                self.capture_sessions.insert(name.clone(), session.clone());
+                match serde_json::to_value(&session) {
+                    Ok(data) => DaemonResponse::ok_with_data("capture session started", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
             }
 
             DaemonCommand::StopCaptureSession {
                 ref name,
                 ref session_id,
             } => {
-                let _ = name;
-                let _ = session_id;
-                DaemonResponse::error(
-                    "capture runtime unavailable; denied by fail-closed policy mediation",
-                )
+                if self.fleet.slot(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                match self.capture_sessions.get(name) {
+                    Some(s) if s.session_id == *session_id => {
+                        self.capture_sessions.remove(name);
+                        DaemonResponse::ok("capture session stopped")
+                    }
+                    Some(_) => DaemonResponse::error(format!(
+                        "session mismatch for '{name}': {session_id}"
+                    )),
+                    None => {
+                        DaemonResponse::error(format!("no active capture session for '{name}'"))
+                    }
+                }
             }
 
             DaemonCommand::FleetGoal { ref goal } => {
@@ -1639,12 +1825,16 @@ mod tests {
                 button: MouseButton::Left,
             },
         });
-        assert!(!resp.ok);
-        assert!(resp.message.contains("fail-closed"));
+        assert!(resp.ok);
+        let execution: ToolActionExecution = serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(execution.result.action, "MouseClick");
+        assert_eq!(execution.risk_tag, execution.result.risk_tag);
+        let note = execution.result.note.unwrap_or_default();
+        assert!(note.contains("deny"));
     }
 
     #[test]
-    fn handle_command_start_capture_session_fail_closed() {
+    fn handle_command_start_capture_session() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
         let resp = runtime.handle_command(DaemonCommand::StartCaptureSession {
             name: "a1".into(),
@@ -1653,19 +1843,30 @@ mod tests {
                 region: None,
             },
         });
-        assert!(!resp.ok);
-        assert!(resp.message.contains("fail-closed"));
+        assert!(resp.ok);
+        let started: CaptureSessionStarted = serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(started.target_fps, 30);
+        assert!(started.session_id.starts_with("cap-"));
     }
 
     #[test]
-    fn handle_command_stop_capture_session_fail_closed() {
+    fn handle_command_stop_capture_session() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let start = runtime.handle_command(DaemonCommand::StartCaptureSession {
+            name: "a1".into(),
+            request: aegis_control::daemon::CaptureSessionRequest {
+                target_fps: 30,
+                region: None,
+            },
+        });
+        let started: CaptureSessionStarted = serde_json::from_value(start.data.unwrap()).unwrap();
+
         let resp = runtime.handle_command(DaemonCommand::StopCaptureSession {
             name: "a1".into(),
-            session_id: "cap-1".into(),
+            session_id: started.session_id,
         });
-        assert!(!resp.ok);
-        assert!(resp.message.contains("fail-closed"));
+        assert!(resp.ok);
+        assert!(resp.message.contains("stopped"));
     }
 
     #[test]

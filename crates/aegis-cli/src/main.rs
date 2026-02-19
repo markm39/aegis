@@ -645,6 +645,36 @@ enum DaemonCommands {
         name: String,
     },
 
+    /// Execute a computer-use ToolAction JSON payload for an agent
+    Tool {
+        /// Agent name
+        name: String,
+
+        /// ToolAction JSON payload (e.g. '{"action":"mouse_click","x":10,"y":20,"button":"left"}')
+        action_json: String,
+    },
+
+    /// Start a capture session for an agent
+    #[command(name = "capture-start")]
+    CaptureStart {
+        /// Agent name
+        name: String,
+
+        /// Target frames per second
+        #[arg(long, default_value = "30")]
+        fps: u16,
+    },
+
+    /// Stop a capture session for an agent
+    #[command(name = "capture-stop")]
+    CaptureStop {
+        /// Agent name
+        name: String,
+
+        /// Capture session id
+        session_id: String,
+    },
+
     /// Follow (tail) agent output in real time
     Follow {
         /// Agent name
@@ -1028,6 +1058,15 @@ fn main() -> anyhow::Result<()> {
             }
             DaemonCommands::Pending { name } => commands::daemon::pending(&name),
             DaemonCommands::Capabilities { name } => commands::daemon::capabilities(&name),
+            DaemonCommands::Tool { name, action_json } => {
+                commands::daemon::tool_action(&name, &action_json)
+            }
+            DaemonCommands::CaptureStart { name, fps } => {
+                commands::daemon::capture_start(&name, fps)
+            }
+            DaemonCommands::CaptureStop { name, session_id } => {
+                commands::daemon::capture_stop(&name, &session_id)
+            }
             DaemonCommands::Follow { name } => commands::daemon::follow(&name),
             DaemonCommands::Enable { name } => commands::daemon::enable_agent(&name),
             DaemonCommands::Disable { name } => commands::daemon::disable_agent(&name),
@@ -2295,6 +2334,67 @@ mod tests {
                 assert_eq!(name, "claude-1");
             }
             _ => panic!("expected Daemon Capabilities command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_tool() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "tool",
+            "claude-1",
+            "{\"action\":\"mouse_click\",\"x\":1,\"y\":2,\"button\":\"left\"}",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon tool: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::Tool { name, action_json },
+            } => {
+                assert_eq!(name, "claude-1");
+                assert!(action_json.contains("mouse_click"));
+            }
+            _ => panic!("expected Daemon Tool command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_capture_start() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "capture-start",
+            "claude-1",
+            "--fps",
+            "45",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon capture-start: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::CaptureStart { name, fps },
+            } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(fps, 45);
+            }
+            _ => panic!("expected Daemon CaptureStart command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_capture_stop() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "capture-stop", "claude-1", "cap-123"]);
+        assert!(cli.is_ok(), "should parse daemon capture-stop: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::CaptureStop { name, session_id },
+            } => {
+                assert_eq!(name, "claude-1");
+                assert_eq!(session_id, "cap-123");
+            }
+            _ => panic!("expected Daemon CaptureStop command"),
         }
     }
 

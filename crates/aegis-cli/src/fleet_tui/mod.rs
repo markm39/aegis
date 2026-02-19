@@ -16,8 +16,10 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{
-    AgentSummary, DaemonClient, DaemonCommand, PendingPromptSummary, RuntimeCapabilities,
+    AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
+    PendingPromptSummary, RuntimeCapabilities, ToolActionExecution,
 };
+use aegis_toolkit::contract::ToolAction;
 use aegis_types::AgentStatus;
 
 use self::event::{AppEvent, EventHandler};
@@ -1273,6 +1275,104 @@ impl FleetApp {
                         }
                         Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
                         Err(e) => self.set_result(format!("failed to query capabilities: {e}")),
+                    }
+                }
+            }
+            FleetCommand::Tool { agent, action_json } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else {
+                    match serde_json::from_str::<ToolAction>(&action_json) {
+                        Ok(action) => {
+                            if let Some(client) = &self.client {
+                                match client.send(&DaemonCommand::ExecuteToolAction {
+                                    name: agent.clone(),
+                                    action,
+                                }) {
+                                    Ok(resp) if resp.ok => {
+                                        if let Some(data) = resp.data {
+                                            match serde_json::from_value::<ToolActionExecution>(
+                                                data,
+                                            ) {
+                                                Ok(exec) => {
+                                                    self.set_result(format!(
+                                                        "{agent}: {} {:?} ({})",
+                                                        exec.result.action,
+                                                        exec.risk_tag,
+                                                        exec.result.note.unwrap_or_default()
+                                                    ));
+                                                }
+                                                Err(e) => self.set_result(format!(
+                                                    "failed to parse tool result: {e}"
+                                                )),
+                                            }
+                                        } else {
+                                            self.set_result(format!("{agent}: tool action sent"));
+                                        }
+                                    }
+                                    Ok(resp) => {
+                                        self.set_result(format!("failed: {}", resp.message))
+                                    }
+                                    Err(e) => self
+                                        .set_result(format!("failed to execute tool action: {e}")),
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.set_result(format!("invalid ToolAction JSON: {e}"));
+                        }
+                    }
+                }
+            }
+            FleetCommand::CaptureStart { agent, target_fps } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::StartCaptureSession {
+                        name: agent.clone(),
+                        request: CaptureSessionRequest {
+                            target_fps: target_fps.unwrap_or(30),
+                            region: None,
+                        },
+                    }) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<CaptureSessionStarted>(data) {
+                                    Ok(started) => self.set_result(format!(
+                                        "{agent}: capture started ({}, {}fps)",
+                                        started.session_id, started.target_fps
+                                    )),
+                                    Err(e) => self
+                                        .set_result(format!("failed to parse capture start: {e}")),
+                                }
+                            } else {
+                                self.set_result(format!("{agent}: capture started"));
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to start capture: {e}")),
+                    }
+                }
+            }
+            FleetCommand::CaptureStop { agent, session_id } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::StopCaptureSession {
+                        name: agent.clone(),
+                        session_id: session_id.clone(),
+                    }) {
+                        Ok(resp) if resp.ok => {
+                            self.set_result(format!("{agent}: capture stopped ({session_id})"))
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to stop capture: {e}")),
                     }
                 }
             }
