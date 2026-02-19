@@ -17,10 +17,10 @@ pub mod control;
 pub mod fleet;
 pub mod lifecycle;
 pub mod ndjson_fmt;
-pub mod stream_fmt;
 pub mod persistence;
 pub mod slot;
 pub mod state;
+pub mod stream_fmt;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -30,19 +30,32 @@ use tracing::{info, warn};
 
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
-    AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse,
-    OrchestratorAgentView, OrchestratorSnapshot,
-    PendingPromptSummary, ToolUseVerdict,
+    AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse, OrchestratorAgentView,
+    OrchestratorSnapshot, PendingPromptSummary, ToolUseVerdict,
 };
-use aegis_types::{Action, ActionKind, Decision};
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
+use aegis_types::{Action, ActionKind, Decision};
 
 use crate::control::DaemonCmdRx;
 use crate::fleet::Fleet;
 use crate::slot::NotableEvent;
 use crate::state::DaemonState;
+
+/// Whether hook policy checks should fail open on control/policy failures.
+///
+/// Defaults to fail-closed. Set `AEGIS_HOOK_FAIL_OPEN=1` (or true/yes/on)
+/// only for lower-trust development environments.
+fn hook_fail_open_enabled() -> bool {
+    std::env::var("AEGIS_HOOK_FAIL_OPEN")
+        .ok()
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
 
 /// The daemon runtime: main loop managing the fleet and control plane.
 pub struct DaemonRuntime {
@@ -73,8 +86,8 @@ impl DaemonRuntime {
 
         // Load Cedar policy engine for hook-based tool use evaluation.
         // Only loads if a policy directory exists AND contains .cedar files.
-        // When no policies are configured, hooks default to allow (matching
-        // the --dangerously-skip-permissions baseline).
+        // If unavailable, hook checks fail-closed unless explicitly
+        // configured fail-open via AEGIS_HOOK_FAIL_OPEN.
         let policy_engine = aegis_config
             .policy_paths
             .first()
@@ -83,9 +96,9 @@ impl DaemonRuntime {
                     && std::fs::read_dir(dir)
                         .ok()
                         .map(|entries| {
-                            entries.filter_map(|e| e.ok()).any(|e| {
-                                e.path().extension().is_some_and(|ext| ext == "cedar")
-                            })
+                            entries
+                                .filter_map(|e| e.ok())
+                                .any(|e| e.path().extension().is_some_and(|ext| ext == "cedar"))
                         })
                         .unwrap_or(false)
             })
@@ -95,7 +108,10 @@ impl DaemonRuntime {
                     Some(engine)
                 }
                 Err(e) => {
-                    info!(?e, "no Cedar policy engine loaded (hooks will default to allow)");
+                    warn!(
+                        ?e,
+                        "no Cedar policy engine loaded (hook checks will fail-closed)"
+                    );
                     None
                 }
             });
@@ -131,7 +147,8 @@ impl DaemonRuntime {
             // Restore restart counts from previous daemon instance so
             // max_restarts guards carry across daemon restarts.
             for agent_state in &prev_state.agents {
-                self.fleet.restore_restart_count(&agent_state.name, agent_state.restart_count);
+                self.fleet
+                    .restore_restart_count(&agent_state.name, agent_state.restart_count);
             }
         }
 
@@ -159,8 +176,7 @@ impl DaemonRuntime {
                 .name("channel".to_string())
                 .spawn(move || {
                     aegis_channel::run_fleet(config, input_rx, Some(feedback_tx));
-                })
-            {
+                }) {
                 Ok(handle) => {
                     self.channel_tx = Some(input_tx);
                     self.channel_cmd_rx = Some(feedback_rx);
@@ -222,7 +238,9 @@ impl DaemonRuntime {
                     if handle.is_finished() {
                         let handle = self.channel_thread.take().unwrap();
                         match handle.join() {
-                            Ok(()) => tracing::warn!("notification channel thread exited unexpectedly"),
+                            Ok(()) => {
+                                tracing::warn!("notification channel thread exited unexpectedly")
+                            }
                             Err(_) => tracing::error!("notification channel thread panicked"),
                         }
                         // Clear senders so we don't keep trying to send to a dead thread
@@ -310,15 +328,20 @@ impl DaemonRuntime {
 
         for (agent_name, event) in events {
             let kind = match event {
-                NotableEvent::PendingPrompt { request_id, raw_prompt } => {
-                    PilotEventKind::PendingApproval { request_id, raw_prompt }
-                }
+                NotableEvent::PendingPrompt {
+                    request_id,
+                    raw_prompt,
+                } => PilotEventKind::PendingApproval {
+                    request_id,
+                    raw_prompt,
+                },
                 NotableEvent::AttentionNeeded { nudge_count } => {
                     PilotEventKind::AttentionNeeded { nudge_count }
                 }
-                NotableEvent::StallNudge { nudge_count } => {
-                    PilotEventKind::StallDetected { nudge_count, idle_secs: 0 }
-                }
+                NotableEvent::StallNudge { nudge_count } => PilotEventKind::StallDetected {
+                    nudge_count,
+                    idle_secs: 0,
+                },
                 NotableEvent::ChildExited { exit_code } => {
                     PilotEventKind::AgentExited { exit_code }
                 }
@@ -345,7 +368,7 @@ impl DaemonRuntime {
             let webhook_event = PilotWebhookEvent::new(
                 kind,
                 &agent_name,
-                0,    // PID not easily available from slot
+                0, // PID not easily available from slot
                 vec![],
                 None,
                 stats,
@@ -368,6 +391,8 @@ impl DaemonRuntime {
                     agent_count: self.fleet.agent_count(),
                     running_count: self.fleet.running_count(),
                     daemon_pid: std::process::id(),
+                    policy_engine_loaded: self.policy_engine.is_some(),
+                    hook_fail_open: hook_fail_open_enabled(),
                 };
                 match serde_json::to_value(&ping) {
                     Ok(data) => DaemonResponse::ok_with_data("pong", data),
@@ -386,7 +411,8 @@ impl DaemonRuntime {
                         // Compute live remaining backoff for Crashed status
                         let status = match &slot.status {
                             AgentStatus::Crashed { exit_code, .. } => {
-                                let remaining = slot.backoff_until
+                                let remaining = slot
+                                    .backoff_until
                                     .map(|t| t.saturating_duration_since(now).as_secs())
                                     .unwrap_or(0);
                                 AgentStatus::Crashed {
@@ -425,7 +451,8 @@ impl DaemonRuntime {
                 let now = std::time::Instant::now();
                 let status = match &slot.status {
                     AgentStatus::Crashed { exit_code, .. } => {
-                        let remaining = slot.backoff_until
+                        let remaining = slot
+                            .backoff_until
                             .map(|t| t.saturating_duration_since(now).as_secs())
                             .unwrap_or(0);
                         AgentStatus::Crashed {
@@ -446,7 +473,9 @@ impl DaemonRuntime {
                         _ => None,
                     },
                     uptime_secs: slot.started_at.map(|t| t.elapsed().as_secs()),
-                    session_id: slot.session_id.lock()
+                    session_id: slot
+                        .session_id
+                        .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .map(|u| u.to_string()),
                     role: slot.config.role.clone(),
@@ -478,9 +507,9 @@ impl DaemonRuntime {
                 match self.fleet.agent_status(name) {
                     None => return DaemonResponse::error(format!("unknown agent: {name}")),
                     Some(&AgentStatus::Disabled) => {
-                        return DaemonResponse::error(
-                            format!("agent '{name}' is disabled. Use enable first.")
-                        );
+                        return DaemonResponse::error(format!(
+                            "agent '{name}' is disabled. Use enable first."
+                        ));
                     }
                     _ => {}
                 }
@@ -496,12 +525,10 @@ impl DaemonRuntime {
                 DaemonResponse::ok(format!("stopping '{name}'"))
             }
 
-            DaemonCommand::RestartAgent { ref name } => {
-                match self.fleet.restart_agent(name) {
-                    Ok(()) => DaemonResponse::ok(format!("restarting '{name}'")),
-                    Err(e) => DaemonResponse::error(e),
-                }
-            }
+            DaemonCommand::RestartAgent { ref name } => match self.fleet.restart_agent(name) {
+                Ok(()) => DaemonResponse::ok(format!("restarting '{name}'")),
+                Err(e) => DaemonResponse::error(e),
+            },
 
             DaemonCommand::SendToAgent { ref name, ref text } => {
                 match self.fleet.send_to_agent(name, text) {
@@ -563,56 +590,69 @@ impl DaemonRuntime {
                 DaemonResponse::ok(format!("agent '{name}' removed"))
             }
 
-            DaemonCommand::ApproveRequest { ref name, ref request_id } => {
+            DaemonCommand::ApproveRequest {
+                ref name,
+                ref request_id,
+            } => {
                 let id = match uuid::Uuid::parse_str(request_id) {
                     Ok(id) => id,
                     Err(e) => return DaemonResponse::error(format!("invalid request_id: {e}")),
                 };
                 match self.fleet.approve_request(name, id) {
-                    Ok(()) => DaemonResponse::ok(format!("approved request {request_id} for '{name}'")),
-                    Err(e) => DaemonResponse::error(e),
-                }
-            }
-
-            DaemonCommand::DenyRequest { ref name, ref request_id } => {
-                let id = match uuid::Uuid::parse_str(request_id) {
-                    Ok(id) => id,
-                    Err(e) => return DaemonResponse::error(format!("invalid request_id: {e}")),
-                };
-                match self.fleet.deny_request(name, id) {
-                    Ok(()) => DaemonResponse::ok(format!("denied request {request_id} for '{name}'")),
-                    Err(e) => DaemonResponse::error(e),
-                }
-            }
-
-            DaemonCommand::NudgeAgent { ref name, ref message } => {
-                match self.fleet.nudge_agent(name, message.clone()) {
-                    Ok(()) => DaemonResponse::ok(format!("nudged '{name}'")),
-                    Err(e) => DaemonResponse::error(e),
-                }
-            }
-
-            DaemonCommand::ListPending { ref name } => {
-                match self.fleet.list_pending(name) {
-                    Ok(pending) => {
-                        let summaries: Vec<PendingPromptSummary> = pending
-                            .iter()
-                            .map(|p| PendingPromptSummary {
-                                request_id: p.request_id.to_string(),
-                                raw_prompt: p.raw_prompt.clone(),
-                                age_secs: p.received_at.elapsed().as_secs(),
-                            })
-                            .collect();
-                        match serde_json::to_value(&summaries) {
-                            Ok(data) => DaemonResponse::ok_with_data("pending prompts", data),
-                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
-                        }
+                    Ok(()) => {
+                        DaemonResponse::ok(format!("approved request {request_id} for '{name}'"))
                     }
                     Err(e) => DaemonResponse::error(e),
                 }
             }
 
-            DaemonCommand::EvaluateToolUse { ref agent, ref tool_name, ref tool_input } => {
+            DaemonCommand::DenyRequest {
+                ref name,
+                ref request_id,
+            } => {
+                let id = match uuid::Uuid::parse_str(request_id) {
+                    Ok(id) => id,
+                    Err(e) => return DaemonResponse::error(format!("invalid request_id: {e}")),
+                };
+                match self.fleet.deny_request(name, id) {
+                    Ok(()) => {
+                        DaemonResponse::ok(format!("denied request {request_id} for '{name}'"))
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::NudgeAgent {
+                ref name,
+                ref message,
+            } => match self.fleet.nudge_agent(name, message.clone()) {
+                Ok(()) => DaemonResponse::ok(format!("nudged '{name}'")),
+                Err(e) => DaemonResponse::error(e),
+            },
+
+            DaemonCommand::ListPending { ref name } => match self.fleet.list_pending(name) {
+                Ok(pending) => {
+                    let summaries: Vec<PendingPromptSummary> = pending
+                        .iter()
+                        .map(|p| PendingPromptSummary {
+                            request_id: p.request_id.to_string(),
+                            raw_prompt: p.raw_prompt.clone(),
+                            age_secs: p.received_at.elapsed().as_secs(),
+                        })
+                        .collect();
+                    match serde_json::to_value(&summaries) {
+                        Ok(data) => DaemonResponse::ok_with_data("pending prompts", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    }
+                }
+                Err(e) => DaemonResponse::error(e),
+            },
+
+            DaemonCommand::EvaluateToolUse {
+                ref agent,
+                ref tool_name,
+                ref tool_input,
+            } => {
                 // Interactive tools (AskUserQuestion, EnterPlanMode) would stall
                 // a headless daemon-managed agent. Deny them with a contextual
                 // prompt so the model proceeds autonomously.
@@ -650,8 +690,19 @@ impl DaemonRuntime {
                         (d.to_string(), verdict.reason)
                     }
                     None => {
-                        // No policy engine loaded; default to allow
-                        ("allow".to_string(), "no policy engine loaded".to_string())
+                        if hook_fail_open_enabled() {
+                            (
+                                "allow".to_string(),
+                                "policy engine unavailable; allowed due to AEGIS_HOOK_FAIL_OPEN"
+                                    .to_string(),
+                            )
+                        } else {
+                            (
+                                "deny".to_string(),
+                                "policy engine unavailable; denied by fail-closed hook policy"
+                                    .to_string(),
+                            )
+                        }
                     }
                 };
 
@@ -674,8 +725,14 @@ impl DaemonRuntime {
             DaemonCommand::FleetGoal { ref goal } => {
                 match goal {
                     Some(new_goal) => {
-                        let new_goal_val = if new_goal.is_empty() { None } else { Some(new_goal.clone()) };
-                        let display = new_goal_val.clone().unwrap_or_else(|| "(cleared)".to_string());
+                        let new_goal_val = if new_goal.is_empty() {
+                            None
+                        } else {
+                            Some(new_goal.clone())
+                        };
+                        let display = new_goal_val
+                            .clone()
+                            .unwrap_or_else(|| "(cleared)".to_string());
 
                         // Persist first
                         let mut candidate = self.config.clone();
@@ -689,16 +746,20 @@ impl DaemonRuntime {
                         self.fleet.fleet_goal = new_goal_val;
                         DaemonResponse::ok(format!("fleet goal set: {display}"))
                     }
-                    None => {
-                        DaemonResponse::ok_with_data(
-                            "fleet goal",
-                            serde_json::json!({ "goal": self.config.goal }),
-                        )
-                    }
+                    None => DaemonResponse::ok_with_data(
+                        "fleet goal",
+                        serde_json::json!({ "goal": self.config.goal }),
+                    ),
                 }
             }
 
-            DaemonCommand::UpdateAgentContext { ref name, ref role, ref agent_goal, ref context, ref task } => {
+            DaemonCommand::UpdateAgentContext {
+                ref name,
+                ref role,
+                ref agent_goal,
+                ref context,
+                ref task,
+            } => {
                 if self.fleet.slot(name).is_none() {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
                 }
@@ -735,7 +796,9 @@ impl DaemonRuntime {
                     }
                 }
                 self.config = candidate;
-                DaemonResponse::ok(format!("context updated for '{name}' (takes effect on next restart)"))
+                DaemonResponse::ok(format!(
+                    "context updated for '{name}' (takes effect on next restart)"
+                ))
             }
 
             DaemonCommand::GetAgentContext { ref name } => {
@@ -784,7 +847,9 @@ impl DaemonRuntime {
                 match self.fleet.slot(&name) {
                     None => return DaemonResponse::error(format!("unknown agent: {name}")),
                     Some(s) if !s.config.enabled => {
-                        return DaemonResponse::error(format!("agent '{name}' is already disabled"));
+                        return DaemonResponse::error(format!(
+                            "agent '{name}' is already disabled"
+                        ));
                     }
                     _ => {}
                 }
@@ -806,26 +871,30 @@ impl DaemonRuntime {
                 }
             }
 
-            DaemonCommand::ReloadConfig => {
-                self.reload_config()
-            }
+            DaemonCommand::ReloadConfig => self.reload_config(),
 
-            DaemonCommand::OrchestratorContext { ref agents, output_lines } => {
+            DaemonCommand::OrchestratorContext {
+                ref agents,
+                output_lines,
+            } => {
                 let line_count = output_lines.unwrap_or(30);
                 let all_names = self.fleet.agent_names_sorted();
 
                 // Determine which agents to include
                 let target_names: Vec<&String> = if agents.is_empty() {
                     // All non-orchestrator agents
-                    all_names.iter()
+                    all_names
+                        .iter()
                         .filter(|name| {
-                            self.fleet.agent_config(name)
+                            self.fleet
+                                .agent_config(name)
                                 .map(|c| c.orchestrator.is_none())
                                 .unwrap_or(true)
                         })
                         .collect()
                 } else {
-                    all_names.iter()
+                    all_names
+                        .iter()
                         .filter(|name| agents.contains(name))
                         .collect()
                 };
@@ -835,7 +904,8 @@ impl DaemonRuntime {
                     .filter_map(|name| {
                         let slot = self.fleet.slot(name)?;
                         let config = self.fleet.agent_config(name)?;
-                        let recent_output = self.fleet
+                        let recent_output = self
+                            .fleet
                             .agent_output(name, line_count)
                             .unwrap_or_default();
 
@@ -943,7 +1013,8 @@ impl DaemonRuntime {
 
         // Reload policy engine (picks up new/changed .cedar files)
         let mut policy_warning: Option<String> = None;
-        let policy_dir = self.aegis_config
+        let policy_dir = self
+            .aegis_config
             .policy_paths
             .first()
             .filter(|dir| {
@@ -951,9 +1022,9 @@ impl DaemonRuntime {
                     && std::fs::read_dir(dir)
                         .ok()
                         .map(|entries| {
-                            entries.filter_map(|e| e.ok()).any(|e| {
-                                e.path().extension().is_some_and(|ext| ext == "cedar")
-                            })
+                            entries
+                                .filter_map(|e| e.ok())
+                                .any(|e| e.path().extension().is_some_and(|ext| ext == "cedar"))
                         })
                         .unwrap_or(false)
             })
@@ -970,7 +1041,9 @@ impl DaemonRuntime {
                 }
             }
         } else if self.policy_engine.is_some() {
-            info!("no policy directory found, clearing policy engine");
+            warn!(
+                "no policy directory found, clearing policy engine (hook checks now fail-closed)"
+            );
             self.policy_engine = None;
         }
 
@@ -1016,11 +1089,14 @@ impl DaemonRuntime {
             .map_err(|e| format!("failed to create temp config: {e}"))?;
         use std::io::Write;
         let mut writer = std::io::BufWriter::new(file);
-        writer.write_all(toml_str.as_bytes())
+        writer
+            .write_all(toml_str.as_bytes())
             .map_err(|e| format!("failed to write temp config: {e}"))?;
-        writer.flush()
+        writer
+            .flush()
             .map_err(|e| format!("failed to flush temp config: {e}"))?;
-        writer.into_inner()
+        writer
+            .into_inner()
             .map_err(|e| format!("failed to finalize temp config: {e}"))?
             .sync_all()
             .map_err(|e| format!("failed to sync temp config to disk: {e}"))?;
@@ -1039,7 +1115,9 @@ impl DaemonRuntime {
 
         for name in self.fleet.agent_names() {
             if let Some(slot) = self.fleet.slot(&name) {
-                let sid = *slot.session_id.lock()
+                let sid = *slot
+                    .session_id
+                    .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 daemon_state.agents.push(state::AgentState {
                     name: name.clone(),
@@ -1287,6 +1365,7 @@ mod tests {
         let ping: DaemonPing = serde_json::from_value(data).unwrap();
         assert_eq!(ping.agent_count, 2);
         assert_eq!(ping.running_count, 0);
+        assert!(!ping.hook_fail_open);
     }
 
     #[test]
@@ -1420,9 +1499,7 @@ mod tests {
     #[test]
     fn handle_command_list_pending_empty() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
-        let resp = runtime.handle_command(DaemonCommand::ListPending {
-            name: "a1".into(),
-        });
+        let resp = runtime.handle_command(DaemonCommand::ListPending { name: "a1".into() });
         assert!(resp.ok);
         let data = resp.data.unwrap();
         let pending: Vec<PendingPromptSummary> = serde_json::from_value(data).unwrap();
@@ -1449,8 +1526,8 @@ mod tests {
         assert!(resp.ok);
         let data = resp.data.unwrap();
         let verdict: ToolUseVerdict = serde_json::from_value(data).unwrap();
-        assert_eq!(verdict.decision, "allow");
-        assert!(verdict.reason.contains("no policy engine"));
+        assert_eq!(verdict.decision, "deny");
+        assert!(verdict.reason.contains("fail-closed"));
     }
 
     #[test]
@@ -1473,7 +1550,8 @@ mod tests {
 
     #[test]
     fn map_tool_use_write() {
-        let kind = map_tool_use_to_action("Write", &serde_json::json!({"file_path": "/tmp/out.txt"}));
+        let kind =
+            map_tool_use_to_action("Write", &serde_json::json!({"file_path": "/tmp/out.txt"}));
         match kind {
             ActionKind::FileWrite { path } => assert_eq!(path, PathBuf::from("/tmp/out.txt")),
             other => panic!("expected FileWrite, got {other:?}"),
@@ -1482,7 +1560,8 @@ mod tests {
 
     #[test]
     fn map_tool_use_edit() {
-        let kind = map_tool_use_to_action("Edit", &serde_json::json!({"file_path": "/src/main.rs"}));
+        let kind =
+            map_tool_use_to_action("Edit", &serde_json::json!({"file_path": "/src/main.rs"}));
         match kind {
             ActionKind::FileWrite { path } => assert_eq!(path, PathBuf::from("/src/main.rs")),
             other => panic!("expected FileWrite, got {other:?}"),
@@ -1601,14 +1680,13 @@ mod tests {
             tool_input: serde_json::json!({"question": "what approach?"}),
         });
         assert!(resp.ok);
-        let verdict: ToolUseVerdict =
-            serde_json::from_value(resp.data.unwrap()).unwrap();
+        let verdict: ToolUseVerdict = serde_json::from_value(resp.data.unwrap()).unwrap();
         assert_eq!(verdict.decision, "deny");
         assert!(verdict.reason.contains("autonomous"));
     }
 
     #[test]
-    fn evaluate_tool_use_allows_normal_tools() {
+    fn evaluate_tool_use_denies_when_policy_unavailable() {
         let mut runtime = test_runtime(vec![test_agent("agent-1")]);
         let resp = runtime.handle_command(DaemonCommand::EvaluateToolUse {
             agent: "agent-1".into(),
@@ -1616,9 +1694,9 @@ mod tests {
             tool_input: serde_json::json!({"file_path": "/tmp/test.txt"}),
         });
         assert!(resp.ok);
-        let verdict: ToolUseVerdict =
-            serde_json::from_value(resp.data.unwrap()).unwrap();
-        assert_eq!(verdict.decision, "allow");
+        let verdict: ToolUseVerdict = serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(verdict.decision, "deny");
+        assert!(verdict.reason.contains("fail-closed"));
     }
 
     #[test]
@@ -1655,7 +1733,9 @@ mod tests {
     #[test]
     fn handle_command_enable_unknown_agent() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
-        let resp = runtime.handle_command(DaemonCommand::EnableAgent { name: "ghost".into() });
+        let resp = runtime.handle_command(DaemonCommand::EnableAgent {
+            name: "ghost".into(),
+        });
         assert!(!resp.ok);
     }
 
@@ -1676,7 +1756,9 @@ mod tests {
     #[test]
     fn handle_command_remove_unknown_agent() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
-        let resp = runtime.handle_command(DaemonCommand::RemoveAgent { name: "ghost".into() });
+        let resp = runtime.handle_command(DaemonCommand::RemoveAgent {
+            name: "ghost".into(),
+        });
         assert!(!resp.ok);
         assert_eq!(runtime.fleet.agent_count(), 1);
     }
@@ -1696,9 +1778,16 @@ mod tests {
 
         let slot = runtime.fleet.slot("a1").unwrap();
         assert_eq!(slot.config.role.as_deref(), Some("UX specialist"));
-        assert_eq!(slot.config.agent_goal.as_deref(), Some("Design the landing page"));
+        assert_eq!(
+            slot.config.agent_goal.as_deref(),
+            Some("Design the landing page")
+        );
         assert_eq!(slot.config.context.as_deref(), Some("Use Tailwind CSS"));
-        assert_eq!(slot.config.task.as_deref(), Some("test task"), "task should be unchanged");
+        assert_eq!(
+            slot.config.task.as_deref(),
+            Some("test task"),
+            "task should be unchanged"
+        );
     }
 
     #[test]
@@ -1713,7 +1802,10 @@ mod tests {
             context: None,
             task: None,
         });
-        assert_eq!(runtime.fleet.slot("a1").unwrap().config.role.as_deref(), Some("Backend dev"));
+        assert_eq!(
+            runtime.fleet.slot("a1").unwrap().config.role.as_deref(),
+            Some("Backend dev")
+        );
 
         // Clear it with empty string
         let resp = runtime.handle_command(DaemonCommand::UpdateAgentContext {
@@ -1724,7 +1816,10 @@ mod tests {
             task: None,
         });
         assert!(resp.ok);
-        assert!(runtime.fleet.slot("a1").unwrap().config.role.is_none(), "empty string should clear field");
+        assert!(
+            runtime.fleet.slot("a1").unwrap().config.role.is_none(),
+            "empty string should clear field"
+        );
     }
 
     #[test]
@@ -1765,7 +1860,9 @@ mod tests {
     #[test]
     fn handle_command_get_context_unknown_agent() {
         let mut runtime = test_runtime(vec![test_agent("a1")]);
-        let resp = runtime.handle_command(DaemonCommand::GetAgentContext { name: "ghost".into() });
+        let resp = runtime.handle_command(DaemonCommand::GetAgentContext {
+            name: "ghost".into(),
+        });
         assert!(!resp.ok);
     }
 
@@ -1880,8 +1977,7 @@ mod tests {
             output_lines: None,
         });
         assert!(resp.ok);
-        let snapshot: OrchestratorSnapshot =
-            serde_json::from_value(resp.data.unwrap()).unwrap();
+        let snapshot: OrchestratorSnapshot = serde_json::from_value(resp.data.unwrap()).unwrap();
         assert_eq!(snapshot.agents.len(), 2);
         // Sorted alphabetically
         assert_eq!(snapshot.agents[0].name, "worker-1");
@@ -1899,8 +1995,7 @@ mod tests {
             output_lines: None,
         });
         assert!(resp.ok);
-        let snapshot: OrchestratorSnapshot =
-            serde_json::from_value(resp.data.unwrap()).unwrap();
+        let snapshot: OrchestratorSnapshot = serde_json::from_value(resp.data.unwrap()).unwrap();
         // Should only contain the worker, not the orchestrator
         assert_eq!(snapshot.agents.len(), 1);
         assert_eq!(snapshot.agents[0].name, "worker-1");
@@ -1908,16 +2003,13 @@ mod tests {
 
     #[test]
     fn handle_command_orchestrator_context_specific_agents() {
-        let mut runtime = test_runtime(vec![
-            test_agent("a1"), test_agent("a2"), test_agent("a3"),
-        ]);
+        let mut runtime = test_runtime(vec![test_agent("a1"), test_agent("a2"), test_agent("a3")]);
         let resp = runtime.handle_command(DaemonCommand::OrchestratorContext {
             agents: vec!["a1".into(), "a3".into()],
             output_lines: Some(10),
         });
         assert!(resp.ok);
-        let snapshot: OrchestratorSnapshot =
-            serde_json::from_value(resp.data.unwrap()).unwrap();
+        let snapshot: OrchestratorSnapshot = serde_json::from_value(resp.data.unwrap()).unwrap();
         assert_eq!(snapshot.agents.len(), 2);
         assert_eq!(snapshot.agents[0].name, "a1");
         assert_eq!(snapshot.agents[1].name, "a3");
@@ -1941,6 +2033,8 @@ mod tests {
             start: false,
         });
         assert!(!resp.ok, "should reject invalid working_dir");
-        assert!(resp.message.contains("not a directory") || resp.message.contains("does not exist"));
+        assert!(
+            resp.message.contains("not a directory") || resp.message.contains("does not exist")
+        );
     }
 }

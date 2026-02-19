@@ -44,7 +44,10 @@ pub enum DaemonCommand {
     /// Deny a pending permission request for an agent.
     DenyRequest { name: String, request_id: String },
     /// Nudge a stalled agent with an optional message.
-    NudgeAgent { name: String, message: Option<String> },
+    NudgeAgent {
+        name: String,
+        message: Option<String>,
+    },
     /// List pending permission prompts for an agent.
     ListPending { name: String },
     /// Evaluate a tool use against Cedar policy (used by hooks).
@@ -78,9 +81,7 @@ pub enum DaemonCommand {
         task: Option<String>,
     },
     /// Get an agent's full context (role, goal, context, task).
-    GetAgentContext {
-        name: String,
-    },
+    GetAgentContext { name: String },
     /// Enable an agent slot (allows it to be started).
     EnableAgent { name: String },
     /// Disable an agent slot (stops it if running, prevents restart).
@@ -290,6 +291,12 @@ pub struct DaemonPing {
     pub running_count: usize,
     /// Daemon process ID.
     pub daemon_pid: u32,
+    /// Whether the daemon currently has a loaded policy engine for hook checks.
+    #[serde(default)]
+    pub policy_engine_loaded: bool,
+    /// Whether hook evaluation is configured fail-open instead of fail-closed.
+    #[serde(default)]
+    pub hook_fail_open: bool,
 }
 
 /// Client for connecting to the daemon control socket.
@@ -319,34 +326,43 @@ impl DaemonClient {
         use std::io::{BufRead, BufReader, Read, Write};
         use std::os::unix::net::UnixStream;
 
-        let stream = UnixStream::connect(&self.socket_path)
-            .map_err(|e| format!("failed to connect to daemon at {}: {e}", self.socket_path.display()))?;
+        let stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+            format!(
+                "failed to connect to daemon at {}: {e}",
+                self.socket_path.display()
+            )
+        })?;
 
         let timeout = Some(std::time::Duration::from_secs(5));
-        stream.set_read_timeout(timeout)
+        stream
+            .set_read_timeout(timeout)
             .map_err(|e| format!("failed to set read timeout: {e}"))?;
-        stream.set_write_timeout(timeout)
+        stream
+            .set_write_timeout(timeout)
             .map_err(|e| format!("failed to set write timeout: {e}"))?;
 
-        let mut writer = stream.try_clone()
+        let mut writer = stream
+            .try_clone()
             .map_err(|e| format!("failed to clone stream: {e}"))?;
 
         let mut json = serde_json::to_string(command)
             .map_err(|e| format!("failed to serialize command: {e}"))?;
         json.push('\n');
-        writer.write_all(json.as_bytes())
+        writer
+            .write_all(json.as_bytes())
             .map_err(|e| format!("failed to send command: {e}"))?;
-        writer.flush()
+        writer
+            .flush()
             .map_err(|e| format!("failed to flush: {e}"))?;
 
         // Cap at 10 MB to prevent unbounded memory growth from a misbehaving daemon
         let mut reader = BufReader::new(stream.take(10 * 1024 * 1024));
         let mut line = String::new();
-        reader.read_line(&mut line)
+        reader
+            .read_line(&mut line)
             .map_err(|e| format!("failed to read response: {e}"))?;
 
-        serde_json::from_str(&line)
-            .map_err(|e| format!("failed to parse response: {e}"))
+        serde_json::from_str(&line).map_err(|e| format!("failed to parse response: {e}"))
     }
 
     /// Check if the daemon is running by attempting a Ping.
@@ -364,12 +380,26 @@ mod tests {
         let commands = vec![
             DaemonCommand::Ping,
             DaemonCommand::ListAgents,
-            DaemonCommand::AgentStatus { name: "claude-1".into() },
-            DaemonCommand::AgentOutput { name: "claude-1".into(), lines: Some(50) },
-            DaemonCommand::SendToAgent { name: "claude-1".into(), text: "hello".into() },
-            DaemonCommand::StartAgent { name: "claude-1".into() },
-            DaemonCommand::StopAgent { name: "claude-1".into() },
-            DaemonCommand::RestartAgent { name: "claude-1".into() },
+            DaemonCommand::AgentStatus {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::AgentOutput {
+                name: "claude-1".into(),
+                lines: Some(50),
+            },
+            DaemonCommand::SendToAgent {
+                name: "claude-1".into(),
+                text: "hello".into(),
+            },
+            DaemonCommand::StartAgent {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::StopAgent {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::RestartAgent {
+                name: "claude-1".into(),
+            },
             DaemonCommand::AddAgent {
                 config: Box::new(AgentSlotConfig {
                     name: "new-agent".into(),
@@ -394,7 +424,9 @@ mod tests {
                 }),
                 start: true,
             },
-            DaemonCommand::RemoveAgent { name: "claude-1".into() },
+            DaemonCommand::RemoveAgent {
+                name: "claude-1".into(),
+            },
             DaemonCommand::ApproveRequest {
                 name: "claude-1".into(),
                 request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
@@ -407,14 +439,18 @@ mod tests {
                 name: "claude-1".into(),
                 message: Some("wake up".into()),
             },
-            DaemonCommand::ListPending { name: "claude-1".into() },
+            DaemonCommand::ListPending {
+                name: "claude-1".into(),
+            },
             DaemonCommand::EvaluateToolUse {
                 agent: "claude-1".into(),
                 tool_name: "Bash".into(),
                 tool_input: serde_json::json!({"command": "ls -la"}),
             },
             DaemonCommand::FleetGoal { goal: None },
-            DaemonCommand::FleetGoal { goal: Some("Build a chess app".into()) },
+            DaemonCommand::FleetGoal {
+                goal: Some("Build a chess app".into()),
+            },
             DaemonCommand::UpdateAgentContext {
                 name: "claude-1".into(),
                 role: Some("UX specialist".into()),
@@ -422,9 +458,15 @@ mod tests {
                 context: Some("Use Tailwind CSS".into()),
                 task: Some("Build the login page".into()),
             },
-            DaemonCommand::GetAgentContext { name: "claude-1".into() },
-            DaemonCommand::EnableAgent { name: "claude-1".into() },
-            DaemonCommand::DisableAgent { name: "claude-1".into() },
+            DaemonCommand::GetAgentContext {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::EnableAgent {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::DisableAgent {
+                name: "claude-1".into(),
+            },
             DaemonCommand::ReloadConfig,
             DaemonCommand::Shutdown,
             DaemonCommand::OrchestratorContext {
@@ -546,10 +588,14 @@ mod tests {
             agent_count: 4,
             running_count: 3,
             daemon_pid: 5678,
+            policy_engine_loaded: true,
+            hook_fail_open: false,
         };
         let json = serde_json::to_string(&ping).unwrap();
         let back: DaemonPing = serde_json::from_str(&json).unwrap();
         assert_eq!(back.uptime_secs, 3600);
         assert_eq!(back.running_count, 3);
+        assert!(back.policy_engine_loaded);
+        assert!(!back.hook_fail_open);
     }
 }

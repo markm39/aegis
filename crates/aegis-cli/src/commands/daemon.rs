@@ -95,7 +95,10 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
 
     let config_path = daemon_config_path();
     if config_path.exists() {
-        return Ok(format!("daemon.toml already exists at {}", config_path.display()));
+        return Ok(format!(
+            "daemon.toml already exists at {}",
+            config_path.display()
+        ));
     }
 
     let example = DaemonConfig {
@@ -216,8 +219,7 @@ pub fn start() -> anyhow::Result<()> {
     }
 
     // Try to find our own binary path
-    let binary = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("aegis"));
+    let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis"));
 
     // Redirect stdout/stderr to log files so daemon output is not lost.
     // Uses append mode to preserve logs across restarts.
@@ -264,9 +266,7 @@ pub fn start() -> anyhow::Result<()> {
 pub(crate) fn start_quiet() -> anyhow::Result<String> {
     let config_path = daemon_config_path();
     if !config_path.exists() {
-        anyhow::bail!(
-            "No daemon config found. Create one with :daemon init."
-        );
+        anyhow::bail!("No daemon config found. Create one with :daemon init.");
     }
     // Validate config before spawning so errors surface in the TUI command bar,
     // not silently in the background daemon's stderr log.
@@ -281,8 +281,7 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
         }
     }
 
-    let binary = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("aegis"));
+    let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis"));
 
     let log_dir = daemon_dir();
     std::fs::create_dir_all(&log_dir)?;
@@ -478,7 +477,26 @@ pub fn status() -> anyhow::Result<()> {
             println!("Daemon status: running");
             println!("  PID:     {}", ping.daemon_pid);
             println!("  Uptime:  {}s", ping.uptime_secs);
-            println!("  Agents:  {} total, {} running", ping.agent_count, ping.running_count);
+            println!(
+                "  Agents:  {} total, {} running",
+                ping.agent_count, ping.running_count
+            );
+            println!(
+                "  Policy:  {}",
+                if ping.policy_engine_loaded {
+                    "loaded"
+                } else {
+                    "unavailable"
+                }
+            );
+            println!(
+                "  Hook fallback:  {}",
+                if ping.hook_fail_open {
+                    "fail-open (AEGIS_HOOK_FAIL_OPEN)"
+                } else {
+                    "fail-closed"
+                }
+            );
         }
     }
 
@@ -504,8 +522,7 @@ pub fn agents() -> anyhow::Result<()> {
     }
 
     if let Some(data) = response.data {
-        if let Ok(agents) =
-            serde_json::from_value::<Vec<aegis_control::daemon::AgentSummary>>(data)
+        if let Ok(agents) = serde_json::from_value::<Vec<aegis_control::daemon::AgentSummary>>(data)
         {
             if agents.is_empty() {
                 println!("No agents configured.");
@@ -774,11 +791,9 @@ pub fn pending(name: &str) -> anyhow::Result<()> {
 
 /// Install the launchd plist.
 pub fn install(start_after: bool) -> anyhow::Result<()> {
-    let binary = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("aegis"));
+    let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis"));
 
-    persistence::install_launchd(&binary.to_string_lossy())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    persistence::install_launchd(&binary.to_string_lossy()).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let plist = persistence::plist_path();
     println!("Launchd plist installed at: {}", plist.display());
@@ -812,8 +827,7 @@ pub fn uninstall() -> anyhow::Result<()> {
             .args(["unload", &plist.to_string_lossy()])
             .output();
 
-        persistence::uninstall_launchd()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        persistence::uninstall_launchd().map_err(|e| anyhow::anyhow!("{e}"))?;
 
         println!("Launchd plist removed.");
     } else {
@@ -852,7 +866,10 @@ pub fn config_show() -> anyhow::Result<()> {
             if let Some(task) = &agent.task {
                 println!("    Task:     {task}");
             }
-            println!("    Restart:  {:?} (max {})", agent.restart, agent.max_restarts);
+            println!(
+                "    Restart:  {:?} (max {})",
+                agent.restart, agent.max_restarts
+            );
         }
     }
     println!();
@@ -907,7 +924,10 @@ pub fn config_edit() -> anyhow::Result<()> {
     let content = std::fs::read_to_string(&config_path)?;
     match DaemonConfig::from_toml(&content) {
         Ok(cfg) => {
-            println!("Configuration saved and validated ({} agent(s)).", cfg.agents.len());
+            println!(
+                "Configuration saved and validated ({} agent(s)).",
+                cfg.agents.len()
+            );
             println!("Run 'aegis daemon reload' to apply changes without restarting.");
         }
         Err(e) => {
@@ -981,7 +1001,10 @@ pub fn add_agent() -> anyhow::Result<()> {
 
     let tool_name = tool_display_name(&slot.tool);
     println!();
-    println!("Added agent '{name}' ({tool_name}) to {}", config_path.display());
+    println!(
+        "Added agent '{name}' ({tool_name}) to {}",
+        config_path.display()
+    );
 
     // If daemon is running, notify it
     let client = DaemonClient::default_path();
@@ -1110,10 +1133,15 @@ pub fn orchestrator_status(agents: &[String], lines: usize) -> anyhow::Result<()
 
             for agent in &snapshot.agents {
                 // Header line
-                let uptime = agent.uptime_secs
+                let uptime = agent
+                    .uptime_secs
                     .map(|s| format!("{}m", s / 60))
                     .unwrap_or_else(|| "-".to_string());
-                let attention = if agent.attention_needed { " [ATTENTION]" } else { "" };
+                let attention = if agent.attention_needed {
+                    " [ATTENTION]"
+                } else {
+                    ""
+                };
                 let pending = if agent.pending_count > 0 {
                     format!(" ({} pending)", agent.pending_count)
                 } else {
@@ -1170,12 +1198,8 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
         args.push("-f");
     }
 
-    let stdout_str = stdout_log
-        .to_str()
-        .map(|s| s.to_string());
-    let stderr_str = stderr_log
-        .to_str()
-        .map(|s| s.to_string());
+    let stdout_str = stdout_log.to_str().map(|s| s.to_string());
+    let stderr_str = stderr_log.to_str().map(|s| s.to_string());
 
     if stdout_log.exists() {
         if let Some(ref s) = stdout_str {
@@ -1192,9 +1216,7 @@ pub fn logs(follow: bool) -> anyhow::Result<()> {
         }
     }
 
-    let status = std::process::Command::new("tail")
-        .args(&args)
-        .status()?;
+    let status = std::process::Command::new("tail").args(&args).status()?;
 
     if !status.success() {
         anyhow::bail!("tail exited with {status}");
@@ -1215,9 +1237,9 @@ fn colorize_line(line: &str) -> String {
     const MAGENTA: &str = "\x1b[35m";
     const CYAN: &str = "\x1b[36m";
     const DIM: &str = "\x1b[2m";
-    const HOT_PINK: &str = "\x1b[38;2;253;93;177m";    // CC bash border
+    const HOT_PINK: &str = "\x1b[38;2;253;93;177m"; // CC bash border
     const PURPLE_BLUE: &str = "\x1b[38;2;177;185;249m"; // CC permission/search
-    const CLAUDE: &str = "\x1b[38;2;215;119;87m";       // CC brand
+    const CLAUDE: &str = "\x1b[38;2;215;119;87m"; // CC brand
 
     let color = if line.contains("[APPROVED]") {
         GREEN
@@ -1265,10 +1287,13 @@ pub fn follow(name: &str) -> anyhow::Result<()> {
     }
 
     // Verify agent exists and check for tmux attach support
-    let resp = client.send(&DaemonCommand::ListAgents)
+    let resp = client
+        .send(&DaemonCommand::ListAgents)
         .map_err(|e| anyhow::anyhow!(e))?;
     if let Some(data) = &resp.data {
-        if let Ok(agents) = serde_json::from_value::<Vec<aegis_control::daemon::AgentSummary>>(data.clone()) {
+        if let Ok(agents) =
+            serde_json::from_value::<Vec<aegis_control::daemon::AgentSummary>>(data.clone())
+        {
             if let Some(agent) = agents.iter().find(|a| a.name == name) {
                 if let Some(ref attach_cmd) = agent.attach_command {
                     if attach_cmd.len() >= 2 {
@@ -1438,11 +1463,7 @@ pub fn goal(text: Option<&str>) -> anyhow::Result<()> {
 }
 
 /// Get or set agent context fields (role, goal, context, task).
-pub fn context(
-    name: &str,
-    field: Option<&str>,
-    value: Option<&str>,
-) -> anyhow::Result<()> {
+pub fn context(name: &str, field: Option<&str>, value: Option<&str>) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
 
     if !client.is_running() {
@@ -1456,9 +1477,7 @@ pub fn context(
                 "goal" => (None, Some(v.to_string()), None, None),
                 "context" => (None, None, Some(v.to_string()), None),
                 "task" => (None, None, None, Some(v.to_string())),
-                _ => anyhow::bail!(
-                    "Unknown field '{f}'. Valid fields: role, goal, context, task"
-                ),
+                _ => anyhow::bail!("Unknown field '{f}'. Valid fields: role, goal, context, task"),
             };
             let response = client
                 .send(&DaemonCommand::UpdateAgentContext {
@@ -1503,4 +1522,3 @@ pub fn context(
 
     Ok(())
 }
-

@@ -31,6 +31,35 @@ struct HookInput {
     tool_input: serde_json::Value,
 }
 
+/// Whether hook fallback behavior should fail open.
+///
+/// Defaults to fail-closed for safety. Set `AEGIS_HOOK_FAIL_OPEN=1` (or
+/// true/yes/on) only for lower-trust development workflows.
+fn hook_fail_open_enabled() -> bool {
+    std::env::var("AEGIS_HOOK_FAIL_OPEN")
+        .ok()
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+/// Build a fallback verdict for control-plane failures.
+fn fallback_verdict(reason: String) -> ToolUseVerdict {
+    if hook_fail_open_enabled() {
+        ToolUseVerdict {
+            decision: "allow".to_string(),
+            reason: format!("{reason} (allowed due to AEGIS_HOOK_FAIL_OPEN)"),
+        }
+    } else {
+        ToolUseVerdict {
+            decision: "deny".to_string(),
+            reason: format!("{reason} (denied by fail-closed hook policy)"),
+        }
+    }
+}
+
 /// Parse the hook payload from stdin and auto-detect the calling tool.
 ///
 /// Detection uses the `hook_event_name` field:
@@ -152,21 +181,22 @@ fn format_deny(format: HookFormat, tool_name: &str, reason: &str) -> serde_json:
 ///
 /// Reads the hook payload from stdin, auto-detects the format, queries the
 /// daemon for a Cedar policy verdict, and outputs the result in the caller's
-/// expected format. Falls back to allow if the daemon is unreachable (matching
-/// the `--dangerously-skip-permissions` baseline).
+/// expected format. Falls back to fail-closed deny when the daemon is
+/// unreachable unless `AEGIS_HOOK_FAIL_OPEN` is explicitly enabled.
 pub fn pre_tool_use() -> anyhow::Result<()> {
     // Read the hook payload from stdin (capped at 10 MB to prevent memory exhaustion)
     let mut input = String::new();
-    io::stdin().take(10 * 1024 * 1024).read_to_string(&mut input)?;
+    io::stdin()
+        .take(10 * 1024 * 1024)
+        .read_to_string(&mut input)?;
 
-    let payload: serde_json::Value = serde_json::from_str(&input)
-        .unwrap_or_else(|_| serde_json::Value::Null);
+    let payload: serde_json::Value =
+        serde_json::from_str(&input).unwrap_or_else(|_| serde_json::Value::Null);
 
     let hook_input = parse_hook_input(&payload);
 
     // Get agent name from environment (set by the daemon/driver when spawning)
-    let agent_name = std::env::var("AEGIS_AGENT_NAME")
-        .unwrap_or_else(|_| "unknown".to_string());
+    let agent_name = std::env::var("AEGIS_AGENT_NAME").unwrap_or_else(|_| "unknown".to_string());
 
     // Try to reach the daemon for policy evaluation.
     // AEGIS_SOCKET_PATH allows the daemon to point hooks at a non-default socket.
@@ -179,27 +209,17 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
         tool_name: hook_input.tool_name.clone(),
         tool_input: hook_input.tool_input,
     }) {
-        Ok(resp) if resp.ok => {
-            resp.data
-                .and_then(|d| serde_json::from_value::<ToolUseVerdict>(d).ok())
-                .unwrap_or(ToolUseVerdict {
-                    decision: "allow".to_string(),
-                    reason: "could not parse daemon response".to_string(),
-                })
-        }
+        Ok(resp) if resp.ok => resp
+            .data
+            .and_then(|d| serde_json::from_value::<ToolUseVerdict>(d).ok())
+            .unwrap_or_else(|| fallback_verdict("could not parse daemon response".to_string())),
         Ok(resp) => {
             eprintln!("aegis: policy evaluation error: {}", resp.message);
-            ToolUseVerdict {
-                decision: "allow".to_string(),
-                reason: format!("daemon error: {}", resp.message),
-            }
+            fallback_verdict(format!("daemon error: {}", resp.message))
         }
         Err(e) => {
-            eprintln!("aegis: daemon unreachable, defaulting to allow: {e}");
-            ToolUseVerdict {
-                decision: "allow".to_string(),
-                reason: format!("daemon unreachable: {e}"),
-            }
+            eprintln!("aegis: daemon unreachable: {e}");
+            fallback_verdict(format!("daemon unreachable: {e}"))
         }
     };
 
@@ -246,8 +266,7 @@ pub fn install_settings(project_dir: Option<&std::path::Path>) -> anyhow::Result
     let settings_path = base.join(".claude").join("settings.json");
     let already_exists = settings_path.exists();
 
-    hooks::install_project_hooks(&base)
-        .map_err(|e| anyhow::anyhow!(e))?;
+    hooks::install_project_hooks(&base).map_err(|e| anyhow::anyhow!(e))?;
 
     if already_exists {
         // Check if it was a no-op (already installed)
@@ -347,7 +366,10 @@ mod tests {
         assert_eq!(hso["permissionDecision"], "deny");
         let reason = hso["permissionDecisionReason"].as_str().unwrap();
         assert!(reason.contains("Bash"), "reason should mention tool name");
-        assert!(reason.contains("forbidden path"), "reason should include policy reason");
+        assert!(
+            reason.contains("forbidden path"),
+            "reason should include policy reason"
+        );
     }
 
     #[test]
@@ -370,11 +392,16 @@ mod tests {
         assert_eq!(arr.len(), 1);
         // Nested: matcher group -> hooks array -> handler
         let group = &arr[0];
-        let inner = group.get("hooks").expect("matcher group should have hooks array");
+        let inner = group
+            .get("hooks")
+            .expect("matcher group should have hooks array");
         let handlers = inner.as_array().expect("should be array");
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0]["type"].as_str().unwrap(), "command");
-        assert!(handlers[0]["command"].as_str().unwrap().contains("aegis hook"));
+        assert!(handlers[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("aegis hook"));
     }
 
     #[test]
@@ -398,10 +425,8 @@ mod tests {
         install_settings(Some(tmpdir.path())).expect("first install");
         install_settings(Some(tmpdir.path())).expect("second install");
 
-        let content = std::fs::read_to_string(
-            tmpdir.path().join(".claude").join("settings.json"),
-        )
-        .unwrap();
+        let content =
+            std::fs::read_to_string(tmpdir.path().join(".claude").join("settings.json")).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
         let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 1, "should not duplicate hook entry");
@@ -434,9 +459,15 @@ mod tests {
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         // Model should be preserved
-        assert_eq!(settings["model"].as_str().unwrap(), "claude-sonnet-4-5-20250929");
+        assert_eq!(
+            settings["model"].as_str().unwrap(),
+            "claude-sonnet-4-5-20250929"
+        );
         // PostToolUse hook should be preserved
-        assert_eq!(settings["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            settings["hooks"]["PostToolUse"].as_array().unwrap().len(),
+            1
+        );
         // PreToolUse hook should be added
         assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
     }
