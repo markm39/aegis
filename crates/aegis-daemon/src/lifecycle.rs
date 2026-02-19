@@ -285,16 +285,16 @@ fn run_agent_slot_inner(
 
             let prompt = prompt_text.as_deref().unwrap_or("");
             match kind {
-                ProcessKind::Json { tool: ToolKind::ClaudeCode } => {
+                ProcessKind::Json { tool: ToolKind::ClaudeCode, .. } => {
                     info!(agent = name, command = command, "spawning agent via JsonStreamSession");
                     Box::new(
                         JsonStreamSession::spawn(name, &command, &args, &working_dir, &env, prompt)
                             .map_err(|e| format!("failed to spawn json-stream session for {name}: {e}"))?,
                     )
                 }
-                ProcessKind::Json { tool: ToolKind::Codex } => {
+                ProcessKind::Json { tool: ToolKind::Codex, global_args } => {
                     info!(agent = name, command = command, "spawning agent via Codex JSON session");
-                    let protocol = CodexJsonProtocol;
+                    let protocol = CodexJsonProtocol::new(global_args);
                     Box::new(
                         JsonlSession::spawn(name, protocol, &command, &args, &working_dir, &env, prompt)
                             .map_err(|e| format!("failed to spawn codex json session for {name}: {e}"))?,

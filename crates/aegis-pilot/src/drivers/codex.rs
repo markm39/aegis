@@ -26,11 +26,17 @@ impl AgentDriver for CodexDriver {
 
     fn spawn_strategy(&self, _working_dir: &Path) -> SpawnStrategy {
         let mut args = Vec::new();
-        // JSON exec uses a dedicated protocol; only keep relevant flags here.
+        // JSON exec uses a dedicated protocol; only keep relevant exec flags here.
         if self.approval_mode == "full-auto" {
             args.push("--full-auto".to_string());
         }
         args.extend(self.extra_args.iter().cloned());
+
+        let global_args = if self.approval_mode == "full-auto" {
+            Vec::new()
+        } else {
+            vec!["--ask-for-approval".to_string(), "on-request".to_string()]
+        };
 
         let mut env = Vec::new();
         if let Some(ref name) = self.aegis_agent_name {
@@ -46,7 +52,7 @@ impl AgentDriver for CodexDriver {
             command: "codex".to_string(),
             args,
             env,
-            kind: ProcessKind::Json { tool: ToolKind::Codex },
+            kind: ProcessKind::Json { tool: ToolKind::Codex, global_args },
         }
     }
 

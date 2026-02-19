@@ -51,7 +51,7 @@ impl AgentDriver for ClaudeCodeDriver {
             command: "claude".to_string(),
             args,
             env,
-            kind: ProcessKind::Json { tool: ToolKind::ClaudeCode },
+            kind: ProcessKind::Json { tool: ToolKind::ClaudeCode, global_args: Vec::new() },
         }
     }
 

@@ -326,7 +326,15 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
 }
 
 /// Codex JSONL protocol.
-pub struct CodexJsonProtocol;
+pub struct CodexJsonProtocol {
+    global_args: Vec<String>,
+}
+
+impl CodexJsonProtocol {
+    pub fn new(global_args: Vec<String>) -> Self {
+        Self { global_args }
+    }
+}
 
 impl JsonlProtocol for CodexJsonProtocol {
     fn name(&self) -> &str {
@@ -338,7 +346,9 @@ impl JsonlProtocol for CodexJsonProtocol {
     }
 
     fn spawn_args(&self, base_args: &[String], prompt: &str) -> Vec<String> {
-        let mut args = vec!["exec".to_string(), "--json".to_string()];
+        let mut args = Vec::new();
+        args.extend(self.global_args.iter().cloned());
+        args.extend(["exec".to_string(), "--json".to_string()]);
         args.extend(base_args.iter().cloned());
         if !prompt.is_empty() {
             args.push(prompt.to_string());
@@ -347,12 +357,14 @@ impl JsonlProtocol for CodexJsonProtocol {
     }
 
     fn resume_args(&self, base_args: &[String], session_id: &str, prompt: &str) -> Vec<String> {
-        let mut args = vec![
+        let mut args = Vec::new();
+        args.extend(self.global_args.iter().cloned());
+        args.extend([
             "exec".to_string(),
             "resume".to_string(),
             "--json".to_string(),
             session_id.to_string(),
-        ];
+        ]);
         if !prompt.is_empty() {
             args.push(prompt.to_string());
         }

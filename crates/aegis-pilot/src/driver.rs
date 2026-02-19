@@ -34,7 +34,7 @@ pub enum SpawnStrategy {
 #[derive(Debug, Clone)]
 pub enum ProcessKind {
     /// JSONL/structured stream that can be formatted and resumed.
-    Json { tool: ToolKind },
+    Json { tool: ToolKind, global_args: Vec<String> },
     /// Detached GUI/utility process (spawn and do not supervise).
     Detached,
 }
