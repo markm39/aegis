@@ -6,6 +6,8 @@
 pub mod capture;
 pub mod contract;
 pub mod input;
+#[cfg(target_os = "macos")]
+pub mod macos_helper;
 pub mod policy;
 pub mod tui;
 pub mod vision;
@@ -22,6 +24,11 @@ pub enum ToolkitError {
 }
 
 pub type ToolkitResult<T> = Result<T, ToolkitError>;
+
+#[cfg(target_os = "macos")]
+pub fn macos_helper() -> ToolkitResult<macos_helper::MacosHelper> {
+    macos_helper::MacosHelper::spawn()
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FrameMetadata {
