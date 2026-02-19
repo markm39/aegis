@@ -15,7 +15,9 @@ use std::time::Instant;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use aegis_control::daemon::{AgentSummary, DaemonClient, DaemonCommand, PendingPromptSummary};
+use aegis_control::daemon::{
+    AgentSummary, DaemonClient, DaemonCommand, PendingPromptSummary, RuntimeCapabilities,
+};
 use aegis_types::AgentStatus;
 
 use self::event::{AppEvent, EventHandler};
@@ -92,6 +94,8 @@ pub struct FleetApp {
     pub focus_pending: bool,
     /// Whether the detail agent needs attention.
     pub detail_attention: bool,
+    /// Runtime capability/mediation profile for the detail agent.
+    pub detail_runtime: Option<RuntimeCapabilities>,
 
     // -- Command mode --
     /// Whether command mode is active (: bar).
@@ -154,6 +158,7 @@ impl FleetApp {
             pending_selected: 0,
             focus_pending: false,
             detail_attention: false,
+            detail_runtime: None,
             command_mode: false,
             command_buffer: String::new(),
             command_cursor: 0,
@@ -207,8 +212,11 @@ impl FleetApp {
                 self.last_error = None;
                 if let Some(data) = resp.data {
                     self.daemon_uptime_secs = data["uptime_secs"].as_u64().unwrap_or(0);
-                    self.daemon_pid = data["daemon_pid"].as_u64().unwrap_or(0)
-                        .try_into().unwrap_or(0);
+                    self.daemon_pid = data["daemon_pid"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .try_into()
+                        .unwrap_or(0);
                 }
             }
             Ok(resp) => {
@@ -261,8 +269,7 @@ impl FleetApp {
                             }
                         }
                         Err(e) => {
-                            self.last_error =
-                                Some(format!("failed to parse agent list: {e}"));
+                            self.last_error = Some(format!("failed to parse agent list: {e}"));
                         }
                     }
                 }
@@ -278,7 +285,8 @@ impl FleetApp {
         // Fetch fleet goal
         match client.send(&DaemonCommand::FleetGoal { goal: None }) {
             Ok(resp) if resp.ok => {
-                self.fleet_goal = resp.data
+                self.fleet_goal = resp
+                    .data
                     .and_then(|d| d["goal"].as_str().map(|s| s.to_string()))
                     .filter(|s| !s.is_empty());
             }
@@ -315,8 +323,7 @@ impl FleetApp {
                             }
                         }
                         Err(e) => {
-                            self.last_error =
-                                Some(format!("failed to parse agent output: {e}"));
+                            self.last_error = Some(format!("failed to parse agent output: {e}"));
                         }
                     }
                 }
@@ -346,8 +353,7 @@ impl FleetApp {
                             }
                         }
                         Err(e) => {
-                            self.last_error =
-                                Some(format!("failed to parse pending prompts: {e}"));
+                            self.last_error = Some(format!("failed to parse pending prompts: {e}"));
                         }
                     }
                 }
@@ -359,6 +365,21 @@ impl FleetApp {
         if let Some(agent) = self.agents.iter().find(|a| a.name == self.detail_name) {
             self.detail_attention = agent.attention_needed;
         }
+
+        // Fetch runtime capability profile for the detail agent.
+        let caps_cmd = DaemonCommand::RuntimeCapabilities {
+            name: self.detail_name.clone(),
+        };
+        match client.send(&caps_cmd) {
+            Ok(resp) if resp.ok => {
+                self.detail_runtime = resp
+                    .data
+                    .and_then(|d| serde_json::from_value::<RuntimeCapabilities>(d).ok());
+            }
+            _ => {
+                self.detail_runtime = None;
+            }
+        }
     }
 
     /// Handle a key event.
@@ -369,9 +390,7 @@ impl FleetApp {
         }
 
         // Ctrl+C: cancel modal modes, or quit
-        if key.code == KeyCode::Char('c')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if self.command_mode {
                 self.command_mode = false;
                 self.command_buffer.clear();
@@ -415,7 +434,8 @@ impl FleetApp {
         // Route paste to command bar if active
         if self.command_mode {
             let cleaned = text.replace(['\n', '\r'], " ");
-            self.command_buffer.insert_str(self.command_cursor, &cleaned);
+            self.command_buffer
+                .insert_str(self.command_cursor, &cleaned);
             self.command_cursor += cleaned.len();
             self.update_completions();
             return;
@@ -456,6 +476,7 @@ impl FleetApp {
                     self.pending_selected = 0;
                     self.focus_pending = false;
                     self.detail_attention = false;
+                    self.detail_runtime = None;
                     self.view = FleetView::AgentDetail;
                     // Force immediate poll for output
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
@@ -722,7 +743,9 @@ impl FleetApp {
             KeyCode::Char('p') => {
                 // Pop agent into new terminal (tmux attach if available)
                 let agent = self.detail_name.clone();
-                let cmd = self.agents.iter()
+                let cmd = self
+                    .agents
+                    .iter()
                     .find(|a| a.name == agent)
                     .and_then(|a| a.attach_command.as_ref())
                     .map(|parts| parts.join(" "))
@@ -756,24 +779,23 @@ impl FleetApp {
                 self.input_buffer.clear();
                 self.input_cursor = 0;
             }
-            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match c {
-                    'a' => self.input_cursor = 0,
-                    'e' => self.input_cursor = self.input_buffer.len(),
-                    'u' => {
-                        self.input_buffer.drain(..self.input_cursor);
-                        self.input_cursor = 0;
-                    }
-                    'w' => {
-                        if self.input_cursor > 0 {
-                            let new_pos = delete_word_backward_pos(&self.input_buffer, self.input_cursor);
-                            self.input_buffer.drain(new_pos..self.input_cursor);
-                            self.input_cursor = new_pos;
-                        }
-                    }
-                    _ => {}
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+                'a' => self.input_cursor = 0,
+                'e' => self.input_cursor = self.input_buffer.len(),
+                'u' => {
+                    self.input_buffer.drain(..self.input_cursor);
+                    self.input_cursor = 0;
                 }
-            }
+                'w' => {
+                    if self.input_cursor > 0 {
+                        let new_pos =
+                            delete_word_backward_pos(&self.input_buffer, self.input_cursor);
+                        self.input_buffer.drain(new_pos..self.input_cursor);
+                        self.input_cursor = new_pos;
+                    }
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 self.input_buffer.insert(self.input_cursor, c);
                 self.input_cursor += c.len_utf8();
@@ -868,26 +890,25 @@ impl FleetApp {
             KeyCode::Down => {
                 self.history_next();
             }
-            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match c {
-                    'a' => self.command_cursor = 0,
-                    'e' => self.command_cursor = self.command_buffer.len(),
-                    'u' => {
-                        self.command_buffer.drain(..self.command_cursor);
-                        self.command_cursor = 0;
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+                'a' => self.command_cursor = 0,
+                'e' => self.command_cursor = self.command_buffer.len(),
+                'u' => {
+                    self.command_buffer.drain(..self.command_cursor);
+                    self.command_cursor = 0;
+                    self.update_completions();
+                }
+                'w' => {
+                    if self.command_cursor > 0 {
+                        let new_pos =
+                            delete_word_backward_pos(&self.command_buffer, self.command_cursor);
+                        self.command_buffer.drain(new_pos..self.command_cursor);
+                        self.command_cursor = new_pos;
                         self.update_completions();
                     }
-                    'w' => {
-                        if self.command_cursor > 0 {
-                            let new_pos = delete_word_backward_pos(&self.command_buffer, self.command_cursor);
-                            self.command_buffer.drain(new_pos..self.command_cursor);
-                            self.command_cursor = new_pos;
-                            self.update_completions();
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 self.command_buffer.insert(self.command_cursor, c);
                 self.command_cursor += c.len_utf8();
@@ -1088,7 +1109,10 @@ impl FleetApp {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    self.send_and_show_result(DaemonCommand::NudgeAgent { name: agent, message });
+                    self.send_and_show_result(DaemonCommand::NudgeAgent {
+                        name: agent,
+                        message,
+                    });
                 }
             }
             FleetCommand::Pop { agent } => {
@@ -1096,7 +1120,9 @@ impl FleetApp {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
                     // Use the tmux attach command if available, otherwise fall back to follow
-                    let cmd = self.agents.iter()
+                    let cmd = self
+                        .agents
+                        .iter()
                         .find(|a| a.name == agent)
                         .and_then(|a| a.attach_command.as_ref())
                         .map(|parts| parts.join(" "))
@@ -1118,6 +1144,7 @@ impl FleetApp {
                     self.pending_selected = 0;
                     self.focus_pending = false;
                     self.detail_attention = false;
+                    self.detail_runtime = None;
                     self.view = FleetView::AgentDetail;
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                 }
@@ -1155,10 +1182,15 @@ impl FleetApp {
                     {
                         Some(cfg) => match cfg.channel {
                             Some(aegis_types::config::ChannelConfig::Telegram(tg)) => {
-                                let token_preview = crate::tui_utils::truncate_str(&tg.bot_token, 13);
-                                format!("Telegram: configured (token: {token_preview}, chat: {})", tg.chat_id)
+                                let token_preview =
+                                    crate::tui_utils::truncate_str(&tg.bot_token, 13);
+                                format!(
+                                    "Telegram: configured (token: {token_preview}, chat: {})",
+                                    tg.chat_id
+                                )
                             }
-                            None => "Telegram: not configured. Run :telegram setup to configure.".to_string(),
+                            None => "Telegram: not configured. Run :telegram setup to configure."
+                                .to_string(),
                         },
                         None => "Telegram: failed to read daemon.toml".to_string(),
                     }
@@ -1168,12 +1200,12 @@ impl FleetApp {
             FleetCommand::TelegramSetup => {
                 self.spawn_terminal("aegis telegram setup", "Opened Telegram setup wizard");
             }
-            FleetCommand::TelegramDisable => {
-                match crate::commands::telegram::disable_quiet() {
-                    Ok(msg) => self.set_result(msg),
-                    Err(e) => { self.last_error = Some(format!("Failed to disable Telegram: {e}")); }
+            FleetCommand::TelegramDisable => match crate::commands::telegram::disable_quiet() {
+                Ok(msg) => self.set_result(msg),
+                Err(e) => {
+                    self.last_error = Some(format!("Failed to disable Telegram: {e}"));
                 }
-            }
+            },
             FleetCommand::Status => {
                 // Show status as command result
                 let running = self.running_count();
@@ -1208,8 +1240,40 @@ impl FleetApp {
                     self.pending_selected = 0;
                     self.focus_pending = true;
                     self.detail_attention = false;
+                    self.detail_runtime = None;
                     self.view = FleetView::AgentDetail;
                     self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                }
+            }
+            FleetCommand::Capabilities { agent } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::RuntimeCapabilities {
+                        name: agent.clone(),
+                    }) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<RuntimeCapabilities>(data) {
+                                    Ok(caps) => {
+                                        self.set_result(format!(
+                                            "{agent}: mediation={} headless={} ({})",
+                                            caps.policy_mediation,
+                                            caps.headless,
+                                            caps.mediation_note
+                                        ));
+                                    }
+                                    Err(e) => self.set_result(format!(
+                                        "failed to parse capabilities for '{agent}': {e}"
+                                    )),
+                                }
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to query capabilities: {e}")),
+                    }
                 }
             }
             FleetCommand::Wrap { cmd } => {
@@ -1245,18 +1309,13 @@ impl FleetApp {
             FleetCommand::Hook => {
                 self.spawn_terminal("aegis hook install", "Installing hooks in new terminal");
             }
-            FleetCommand::Use { name } => {
-                match name {
-                    Some(n) => self.spawn_terminal(
-                        &format!("aegis use {n}"),
-                        &format!("Switching to config '{n}'"),
-                    ),
-                    None => self.spawn_terminal(
-                        "aegis use",
-                        "Opened config picker in new terminal",
-                    ),
-                }
-            }
+            FleetCommand::Use { name } => match name {
+                Some(n) => self.spawn_terminal(
+                    &format!("aegis use {n}"),
+                    &format!("Switching to config '{n}'"),
+                ),
+                None => self.spawn_terminal("aegis use", "Opened config picker in new terminal"),
+            },
             FleetCommand::Watch { dir } => {
                 let cmd = match dir {
                     Some(d) => format!("aegis watch --dir {}", crate::terminal::shell_quote(&d)),
@@ -1296,45 +1355,45 @@ impl FleetApp {
             FleetCommand::Goal { text } => {
                 self.send_and_show_result(DaemonCommand::FleetGoal { goal: text });
             }
-            FleetCommand::Context { agent, field, value } => {
-                match (field, value) {
-                    (Some(f), Some(v)) => {
-                        let (role, agent_goal, context, task) = match f.as_str() {
-                            "role" => (Some(v), None, None, None),
-                            "goal" => (None, Some(v), None, None),
-                            "context" => (None, None, Some(v), None),
-                            "task" => (None, None, None, Some(v)),
-                            _ => {
-                                self.set_result(format!(
-                                    "unknown field '{f}'. Use: role, goal, context, or task"
-                                ));
-                                return;
-                            }
-                        };
-                        self.send_and_show_result(DaemonCommand::UpdateAgentContext {
-                            name: agent,
-                            role,
-                            agent_goal,
-                            context,
-                            task,
-                        });
-                    }
-                    _ => {
-                        self.send_context_query(&agent);
-                    }
+            FleetCommand::Context {
+                agent,
+                field,
+                value,
+            } => match (field, value) {
+                (Some(f), Some(v)) => {
+                    let (role, agent_goal, context, task) = match f.as_str() {
+                        "role" => (Some(v), None, None, None),
+                        "goal" => (None, Some(v), None, None),
+                        "context" => (None, None, Some(v), None),
+                        "task" => (None, None, None, Some(v)),
+                        _ => {
+                            self.set_result(format!(
+                                "unknown field '{f}'. Use: role, goal, context, or task"
+                            ));
+                            return;
+                        }
+                    };
+                    self.send_and_show_result(DaemonCommand::UpdateAgentContext {
+                        name: agent,
+                        role,
+                        agent_goal,
+                        context,
+                        task,
+                    });
                 }
-            }
-            FleetCommand::DaemonStart => {
-                match crate::commands::daemon::start_quiet() {
-                    Ok(msg) => {
-                        self.set_result(msg);
-                        self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
-                    }
-                    Err(e) => {
-                        self.last_error = Some(format!("Failed to start daemon: {e}"));
-                    }
+                _ => {
+                    self.send_context_query(&agent);
                 }
-            }
+            },
+            FleetCommand::DaemonStart => match crate::commands::daemon::start_quiet() {
+                Ok(msg) => {
+                    self.set_result(msg);
+                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                }
+                Err(e) => {
+                    self.last_error = Some(format!("Failed to start daemon: {e}"));
+                }
+            },
             FleetCommand::DaemonStop => {
                 if !self.connected {
                     self.set_result("Daemon is not running.");
@@ -1350,16 +1409,14 @@ impl FleetApp {
                     }
                 }
             }
-            FleetCommand::DaemonInit => {
-                match crate::commands::daemon::init_quiet() {
-                    Ok(msg) => {
-                        self.set_result(msg);
-                    }
-                    Err(e) => {
-                        self.last_error = Some(format!("{e}"));
-                    }
+            FleetCommand::DaemonInit => match crate::commands::daemon::init_quiet() {
+                Ok(msg) => {
+                    self.set_result(msg);
                 }
-            }
+                Err(e) => {
+                    self.last_error = Some(format!("{e}"));
+                }
+            },
             FleetCommand::DaemonReload => {
                 if !self.connected {
                     self.set_result("Daemon is not running.");
@@ -1518,7 +1575,9 @@ impl FleetApp {
             self.last_error = Some("Not connected to daemon. Use :daemon start".into());
             return;
         };
-        match client.send(&DaemonCommand::GetAgentContext { name: agent.to_string() }) {
+        match client.send(&DaemonCommand::GetAgentContext {
+            name: agent.to_string(),
+        }) {
             Ok(resp) if resp.ok => {
                 if let Some(data) = resp.data {
                     let role = data["role"].as_str().unwrap_or("(none)");
@@ -1552,7 +1611,9 @@ impl FleetApp {
         }
         // Fetch on demand from daemon
         let client = self.client.as_ref()?;
-        let cmd = DaemonCommand::ListPending { name: agent.to_string() };
+        let cmd = DaemonCommand::ListPending {
+            name: agent.to_string(),
+        };
         let resp = client.send(&cmd).ok()?;
         if !resp.ok {
             return None;
@@ -1574,14 +1635,18 @@ impl FleetApp {
     fn spawn_terminal(&mut self, cmd: &str, msg: &str) {
         match crate::terminal::spawn_in_terminal(cmd) {
             Ok(()) => self.set_result(msg),
-            Err(e) => { self.last_error = Some(e); }
+            Err(e) => {
+                self.last_error = Some(e);
+            }
         }
     }
 
     /// Get the selected agent's name (if any).
     #[cfg(test)]
     fn selected_agent_name(&self) -> Option<&str> {
-        self.agents.get(self.agent_selected).map(|a| a.name.as_str())
+        self.agents
+            .get(self.agent_selected)
+            .map(|a| a.name.as_str())
     }
 
     /// Count of running agents.
@@ -1738,7 +1803,10 @@ mod tests {
             },
             AgentSummary {
                 name: "gamma".into(),
-                status: AgentStatus::Failed { exit_code: 1, restart_count: 5 },
+                status: AgentStatus::Failed {
+                    exit_code: 1,
+                    restart_count: 5,
+                },
                 tool: "ClaudeCode".into(),
                 working_dir: "/tmp/gamma".into(),
                 role: None,
@@ -2252,7 +2320,11 @@ mod tests {
         app.command_cursor = 5;
 
         app.handle_key(press(KeyCode::Enter));
-        assert!(app.command_result.as_ref().unwrap().contains("unknown command"));
+        assert!(app
+            .command_result
+            .as_ref()
+            .unwrap()
+            .contains("unknown command"));
     }
 
     #[test]
@@ -2373,7 +2445,11 @@ mod tests {
         app.handle_key(press(KeyCode::Enter));
         // Should stay in overview (not switch to detail)
         assert_eq!(app.view, FleetView::Overview);
-        assert!(app.command_result.as_ref().unwrap().contains("unknown agent"));
+        assert!(app
+            .command_result
+            .as_ref()
+            .unwrap()
+            .contains("unknown agent"));
     }
 
     #[test]
@@ -2426,7 +2502,10 @@ mod tests {
         app.handle_key(ctrl_c());
         assert!(!app.command_mode);
         assert!(app.command_buffer.is_empty());
-        assert!(app.running, "Ctrl+C in command mode should exit mode, not quit");
+        assert!(
+            app.running,
+            "Ctrl+C in command mode should exit mode, not quit"
+        );
     }
 
     #[test]
@@ -2439,7 +2518,10 @@ mod tests {
         app.handle_key(ctrl_c());
         assert!(!app.input_mode);
         assert!(app.input_buffer.is_empty());
-        assert!(app.running, "Ctrl+C in input mode should exit mode, not quit");
+        assert!(
+            app.running,
+            "Ctrl+C in input mode should exit mode, not quit"
+        );
     }
 
     #[test]
@@ -2678,7 +2760,9 @@ mod tests {
     fn send_named_command_shows_error_when_disconnected() {
         let mut app = FleetApp::new(None);
         // client is None since FleetApp::new(None) has no daemon client
-        app.send_named_command(DaemonCommand::StopAgent { name: "test".into() });
+        app.send_named_command(DaemonCommand::StopAgent {
+            name: "test".into(),
+        });
         assert!(app.last_error.is_some());
         assert!(app.last_error.as_ref().unwrap().contains("Not connected"));
     }
@@ -2686,7 +2770,9 @@ mod tests {
     #[test]
     fn send_and_show_result_shows_error_when_disconnected() {
         let mut app = FleetApp::new(None);
-        app.send_and_show_result(DaemonCommand::StopAgent { name: "test".into() });
+        app.send_and_show_result(DaemonCommand::StopAgent {
+            name: "test".into(),
+        });
         assert!(app.last_error.is_some());
         assert!(app.last_error.as_ref().unwrap().contains("Not connected"));
     }
@@ -2765,7 +2851,11 @@ mod tests {
         app.jump_to_next_attention();
         // Should show a message, not crash
         assert!(app.command_result.is_some());
-        assert!(app.command_result.as_ref().unwrap().contains("No agents need attention"));
+        assert!(app
+            .command_result
+            .as_ref()
+            .unwrap()
+            .contains("No agents need attention"));
     }
 
     #[test]

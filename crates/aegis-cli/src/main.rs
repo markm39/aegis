@@ -639,6 +639,12 @@ enum DaemonCommands {
         name: String,
     },
 
+    /// Show runtime capability and policy-mediation coverage for an agent
+    Capabilities {
+        /// Agent name
+        name: String,
+    },
+
     /// Follow (tail) agent output in real time
     Follow {
         /// Agent name
@@ -746,26 +752,35 @@ fn main() -> anyhow::Result<()> {
     };
 
     match command {
-        Commands::Setup => {
-            commands::setup::run()
-        }
+        Commands::Setup => commands::setup::run(),
         Commands::Init { name, policy, dir } => {
             commands::init::run(name.as_deref(), &policy, dir.as_deref())
         }
-        Commands::Run { config, policy, tag, command } => {
+        Commands::Run {
+            config,
+            policy,
+            tag,
+            command,
+        } => {
             eprintln!("Note: `aegis run` is deprecated. Use `aegis wrap` instead (add --seatbelt for sandbox enforcement).");
-            let (cmd, args) = command
-                .split_first()
-                .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis run -- <command> [args...]"))?;
-            commands::wrap::run(None, &policy, config.as_deref(), cmd, args, tag.as_deref(), false)
+            let (cmd, args) = command.split_first().ok_or_else(|| {
+                anyhow::anyhow!("no command specified; usage: aegis run -- <command> [args...]")
+            })?;
+            commands::wrap::run(
+                None,
+                &policy,
+                config.as_deref(),
+                cmd,
+                args,
+                tag.as_deref(),
+                false,
+            )
         }
         Commands::Monitor { config } => {
             let config = resolve_config(config)?;
             commands::monitor::run(&config)
         }
-        Commands::Use { name } => {
-            commands::use_config::run(name.as_deref())
-        }
+        Commands::Use { name } => commands::use_config::run(name.as_deref()),
         Commands::Policy { action } => match action {
             PolicyCommands::Validate { path } => commands::policy::validate(&path),
             PolicyCommands::Import { config, path } => {
@@ -865,9 +880,7 @@ fn main() -> anyhow::Result<()> {
             let config = resolve_config(config)?;
             commands::status::run(&config)
         }
-        Commands::List => {
-            commands::list::run()
-        }
+        Commands::List => commands::list::run(),
         Commands::Log { config, last } => {
             let config = resolve_config(config)?;
             commands::audit::query(
@@ -906,14 +919,9 @@ fn main() -> anyhow::Result<()> {
                 let config = resolve_config(config)?;
                 commands::config::edit(&config)
             }
-        }
+        },
         Commands::Completions { shell } => {
-            clap_complete::generate(
-                shell,
-                &mut Cli::command(),
-                "aegis",
-                &mut std::io::stdout(),
-            );
+            clap_complete::generate(shell, &mut Cli::command(), "aegis", &mut std::io::stdout());
             Ok(())
         }
         Commands::Manpage => {
@@ -944,10 +952,18 @@ fn main() -> anyhow::Result<()> {
             seatbelt,
             command,
         } => {
-            let (cmd, args) = command
-                .split_first()
-                .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis wrap -- <command> [args...]"))?;
-            commands::wrap::run(dir.as_deref(), &policy, name.as_deref(), cmd, args, tag.as_deref(), seatbelt)
+            let (cmd, args) = command.split_first().ok_or_else(|| {
+                anyhow::anyhow!("no command specified; usage: aegis wrap -- <command> [args...]")
+            })?;
+            commands::wrap::run(
+                dir.as_deref(),
+                &policy,
+                name.as_deref(),
+                cmd,
+                args,
+                tag.as_deref(),
+                seatbelt,
+            )
         }
         Commands::Pilot {
             dir,
@@ -960,9 +976,9 @@ fn main() -> anyhow::Result<()> {
             api_key,
             command,
         } => {
-            let (cmd, args) = command
-                .split_first()
-                .ok_or_else(|| anyhow::anyhow!("no command specified; usage: aegis pilot -- <command> [args...]"))?;
+            let (cmd, args) = command.split_first().ok_or_else(|| {
+                anyhow::anyhow!("no command specified; usage: aegis pilot -- <command> [args...]")
+            })?;
             commands::pilot::run(
                 dir.as_deref(),
                 &policy,
@@ -981,9 +997,7 @@ fn main() -> anyhow::Result<()> {
             TelegramCommands::Status => commands::telegram::status(),
             TelegramCommands::Disable => commands::telegram::disable(),
         },
-        Commands::Fleet => {
-            fleet_tui::run_fleet_tui()
-        }
+        Commands::Fleet => fleet_tui::run_fleet_tui(),
         Commands::Daemon { action } => match action {
             DaemonCommands::Init => commands::daemon::init(),
             DaemonCommands::Run { launchd } => commands::daemon::run(launchd),
@@ -1000,55 +1014,30 @@ fn main() -> anyhow::Result<()> {
             },
             DaemonCommands::Add => commands::daemon::add_agent(),
             DaemonCommands::Remove { name } => commands::daemon::remove_agent(&name),
-            DaemonCommands::Output { name, lines } => {
-                commands::daemon::output(&name, lines)
-            }
-            DaemonCommands::Send { name, text } => {
-                commands::daemon::send(&name, &text)
-            }
-            DaemonCommands::StartAgent { name } => {
-                commands::daemon::start_agent(&name)
-            }
-            DaemonCommands::StopAgent { name } => {
-                commands::daemon::stop_agent(&name)
-            }
-            DaemonCommands::RestartAgent { name } => {
-                commands::daemon::restart_agent(&name)
-            }
+            DaemonCommands::Output { name, lines } => commands::daemon::output(&name, lines),
+            DaemonCommands::Send { name, text } => commands::daemon::send(&name, &text),
+            DaemonCommands::StartAgent { name } => commands::daemon::start_agent(&name),
+            DaemonCommands::StopAgent { name } => commands::daemon::stop_agent(&name),
+            DaemonCommands::RestartAgent { name } => commands::daemon::restart_agent(&name),
             DaemonCommands::Approve { name, request_id } => {
                 commands::daemon::approve(&name, &request_id)
             }
-            DaemonCommands::Deny { name, request_id } => {
-                commands::daemon::deny(&name, &request_id)
-            }
+            DaemonCommands::Deny { name, request_id } => commands::daemon::deny(&name, &request_id),
             DaemonCommands::Nudge { name, message } => {
                 commands::daemon::nudge(&name, message.as_deref())
             }
-            DaemonCommands::Pending { name } => {
-                commands::daemon::pending(&name)
-            }
-            DaemonCommands::Follow { name } => {
-                commands::daemon::follow(&name)
-            }
-            DaemonCommands::Enable { name } => {
-                commands::daemon::enable_agent(&name)
-            }
-            DaemonCommands::Disable { name } => {
-                commands::daemon::disable_agent(&name)
-            }
-            DaemonCommands::Goal { text } => {
-                commands::daemon::goal(text.as_deref())
-            }
+            DaemonCommands::Pending { name } => commands::daemon::pending(&name),
+            DaemonCommands::Capabilities { name } => commands::daemon::capabilities(&name),
+            DaemonCommands::Follow { name } => commands::daemon::follow(&name),
+            DaemonCommands::Enable { name } => commands::daemon::enable_agent(&name),
+            DaemonCommands::Disable { name } => commands::daemon::disable_agent(&name),
+            DaemonCommands::Goal { text } => commands::daemon::goal(text.as_deref()),
             DaemonCommands::Context { name, field, value } => {
                 commands::daemon::context(&name, field.as_deref(), value.as_deref())
             }
-            DaemonCommands::Install { start } => {
-                commands::daemon::install(start)
-            }
+            DaemonCommands::Install { start } => commands::daemon::install(start),
             DaemonCommands::Uninstall => commands::daemon::uninstall(),
-            DaemonCommands::Logs { follow } => {
-                commands::daemon::logs(follow)
-            }
+            DaemonCommands::Logs { follow } => commands::daemon::logs(follow),
             DaemonCommands::OrchestratorStatus { agents, lines } => {
                 commands::daemon::orchestrator_status(&agents, lines)
             }
@@ -1056,9 +1045,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Hook { action } => match action {
             HookCommands::PreToolUse => commands::hook::pre_tool_use(),
             HookCommands::ShowSettings => commands::hook::show_settings(),
-            HookCommands::Install { dir } => {
-                commands::hook::install_settings(dir.as_deref())
-            }
+            HookCommands::Install { dir } => commands::hook::install_settings(dir.as_deref()),
         },
         Commands::Watch {
             dir,
@@ -1067,16 +1054,14 @@ fn main() -> anyhow::Result<()> {
             tag,
             idle_timeout,
             stop,
-        } => {
-            commands::watch::run(
-                dir.as_deref(),
-                &policy,
-                name.as_deref(),
-                tag.as_deref(),
-                idle_timeout,
-                stop,
-            )
-        }
+        } => commands::watch::run(
+            dir.as_deref(),
+            &policy,
+            name.as_deref(),
+            tag.as_deref(),
+            idle_timeout,
+            stop,
+        ),
     }
 }
 
@@ -1088,7 +1073,10 @@ mod tests {
     #[test]
     fn cli_parse_init_positional() {
         let cli = Cli::try_parse_from(["aegis", "init", "myagent"]);
-        assert!(cli.is_ok(), "should parse init with positional name: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse init with positional name: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Init { name, policy, dir } => {
@@ -1115,8 +1103,7 @@ mod tests {
 
     #[test]
     fn cli_parse_init_with_policy() {
-        let cli =
-            Cli::try_parse_from(["aegis", "init", "agent2", "--policy", "allow-read-only"]);
+        let cli = Cli::try_parse_from(["aegis", "init", "agent2", "--policy", "allow-read-only"]);
         assert!(cli.is_ok(), "should parse init with policy: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1131,9 +1118,7 @@ mod tests {
 
     #[test]
     fn cli_parse_init_with_dir() {
-        let cli = Cli::try_parse_from([
-            "aegis", "init", "agent3", "--dir", "/tmp/my-project",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "init", "agent3", "--dir", "/tmp/my-project"]);
         assert!(cli.is_ok(), "should parse init with dir: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1147,13 +1132,17 @@ mod tests {
 
     #[test]
     fn cli_parse_run_with_config() {
-        let cli = Cli::try_parse_from([
-            "aegis", "run", "--config", "myagent", "--", "echo", "hello",
-        ]);
+        let cli =
+            Cli::try_parse_from(["aegis", "run", "--config", "myagent", "--", "echo", "hello"]);
         assert!(cli.is_ok(), "should parse run with --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Run { config, policy, tag, command } => {
+            Commands::Run {
+                config,
+                policy,
+                tag,
+                command,
+            } => {
                 assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(policy, "allow-read-only");
                 assert!(tag.is_none());
@@ -1166,7 +1155,13 @@ mod tests {
     #[test]
     fn cli_parse_run_with_tag() {
         let cli = Cli::try_parse_from([
-            "aegis", "run", "--tag", "deploy-v2.1", "--", "echo", "hello",
+            "aegis",
+            "run",
+            "--tag",
+            "deploy-v2.1",
+            "--",
+            "echo",
+            "hello",
         ]);
         assert!(cli.is_ok(), "should parse run with --tag: {cli:?}");
         let cli = cli.unwrap();
@@ -1180,13 +1175,13 @@ mod tests {
 
     #[test]
     fn cli_parse_run_without_config() {
-        let cli = Cli::try_parse_from([
-            "aegis", "run", "--", "echo", "hello",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "run", "--", "echo", "hello"]);
         assert!(cli.is_ok(), "should parse run without --config: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Run { config, command, .. } => {
+            Commands::Run {
+                config, command, ..
+            } => {
                 assert!(config.is_none(), "config should be None when not specified");
                 assert_eq!(command, vec!["echo", "hello"]);
             }
@@ -1197,12 +1192,23 @@ mod tests {
     #[test]
     fn cli_parse_run_with_policy() {
         let cli = Cli::try_parse_from([
-            "aegis", "run", "--policy", "permit-all", "--", "python3", "agent.py",
+            "aegis",
+            "run",
+            "--policy",
+            "permit-all",
+            "--",
+            "python3",
+            "agent.py",
         ]);
         assert!(cli.is_ok(), "should parse run with --policy: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Run { config, policy, command, .. } => {
+            Commands::Run {
+                config,
+                policy,
+                command,
+                ..
+            } => {
                 assert!(config.is_none());
                 assert_eq!(policy, "permit-all");
                 assert_eq!(command, vec!["python3", "agent.py"]);
@@ -1213,12 +1219,7 @@ mod tests {
 
     #[test]
     fn cli_parse_policy_validate() {
-        let cli = Cli::try_parse_from([
-            "aegis",
-            "policy",
-            "validate",
-            "/tmp/test.cedar",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "policy", "validate", "/tmp/test.cedar"]);
         assert!(cli.is_ok(), "should parse policy validate: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1233,9 +1234,7 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_query() {
-        let cli = Cli::try_parse_from([
-            "aegis", "audit", "query", "myagent", "--last", "50",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "audit", "query", "myagent", "--last", "50"]);
         assert!(cli.is_ok(), "should parse audit query: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1291,9 +1290,7 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_sessions() {
-        let cli = Cli::try_parse_from([
-            "aegis", "audit", "sessions", "myagent", "--last", "5",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "audit", "sessions", "myagent", "--last", "5"]);
         assert!(cli.is_ok(), "should parse audit sessions: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1340,7 +1337,10 @@ mod tests {
             "myagent",
             "550e8400-e29b-41d4-a716-446655440000",
         ]);
-        assert!(cli.is_ok(), "should parse audit session with --config: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse audit session with --config: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
@@ -1405,13 +1405,7 @@ mod tests {
     #[test]
     fn cli_parse_audit_purge() {
         // Positional older_than, no config
-        let cli = Cli::try_parse_from([
-            "aegis",
-            "audit",
-            "purge",
-            "30d",
-            "--confirm",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "audit", "purge", "30d", "--confirm"]);
         assert!(cli.is_ok(), "should parse audit purge: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1442,7 +1436,10 @@ mod tests {
             "30d",
             "--confirm",
         ]);
-        assert!(cli.is_ok(), "should parse audit purge with --config: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse audit purge with --config: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
@@ -1479,9 +1476,7 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_watch_with_filter() {
-        let cli = Cli::try_parse_from([
-            "aegis", "audit", "watch", "myagent", "--decision", "Deny",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "audit", "watch", "myagent", "--decision", "Deny"]);
         assert!(cli.is_ok(), "should parse audit watch with filter: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1497,19 +1492,18 @@ mod tests {
 
     #[test]
     fn cli_parse_audit_export() {
-        let cli = Cli::try_parse_from([
-            "aegis",
-            "audit",
-            "export",
-            "myagent",
-            "--format",
-            "csv",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "audit", "export", "myagent", "--format", "csv"]);
         assert!(cli.is_ok(), "should parse audit export: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
-                action: AuditCommands::Export { config, format, follow, .. },
+                action:
+                    AuditCommands::Export {
+                        config,
+                        format,
+                        follow,
+                        ..
+                    },
             } => {
                 assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(format, "csv");
@@ -1522,19 +1516,22 @@ mod tests {
     #[test]
     fn cli_parse_audit_export_follow() {
         let cli = Cli::try_parse_from([
-            "aegis",
-            "audit",
-            "export",
-            "myagent",
-            "--format",
-            "jsonl",
-            "--follow",
+            "aegis", "audit", "export", "myagent", "--format", "jsonl", "--follow",
         ]);
-        assert!(cli.is_ok(), "should parse audit export with follow: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse audit export with follow: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
-                action: AuditCommands::Export { config, format, follow, .. },
+                action:
+                    AuditCommands::Export {
+                        config,
+                        format,
+                        follow,
+                        ..
+                    },
             } => {
                 assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(format, "jsonl");
@@ -1572,20 +1569,14 @@ mod tests {
 
     #[test]
     fn cli_parse_policy_list() {
-        let cli =
-            Cli::try_parse_from(["aegis", "policy", "list", "myagent"]);
+        let cli = Cli::try_parse_from(["aegis", "policy", "list", "myagent"]);
         assert!(cli.is_ok(), "should parse policy list: {cli:?}");
     }
 
     #[test]
     fn cli_parse_policy_import() {
         // Positional path, no config
-        let cli = Cli::try_parse_from([
-            "aegis",
-            "policy",
-            "import",
-            "/tmp/custom.cedar",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "policy", "import", "/tmp/custom.cedar"]);
         assert!(cli.is_ok(), "should parse policy import: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1609,7 +1600,10 @@ mod tests {
             "myagent",
             "/tmp/custom.cedar",
         ]);
-        assert!(cli.is_ok(), "should parse policy import with --config: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse policy import with --config: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Policy {
@@ -1625,13 +1619,7 @@ mod tests {
     #[test]
     fn cli_parse_policy_test() {
         // Positional action and resource, no config
-        let cli = Cli::try_parse_from([
-            "aegis",
-            "policy",
-            "test",
-            "FileRead",
-            "/tmp/test.txt",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "policy", "test", "FileRead", "/tmp/test.txt"]);
         assert!(cli.is_ok(), "should parse policy test: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -1662,7 +1650,10 @@ mod tests {
             "FileRead",
             "/tmp/test.txt",
         ]);
-        assert!(cli.is_ok(), "should parse policy test with --config: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse policy test with --config: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Policy {
@@ -1684,12 +1675,7 @@ mod tests {
     #[test]
     fn cli_parse_policy_generate() {
         // Positional template
-        let cli = Cli::try_parse_from([
-            "aegis",
-            "policy",
-            "generate",
-            "default-deny",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "policy", "generate", "default-deny"]);
         assert!(cli.is_ok(), "should parse policy generate: {cli:?}");
     }
 
@@ -1798,7 +1784,13 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
-                action: AuditCommands::Export { config, format, limit, follow },
+                action:
+                    AuditCommands::Export {
+                        config,
+                        format,
+                        limit,
+                        follow,
+                    },
             } => {
                 assert_eq!(config, Some("myagent".to_string()));
                 assert_eq!(format, "csv");
@@ -2027,7 +2019,10 @@ mod tests {
     #[test]
     fn cli_parse_audit_query_no_config() {
         let cli = Cli::try_parse_from(["aegis", "audit", "query", "--last", "50"]);
-        assert!(cli.is_ok(), "audit query without config should parse: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "audit query without config should parse: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Audit {
@@ -2045,7 +2040,10 @@ mod tests {
         let cli = Cli::try_parse_from(["aegis"]);
         assert!(cli.is_ok(), "bare aegis should parse: {cli:?}");
         let cli = cli.unwrap();
-        assert!(cli.command.is_none(), "command should be None for bare aegis");
+        assert!(
+            cli.command.is_none(),
+            "command should be None for bare aegis"
+        );
     }
 
     #[test]
@@ -2095,20 +2093,13 @@ mod tests {
         let project_dir = tmpdir.path().join("my-project");
         std::fs::create_dir_all(&project_dir).expect("failed to create project dir");
 
-        let result = commands::init::run_in_dir(
-            "dir-agent",
-            "default-deny",
-            &base,
-            Some(&project_dir),
-        );
+        let result =
+            commands::init::run_in_dir("dir-agent", "default-deny", &base, Some(&project_dir));
         assert!(result.is_ok(), "init with --dir should succeed: {result:?}");
 
         let config = commands::init::load_config_from_dir(&base).expect("config should load");
         // sandbox_dir should point to the project dir, not base/sandbox
-        assert_eq!(
-            config.sandbox_dir,
-            project_dir.canonicalize().unwrap(),
-        );
+        assert_eq!(config.sandbox_dir, project_dir.canonicalize().unwrap(),);
         // The dedicated sandbox/ subdir should NOT have been created
         assert!(!base.join("sandbox").exists());
     }
@@ -2178,9 +2169,7 @@ mod tests {
 
     #[test]
     fn cli_parse_watch_stop() {
-        let cli = Cli::try_parse_from([
-            "aegis", "watch", "--name", "myproject", "--stop",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "watch", "--name", "myproject", "--stop"]);
         assert!(cli.is_ok(), "should parse watch --stop: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
@@ -2203,12 +2192,18 @@ mod tests {
     #[test]
     fn cli_parse_daemon_approve() {
         let cli = Cli::try_parse_from([
-            "aegis", "daemon", "approve", "claude-1", "550e8400-e29b-41d4-a716-446655440000",
+            "aegis",
+            "daemon",
+            "approve",
+            "claude-1",
+            "550e8400-e29b-41d4-a716-446655440000",
         ]);
         assert!(cli.is_ok(), "should parse daemon approve: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Approve { name, request_id } } => {
+            Commands::Daemon {
+                action: DaemonCommands::Approve { name, request_id },
+            } => {
                 assert_eq!(name, "claude-1");
                 assert_eq!(request_id, "550e8400-e29b-41d4-a716-446655440000");
             }
@@ -2219,12 +2214,18 @@ mod tests {
     #[test]
     fn cli_parse_daemon_deny() {
         let cli = Cli::try_parse_from([
-            "aegis", "daemon", "deny", "claude-1", "550e8400-e29b-41d4-a716-446655440000",
+            "aegis",
+            "daemon",
+            "deny",
+            "claude-1",
+            "550e8400-e29b-41d4-a716-446655440000",
         ]);
         assert!(cli.is_ok(), "should parse daemon deny: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Deny { name, request_id } } => {
+            Commands::Daemon {
+                action: DaemonCommands::Deny { name, request_id },
+            } => {
                 assert_eq!(name, "claude-1");
                 assert_eq!(request_id, "550e8400-e29b-41d4-a716-446655440000");
             }
@@ -2234,13 +2235,13 @@ mod tests {
 
     #[test]
     fn cli_parse_daemon_nudge() {
-        let cli = Cli::try_parse_from([
-            "aegis", "daemon", "nudge", "claude-1", "wake up",
-        ]);
+        let cli = Cli::try_parse_from(["aegis", "daemon", "nudge", "claude-1", "wake up"]);
         assert!(cli.is_ok(), "should parse daemon nudge: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Nudge { name, message } } => {
+            Commands::Daemon {
+                action: DaemonCommands::Nudge { name, message },
+            } => {
                 assert_eq!(name, "claude-1");
                 assert_eq!(message, Some("wake up".to_string()));
             }
@@ -2251,10 +2252,15 @@ mod tests {
     #[test]
     fn cli_parse_daemon_nudge_no_message() {
         let cli = Cli::try_parse_from(["aegis", "daemon", "nudge", "claude-1"]);
-        assert!(cli.is_ok(), "should parse daemon nudge without message: {cli:?}");
+        assert!(
+            cli.is_ok(),
+            "should parse daemon nudge without message: {cli:?}"
+        );
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Nudge { name, message } } => {
+            Commands::Daemon {
+                action: DaemonCommands::Nudge { name, message },
+            } => {
                 assert_eq!(name, "claude-1");
                 assert!(message.is_none());
             }
@@ -2268,10 +2274,27 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon pending: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Pending { name } } => {
+            Commands::Daemon {
+                action: DaemonCommands::Pending { name },
+            } => {
                 assert_eq!(name, "claude-1");
             }
             _ => panic!("expected Daemon Pending command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_capabilities() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "capabilities", "claude-1"]);
+        assert!(cli.is_ok(), "should parse daemon capabilities: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::Capabilities { name },
+            } => {
+                assert_eq!(name, "claude-1");
+            }
+            _ => panic!("expected Daemon Capabilities command"),
         }
     }
 
@@ -2281,7 +2304,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse telegram setup: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Telegram { action: TelegramCommands::Setup } => {}
+            Commands::Telegram {
+                action: TelegramCommands::Setup,
+            } => {}
             _ => panic!("expected Telegram Setup command"),
         }
     }
@@ -2292,7 +2317,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse telegram status: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Telegram { action: TelegramCommands::Status } => {}
+            Commands::Telegram {
+                action: TelegramCommands::Status,
+            } => {}
             _ => panic!("expected Telegram Status command"),
         }
     }
@@ -2303,7 +2330,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse telegram disable: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Telegram { action: TelegramCommands::Disable } => {}
+            Commands::Telegram {
+                action: TelegramCommands::Disable,
+            } => {}
             _ => panic!("expected Telegram Disable command"),
         }
     }
@@ -2314,7 +2343,12 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon config show: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Show } } => {}
+            Commands::Daemon {
+                action:
+                    DaemonCommands::Config {
+                        action: DaemonConfigCommands::Show,
+                    },
+            } => {}
             _ => panic!("expected Daemon Config Show command"),
         }
     }
@@ -2325,7 +2359,12 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon config edit: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Edit } } => {}
+            Commands::Daemon {
+                action:
+                    DaemonCommands::Config {
+                        action: DaemonConfigCommands::Edit,
+                    },
+            } => {}
             _ => panic!("expected Daemon Config Edit command"),
         }
     }
@@ -2336,7 +2375,12 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon config path: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Config { action: DaemonConfigCommands::Path } } => {}
+            Commands::Daemon {
+                action:
+                    DaemonCommands::Config {
+                        action: DaemonConfigCommands::Path,
+                    },
+            } => {}
             _ => panic!("expected Daemon Config Path command"),
         }
     }
@@ -2347,7 +2391,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon reload: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Reload } => {}
+            Commands::Daemon {
+                action: DaemonCommands::Reload,
+            } => {}
             _ => panic!("expected Daemon Reload command"),
         }
     }
@@ -2358,7 +2404,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon add: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Add } => {}
+            Commands::Daemon {
+                action: DaemonCommands::Add,
+            } => {}
             _ => panic!("expected Daemon Add command"),
         }
     }
@@ -2369,7 +2417,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse daemon remove: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Daemon { action: DaemonCommands::Remove { name } } => {
+            Commands::Daemon {
+                action: DaemonCommands::Remove { name },
+            } => {
                 assert_eq!(name, "claude-1");
             }
             _ => panic!("expected Daemon Remove command"),
@@ -2382,7 +2432,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse hook pre-tool-use: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Hook { action: HookCommands::PreToolUse } => {}
+            Commands::Hook {
+                action: HookCommands::PreToolUse,
+            } => {}
             _ => panic!("expected Hook PreToolUse command"),
         }
     }
@@ -2393,7 +2445,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse hook show-settings: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Hook { action: HookCommands::ShowSettings } => {}
+            Commands::Hook {
+                action: HookCommands::ShowSettings,
+            } => {}
             _ => panic!("expected Hook ShowSettings command"),
         }
     }
@@ -2404,7 +2458,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse hook install: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Hook { action: HookCommands::Install { dir } } => {
+            Commands::Hook {
+                action: HookCommands::Install { dir },
+            } => {
                 assert!(dir.is_none());
             }
             _ => panic!("expected Hook Install command"),
@@ -2417,7 +2473,9 @@ mod tests {
         assert!(cli.is_ok(), "should parse hook install with dir: {cli:?}");
         let cli = cli.unwrap();
         match cli.command.unwrap() {
-            Commands::Hook { action: HookCommands::Install { dir } } => {
+            Commands::Hook {
+                action: HookCommands::Install { dir },
+            } => {
                 assert_eq!(dir, Some(PathBuf::from("/tmp/project")));
             }
             _ => panic!("expected Hook Install command"),

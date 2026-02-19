@@ -789,6 +789,40 @@ pub fn pending(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Show runtime capability and policy-mediation coverage for an agent.
+pub fn capabilities(name: &str) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::RuntimeCapabilities {
+            name: name.to_string(),
+        })
+        .map_err(|e| anyhow::anyhow!("failed to get runtime capabilities: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let caps: aegis_control::daemon::RuntimeCapabilities = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse runtime capabilities: {e}"))?;
+
+        println!("Runtime capabilities for '{}':", caps.name);
+        println!("  Tool:              {}", caps.tool);
+        println!("  Headless:          {}", caps.headless);
+        println!("  Policy mediation:  {}", caps.policy_mediation);
+        println!("  Note:              {}", caps.mediation_note);
+    }
+
+    Ok(())
+}
+
 /// Install the launchd plist.
 pub fn install(start_after: bool) -> anyhow::Result<()> {
     let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis"));

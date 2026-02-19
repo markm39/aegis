@@ -23,7 +23,10 @@ pub enum FleetCommand {
     /// Deny the first pending prompt for an agent.
     Deny { agent: String },
     /// Nudge a stalled agent with optional message.
-    Nudge { agent: String, message: Option<String> },
+    Nudge {
+        agent: String,
+        message: Option<String>,
+    },
     /// Drill into an agent's output (switch to detail view).
     Follow { agent: String },
     /// Pop an agent's output into a new terminal window.
@@ -48,6 +51,8 @@ pub enum FleetCommand {
     Logs,
     /// List pending prompts for an agent.
     Pending { agent: String },
+    /// Show runtime capability/mediation profile for an agent.
+    Capabilities { agent: String },
     /// Wrap a command with Aegis observability in a new terminal.
     Wrap { cmd: String },
     /// Run a sandboxed command in a new terminal.
@@ -75,7 +80,11 @@ pub enum FleetCommand {
     /// View or set the fleet-wide goal.
     Goal { text: Option<String> },
     /// View or set agent context fields (role, goal, context).
-    Context { agent: String, field: Option<String>, value: Option<String> },
+    Context {
+        agent: String,
+        field: Option<String>,
+        value: Option<String>,
+    },
     /// Start the daemon in the background.
     DaemonStart,
     /// Stop the running daemon.
@@ -112,17 +121,69 @@ pub enum FleetCommand {
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
-    "add", "alerts", "approve", "config", "context", "daemon", "deny", "diff", "disable",
-    "enable", "export", "follow", "goal", "help", "hook", "init", "list", "log", "logs",
-    "monitor", "nudge", "orch", "pending", "pilot", "policy", "pop", "q", "quit", "remove",
-    "report", "restart", "run", "send", "sessions", "setup", "start", "status", "stop",
-    "telegram", "use", "verify", "watch", "wrap",
+    "add",
+    "alerts",
+    "approve",
+    "capabilities",
+    "config",
+    "context",
+    "daemon",
+    "deny",
+    "diff",
+    "disable",
+    "enable",
+    "export",
+    "follow",
+    "goal",
+    "help",
+    "hook",
+    "init",
+    "list",
+    "log",
+    "logs",
+    "monitor",
+    "nudge",
+    "orch",
+    "pending",
+    "pilot",
+    "policy",
+    "pop",
+    "q",
+    "quit",
+    "remove",
+    "report",
+    "restart",
+    "run",
+    "send",
+    "sessions",
+    "setup",
+    "start",
+    "status",
+    "stop",
+    "telegram",
+    "use",
+    "verify",
+    "watch",
+    "wrap",
 ];
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
-    "approve", "context", "deny", "disable", "enable", "follow", "nudge", "pending", "pop",
-    "remove", "restart", "send", "start", "stop",
+    "approve",
+    "capabilities",
+    "context",
+    "deny",
+    "disable",
+    "enable",
+    "follow",
+    "nudge",
+    "pending",
+    "pop",
+    "remove",
+    "restart",
+    "send",
+    "start",
+    "stop",
 ];
 
 /// Parse a command string into a `FleetCommand`.
@@ -253,6 +314,13 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Ok(Some(FleetCommand::Pending { agent: arg1.into() }))
             }
         }
+        "capabilities" => {
+            if arg1.is_empty() {
+                Err("usage: capabilities <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Capabilities { agent: arg1.into() }))
+            }
+        }
         "wrap" => {
             if arg1.is_empty() {
                 Err("usage: wrap <command> [args...]".into())
@@ -363,7 +431,16 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
 }
 
 /// Subcommands for `:daemon`.
-const DAEMON_SUBCOMMANDS: &[&str] = &["init", "install", "reload", "restart", "start", "status", "stop", "uninstall"];
+const DAEMON_SUBCOMMANDS: &[&str] = &[
+    "init",
+    "install",
+    "reload",
+    "restart",
+    "start",
+    "status",
+    "stop",
+    "uninstall",
+];
 
 /// Subcommands for `:telegram`.
 const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
@@ -489,6 +566,7 @@ pub fn help_text() -> &'static str {
      :nudge <agent> [msg]     Nudge stalled agent\n\
      :orch                    Orchestrator fleet overview\n\
      :pending <agent>         Show pending prompts\n\
+     :capabilities <agent>    Runtime capability/mediation profile\n\
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
      :pop <agent>             Open agent in new terminal\n\
@@ -531,7 +609,9 @@ mod tests {
     fn parse_start() {
         assert_eq!(
             parse("start claude-1").unwrap(),
-            Some(FleetCommand::Start { agent: "claude-1".into() })
+            Some(FleetCommand::Start {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -544,7 +624,9 @@ mod tests {
     fn parse_stop() {
         assert_eq!(
             parse("stop agent-2").unwrap(),
-            Some(FleetCommand::Stop { agent: "agent-2".into() })
+            Some(FleetCommand::Stop {
+                agent: "agent-2".into()
+            })
         );
     }
 
@@ -581,7 +663,9 @@ mod tests {
     fn parse_approve() {
         assert_eq!(
             parse("approve agent-1").unwrap(),
-            Some(FleetCommand::Approve { agent: "agent-1".into() })
+            Some(FleetCommand::Approve {
+                agent: "agent-1".into()
+            })
         );
     }
 
@@ -589,7 +673,9 @@ mod tests {
     fn parse_deny() {
         assert_eq!(
             parse("deny agent-1").unwrap(),
-            Some(FleetCommand::Deny { agent: "agent-1".into() })
+            Some(FleetCommand::Deny {
+                agent: "agent-1".into()
+            })
         );
     }
 
@@ -619,7 +705,9 @@ mod tests {
     fn parse_follow() {
         assert_eq!(
             parse("follow claude-1").unwrap(),
-            Some(FleetCommand::Follow { agent: "claude-1".into() })
+            Some(FleetCommand::Follow {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -643,7 +731,9 @@ mod tests {
     fn parse_remove() {
         assert_eq!(
             parse("remove claude-1").unwrap(),
-            Some(FleetCommand::Remove { agent: "claude-1".into() })
+            Some(FleetCommand::Remove {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -660,8 +750,14 @@ mod tests {
     #[test]
     fn parse_telegram() {
         assert_eq!(parse("telegram").unwrap(), Some(FleetCommand::Telegram));
-        assert_eq!(parse("telegram setup").unwrap(), Some(FleetCommand::TelegramSetup));
-        assert_eq!(parse("telegram disable").unwrap(), Some(FleetCommand::TelegramDisable));
+        assert_eq!(
+            parse("telegram setup").unwrap(),
+            Some(FleetCommand::TelegramSetup)
+        );
+        assert_eq!(
+            parse("telegram disable").unwrap(),
+            Some(FleetCommand::TelegramDisable)
+        );
         assert!(parse("telegram bogus").is_err());
     }
 
@@ -674,7 +770,9 @@ mod tests {
     fn parse_pop() {
         assert_eq!(
             parse("pop claude-1").unwrap(),
-            Some(FleetCommand::Pop { agent: "claude-1".into() })
+            Some(FleetCommand::Pop {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -755,7 +853,9 @@ mod tests {
     fn parse_pending() {
         assert_eq!(
             parse("pending claude-1").unwrap(),
-            Some(FleetCommand::Pending { agent: "claude-1".into() })
+            Some(FleetCommand::Pending {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -765,10 +865,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_capabilities() {
+        assert_eq!(
+            parse("capabilities claude-1").unwrap(),
+            Some(FleetCommand::Capabilities {
+                agent: "claude-1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_capabilities_missing_agent() {
+        assert!(parse("capabilities").is_err());
+    }
+
+    #[test]
     fn parse_wrap() {
         assert_eq!(
             parse("wrap claude --help").unwrap(),
-            Some(FleetCommand::Wrap { cmd: "claude --help".into() })
+            Some(FleetCommand::Wrap {
+                cmd: "claude --help".into()
+            })
         );
     }
 
@@ -776,7 +893,9 @@ mod tests {
     fn parse_wrap_single_arg() {
         assert_eq!(
             parse("wrap claude").unwrap(),
-            Some(FleetCommand::Wrap { cmd: "claude".into() })
+            Some(FleetCommand::Wrap {
+                cmd: "claude".into()
+            })
         );
     }
 
@@ -789,7 +908,9 @@ mod tests {
     fn parse_run_cmd() {
         assert_eq!(
             parse("run echo hello world").unwrap(),
-            Some(FleetCommand::Run { cmd: "echo hello world".into() })
+            Some(FleetCommand::Run {
+                cmd: "echo hello world".into()
+            })
         );
     }
 
@@ -802,7 +923,9 @@ mod tests {
     fn parse_pilot_cmd() {
         assert_eq!(
             parse("pilot claude").unwrap(),
-            Some(FleetCommand::Pilot { cmd: "claude".into() })
+            Some(FleetCommand::Pilot {
+                cmd: "claude".into()
+            })
         );
     }
 
@@ -835,7 +958,9 @@ mod tests {
     fn parse_use_with_name() {
         assert_eq!(
             parse("use myconfig").unwrap(),
-            Some(FleetCommand::Use { name: Some("myconfig".into()) })
+            Some(FleetCommand::Use {
+                name: Some("myconfig".into())
+            })
         );
     }
 
@@ -855,7 +980,9 @@ mod tests {
         );
         assert_eq!(
             parse("watch /tmp/project").unwrap(),
-            Some(FleetCommand::Watch { dir: Some("/tmp/project".into()) })
+            Some(FleetCommand::Watch {
+                dir: Some("/tmp/project".into())
+            })
         );
     }
 
@@ -999,7 +1126,9 @@ mod tests {
     fn parse_enable() {
         assert_eq!(
             parse("enable claude-1").unwrap(),
-            Some(FleetCommand::Enable { agent: "claude-1".into() })
+            Some(FleetCommand::Enable {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -1012,7 +1141,9 @@ mod tests {
     fn parse_disable() {
         assert_eq!(
             parse("disable claude-1").unwrap(),
-            Some(FleetCommand::Disable { agent: "claude-1".into() })
+            Some(FleetCommand::Disable {
+                agent: "claude-1".into()
+            })
         );
     }
 
@@ -1103,7 +1234,9 @@ mod tests {
     fn parse_export_with_format() {
         assert_eq!(
             parse("export csv").unwrap(),
-            Some(FleetCommand::Export { format: Some("csv".into()) })
+            Some(FleetCommand::Export {
+                format: Some("csv".into())
+            })
         );
     }
 

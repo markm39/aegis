@@ -84,7 +84,7 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),              // Header
-                Constraint::Min(0),                // Main content
+                Constraint::Min(0),                 // Main content
                 Constraint::Length(3),              // Status bar
                 Constraint::Length(cmd_bar_height), // Command bar (dynamic)
             ])
@@ -94,7 +94,7 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // Header
-                Constraint::Min(0),   // Main content
+                Constraint::Min(0),    // Main content
                 Constraint::Length(3), // Status bar
             ])
             .split(frame.area())
@@ -150,7 +150,9 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
     let connection_span = if app.connected {
         Span::styled(
             "CONNECTED",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(
@@ -160,7 +162,12 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
     };
 
     let mut header_spans = vec![
-        Span::styled(" Aegis Fleet ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Aegis Fleet ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         connection_span,
         Span::styled("]", Style::default().fg(Color::DarkGray)),
@@ -174,10 +181,7 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
                 Style::default().fg(Color::Green),
             ),
             Span::styled(" / ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{total} total"),
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(format!("{total} total"), Style::default().fg(Color::White)),
             Span::styled("  PID: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{}", app.daemon_pid),
@@ -192,7 +196,10 @@ fn draw_overview_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
     }
 
     if let Some(ref goal) = app.fleet_goal {
-        header_spans.push(Span::styled("  Goal: ", Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(
+            "  Goal: ",
+            Style::default().fg(Color::DarkGray),
+        ));
         header_spans.push(Span::styled(
             truncate_str(goal, 40),
             Style::default().fg(Color::Yellow),
@@ -232,12 +239,11 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         return;
     }
 
-    let header = Row::new(vec!["", "NAME", "ROLE", "STATUS", "PENDING", "TOOL", "DIR"])
-        .style(
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        );
+    let header = Row::new(vec!["", "NAME", "ROLE", "STATUS", "PENDING", "TOOL", "DIR"]).style(
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows: Vec<Row> = app
         .agents
@@ -285,7 +291,9 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
                 ratatui::widgets::Cell::from(truncate_str(&role, 16)),
                 ratatui::widgets::Cell::from(status_text.to_string()),
                 ratatui::widgets::Cell::from(pending).style(if agent.pending_count > 0 {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 }),
@@ -325,7 +333,12 @@ fn draw_agent_table(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
 fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
     let mut spans = if app.connected {
         vec![
-            Span::styled(" :", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " :",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" cmd  ", Style::default().fg(Color::DarkGray)),
             Span::styled("j/k", Style::default().fg(Color::Yellow)),
             Span::styled(" nav  ", Style::default().fg(Color::DarkGray)),
@@ -336,7 +349,10 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             Span::styled("x", Style::default().fg(Color::Red)),
             Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled("r", Style::default().fg(Color::Yellow)),
-            Span::styled(" start/stop/restart  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " start/stop/restart  ",
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled("a", Style::default().fg(Color::Cyan)),
             Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
             Span::styled("?", Style::default().fg(Color::Cyan)),
@@ -389,31 +405,29 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         .map(|a| status_display(&a.status))
         .unwrap_or(("Unknown".into(), Color::DarkGray));
 
-    let agent_summary = app
-        .agents
-        .iter()
-        .find(|a| a.name == app.detail_name);
+    let agent_summary = app.agents.iter().find(|a| a.name == app.detail_name);
 
-    let tool = agent_summary
-        .map(|a| a.tool.as_str())
-        .unwrap_or("?");
+    let tool = agent_summary.map(|a| a.tool.as_str()).unwrap_or("?");
 
-    let role = agent_summary
-        .and_then(|a| a.role.as_deref());
+    let role = agent_summary.and_then(|a| a.role.as_deref());
     let is_orch = agent_summary.map(|a| a.is_orchestrator).unwrap_or(false);
 
     let mut header_spans = vec![
         Span::styled(" ", Style::default()),
         Span::styled(
             &app.detail_name,
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
 
     if is_orch {
         header_spans.push(Span::styled(
             "  [Orchestrator]",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -441,12 +455,11 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         Span::styled(
             status_text,
-            Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            status_detail,
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(status_detail, Style::default().fg(Color::DarkGray)),
         Span::styled("]  ", Style::default().fg(Color::DarkGray)),
         Span::styled(tool, Style::default().fg(Color::Cyan)),
         Span::styled(
@@ -465,7 +478,9 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     if !app.detail_pending.is_empty() {
         header_spans.push(Span::styled(
             format!("  [{} pending]", app.detail_pending.len()),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -474,6 +489,23 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             "  [ATTENTION]",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
+    }
+
+    if let Some(caps) = &app.detail_runtime {
+        let med_color = match caps.policy_mediation.as_str() {
+            "enforced" => Color::Green,
+            "partial" => Color::Yellow,
+            _ => Color::Red,
+        };
+        header_spans.push(Span::styled(
+            "  [mediation:",
+            Style::default().fg(Color::DarkGray),
+        ));
+        header_spans.push(Span::styled(
+            caps.policy_mediation.as_str(),
+            Style::default().fg(med_color).add_modifier(Modifier::BOLD),
+        ));
+        header_spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
     }
 
     let header_line = Line::from(header_spans);
@@ -586,7 +618,9 @@ fn draw_pending_panel(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
                 "  "
             };
             let style = if i == app.pending_selected && app.focus_pending {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Yellow)
             };
@@ -640,7 +674,12 @@ fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
     };
 
     let line = Line::from(vec![
-        Span::styled(" > ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " > ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(before, Style::default().fg(Color::White)),
         Span::styled(
             cursor_char,
@@ -649,14 +688,12 @@ fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
         Span::styled(after, Style::default().fg(Color::White)),
     ]);
 
-    let bar = Paragraph::new(line)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Send Input ")
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
+    let bar = Paragraph::new(line).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Send Input ")
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     frame.render_widget(bar, area);
 }
 
@@ -681,7 +718,12 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     }
 
     spans.extend([
-        Span::styled(":", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            ":",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" cmd  ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
@@ -700,7 +742,10 @@ fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     ]);
 
     if app.detail_attention {
-        spans.push(Span::styled("  ATTENTION", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            "  ATTENTION",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
     }
 
     let status = Paragraph::new(Line::from(spans)).block(
@@ -722,13 +767,21 @@ fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
         let (cursor_char, after) = if cursor_pos < app.command_buffer.len() {
             let ch = app.command_buffer[cursor_pos..].chars().next().unwrap();
             let end = cursor_pos + ch.len_utf8();
-            (&app.command_buffer[cursor_pos..end], &app.command_buffer[end..])
+            (
+                &app.command_buffer[cursor_pos..end],
+                &app.command_buffer[end..],
+            )
         } else {
             (" ", "")
         };
 
         let mut spans = vec![
-            Span::styled(":", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                ":",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(before, Style::default().fg(Color::White)),
             Span::styled(
                 cursor_char,
@@ -747,10 +800,15 @@ fn draw_command_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Re
                 if app.completion_idx == Some(i) {
                     spans.push(Span::styled(
                         comp.clone(),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 } else {
-                    spans.push(Span::styled(comp.clone(), Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled(
+                        comp.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 }
             }
             if app.command_completions.len() > 5 {
@@ -791,14 +849,19 @@ fn draw_help_view(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
-            Constraint::Min(0),   // Help text
+            Constraint::Min(0),    // Help text
             Constraint::Length(3), // Footer
         ])
         .split(area);
 
     // Header
     let header = Paragraph::new(Line::from(vec![
-        Span::styled(" Aegis Fleet ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Aegis Fleet ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  Help", Style::default().fg(Color::Cyan)),
     ]))
     .block(
@@ -820,7 +883,10 @@ fn draw_help_view(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
                 if parts.len() == 2 {
                     Line::from(vec![
                         Span::styled(parts[0], Style::default().fg(Color::Yellow)),
-                        Span::styled(format!("  {}", parts[1]), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!("  {}", parts[1]),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ])
                 } else {
                     Line::styled(l, Style::default().fg(Color::Yellow))
@@ -864,7 +930,7 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
-            Constraint::Min(0),   // Content
+            Constraint::Min(0),    // Content
             Constraint::Length(3), // Footer
         ])
         .split(area);
@@ -877,7 +943,9 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             " Add Agent ",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  Step {step_num}/{total}"),
@@ -894,11 +962,31 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
     // Content -- depends on current step
     match wiz.step {
         WizardStep::Tool => draw_wizard_tool(frame, wiz, chunks[1]),
-        WizardStep::CustomCommand => draw_wizard_text(frame, "Custom Command (e.g. my-tool --flag)", &wiz.custom_command, wiz.custom_command_cursor, chunks[1]),
+        WizardStep::CustomCommand => draw_wizard_text(
+            frame,
+            "Custom Command (e.g. my-tool --flag)",
+            &wiz.custom_command,
+            wiz.custom_command_cursor,
+            chunks[1],
+        ),
         WizardStep::AgentType => draw_wizard_agent_type(frame, wiz, chunks[1]),
-        WizardStep::Name => draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1]),
-        WizardStep::WorkingDir => draw_wizard_text(frame, "Working Directory", &wiz.working_dir, wiz.working_dir_cursor, chunks[1]),
-        WizardStep::Task => draw_wizard_multiline_text(frame, "Task / Prompt (optional, Enter to skip)", &wiz.task, wiz.task_cursor, chunks[1]),
+        WizardStep::Name => {
+            draw_wizard_text(frame, "Agent Name", &wiz.name, wiz.name_cursor, chunks[1])
+        }
+        WizardStep::WorkingDir => draw_wizard_text(
+            frame,
+            "Working Directory",
+            &wiz.working_dir,
+            wiz.working_dir_cursor,
+            chunks[1],
+        ),
+        WizardStep::Task => draw_wizard_multiline_text(
+            frame,
+            "Task / Prompt (optional, Enter to skip)",
+            &wiz.task,
+            wiz.task_cursor,
+            chunks[1],
+        ),
         WizardStep::Role => {
             let label = if wiz.is_orchestrator() {
                 "Role (e.g. \"Technical Director\")"
@@ -913,11 +1001,35 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
             } else {
                 "Goal (optional, what this agent should achieve)"
             };
-            draw_wizard_multiline_text(frame, label, &wiz.agent_goal, wiz.agent_goal_cursor, chunks[1]);
+            draw_wizard_multiline_text(
+                frame,
+                label,
+                &wiz.agent_goal,
+                wiz.agent_goal_cursor,
+                chunks[1],
+            );
         }
-        WizardStep::Context => draw_wizard_multiline_text(frame, "Context (optional, constraints or instructions)", &wiz.context, wiz.context_cursor, chunks[1]),
-        WizardStep::BacklogPath => draw_wizard_text(frame, "Backlog Path (optional, path to roadmap/backlog file)", &wiz.backlog_path, wiz.backlog_path_cursor, chunks[1]),
-        WizardStep::ReviewInterval => draw_wizard_text(frame, "Review Interval (seconds between review cycles, default: 300)", &wiz.review_interval, wiz.review_interval_cursor, chunks[1]),
+        WizardStep::Context => draw_wizard_multiline_text(
+            frame,
+            "Context (optional, constraints or instructions)",
+            &wiz.context,
+            wiz.context_cursor,
+            chunks[1],
+        ),
+        WizardStep::BacklogPath => draw_wizard_text(
+            frame,
+            "Backlog Path (optional, path to roadmap/backlog file)",
+            &wiz.backlog_path,
+            wiz.backlog_path_cursor,
+            chunks[1],
+        ),
+        WizardStep::ReviewInterval => draw_wizard_text(
+            frame,
+            "Review Interval (seconds between review cycles, default: 300)",
+            &wiz.review_interval,
+            wiz.review_interval_cursor,
+            chunks[1],
+        ),
         WizardStep::RestartPolicy => draw_wizard_restart(frame, wiz, chunks[1]),
         WizardStep::Confirm => draw_wizard_confirm(frame, wiz, chunks[1]),
     }
@@ -933,17 +1045,22 @@ fn draw_wizard(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layout::R
     let footer_spans = if let Some(ref err) = wiz.validation_error {
         vec![
             Span::styled(format!(" {err}"), Style::default().fg(Color::Red)),
-            Span::styled(format!("  {footer_text}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("  {footer_text}"),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]
     } else {
-        vec![Span::styled(format!(" {footer_text}"), Style::default().fg(Color::DarkGray))]
+        vec![Span::styled(
+            format!(" {footer_text}"),
+            Style::default().fg(Color::DarkGray),
+        )]
     };
-    let footer = Paragraph::new(Line::from(footer_spans))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let footer = Paragraph::new(Line::from(footer_spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(footer, chunks[2]);
 }
 
@@ -955,7 +1072,9 @@ fn draw_wizard_tool(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::layo
         .map(|(i, tool)| {
             let marker = if i == wiz.tool_selected { "> " } else { "  " };
             let style = if i == wiz.tool_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -985,9 +1104,15 @@ fn draw_wizard_agent_type(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui
         .iter()
         .enumerate()
         .map(|(i, choice)| {
-            let marker = if i == wiz.agent_type_selected { "> " } else { "  " };
+            let marker = if i == wiz.agent_type_selected {
+                "> "
+            } else {
+                "  "
+            };
             let style = if i == wiz.agent_type_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -1037,24 +1162,19 @@ fn draw_wizard_text(
         Span::styled(before, Style::default().fg(Color::White)),
         Span::styled(
             cursor_char,
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White),
+            Style::default().fg(Color::Black).bg(Color::White),
         ),
         Span::styled(after, Style::default().fg(Color::White)),
     ]);
 
-    let content = Paragraph::new(vec![
-        Line::from(""),
-        input_line,
-    ])
-    .wrap(Wrap { trim: false })
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {label} "))
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
+    let content = Paragraph::new(vec![Line::from(""), input_line])
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {label} "))
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
     frame.render_widget(content, area);
 }
 
@@ -1080,14 +1200,12 @@ fn draw_wizard_multiline_text(
 
     let lines = build_multiline_input(text, cursor, text_style, cursor_style);
 
-    let content = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let content = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(content, area);
 }
 
@@ -1132,10 +1250,7 @@ fn build_multiline_input<'a>(
                     cursor_style,
                 ));
                 if ch_end < segment.len() {
-                    spans.push(Span::styled(
-                        segment[ch_end..].to_string(),
-                        text_style,
-                    ));
+                    spans.push(Span::styled(segment[ch_end..].to_string(), text_style));
                 }
             } else {
                 // Cursor at end of segment
@@ -1160,9 +1275,15 @@ fn draw_wizard_restart(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
         .iter()
         .enumerate()
         .map(|(i, choice)| {
-            let marker = if i == wiz.restart_selected { "> " } else { "  " };
+            let marker = if i == wiz.restart_selected {
+                "> "
+            } else {
+                "  "
+            };
             let style = if i == wiz.restart_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -1216,26 +1337,39 @@ fn draw_wizard_confirm(frame: &mut Frame, wiz: &AddAgentWizard, area: ratatui::l
     if wiz.is_custom_tool() {
         lines.push(Line::from(vec![
             Span::styled("  Command:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(truncate_str(&wiz.custom_command, 60), Style::default().fg(Color::White)),
+            Span::styled(
+                truncate_str(&wiz.custom_command, 60),
+                Style::default().fg(Color::White),
+            ),
         ]));
     }
 
-    let type_color = if wiz.is_orchestrator() { Color::Magenta } else { Color::White };
+    let type_color = if wiz.is_orchestrator() {
+        Color::Magenta
+    } else {
+        Color::White
+    };
     lines.push(Line::from(vec![
         Span::styled("  Type:      ", Style::default().fg(Color::DarkGray)),
-        Span::styled(type_label, Style::default().fg(type_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            type_label,
+            Style::default().fg(type_color).add_modifier(Modifier::BOLD),
+        ),
     ]));
 
     lines.push(Line::from(vec![
-            Span::styled("  Name:      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&wiz.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        ]));
-    lines.extend([
-        Line::from(vec![
-            Span::styled("  Dir:       ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&wiz.working_dir, Style::default().fg(Color::White)),
-        ]),
-    ]);
+        Span::styled("  Name:      ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            &wiz.name,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.extend([Line::from(vec![
+        Span::styled("  Dir:       ", Style::default().fg(Color::DarkGray)),
+        Span::styled(&wiz.working_dir, Style::default().fg(Color::White)),
+    ])]);
 
     // Task only shown for workers
     if !wiz.is_orchestrator() {
@@ -1311,9 +1445,9 @@ fn status_display(status: &AgentStatus) -> (String, Color) {
         AgentStatus::Running { .. } => ("Running".into(), Color::Green),
         AgentStatus::Stopped { .. } => ("Stopped".into(), Color::DarkGray),
         AgentStatus::Pending => ("Pending".into(), Color::Cyan),
-        AgentStatus::Crashed { restart_in_secs, .. } => {
-            (format!("Crashed ({restart_in_secs}s)"), Color::Yellow)
-        }
+        AgentStatus::Crashed {
+            restart_in_secs, ..
+        } => (format!("Crashed ({restart_in_secs}s)"), Color::Yellow),
         AgentStatus::Failed { .. } => ("Failed".into(), Color::Red),
         AgentStatus::Stopping => ("Stopping".into(), Color::Yellow),
         AgentStatus::Disabled => ("Disabled".into(), Color::DarkGray),
@@ -1366,11 +1500,31 @@ mod tests {
 
     #[test]
     fn status_display_variants() {
-        assert_eq!(status_display(&AgentStatus::Running { pid: 1 }).0, "Running");
-        assert_eq!(status_display(&AgentStatus::Stopped { exit_code: 0 }).0, "Stopped");
+        assert_eq!(
+            status_display(&AgentStatus::Running { pid: 1 }).0,
+            "Running"
+        );
+        assert_eq!(
+            status_display(&AgentStatus::Stopped { exit_code: 0 }).0,
+            "Stopped"
+        );
         assert_eq!(status_display(&AgentStatus::Pending).0, "Pending");
-        assert_eq!(status_display(&AgentStatus::Crashed { exit_code: 1, restart_in_secs: 5 }).0, "Crashed (5s)");
-        assert_eq!(status_display(&AgentStatus::Failed { exit_code: 1, restart_count: 3 }).0, "Failed");
+        assert_eq!(
+            status_display(&AgentStatus::Crashed {
+                exit_code: 1,
+                restart_in_secs: 5
+            })
+            .0,
+            "Crashed (5s)"
+        );
+        assert_eq!(
+            status_display(&AgentStatus::Failed {
+                exit_code: 1,
+                restart_count: 3
+            })
+            .0,
+            "Failed"
+        );
         assert_eq!(status_display(&AgentStatus::Stopping).0, "Stopping");
         assert_eq!(status_display(&AgentStatus::Disabled).0, "Disabled");
     }
@@ -1387,20 +1541,18 @@ mod tests {
     fn draw_does_not_panic_with_agents() {
         let mut app = FleetApp::new(None);
         app.connected = true;
-        app.agents = vec![
-            aegis_control::daemon::AgentSummary {
-                name: "test-agent".into(),
-                status: AgentStatus::Running { pid: 42 },
-                tool: "ClaudeCode".into(),
-                working_dir: "/tmp/test".into(),
-                role: None,
-                restart_count: 0,
-                pending_count: 0,
-                attention_needed: false,
-                is_orchestrator: false,
-                attach_command: None,
-            },
-        ];
+        app.agents = vec![aegis_control::daemon::AgentSummary {
+            name: "test-agent".into(),
+            status: AgentStatus::Running { pid: 42 },
+            tool: "ClaudeCode".into(),
+            working_dir: "/tmp/test".into(),
+            role: None,
+            restart_count: 0,
+            pending_count: 0,
+            attention_needed: false,
+            is_orchestrator: false,
+            attach_command: None,
+        }];
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
@@ -1576,9 +1728,9 @@ mod tests {
     #[test]
     fn wrapped_input_height_basic() {
         // 80-wide area, 2 borders = 78 usable columns
-        assert_eq!(wrapped_input_height(0, 80, 6), 3);   // empty: 1 line + 2 borders
-        assert_eq!(wrapped_input_height(78, 80, 6), 3);  // exactly 1 line
-        assert_eq!(wrapped_input_height(79, 80, 6), 4);  // wraps to 2 lines
+        assert_eq!(wrapped_input_height(0, 80, 6), 3); // empty: 1 line + 2 borders
+        assert_eq!(wrapped_input_height(78, 80, 6), 3); // exactly 1 line
+        assert_eq!(wrapped_input_height(79, 80, 6), 4); // wraps to 2 lines
         assert_eq!(wrapped_input_height(156, 80, 6), 4); // exactly 2 lines
         assert_eq!(wrapped_input_height(157, 80, 6), 5); // wraps to 3 lines
     }
