@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use anyhow::{bail, Context};
 
 use aegis_types::daemon::{
-    daemon_config_path, daemon_dir, AgentToolConfig, DaemonConfig,
-    DaemonControlConfig, PersistenceConfig,
+    daemon_config_path, daemon_dir, AgentToolConfig, DaemonConfig, DaemonControlConfig,
+    PersistenceConfig,
 };
 
 /// Run the unified onboarding wizard.
@@ -42,8 +42,7 @@ pub fn run() -> anyhow::Result<()> {
     }
 
     let dir = daemon_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     // Write Cedar policy file if the security preset generated one.
     if let Some(ref policy_text) = result.policy_text {
@@ -94,8 +93,7 @@ pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
     println!("    [1] Claude Code");
     println!("    [2] Codex");
     println!("    [3] OpenClaw");
-    println!("    [4] Cursor (observe-only)");
-    println!("    [5] Custom");
+    println!("    [4] Custom");
 
     let choice = prompt("  Choice", "1")?;
     let tool = match choice.as_str() {
@@ -113,10 +111,7 @@ pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
             agent_name: None,
             extra_args: vec![],
         },
-        "4" => AgentToolConfig::Cursor {
-            assume_running: false,
-        },
-        "5" => {
+        "4" => {
             let input = prompt("  Command (e.g., /usr/local/bin/my-agent --flag)", "")?;
             if input.is_empty() {
                 bail!("command cannot be empty for custom tool");
@@ -155,8 +150,7 @@ pub(crate) fn prompt_agent_name() -> anyhow::Result<String> {
 
 /// Prompt for working directory, defaulting to CWD.
 pub(crate) fn prompt_working_dir() -> anyhow::Result<PathBuf> {
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let default = cwd.display().to_string();
 
     loop {
@@ -196,9 +190,9 @@ fn prompt(label: &str, default: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::daemon::tool_display_name;
     use aegis_types::config::{ChannelConfig, TelegramConfig};
     use aegis_types::daemon::{AgentSlotConfig, RestartPolicy};
-    use crate::commands::daemon::tool_display_name;
 
     #[test]
     fn tool_display_names() {

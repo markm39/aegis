@@ -1126,7 +1126,6 @@ pub(crate) fn tool_display_name(tool: &AgentToolConfig) -> &str {
         AgentToolConfig::ClaudeCode { .. } => "Claude Code",
         AgentToolConfig::Codex { .. } => "Codex",
         AgentToolConfig::OpenClaw { .. } => "OpenClaw",
-        AgentToolConfig::Cursor { .. } => "Cursor",
         AgentToolConfig::Custom { .. } => "Custom",
     }
 }

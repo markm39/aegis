@@ -82,6 +82,7 @@ dependencies = [
 name = "aegis-control"
 version = "0.1.0"
 dependencies = [
+ "aegis-toolkit",
  "aegis-types",
  "axum",
  "chrono",
@@ -106,6 +107,7 @@ dependencies = [
  "aegis-pilot",
  "aegis-policy",
  "aegis-proxy",
+ "aegis-toolkit",
  "aegis-types",
  "anyhow",
  "chrono",
@@ -263,6 +265,15 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "aegis-toolkit"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

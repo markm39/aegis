@@ -68,12 +68,6 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
             "enforced".to_string(),
             "Cedar policy checks are enforced via PreToolUse hooks".to_string(),
         ),
-        AgentToolConfig::Cursor { .. } => (
-            "Cursor".to_string(),
-            false,
-            "enforced".to_string(),
-            "Cedar policy checks are enforced via Cursor hooks".to_string(),
-        ),
         AgentToolConfig::Codex { .. } => (
             "Codex".to_string(),
             true,
@@ -780,6 +774,39 @@ impl DaemonRuntime {
                 }
             }
 
+            DaemonCommand::ExecuteToolAction {
+                ref name,
+                ref action,
+            } => {
+                let _ = name;
+                let _ = action;
+                DaemonResponse::error(
+                    "computer-use runtime unavailable; denied by fail-closed policy mediation",
+                )
+            }
+
+            DaemonCommand::StartCaptureSession {
+                ref name,
+                ref request,
+            } => {
+                let _ = name;
+                let _ = request;
+                DaemonResponse::error(
+                    "capture runtime unavailable; denied by fail-closed policy mediation",
+                )
+            }
+
+            DaemonCommand::StopCaptureSession {
+                ref name,
+                ref session_id,
+            } => {
+                let _ = name;
+                let _ = session_id;
+                DaemonResponse::error(
+                    "capture runtime unavailable; denied by fail-closed policy mediation",
+                )
+            }
+
             DaemonCommand::FleetGoal { ref goal } => {
                 match goal {
                     Some(new_goal) => {
@@ -1356,6 +1383,7 @@ fn compose_autonomy_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aegis_toolkit::contract::{MouseButton, ToolAction};
     use aegis_types::daemon::{
         AgentSlotConfig, AgentToolConfig, DaemonControlConfig, PersistenceConfig, RestartPolicy,
     };
@@ -1598,6 +1626,46 @@ mod tests {
         assert_eq!(caps.tool, "ClaudeCode");
         assert_eq!(caps.policy_mediation, "enforced");
         assert!(caps.headless);
+    }
+
+    #[test]
+    fn handle_command_execute_tool_action_fail_closed() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::ExecuteToolAction {
+            name: "a1".into(),
+            action: ToolAction::MouseClick {
+                x: 100,
+                y: 200,
+                button: MouseButton::Left,
+            },
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("fail-closed"));
+    }
+
+    #[test]
+    fn handle_command_start_capture_session_fail_closed() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::StartCaptureSession {
+            name: "a1".into(),
+            request: aegis_control::daemon::CaptureSessionRequest {
+                target_fps: 30,
+                region: None,
+            },
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("fail-closed"));
+    }
+
+    #[test]
+    fn handle_command_stop_capture_session_fail_closed() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::StopCaptureSession {
+            name: "a1".into(),
+            session_id: "cap-1".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("fail-closed"));
     }
 
     #[test]

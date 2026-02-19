@@ -6,7 +6,6 @@
 
 pub mod claude_code;
 pub mod codex;
-pub mod cursor;
 pub mod custom;
 pub mod openclaw;
 
@@ -21,42 +20,44 @@ use crate::driver::AgentDriver;
 /// the daemon for Cedar policy evaluation.
 pub fn create_driver(config: &AgentToolConfig, agent_name: Option<&str>) -> Box<dyn AgentDriver> {
     match config {
-        AgentToolConfig::ClaudeCode { one_shot, extra_args, .. } => {
-            Box::new(claude_code::ClaudeCodeDriver {
-                agent_name: agent_name.map(|s| s.to_string()),
-                one_shot: *one_shot,
-                extra_args: extra_args.clone(),
-            })
-        }
-        AgentToolConfig::Codex { approval_mode, one_shot, extra_args } => {
-            Box::new(codex::CodexDriver {
-                aegis_agent_name: agent_name.map(|s| s.to_string()),
-                approval_mode: approval_mode.clone(),
-                one_shot: *one_shot,
-                extra_args: extra_args.clone(),
-            })
-        }
-        AgentToolConfig::OpenClaw { agent_name: oc_name, extra_args } => {
-            Box::new(openclaw::OpenClawDriver {
-                aegis_agent_name: agent_name.map(|s| s.to_string()),
-                agent_name: oc_name.clone(),
-                extra_args: extra_args.clone(),
-            })
-        }
-        AgentToolConfig::Cursor { assume_running } => {
-            Box::new(cursor::CursorDriver {
-                aegis_agent_name: agent_name.map(|s| s.to_string()),
-                assume_running: *assume_running,
-            })
-        }
-        AgentToolConfig::Custom { command, args, adapter, env } => {
-            Box::new(custom::CustomDriver {
-                command: command.clone(),
-                args: args.clone(),
-                adapter: adapter.clone(),
-                env: env.clone(),
-            })
-        }
+        AgentToolConfig::ClaudeCode {
+            one_shot,
+            extra_args,
+            ..
+        } => Box::new(claude_code::ClaudeCodeDriver {
+            agent_name: agent_name.map(|s| s.to_string()),
+            one_shot: *one_shot,
+            extra_args: extra_args.clone(),
+        }),
+        AgentToolConfig::Codex {
+            approval_mode,
+            one_shot,
+            extra_args,
+        } => Box::new(codex::CodexDriver {
+            aegis_agent_name: agent_name.map(|s| s.to_string()),
+            approval_mode: approval_mode.clone(),
+            one_shot: *one_shot,
+            extra_args: extra_args.clone(),
+        }),
+        AgentToolConfig::OpenClaw {
+            agent_name: oc_name,
+            extra_args,
+        } => Box::new(openclaw::OpenClawDriver {
+            aegis_agent_name: agent_name.map(|s| s.to_string()),
+            agent_name: oc_name.clone(),
+            extra_args: extra_args.clone(),
+        }),
+        AgentToolConfig::Custom {
+            command,
+            args,
+            adapter,
+            env,
+        } => Box::new(custom::CustomDriver {
+            command: command.clone(),
+            args: args.clone(),
+            adapter: adapter.clone(),
+            env: env.clone(),
+        }),
     }
 }
 
@@ -96,14 +97,6 @@ mod tests {
         };
         let driver = create_driver(&config, None);
         assert_eq!(driver.name(), "OpenClaw");
-    }
-
-    #[test]
-    fn create_cursor_driver() {
-        let config = AgentToolConfig::Cursor { assume_running: true };
-        let driver = create_driver(&config, None);
-        assert_eq!(driver.name(), "Cursor");
-        assert!(!driver.supports_headless());
     }
 
     #[test]

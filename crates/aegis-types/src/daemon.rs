@@ -169,12 +169,6 @@ pub enum AgentToolConfig {
         #[serde(default)]
         extra_args: Vec<String>,
     },
-    /// Cursor editor (observe-only; Aegis monitors but does not control).
-    Cursor {
-        /// Assume Cursor is already running (don't try to spawn).
-        #[serde(default)]
-        assume_running: bool,
-    },
     /// Custom command with user-specified adapter.
     Custom {
         /// Command to execute.
@@ -245,7 +239,10 @@ impl Default for DaemonControlConfig {
 
 fn default_socket_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".aegis").join("daemon").join("daemon.sock")
+    PathBuf::from(home)
+        .join(".aegis")
+        .join("daemon")
+        .join("daemon.sock")
 }
 
 /// Runtime status of a single agent slot.
@@ -290,10 +287,19 @@ impl std::fmt::Display for AgentStatus {
             AgentStatus::Pending => write!(f, "Pending"),
             AgentStatus::Running { pid } => write!(f, "Running (pid {pid})"),
             AgentStatus::Stopped { exit_code } => write!(f, "Stopped (exit {exit_code})"),
-            AgentStatus::Crashed { exit_code, restart_in_secs } => {
-                write!(f, "Crashed (exit {exit_code}, restart in {restart_in_secs}s)")
+            AgentStatus::Crashed {
+                exit_code,
+                restart_in_secs,
+            } => {
+                write!(
+                    f,
+                    "Crashed (exit {exit_code}, restart in {restart_in_secs}s)"
+                )
             }
-            AgentStatus::Failed { exit_code, restart_count } => {
+            AgentStatus::Failed {
+                exit_code,
+                restart_count,
+            } => {
                 write!(f, "Failed (exit {exit_code}, {restart_count} restarts)")
             }
             AgentStatus::Stopping => write!(f, "Stopping"),
@@ -411,9 +417,6 @@ mod tests {
                 agent_name: Some("builder".into()),
                 extra_args: vec![],
             },
-            AgentToolConfig::Cursor {
-                assume_running: true,
-            },
             AgentToolConfig::Custom {
                 command: "my-agent".into(),
                 args: vec!["--mode".into(), "auto".into()],
@@ -447,11 +450,19 @@ mod tests {
             "Stopped (exit 0)"
         );
         assert_eq!(
-            AgentStatus::Crashed { exit_code: 1, restart_in_secs: 10 }.to_string(),
+            AgentStatus::Crashed {
+                exit_code: 1,
+                restart_in_secs: 10
+            }
+            .to_string(),
             "Crashed (exit 1, restart in 10s)"
         );
         assert_eq!(
-            AgentStatus::Failed { exit_code: 1, restart_count: 5 }.to_string(),
+            AgentStatus::Failed {
+                exit_code: 1,
+                restart_count: 5
+            }
+            .to_string(),
             "Failed (exit 1, 5 restarts)"
         );
         assert_eq!(AgentStatus::Disabled.to_string(), "Disabled");
@@ -503,7 +514,10 @@ mod tests {
             type = "claude_code"
         "#;
         let result = DaemonConfig::from_toml(toml_str);
-        assert!(result.is_err(), "path traversal in agent name should be rejected");
+        assert!(
+            result.is_err(),
+            "path traversal in agent name should be rejected"
+        );
 
         let toml_str = r#"
             [[agents]]

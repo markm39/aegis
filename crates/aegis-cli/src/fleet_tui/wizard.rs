@@ -98,10 +98,8 @@ pub enum AgentTypeChoice {
 }
 
 impl AgentTypeChoice {
-    pub const ALL: &'static [AgentTypeChoice] = &[
-        AgentTypeChoice::Worker,
-        AgentTypeChoice::Orchestrator,
-    ];
+    pub const ALL: &'static [AgentTypeChoice] =
+        &[AgentTypeChoice::Worker, AgentTypeChoice::Orchestrator];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -113,7 +111,9 @@ impl AgentTypeChoice {
     pub fn description(&self) -> &'static str {
         match self {
             AgentTypeChoice::Worker => "Writes code, implements features, fixes bugs",
-            AgentTypeChoice::Orchestrator => "Reviews worker output, assigns tasks, never writes code",
+            AgentTypeChoice::Orchestrator => {
+                "Reviews worker output, assigns tasks, never writes code"
+            }
         }
     }
 }
@@ -124,7 +124,6 @@ pub enum ToolChoice {
     ClaudeCode,
     Codex,
     OpenClaw,
-    Cursor,
     Custom,
 }
 
@@ -133,7 +132,6 @@ impl ToolChoice {
         ToolChoice::ClaudeCode,
         ToolChoice::Codex,
         ToolChoice::OpenClaw,
-        ToolChoice::Cursor,
         ToolChoice::Custom,
     ];
 
@@ -142,7 +140,6 @@ impl ToolChoice {
             ToolChoice::ClaudeCode => "Claude Code",
             ToolChoice::Codex => "Codex",
             ToolChoice::OpenClaw => "OpenClaw",
-            ToolChoice::Cursor => "Cursor",
             ToolChoice::Custom => "Custom command",
         }
     }
@@ -152,7 +149,6 @@ impl ToolChoice {
             ToolChoice::ClaudeCode => "Anthropic Claude Code CLI agent",
             ToolChoice::Codex => "OpenAI Codex CLI agent",
             ToolChoice::OpenClaw => "OpenClaw autonomous agent",
-            ToolChoice::Cursor => "Cursor editor (observe-only monitoring)",
             ToolChoice::Custom => "Run a custom command with Aegis supervision",
         }
     }
@@ -460,7 +456,8 @@ impl AddAgentWizard {
                     self.completed = true;
                     self.active = false;
                 } else {
-                    self.validation_error = Some("invalid configuration -- please review all fields".into());
+                    self.validation_error =
+                        Some("invalid configuration -- please review all fields".into());
                 }
                 true
             }
@@ -475,7 +472,9 @@ impl AddAgentWizard {
     /// Handle text input with cursor support.
     fn handle_text_key(&mut self, key: KeyEvent, target: TextTarget) -> bool {
         let (text, cursor) = match target {
-            TextTarget::CustomCommand => (&mut self.custom_command, &mut self.custom_command_cursor),
+            TextTarget::CustomCommand => {
+                (&mut self.custom_command, &mut self.custom_command_cursor)
+            }
             TextTarget::Name => (&mut self.name, &mut self.name_cursor),
             TextTarget::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor),
             TextTarget::Task => (&mut self.task, &mut self.task_cursor),
@@ -483,7 +482,9 @@ impl AddAgentWizard {
             TextTarget::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor),
             TextTarget::Context => (&mut self.context, &mut self.context_cursor),
             TextTarget::BacklogPath => (&mut self.backlog_path, &mut self.backlog_path_cursor),
-            TextTarget::ReviewInterval => (&mut self.review_interval, &mut self.review_interval_cursor),
+            TextTarget::ReviewInterval => {
+                (&mut self.review_interval, &mut self.review_interval_cursor)
+            }
         };
 
         match key.code {
@@ -511,7 +512,8 @@ impl AddAgentWizard {
                     WizardStep::WorkingDir => {
                         let trimmed = self.working_dir.trim();
                         if trimmed.is_empty() {
-                            self.validation_error = Some("working directory cannot be empty".into());
+                            self.validation_error =
+                                Some("working directory cannot be empty".into());
                             return true;
                         }
                         let path = std::path::Path::new(trimmed);
@@ -573,29 +575,24 @@ impl AddAgentWizard {
             }
             KeyCode::Tab => {
                 // Same as Enter for text fields
-                return self.handle_text_key(
-                    KeyEvent::new(KeyCode::Enter, key.modifiers),
-                    target,
-                );
+                return self.handle_text_key(KeyEvent::new(KeyCode::Enter, key.modifiers), target);
             }
-            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match c {
-                    'a' => *cursor = 0,
-                    'e' => *cursor = text.len(),
-                    'u' => {
-                        text.drain(..*cursor);
-                        *cursor = 0;
-                    }
-                    'w' => {
-                        if *cursor > 0 {
-                            let new_pos = super::delete_word_backward_pos(text, *cursor);
-                            text.drain(new_pos..*cursor);
-                            *cursor = new_pos;
-                        }
-                    }
-                    _ => {}
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+                'a' => *cursor = 0,
+                'e' => *cursor = text.len(),
+                'u' => {
+                    text.drain(..*cursor);
+                    *cursor = 0;
                 }
-            }
+                'w' => {
+                    if *cursor > 0 {
+                        let new_pos = super::delete_word_backward_pos(text, *cursor);
+                        text.drain(new_pos..*cursor);
+                        *cursor = new_pos;
+                    }
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 text.insert(*cursor, c);
                 *cursor += c.len_utf8();
@@ -654,13 +651,13 @@ impl AddAgentWizard {
     /// Multi-line fields (task, role, goal) preserve newlines.
     pub fn handle_paste(&mut self, text: &str) -> bool {
         let (buf, cursor, multiline) = match self.step {
-            WizardStep::CustomCommand => {
-                (&mut self.custom_command, &mut self.custom_command_cursor, false)
-            }
+            WizardStep::CustomCommand => (
+                &mut self.custom_command,
+                &mut self.custom_command_cursor,
+                false,
+            ),
             WizardStep::Name => (&mut self.name, &mut self.name_cursor, false),
-            WizardStep::WorkingDir => {
-                (&mut self.working_dir, &mut self.working_dir_cursor, false)
-            }
+            WizardStep::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor, false),
             WizardStep::Task => (&mut self.task, &mut self.task_cursor, true),
             WizardStep::Role => (&mut self.role, &mut self.role_cursor, true),
             WizardStep::AgentGoal => (&mut self.agent_goal, &mut self.agent_goal_cursor, true),
@@ -668,9 +665,11 @@ impl AddAgentWizard {
             WizardStep::BacklogPath => {
                 (&mut self.backlog_path, &mut self.backlog_path_cursor, false)
             }
-            WizardStep::ReviewInterval => {
-                (&mut self.review_interval, &mut self.review_interval_cursor, false)
-            }
+            WizardStep::ReviewInterval => (
+                &mut self.review_interval,
+                &mut self.review_interval_cursor,
+                false,
+            ),
             _ => return false,
         };
 
@@ -697,7 +696,8 @@ impl AddAgentWizard {
 
     /// Get the selected agent type choice (bounds-checked).
     pub fn agent_type_choice(&self) -> AgentTypeChoice {
-        AgentTypeChoice::ALL.get(self.agent_type_selected)
+        AgentTypeChoice::ALL
+            .get(self.agent_type_selected)
             .copied()
             .unwrap_or(AgentTypeChoice::Worker)
     }
@@ -706,9 +706,7 @@ impl AddAgentWizard {
     pub fn is_valid(&self) -> bool {
         let wd = self.working_dir.trim();
         let name_valid = aegis_types::validate_config_name(self.name.trim()).is_ok();
-        let base = name_valid
-            && !wd.is_empty()
-            && std::path::Path::new(wd).is_dir();
+        let base = name_valid && !wd.is_empty() && std::path::Path::new(wd).is_dir();
         if self.is_custom_tool() {
             base && !self.custom_command.trim().is_empty()
         } else {
@@ -718,14 +716,16 @@ impl AddAgentWizard {
 
     /// Get the selected tool choice (bounds-checked).
     pub fn tool_choice(&self) -> ToolChoice {
-        ToolChoice::ALL.get(self.tool_selected)
+        ToolChoice::ALL
+            .get(self.tool_selected)
             .copied()
             .unwrap_or(ToolChoice::ClaudeCode)
     }
 
     /// Get the selected restart choice (bounds-checked).
     pub fn restart_choice(&self) -> RestartChoice {
-        RestartChoice::ALL.get(self.restart_selected)
+        RestartChoice::ALL
+            .get(self.restart_selected)
             .copied()
             .unwrap_or(RestartChoice::OnFailure)
     }
@@ -746,9 +746,6 @@ impl AddAgentWizard {
             ToolChoice::OpenClaw => AgentToolConfig::OpenClaw {
                 agent_name: None,
                 extra_args: vec![],
-            },
-            ToolChoice::Cursor => AgentToolConfig::Cursor {
-                assume_running: false,
             },
             ToolChoice::Custom => {
                 // Split "command --flag1 --flag2" into command + args
@@ -806,9 +803,7 @@ impl AddAgentWizard {
             } else {
                 Some(PathBuf::from(self.backlog_path.trim()))
             };
-            let interval = self.review_interval.trim()
-                .parse::<u64>()
-                .unwrap_or(300);
+            let interval = self.review_interval.trim().parse::<u64>().unwrap_or(300);
             config.orchestrator = Some(OrchestratorConfig {
                 review_interval_secs: interval,
                 backlog_path: backlog,
@@ -1047,14 +1042,25 @@ mod tests {
     fn wizard_custom_tool_step_progression() {
         let mut wiz = AddAgentWizard::new();
 
-        // Select Custom (index 4)
-        wiz.tool_selected = 4;
+        // Select Custom tool
+        wiz.tool_selected = ToolChoice::ALL
+            .iter()
+            .position(|t| *t == ToolChoice::Custom)
+            .unwrap();
         wiz.handle_key(press(KeyCode::Enter));
-        assert_eq!(wiz.step, WizardStep::CustomCommand, "Custom should go to CustomCommand step");
+        assert_eq!(
+            wiz.step,
+            WizardStep::CustomCommand,
+            "Custom should go to CustomCommand step"
+        );
 
         // Empty command should not advance
         wiz.handle_key(press(KeyCode::Enter));
-        assert_eq!(wiz.step, WizardStep::CustomCommand, "empty command should not advance");
+        assert_eq!(
+            wiz.step,
+            WizardStep::CustomCommand,
+            "empty command should not advance"
+        );
 
         // Type a command and advance to AgentType
         wiz.custom_command = "my-tool --verbose".into();
@@ -1089,7 +1095,10 @@ mod tests {
         assert!(wiz.active);
 
         // AgentType -> CustomCommand (when Custom tool is selected)
-        wiz.tool_selected = 4; // Custom
+        wiz.tool_selected = ToolChoice::ALL
+            .iter()
+            .position(|t| *t == ToolChoice::Custom)
+            .unwrap();
         wiz.step = WizardStep::AgentType;
         wiz.handle_key(press(KeyCode::Esc));
         assert_eq!(wiz.step, WizardStep::CustomCommand);
@@ -1186,7 +1195,10 @@ mod tests {
     #[test]
     fn wizard_custom_command_splits_args() {
         let mut wiz = AddAgentWizard::new();
-        wiz.tool_selected = 4; // Custom
+        wiz.tool_selected = ToolChoice::ALL
+            .iter()
+            .position(|t| *t == ToolChoice::Custom)
+            .unwrap();
         wiz.custom_command = "my-agent --verbose --timeout 30".into();
         wiz.name = "custom-1".into();
         wiz.working_dir = "/tmp".into();
@@ -1279,11 +1291,17 @@ mod tests {
     #[test]
     fn wizard_custom_is_valid_requires_command() {
         let mut wiz = AddAgentWizard::new();
-        wiz.tool_selected = 4; // Custom
+        wiz.tool_selected = ToolChoice::ALL
+            .iter()
+            .position(|t| *t == ToolChoice::Custom)
+            .unwrap();
         wiz.name = "test".into();
         wiz.working_dir = "/tmp".into();
         wiz.custom_command = "".into();
-        assert!(!wiz.is_valid(), "custom tool with empty command should be invalid");
+        assert!(
+            !wiz.is_valid(),
+            "custom tool with empty command should be invalid"
+        );
 
         wiz.custom_command = "my-tool".into();
         assert!(wiz.is_valid(), "custom tool with command should be valid");
@@ -1493,7 +1511,9 @@ mod tests {
 
         let config = wiz.build_config();
         assert_eq!(config.name, "orch-1");
-        let orch = config.orchestrator.expect("should have orchestrator config");
+        let orch = config
+            .orchestrator
+            .expect("should have orchestrator config");
         assert_eq!(orch.review_interval_secs, 120);
         assert_eq!(orch.backlog_path, Some(PathBuf::from("./BACKLOG.md")));
         assert!(orch.managed_agents.is_empty());
@@ -1552,7 +1572,11 @@ mod tests {
         wiz.review_interval_cursor = wiz.review_interval.len();
 
         wiz.handle_key(press(KeyCode::Enter));
-        assert_eq!(wiz.step, WizardStep::ReviewInterval, "invalid interval should not advance");
+        assert_eq!(
+            wiz.step,
+            WizardStep::ReviewInterval,
+            "invalid interval should not advance"
+        );
         assert!(wiz.validation_error.is_some());
 
         // Valid number should advance

@@ -34,7 +34,10 @@ pub enum SpawnStrategy {
 #[derive(Debug, Clone)]
 pub enum ProcessKind {
     /// JSONL/structured stream that can be formatted and resumed.
-    Json { tool: ToolKind, global_args: Vec<String> },
+    Json {
+        tool: ToolKind,
+        global_args: Vec<String>,
+    },
     /// Detached GUI/utility process (spawn and do not supervise).
     Detached,
 }
@@ -52,7 +55,7 @@ pub enum TaskInjection {
 
 /// Trait for managing an AI tool's full lifecycle in a daemon slot.
 ///
-/// Each supported tool (Claude Code, Codex, OpenClaw, Cursor, Custom) has
+/// Each supported tool (Claude Code, Codex, OpenClaw, Custom) has
 /// a driver implementation that knows:
 /// - How to construct the spawn command
 /// - Which adapter to use for prompt detection
@@ -67,8 +70,8 @@ pub trait AgentDriver: Send {
 
     /// Create the appropriate adapter for this tool, if any.
     ///
-    /// Returns `None` for tools that don't need prompt detection (e.g., Cursor
-    /// in observe-only mode). The daemon will use a PassthroughAdapter.
+    /// Returns `None` for tools that don't need prompt detection. The daemon
+    /// will use a PassthroughAdapter.
     fn create_adapter(&self) -> Option<Box<dyn AgentAdapter>>;
 
     /// How to inject a task into this agent.

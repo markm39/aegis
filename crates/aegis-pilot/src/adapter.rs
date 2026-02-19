@@ -1,6 +1,6 @@
 //! Agent adapter trait for detecting permission prompts in terminal output.
 //!
-//! Each AI agent (Claude Code, Cursor, etc.) has its own prompt format.
+//! Each AI agent (Claude Code, Codex, etc.) has its own prompt format.
 //! Adapters parse ANSI-stripped output lines and detect when the agent is
 //! asking for permission, extracting the action being requested and the
 //! response strings needed to approve or deny it.

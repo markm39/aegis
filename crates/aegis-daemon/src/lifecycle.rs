@@ -229,13 +229,6 @@ fn run_agent_slot_inner(
                 info!(agent = name, dir = %working_dir.display(), "installed Claude Code PreToolUse hook");
             }
         }
-        AgentToolConfig::Cursor { .. } => {
-            if let Err(e) = hooks::install_cursor_hooks(&working_dir) {
-                warn!(agent = name, error = %e, "failed to install Cursor hook settings, policy enforcement may not work");
-            } else {
-                info!(agent = name, dir = %working_dir.display(), "installed Cursor hooks");
-            }
-        }
         AgentToolConfig::Codex { .. } => {
             // Codex CLI does not have a hooks system yet (PR #11067 in review).
             // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the
@@ -261,10 +254,7 @@ fn run_agent_slot_inner(
     // Runtime mediation hardening:
     // If the runtime doesn't have enforced hook mediation, mark it as needing
     // attention so operators/orchestrators keep a human in the loop.
-    let mediation_enforced = matches!(
-        &slot_config.tool,
-        AgentToolConfig::ClaudeCode { .. } | AgentToolConfig::Cursor { .. }
-    );
+    let mediation_enforced = matches!(&slot_config.tool, AgentToolConfig::ClaudeCode { .. });
     if !mediation_enforced {
         let note = match &slot_config.tool {
             AgentToolConfig::Codex { .. } => {
@@ -325,7 +315,7 @@ fn run_agent_slot_inner(
             kind,
         } => {
             // Process strategy: JSONL sessions with structured output (Claude/Codex),
-            // or detached GUI tools (Cursor).
+            // or detached GUI tools.
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
                 env.push((
@@ -455,7 +445,7 @@ fn run_agent_slot_inner(
             }
         }
         SpawnStrategy::External => {
-            // External process (e.g. Cursor already running) -- nothing to spawn
+            // External process already running -- nothing to spawn
             info!(agent = name, "external agent, skipping spawn");
 
             // Stop usage proxy, observer, end session

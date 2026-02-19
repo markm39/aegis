@@ -6,6 +6,7 @@
 pub mod capture;
 pub mod contract;
 pub mod input;
+pub mod policy;
 pub mod tui;
 pub mod vision;
 pub mod window;

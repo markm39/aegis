@@ -15,7 +15,9 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use aegis_pilot::supervisor::SupervisorCommand;
-use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy};
+use aegis_types::daemon::{
+    AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy,
+};
 use aegis_types::AegisConfig;
 
 use crate::lifecycle;
@@ -82,11 +84,7 @@ impl Fleet {
 
     /// Start all enabled agents.
     pub fn start_all(&mut self) {
-        let names: Vec<String> = self
-            .slots
-            .keys()
-            .cloned()
-            .collect();
+        let names: Vec<String> = self.slots.keys().cloned().collect();
 
         for name in names {
             if self.slots.get(&name).is_some_and(|s| s.config.enabled) {
@@ -112,10 +110,13 @@ impl Fleet {
     /// Start a specific agent by name.
     pub fn start_agent(&mut self, name: &str) {
         // Pre-compute values before mutable borrow to avoid borrow conflict.
-        let is_orchestrator = self.slots.get(name)
+        let is_orchestrator = self
+            .slots
+            .get(name)
             .is_some_and(|s| s.config.orchestrator.is_some());
         let orchestrator_name = if !is_orchestrator {
-            self.slots.values()
+            self.slots
+                .values()
                 .find(|s| s.config.orchestrator.is_some())
                 .map(|s| s.config.name.clone())
         } else {
@@ -139,7 +140,10 @@ impl Fleet {
         };
 
         if !slot.config.enabled {
-            warn!(agent = name, "start_agent: agent is disabled, use enable first");
+            warn!(
+                agent = name,
+                "start_agent: agent is disabled, use enable first"
+            );
             return;
         }
 
@@ -181,7 +185,17 @@ impl Fleet {
         let handle = thread::Builder::new()
             .name(format!("agent-{name}"))
             .spawn(move || {
-                lifecycle::run_agent_slot(&slot_config, &aegis_config, fleet_goal.as_deref(), orchestrator_name.as_deref(), output_tx, Some(upd_tx), Some(cmd_rx), child_pid, shared_session_id)
+                lifecycle::run_agent_slot(
+                    &slot_config,
+                    &aegis_config,
+                    fleet_goal.as_deref(),
+                    orchestrator_name.as_deref(),
+                    output_tx,
+                    Some(upd_tx),
+                    Some(cmd_rx),
+                    child_pid,
+                    shared_session_id,
+                )
             });
 
         match handle {
@@ -246,7 +260,9 @@ impl Fleet {
 
     /// Enable an agent slot so it can be started.
     pub fn enable_agent(&mut self, name: &str) -> Result<(), String> {
-        let slot = self.slots.get_mut(name)
+        let slot = self
+            .slots
+            .get_mut(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
         if slot.config.enabled {
@@ -263,7 +279,9 @@ impl Fleet {
 
     /// Disable an agent slot. Stops it if running and prevents restart.
     pub fn disable_agent(&mut self, name: &str) -> Result<(), String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
         if !slot.config.enabled {
@@ -297,22 +315,32 @@ impl Fleet {
 
     /// Send text to an agent's PTY stdin via the supervisor command channel.
     pub fn send_to_agent(&self, name: &str, text: &str) -> Result<(), String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
-        let tx = slot.command_tx.as_ref()
+        let tx = slot
+            .command_tx
+            .as_ref()
             .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
 
-        tx.send(SupervisorCommand::SendInput { text: text.to_string() })
-            .map_err(|_| format!("command channel closed for '{name}' (agent may have exited)"))
+        tx.send(SupervisorCommand::SendInput {
+            text: text.to_string(),
+        })
+        .map_err(|_| format!("command channel closed for '{name}' (agent may have exited)"))
     }
 
     /// Approve a pending permission request for an agent.
     pub fn approve_request(&self, name: &str, request_id: Uuid) -> Result<(), String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
-        let tx = slot.command_tx.as_ref()
+        let tx = slot
+            .command_tx
+            .as_ref()
             .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
 
         tx.send(SupervisorCommand::Approve { request_id })
@@ -321,10 +349,14 @@ impl Fleet {
 
     /// Deny a pending permission request for an agent.
     pub fn deny_request(&self, name: &str, request_id: Uuid) -> Result<(), String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
-        let tx = slot.command_tx.as_ref()
+        let tx = slot
+            .command_tx
+            .as_ref()
             .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
 
         tx.send(SupervisorCommand::Deny { request_id })
@@ -333,10 +365,14 @@ impl Fleet {
 
     /// Nudge a stalled agent with an optional message.
     pub fn nudge_agent(&self, name: &str, message: Option<String>) -> Result<(), String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
-        let tx = slot.command_tx.as_ref()
+        let tx = slot
+            .command_tx
+            .as_ref()
             .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
 
         tx.send(SupervisorCommand::Nudge { message })
@@ -345,7 +381,9 @@ impl Fleet {
 
     /// List pending permission prompts for an agent.
     pub fn list_pending(&self, name: &str) -> Result<&[PendingPromptInfo], String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
         Ok(&slot.pending_prompts)
@@ -353,13 +391,13 @@ impl Fleet {
 
     /// Whether an agent needs human attention (max nudges exceeded).
     pub fn agent_attention_needed(&self, name: &str) -> bool {
-        self.slots.get(name)
-            .is_some_and(|s| s.attention_needed)
+        self.slots.get(name).is_some_and(|s| s.attention_needed)
     }
 
     /// Count of pending prompts for an agent.
     pub fn agent_pending_count(&self, name: &str) -> usize {
-        self.slots.get(name)
+        self.slots
+            .get(name)
             .map(|s| s.pending_prompts.len())
             .unwrap_or(0)
     }
@@ -422,9 +460,7 @@ impl Fleet {
             let needs_join = self
                 .slots
                 .get(name)
-                .is_some_and(|s| {
-                    s.thread_handle.as_ref().is_some_and(|h| h.is_finished())
-                });
+                .is_some_and(|s| s.thread_handle.as_ref().is_some_and(|h| h.is_finished()));
 
             if needs_join {
                 self.tick_slot(name);
@@ -433,13 +469,11 @@ impl Fleet {
             // Check if backoff has expired and agent should be restarted.
             // Also verify the agent is still enabled -- a disabled agent's backoff
             // should just be cleared, not trigger a restart.
-            let ready = self
-                .slots
-                .get(name)
-                .is_some_and(|s| {
-                    s.config.enabled
-                        && s.backoff_until.is_some_and(|t| std::time::Instant::now() >= t)
-                });
+            let ready = self.slots.get(name).is_some_and(|s| {
+                s.config.enabled
+                    && s.backoff_until
+                        .is_some_and(|t| std::time::Instant::now() >= t)
+            });
 
             if ready {
                 backoff_ready.push(name.clone());
@@ -489,7 +523,10 @@ impl Fleet {
         };
 
         let exit_code = result.exit_code.unwrap_or(-1);
-        info!(agent = name, exit_code, "agent exited, evaluating restart policy");
+        info!(
+            agent = name,
+            exit_code, "agent exited, evaluating restart policy"
+        );
 
         self.handle_agent_exit(name, exit_code);
     }
@@ -585,8 +622,8 @@ impl Fleet {
             // Cap shift at 6 to avoid overflow (2^6 = 64 > 60 cap).
             let shift = std::cmp::min(slot.restart_count, 6);
             let delay_secs = std::cmp::min(1u64 << shift, 60);
-            let backoff_until = std::time::Instant::now()
-                + std::time::Duration::from_secs(delay_secs);
+            let backoff_until =
+                std::time::Instant::now() + std::time::Duration::from_secs(delay_secs);
             info!(
                 agent = name,
                 restart_count = slot.restart_count,
@@ -692,7 +729,9 @@ impl Fleet {
     /// Returns an error if the agent is unknown or disabled.
     /// Clears any backoff timer so the restart happens immediately.
     pub fn restart_agent(&mut self, name: &str) -> Result<(), String> {
-        let slot = self.slots.get(name)
+        let slot = self
+            .slots
+            .get(name)
             .ok_or_else(|| format!("unknown agent: {name}"))?;
 
         if !slot.config.enabled {
@@ -726,7 +765,6 @@ impl Fleet {
             AgentToolConfig::ClaudeCode { .. } => "ClaudeCode".to_string(),
             AgentToolConfig::Codex { .. } => "Codex".to_string(),
             AgentToolConfig::OpenClaw { .. } => "OpenClaw".to_string(),
-            AgentToolConfig::Cursor { .. } => "Cursor".to_string(),
             AgentToolConfig::Custom { command, .. } => format!("Custom({command})"),
         })
     }
@@ -735,9 +773,7 @@ impl Fleet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aegis_types::daemon::{
-        AgentToolConfig, DaemonControlConfig, PersistenceConfig,
-    };
+    use aegis_types::daemon::{AgentToolConfig, DaemonControlConfig, PersistenceConfig};
     use std::path::PathBuf;
 
     fn test_daemon_config(agents: Vec<AgentSlotConfig>) -> DaemonConfig {
@@ -810,7 +846,10 @@ mod tests {
         let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         let fleet = Fleet::new(&config, aegis);
 
-        assert_eq!(fleet.agent_status("disabled-1"), Some(&AgentStatus::Disabled));
+        assert_eq!(
+            fleet.agent_status("disabled-1"),
+            Some(&AgentStatus::Disabled)
+        );
     }
 
     #[test]
@@ -983,10 +1022,7 @@ mod tests {
 
     #[test]
     fn remove_agent_decreases_count() {
-        let config = test_daemon_config(vec![
-            test_slot_config("a"),
-            test_slot_config("b"),
-        ]);
+        let config = test_daemon_config(vec![test_slot_config("a"), test_slot_config("b")]);
         let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         let mut fleet = Fleet::new(&config, aegis);
 
@@ -1035,16 +1071,16 @@ mod tests {
         let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         let fleet = Fleet::new(&config, aegis);
 
-        assert_eq!(fleet.agent_tool_name("claude"), Some("ClaudeCode".to_string()));
+        assert_eq!(
+            fleet.agent_tool_name("claude"),
+            Some("ClaudeCode".to_string())
+        );
         assert_eq!(fleet.agent_tool_name("nonexistent"), None);
     }
 
     #[test]
     fn stop_all_is_safe_on_idle_fleet() {
-        let config = test_daemon_config(vec![
-            test_slot_config("a"),
-            test_slot_config("b"),
-        ]);
+        let config = test_daemon_config(vec![test_slot_config("a"), test_slot_config("b")]);
         let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         let mut fleet = Fleet::new(&config, aegis);
 
@@ -1062,8 +1098,7 @@ mod tests {
         let mut fleet = Fleet::new(&config, aegis);
 
         // Simulate a very brief run (started just now)
-        fleet.slots.get_mut("crasher").unwrap().started_at =
-            Some(std::time::Instant::now());
+        fleet.slots.get_mut("crasher").unwrap().started_at = Some(std::time::Instant::now());
 
         fleet.handle_agent_exit("crasher", 1);
 
@@ -1106,8 +1141,7 @@ mod tests {
 
         // Set restart count to max
         fleet.slots.get_mut("limited").unwrap().restart_count = 2;
-        fleet.slots.get_mut("limited").unwrap().started_at =
-            Some(std::time::Instant::now());
+        fleet.slots.get_mut("limited").unwrap().started_at = Some(std::time::Instant::now());
 
         fleet.handle_agent_exit("limited", 1);
 
@@ -1123,7 +1157,10 @@ mod tests {
         let aegis = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         let mut fleet = Fleet::new(&config, aegis);
 
-        assert_eq!(fleet.agent_status("off-agent"), Some(&AgentStatus::Disabled));
+        assert_eq!(
+            fleet.agent_status("off-agent"),
+            Some(&AgentStatus::Disabled)
+        );
 
         fleet.enable_agent("off-agent").unwrap();
 
@@ -1181,7 +1218,10 @@ mod tests {
         let mut fleet = Fleet::new(&config, aegis);
 
         let err = fleet.restart_agent("off").unwrap_err();
-        assert!(err.contains("disabled"), "expected disabled error, got: {err}");
+        assert!(
+            err.contains("disabled"),
+            "expected disabled error, got: {err}"
+        );
     }
 
     #[test]
@@ -1191,7 +1231,10 @@ mod tests {
         let mut fleet = Fleet::new(&config, aegis);
 
         let err = fleet.restart_agent("ghost").unwrap_err();
-        assert!(err.contains("unknown"), "expected unknown error, got: {err}");
+        assert!(
+            err.contains("unknown"),
+            "expected unknown error, got: {err}"
+        );
     }
 
     #[test]
@@ -1227,7 +1270,10 @@ mod tests {
             "expected Crashed after panic, got {:?}",
             slot.status
         );
-        assert!(slot.backoff_until.is_some(), "should have backoff after crash");
+        assert!(
+            slot.backoff_until.is_some(),
+            "should have backoff after crash"
+        );
         assert_eq!(slot.restart_count, 1);
     }
 }
