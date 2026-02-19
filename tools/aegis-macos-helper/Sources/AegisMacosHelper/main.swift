@@ -116,6 +116,42 @@ func mouseClick(x: Int, y: Int, button: String?) -> Response {
     return Response(ok: true, error: nil, width: nil, height: nil, rgba_base64: nil)
 }
 
+func mouseDown(x: Int, y: Int, button: String?) -> Response {
+    let btn: CGMouseButton
+    let down: CGEventType
+    switch button?.lowercased() {
+    case "right":
+        btn = .right
+        down = .rightMouseDown
+    case "middle":
+        btn = .center
+        down = .otherMouseDown
+    default:
+        btn = .left
+        down = .leftMouseDown
+    }
+    postMouseEvent(type: down, x: x, y: y, button: btn)
+    return Response(ok: true, error: nil, width: nil, height: nil, rgba_base64: nil)
+}
+
+func mouseUp(x: Int, y: Int, button: String?) -> Response {
+    let btn: CGMouseButton
+    let up: CGEventType
+    switch button?.lowercased() {
+    case "right":
+        btn = .right
+        up = .rightMouseUp
+    case "middle":
+        btn = .center
+        up = .otherMouseUp
+    default:
+        btn = .left
+        up = .leftMouseUp
+    }
+    postMouseEvent(type: up, x: x, y: y, button: btn)
+    return Response(ok: true, error: nil, width: nil, height: nil, rgba_base64: nil)
+}
+
 func postUnicode(_ text: String) -> Bool {
     let chars = Array(text.utf16)
     if let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
@@ -169,6 +205,10 @@ while let req = readRequest() {
         writeResponse(mouseMove(x: req.x ?? 0, y: req.y ?? 0))
     case "mouse_click":
         writeResponse(mouseClick(x: req.x ?? 0, y: req.y ?? 0, button: req.button))
+    case "mouse_down":
+        writeResponse(mouseDown(x: req.x ?? 0, y: req.y ?? 0, button: req.button))
+    case "mouse_up":
+        writeResponse(mouseUp(x: req.x ?? 0, y: req.y ?? 0, button: req.button))
     case "key_press":
         writeResponse(keyPress(key: req.key))
     case "type_text":

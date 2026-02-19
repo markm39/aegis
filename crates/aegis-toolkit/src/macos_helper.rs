@@ -4,8 +4,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use crate::capture::{CaptureProvider, CaptureRequest};
@@ -57,17 +57,21 @@ impl MacosHelper {
         });
 
         let mut cmd = Command::new(helper);
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
 
-        let mut child = cmd.spawn().map_err(|e| {
-            ToolkitError::Unavailable(format!("failed to spawn macos helper: {e}"))
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            ToolkitError::Unavailable("helper stdin not available".into())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            ToolkitError::Unavailable("helper stdout not available".into())
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| ToolkitError::Unavailable(format!("failed to spawn macos helper: {e}")))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ToolkitError::Unavailable("helper stdin not available".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ToolkitError::Unavailable("helper stdout not available".into()))?;
 
         Ok(Self {
             child: Mutex::new(child),
@@ -80,17 +84,26 @@ impl MacosHelper {
         let payload = serde_json::to_string(req)
             .map_err(|e| ToolkitError::Other(format!("serialize request: {e}")))?;
         {
-            let mut stdin = self.stdin.lock().map_err(|_| ToolkitError::Other("stdin lock".into()))?;
-            stdin.write_all(payload.as_bytes())
+            let mut stdin = self
+                .stdin
+                .lock()
+                .map_err(|_| ToolkitError::Other("stdin lock".into()))?;
+            stdin
+                .write_all(payload.as_bytes())
                 .map_err(|e| ToolkitError::Other(format!("stdin write: {e}")))?;
-            stdin.write_all(b"\n")
+            stdin
+                .write_all(b"\n")
                 .map_err(|e| ToolkitError::Other(format!("stdin write: {e}")))?;
             stdin.flush().ok();
         }
 
         let mut line = String::new();
-        let mut stdout = self.stdout.lock().map_err(|_| ToolkitError::Other("stdout lock".into()))?;
-        stdout.read_line(&mut line)
+        let mut stdout = self
+            .stdout
+            .lock()
+            .map_err(|_| ToolkitError::Other("stdout lock".into()))?;
+        stdout
+            .read_line(&mut line)
             .map_err(|e| ToolkitError::Other(format!("stdout read: {e}")))?;
 
         let resp: Response = serde_json::from_str(line.trim())
@@ -98,8 +111,86 @@ impl MacosHelper {
         if resp.ok {
             Ok(resp)
         } else {
-            Err(ToolkitError::Other(resp.error.unwrap_or_else(|| "unknown error".into())))
+            Err(ToolkitError::Other(
+                resp.error.unwrap_or_else(|| "unknown error".into()),
+            ))
         }
+    }
+
+    fn region_from_capture(req: &CaptureRequest) -> Option<Region> {
+        req.region.as_ref().map(|r| Region {
+            x: r.x,
+            y: r.y,
+            width: r.width as i32,
+            height: r.height as i32,
+        })
+    }
+
+    pub fn mouse_down(&self, x: i32, y: i32, button: &str) -> ToolkitResult<()> {
+        self.send(&Request {
+            op: "mouse_down",
+            region: None,
+            x: Some(x),
+            y: Some(y),
+            button: Some(button),
+            text: None,
+            key: None,
+            app_id: None,
+            window_id: None,
+        })?;
+        Ok(())
+    }
+
+    pub fn mouse_up(&self, x: i32, y: i32, button: &str) -> ToolkitResult<()> {
+        self.send(&Request {
+            op: "mouse_up",
+            region: None,
+            x: Some(x),
+            y: Some(y),
+            button: Some(button),
+            text: None,
+            key: None,
+            app_id: None,
+            window_id: None,
+        })?;
+        Ok(())
+    }
+
+    pub fn capture_frame(&self, request: &CaptureRequest) -> ToolkitResult<CaptureFrame> {
+        let resp = self.send(&Request {
+            op: "capture",
+            region: Self::region_from_capture(request),
+            x: None,
+            y: None,
+            button: None,
+            text: None,
+            key: None,
+            app_id: None,
+            window_id: None,
+        })?;
+
+        let width = resp
+            .width
+            .ok_or_else(|| ToolkitError::Other("missing width".into()))?;
+        let height = resp
+            .height
+            .ok_or_else(|| ToolkitError::Other("missing height".into()))?;
+        let b64 = resp
+            .rgba_base64
+            .ok_or_else(|| ToolkitError::Other("missing rgba".into()))?;
+        let rgba = B64
+            .decode(b64.as_bytes())
+            .map_err(|e| ToolkitError::Other(format!("decode rgba: {e}")))?;
+
+        Ok(CaptureFrame {
+            metadata: FrameMetadata {
+                width,
+                height,
+                timestamp_ms: 0,
+                frame_id: 0,
+            },
+            rgba,
+        })
     }
 }
 
@@ -121,10 +212,17 @@ impl CaptureProvider for MacosHelper {
             window_id: None,
         })?;
 
-        let width = resp.width.ok_or_else(|| ToolkitError::Other("missing width".into()))?;
-        let height = resp.height.ok_or_else(|| ToolkitError::Other("missing height".into()))?;
-        let b64 = resp.rgba_base64.ok_or_else(|| ToolkitError::Other("missing rgba".into()))?;
-        let rgba = B64.decode(b64.as_bytes())
+        let width = resp
+            .width
+            .ok_or_else(|| ToolkitError::Other("missing width".into()))?;
+        let height = resp
+            .height
+            .ok_or_else(|| ToolkitError::Other("missing height".into()))?;
+        let b64 = resp
+            .rgba_base64
+            .ok_or_else(|| ToolkitError::Other("missing rgba".into()))?;
+        let rgba = B64
+            .decode(b64.as_bytes())
             .map_err(|e| ToolkitError::Other(format!("decode rgba: {e}")))?;
 
         Ok(CaptureFrame {
@@ -229,11 +327,15 @@ impl WindowProvider for MacosHelper {
 
 impl TuiProvider for MacosHelper {
     fn snapshot(&self, _session_id: &str) -> ToolkitResult<TuiSnapshot> {
-        Err(ToolkitError::Unavailable("tui snapshot not implemented".into()))
+        Err(ToolkitError::Unavailable(
+            "tui snapshot not implemented".into(),
+        ))
     }
 
     fn send_input(&self, _session_id: &str, _input: &TuiInput) -> ToolkitResult<()> {
-        Err(ToolkitError::Unavailable("tui input not implemented".into()))
+        Err(ToolkitError::Unavailable(
+            "tui input not implemented".into(),
+        ))
     }
 }
 
