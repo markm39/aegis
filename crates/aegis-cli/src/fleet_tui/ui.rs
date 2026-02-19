@@ -140,6 +140,10 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
     if has_command && chunks.len() > 3 {
         draw_command_bar(frame, app, chunks[3]);
     }
+
+    if app.context_editor.is_some() {
+        draw_context_editor(frame, app, frame.area());
+    }
 }
 
 /// Render the overview header bar.
@@ -1301,6 +1305,59 @@ fn build_multiline_input<'a>(
     }
 
     result
+}
+
+fn draw_context_editor(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
+    let Some(editor) = &app.context_editor else {
+        return;
+    };
+    let popup = centered_rect(80, 70, area);
+
+    let title = format!(" Edit {} for {} ", editor.field, editor.agent);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(2)])
+        .split(inner);
+
+    let text_style = Style::default().fg(Color::White);
+    let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+    let lines = build_multiline_input(&editor.buffer, editor.cursor, text_style, cursor_style);
+    let content = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(content, chunks[0]);
+
+    let help = Line::from(vec![
+        Span::styled("Ctrl+S", Style::default().fg(Color::Green)),
+        Span::styled(" save  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ]);
+    let help_widget = Paragraph::new(help);
+    frame.render_widget(help_widget, chunks[1]);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 /// Draw restart policy selection.

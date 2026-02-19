@@ -130,12 +130,22 @@ pub struct FleetApp {
     // -- Help view --
     /// Scroll offset for help text.
     pub help_scroll: usize,
+    /// Context editor state for multi-line edits.
+    pub context_editor: Option<ContextEditor>,
 
     // -- Internal --
     /// Daemon client for sending commands.
     client: Option<DaemonClient>,
     /// When we last polled the daemon.
     last_poll: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextEditor {
+    pub agent: String,
+    pub field: String,
+    pub buffer: String,
+    pub cursor: usize,
 }
 
 impl FleetApp {
@@ -173,6 +183,7 @@ impl FleetApp {
             fleet_goal: None,
             wizard: None,
             help_scroll: 0,
+            context_editor: None,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
         }
@@ -399,6 +410,8 @@ impl FleetApp {
                 self.command_cursor = 0;
                 self.command_completions.clear();
                 self.completion_idx = None;
+            } else if self.context_editor.is_some() {
+                self.context_editor = None;
             } else if self.input_mode {
                 self.input_mode = false;
                 self.input_buffer.clear();
@@ -420,6 +433,11 @@ impl FleetApp {
         // Input mode intercepts all keys
         if self.input_mode {
             self.handle_input_key(key);
+            return;
+        }
+
+        if self.context_editor.is_some() {
+            self.handle_context_editor_key(key);
             return;
         }
 
@@ -447,6 +465,12 @@ impl FleetApp {
             let cleaned = text.replace(['\n', '\r'], " ");
             self.input_buffer.insert_str(self.input_cursor, &cleaned);
             self.input_cursor += cleaned.len();
+            return;
+        }
+        if let Some(ref mut editor) = self.context_editor {
+            let cleaned = text.replace('\r', "");
+            editor.buffer.insert_str(editor.cursor, &cleaned);
+            editor.cursor += cleaned.len();
             return;
         }
         // Route paste to wizard if active
@@ -843,6 +867,139 @@ impl FleetApp {
             }
             KeyCode::End => {
                 self.input_cursor = self.input_buffer.len();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_context_editor_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.context_editor = None;
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let (agent, field, buffer) = match self.context_editor.as_ref() {
+                    Some(editor) => (
+                        editor.agent.clone(),
+                        editor.field.clone(),
+                        editor.buffer.clone(),
+                    ),
+                    None => return,
+                };
+                let (role, agent_goal, context, task) = match field.as_str() {
+                    "role" => (Some(buffer), None, None, None),
+                    "goal" => (None, Some(buffer), None, None),
+                    "context" => (None, None, Some(buffer), None),
+                    "task" => (None, None, None, Some(buffer)),
+                    _ => (None, None, None, None),
+                };
+                if role.is_none() && agent_goal.is_none() && context.is_none() && task.is_none() {
+                    self.last_error = Some(format!(
+                        "unknown field '{}'. Use: role, goal, context, or task",
+                        field
+                    ));
+                } else {
+                    self.send_and_show_result(DaemonCommand::UpdateAgentContext {
+                        name: agent,
+                        role,
+                        agent_goal,
+                        context,
+                        task,
+                    });
+                }
+                self.context_editor = None;
+            }
+            KeyCode::Enter => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    editor.buffer.insert(editor.cursor, '\n');
+                    editor.cursor += 1;
+                }
+            }
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+                'a' => {
+                    if let Some(editor) = self.context_editor.as_mut() {
+                        editor.cursor = 0;
+                    }
+                }
+                'e' => {
+                    if let Some(editor) = self.context_editor.as_mut() {
+                        editor.cursor = editor.buffer.len();
+                    }
+                }
+                'u' => {
+                    if let Some(editor) = self.context_editor.as_mut() {
+                        editor.buffer.drain(..editor.cursor);
+                        editor.cursor = 0;
+                    }
+                }
+                'w' => {
+                    if let Some(editor) = self.context_editor.as_mut() {
+                        if editor.cursor > 0 {
+                            let new_pos = delete_word_backward_pos(&editor.buffer, editor.cursor);
+                            editor.buffer.drain(new_pos..editor.cursor);
+                            editor.cursor = new_pos;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            KeyCode::Char(c) => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    editor.buffer.insert(editor.cursor, c);
+                    editor.cursor += c.len_utf8();
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    if editor.cursor > 0 {
+                        let prev = editor.buffer[..editor.cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        editor.buffer.remove(prev);
+                        editor.cursor = prev;
+                    }
+                }
+            }
+            KeyCode::Left => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    if editor.cursor > 0 {
+                        editor.cursor = editor.buffer[..editor.cursor]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
+                }
+            }
+            KeyCode::Right => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    if editor.cursor < editor.buffer.len() {
+                        editor.cursor = editor.buffer[editor.cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| editor.cursor + i)
+                            .unwrap_or(editor.buffer.len());
+                    }
+                }
+            }
+            KeyCode::Delete => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    if editor.cursor < editor.buffer.len() {
+                        editor.buffer.remove(editor.cursor);
+                    }
+                }
+            }
+            KeyCode::Home => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    editor.cursor = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(editor) = self.context_editor.as_mut() {
+                    editor.cursor = editor.buffer.len();
+                }
             }
             _ => {}
         }
@@ -1563,6 +1720,9 @@ impl FleetApp {
                     self.send_context_query(&agent);
                 }
             },
+            FleetCommand::ContextEdit { agent, field } => {
+                self.open_context_editor(agent, field);
+            }
             FleetCommand::DaemonStart => match crate::commands::daemon::start_quiet() {
                 Ok(msg) => {
                     self.set_result(msg);
@@ -1766,6 +1926,47 @@ impl FleetApp {
                         "role={role}  goal={goal}  context={context}  task={task}"
                     ));
                 }
+            }
+            Ok(resp) => {
+                self.last_error = Some(resp.message);
+            }
+            Err(e) => {
+                self.last_error = Some(e);
+            }
+        }
+    }
+
+    fn open_context_editor(&mut self, agent: String, field: String) {
+        let field = field.to_lowercase();
+        if !matches!(field.as_str(), "role" | "goal" | "context" | "task") {
+            self.set_result(format!(
+                "unknown field '{field}'. Use: role, goal, context, or task"
+            ));
+            return;
+        }
+        let Some(client) = &self.client else {
+            self.last_error = Some("Not connected to daemon. Use :daemon start".into());
+            return;
+        };
+        match client.send(&DaemonCommand::GetAgentContext { name: agent.clone() }) {
+            Ok(resp) if resp.ok => {
+                let value = resp
+                    .data
+                    .and_then(|data| match field.as_str() {
+                        "role" => data["role"].as_str().map(|s| s.to_string()),
+                        "goal" => data["agent_goal"].as_str().map(|s| s.to_string()),
+                        "context" => data["context"].as_str().map(|s| s.to_string()),
+                        "task" => data["task"].as_str().map(|s| s.to_string()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let cursor = value.len();
+                self.context_editor = Some(ContextEditor {
+                    agent,
+                    field,
+                    buffer: value,
+                    cursor,
+                });
             }
             Ok(resp) => {
                 self.last_error = Some(resp.message);

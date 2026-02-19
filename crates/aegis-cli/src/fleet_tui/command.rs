@@ -104,6 +104,11 @@ pub enum FleetCommand {
         field: Option<String>,
         value: Option<String>,
     },
+    /// Open the context editor for an agent field.
+    ContextEdit {
+        agent: String,
+        field: String,
+    },
     /// Start the daemon in the background.
     DaemonStart,
     /// Stop the running daemon.
@@ -262,6 +267,18 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                         value: Some(String::new()),
                     })),
                 }
+            } else if first == "edit" {
+                if second.is_empty() {
+                    return Err("usage: agent edit <agent> <field>".into());
+                }
+                if third.is_empty() {
+                    return Err("usage: agent edit <agent> <field>".into());
+                }
+                let field = third.split_whitespace().next().unwrap_or("").to_string();
+                return Ok(Some(FleetCommand::ContextEdit {
+                    agent: second.into(),
+                    field,
+                }));
             } else if second.is_empty() {
                 Ok(Some(FleetCommand::Context {
                     agent: first.into(),
@@ -626,23 +643,50 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
             let tokens: Vec<&str> = trimmed.split_whitespace().collect();
             let ends_with_space = trimmed.ends_with(' ');
             if tokens.len() == 1 && ends_with_space {
-                return agent_names.clone();
+                let mut items = vec!["edit".to_string(), "set".to_string()];
+                items.extend(agent_names.iter().cloned());
+                return items;
             }
             if tokens.len() == 2 {
                 if tokens[1] == "set" {
-                    return agent_names.clone();
+                    return agent_names.to_vec();
+                }
+                if tokens[1] == "edit" {
+                    if ends_with_space {
+                        return agent_names.to_vec();
+                    }
+                    return Vec::new();
                 }
                 if ends_with_space {
                     return CONTEXT_FIELDS.iter().map(|f| f.to_string()).collect();
                 }
-                return agent_names
-                    .iter()
-                    .filter(|name| name.starts_with(tokens[1]))
-                    .cloned()
-                    .collect();
+                let mut items = Vec::new();
+                if "edit".starts_with(tokens[1]) {
+                    items.push("edit".to_string());
+                }
+                if "set".starts_with(tokens[1]) {
+                    items.push("set".to_string());
+                }
+                items.extend(
+                    agent_names
+                        .iter()
+                        .filter(|name| name.starts_with(tokens[1]))
+                        .cloned(),
+                );
+                return items;
             }
             if tokens.len() == 3 {
                 if tokens[1] == "set" {
+                    if ends_with_space {
+                        return CONTEXT_FIELDS.iter().map(|f| f.to_string()).collect();
+                    }
+                    return agent_names
+                        .iter()
+                        .filter(|name| name.starts_with(tokens[2]))
+                        .cloned()
+                        .collect();
+                }
+                if tokens[1] == "edit" {
                     if ends_with_space {
                         return CONTEXT_FIELDS.iter().map(|f| f.to_string()).collect();
                     }
@@ -660,6 +704,14 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                     .collect();
             }
             if tokens.len() == 4 && tokens[1] == "set" {
+                let field_prefix = tokens[3];
+                return CONTEXT_FIELDS
+                    .iter()
+                    .filter(|f| f.starts_with(field_prefix))
+                    .map(|f| f.to_string())
+                    .collect();
+            }
+            if tokens.len() == 4 && tokens[1] == "edit" {
                 let field_prefix = tokens[3];
                 return CONTEXT_FIELDS
                     .iter()
@@ -737,6 +789,7 @@ pub fn help_text() -> &'static str {
      :agent <a>               View agent context\n\
      :agent <a> <f> <val>     Set field (role/goal/context/task)\n\
      :agent set <a> <f> <val> Set field (explicit)\n\
+     :agent edit <a> <f>      Edit field in multiline editor\n\
      :alerts                  Show alert rules\n\
      :approve <agent>         Approve first pending prompt\n\
      :config                  Edit daemon.toml in $EDITOR\n\
@@ -1486,6 +1539,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_agent_edit() {
+        let result = parse("agent edit claude-1 context").unwrap();
+        assert_eq!(
+            result,
+            Some(FleetCommand::ContextEdit {
+                agent: "claude-1".into(),
+                field: "context".into(),
+            })
+        );
+    }
+
+    #[test]
     fn completions_context_field_names() {
         let agents = vec!["claude-1".to_string()];
         // After agent name, should complete field names
@@ -1522,6 +1587,13 @@ mod tests {
         let agents = vec!["claude-1".to_string(), "codex-1".to_string()];
         let c = completions("agent set c", &agents);
         assert_eq!(c, vec!["claude-1", "codex-1"]);
+    }
+
+    #[test]
+    fn completions_agent_edit_field() {
+        let agents = vec!["claude-1".to_string()];
+        let c = completions("agent edit claude-1 ", &agents);
+        assert_eq!(c, vec!["context", "goal", "role", "task"]);
     }
 
     #[test]
