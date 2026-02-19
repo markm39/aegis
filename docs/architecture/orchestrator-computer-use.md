@@ -35,6 +35,19 @@ Each action exposes:
 - `policy_action_name()` for stable Cedar/audit identifiers
 - `risk_tag()` for approval workflow and risk-aware execution
 
+## Capability Disclosure Contract
+
+Tool usage follows a dual contract:
+
+- Runtime contract: actions available in `daemon.toml` (`[toolkit.capture]`, `[toolkit.input]`, `[toolkit.browser]`, `[toolkit.loop_executor]`).
+- Agent disclosure contract: orchestrator prompt and `aegis daemon capabilities <agent>` output are generated from the same config state.
+
+Rules:
+
+- If config disables a capability, runtime denies it (fail closed).
+- Orchestrators must query `aegis daemon capabilities <agent>` before planning UI actions.
+- Prompt guidance and CLI capability output must remain aligned with config-backed enforcement.
+
 ## Risk Tags and Default Handling
 
 Risk tags are represented by `aegis_toolkit::contract::RiskTag`.

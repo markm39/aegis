@@ -325,6 +325,9 @@ pub struct RuntimeCapabilities {
     /// Time budget (ms) for fast executor batches.
     #[serde(default)]
     pub loop_time_budget_ms: u64,
+    /// Config-derived tool capability contract for orchestrator usage.
+    #[serde(default)]
+    pub tool_contract: String,
 }
 
 /// Parameters used to start a capture stream.
@@ -399,7 +402,10 @@ pub enum TuiToolData {
         cursor: [u16; 2],
         size: [u16; 2],
     },
-    Input { target: String, sent: bool },
+    Input {
+        target: String,
+        sent: bool,
+    },
 }
 
 /// Browser-specific result payload for browser actions.
@@ -859,6 +865,7 @@ mod tests {
             toolkit_browser_backend: "cdp".into(),
             loop_max_micro_actions: 8,
             loop_time_budget_ms: 1200,
+            tool_contract: "contract text".into(),
         };
         let json = serde_json::to_string(&caps).unwrap();
         let back: RuntimeCapabilities = serde_json::from_str(&json).unwrap();

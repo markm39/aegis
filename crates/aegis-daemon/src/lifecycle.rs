@@ -30,8 +30,10 @@ use aegis_pilot::session::ToolKind;
 use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, SupervisorConfig};
 use aegis_pilot::tmux::TmuxSession;
 use aegis_policy::PolicyEngine;
-use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, OrchestratorConfig};
+use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, OrchestratorConfig, ToolkitConfig};
 use aegis_types::AegisConfig;
+
+use crate::tool_contract::render_orchestrator_tool_contract;
 
 /// Result returned by a completed agent lifecycle thread.
 pub struct SlotResult {
@@ -61,6 +63,7 @@ pub struct SlotResult {
 pub fn run_agent_slot(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
+    toolkit_config: &ToolkitConfig,
     fleet_goal: Option<&str>,
     orchestrator_name: Option<&str>,
     output_tx: mpsc::Sender<String>,
@@ -74,6 +77,7 @@ pub fn run_agent_slot(
     match run_agent_slot_inner(
         slot_config,
         aegis_config,
+        toolkit_config,
         fleet_goal,
         orchestrator_name,
         &output_tx,
@@ -100,6 +104,7 @@ pub fn run_agent_slot(
 fn run_agent_slot_inner(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
+    toolkit_config: &ToolkitConfig,
     fleet_goal: Option<&str>,
     orchestrator_name: Option<&str>,
     output_tx: &mpsc::Sender<String>,
@@ -282,11 +287,13 @@ fn run_agent_slot_inner(
     //    Worker slots learn about the orchestrator so they follow its direction.
     let composed = if let Some(ref orch_config) = slot_config.orchestrator {
         Some(compose_orchestrator_prompt(
+            name,
             fleet_goal,
             slot_config.role.as_deref(),
             slot_config.agent_goal.as_deref(),
             slot_config.context.as_deref(),
             orch_config,
+            toolkit_config,
         ))
     } else {
         compose_prompt(
@@ -624,11 +631,13 @@ fn compose_prompt(
 /// verifies. Its behavior emerges from this prompt combined with access to
 /// the `aegis` CLI tools.
 fn compose_orchestrator_prompt(
+    orchestrator_name: &str,
     fleet_goal: Option<&str>,
     role: Option<&str>,
     agent_goal: Option<&str>,
     context: Option<&str>,
     orch_config: &OrchestratorConfig,
+    toolkit_config: &ToolkitConfig,
 ) -> String {
     let mut sections = Vec::new();
 
@@ -703,6 +712,26 @@ fn compose_orchestrator_prompt(
          Between cycles, use `sleep {interval}` to wait."
     ));
 
+    sections.push(
+        "## Fast Sense-Act Executor\n\
+         When interacting with UIs, use a planner/executor loop:\n\
+         1. Planner: produce a short micro-plan (3-10 actions).\n\
+         2. Executor: run those actions as a batch.\n\
+         3. Observe outcome and only then plan the next batch.\n\n\
+         Use `aegis daemon tool-batch <agent> '<json-array>' --max-actions <n>` \
+         for low-latency execution. Stop a batch when any of these happen:\n\
+         - You hit a policy boundary (especially high-risk actions).\n\
+         - You are uncertain about UI state.\n\
+         - The configured time budget is exhausted.\n\
+         - An action is denied or fails."
+            .to_string(),
+    );
+
+    sections.push(render_orchestrator_tool_contract(
+        orchestrator_name,
+        toolkit_config,
+    ));
+
     // Verification instructions
     sections.push(
         "## Verification\n\
@@ -733,6 +762,12 @@ fn compose_orchestrator_prompt(
          - `aegis orchestrator status` -- bulk fleet status with recent output\n\
          - `aegis daemon status` -- list all agents with status\n\
          - `aegis daemon output <agent> [--lines N]` -- get agent output\n\
+         - `aegis daemon capabilities <agent>` -- show config-backed computer-use contract\n\
+         - `aegis daemon tool <agent> '<json>'` -- run one computer-use action\n\
+         - `aegis daemon tool-batch <agent> '<json-array>' --max-actions N` -- run micro-action batch\n\
+         - `aegis daemon capture-start <agent> --fps <n>` -- start frame stream cache\n\
+         - `aegis daemon latest-frame <agent>` -- fetch most recent cached frame\n\
+         - `aegis daemon browser-profile <agent> <session_id> [--headless] [--url <u>]` -- start managed browser profile\n\
          - `aegis send <agent> \"message\"` -- send text to agent stdin\n\
          - `aegis context <agent> task \"new task\"` -- update agent's task\n\
          - `aegis context <agent> role \"new role\"` -- update agent's role\n\
@@ -859,11 +894,13 @@ mod tests {
             managed_agents: vec!["frontend".into(), "backend".into()],
         };
         let prompt = compose_orchestrator_prompt(
+            "orch-1",
             Some("Build a chess app"),
             Some("Technical Director"),
             Some("Keep agents focused"),
             None,
             &config,
+            &ToolkitConfig::default(),
         );
 
         assert!(prompt.contains("# Orchestrator Agent"));
@@ -875,6 +912,8 @@ mod tests {
         assert!(prompt.contains("frontend, backend"));
         assert!(prompt.contains("300 seconds"));
         assert!(prompt.contains("aegis orchestrator status"));
+        assert!(prompt.contains("aegis daemon capabilities orch-1"));
+        assert!(prompt.contains("Tool Capability Contract"));
         assert!(prompt.contains("Value Assessment Framework"));
         assert!(prompt.contains("Low value"));
     }
@@ -882,7 +921,15 @@ mod tests {
     #[test]
     fn compose_orchestrator_prompt_minimal() {
         let config = OrchestratorConfig::default();
-        let prompt = compose_orchestrator_prompt(None, None, None, None, &config);
+        let prompt = compose_orchestrator_prompt(
+            "orch-1",
+            None,
+            None,
+            None,
+            None,
+            &config,
+            &ToolkitConfig::default(),
+        );
 
         assert!(prompt.contains("# Orchestrator Agent"));
         assert!(prompt.contains("NEVER write code"));
@@ -903,7 +950,15 @@ mod tests {
             backlog_path: None,
             managed_agents: vec![],
         };
-        let prompt = compose_orchestrator_prompt(None, None, None, None, &config);
+        let prompt = compose_orchestrator_prompt(
+            "orch-1",
+            None,
+            None,
+            None,
+            None,
+            &config,
+            &ToolkitConfig::default(),
+        );
         assert!(prompt.contains("60 seconds"));
     }
 

@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use aegis_pilot::supervisor::SupervisorCommand;
 use aegis_types::daemon::{
-    AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy,
+    AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy, ToolkitConfig,
 };
 use aegis_types::AegisConfig;
 
@@ -31,6 +31,8 @@ pub struct Fleet {
     default_aegis_config: AegisConfig,
     /// Fleet-wide goal that gets composed into every agent's prompt.
     pub fleet_goal: Option<String>,
+    /// Canonical computer-use toolkit contract source from daemon config.
+    toolkit_config: ToolkitConfig,
 }
 
 impl Fleet {
@@ -46,6 +48,7 @@ impl Fleet {
             slots,
             default_aegis_config: aegis_config,
             fleet_goal: config.goal.clone(),
+            toolkit_config: config.toolkit.clone(),
         }
     }
 
@@ -130,6 +133,7 @@ impl Fleet {
                 return;
             }
         };
+        let toolkit_config = self.toolkit_config.clone();
 
         let slot = match self.slots.get_mut(name) {
             Some(s) => s,
@@ -188,6 +192,7 @@ impl Fleet {
                 lifecycle::run_agent_slot(
                     &slot_config,
                     &aegis_config,
+                    &toolkit_config,
                     fleet_goal.as_deref(),
                     orchestrator_name.as_deref(),
                     output_tx,
@@ -784,6 +789,7 @@ mod tests {
             alerts: vec![],
             agents,
             channel: None,
+            toolkit: Default::default(),
         }
     }
 

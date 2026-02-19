@@ -21,6 +21,7 @@ pub mod persistence;
 pub mod slot;
 pub mod state;
 pub mod stream_fmt;
+pub mod tool_contract;
 pub mod toolkit_runtime;
 
 use std::collections::{HashMap, VecDeque};
@@ -49,6 +50,7 @@ use crate::control::DaemonCmdRx;
 use crate::fleet::Fleet;
 use crate::slot::NotableEvent;
 use crate::state::DaemonState;
+use crate::tool_contract::render_orchestrator_tool_contract;
 use crate::toolkit_runtime::{ToolkitOutput, ToolkitRuntime};
 
 const FRAME_RING_CAPACITY: usize = 5;
@@ -160,6 +162,7 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
         toolkit_browser_backend: "cdp".to_string(),
         loop_max_micro_actions: 8,
         loop_time_budget_ms: 1200,
+        tool_contract: String::new(),
     }
 }
 
@@ -1115,6 +1118,7 @@ impl DaemonRuntime {
                 caps.toolkit_browser_backend = self.config.toolkit.browser.backend.clone();
                 caps.loop_max_micro_actions = self.config.toolkit.loop_executor.max_micro_actions;
                 caps.loop_time_budget_ms = self.config.toolkit.loop_executor.time_budget_ms;
+                caps.tool_contract = render_orchestrator_tool_contract(name, &self.config.toolkit);
                 if let Some(session) = self.capture_sessions.get(name) {
                     caps.active_capture_session_id = Some(session.session_id.clone());
                     caps.active_capture_target_fps = Some(session.target_fps);
@@ -1298,8 +1302,10 @@ impl DaemonRuntime {
                         },
                         risk_tag: mapping.risk_tag,
                     };
-                    self.last_tool_actions
-                        .insert(name.clone(), execution.clone());
+                    self.last_tool_actions.insert(
+                        name.clone(),
+                        execution.clone(),
+                    );
                     self.append_runtime_audit(
                         cedar_action.clone(),
                         self.runtime_provenance(
@@ -1736,10 +1742,8 @@ impl DaemonRuntime {
                         },
                         risk_tag: risk,
                     };
-                    self.last_tool_actions.insert(
-                        name.clone(),
-                        execution.clone(),
-                    );
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
                     self.append_runtime_audit(
                         cedar_action,
                         self.runtime_provenance(

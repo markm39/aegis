@@ -835,6 +835,9 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
             "  Loop executor:     max_micro_actions={} time_budget_ms={}",
             caps.loop_max_micro_actions, caps.loop_time_budget_ms
         );
+        if !caps.tool_contract.trim().is_empty() {
+            println!("\n{}", caps.tool_contract);
+        }
         if let Some(session_id) = caps.active_capture_session_id {
             println!(
                 "  Capture session:   {} ({} fps)",
