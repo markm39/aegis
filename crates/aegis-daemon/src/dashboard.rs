@@ -63,8 +63,8 @@ async fn serve(state: DashboardState, shutdown: Arc<AtomicBool>) -> Result<(), S
         .route("/", get(index))
         .route("/api/status", get(status))
         .route("/api/snapshot", get(snapshot))
-        .route("/api/frame/:agent", get(frame))
-        .route("/api/logs/:agent", get(logs))
+        .route("/api/frame/{agent}", get(frame))
+        .route("/api/logs/{agent}", get(logs))
         .route("/ws", get(ws))
         .with_state(state.clone());
 
