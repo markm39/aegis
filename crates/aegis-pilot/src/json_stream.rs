@@ -23,6 +23,11 @@ use aegis_types::AegisError;
 
 use crate::session::AgentSession;
 
+/// Shell-quote a string with single quotes for safe shell expansion.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// An agent session backed by Claude Code's `--print --output-format stream-json`
 /// mode. Output is structured NDJSON on stdout; input uses `--resume` for
 /// follow-up messages.
@@ -318,7 +323,11 @@ impl AgentSession for JsonStreamSession {
     }
 
     fn attach_command(&self) -> Option<Vec<String>> {
+        // Include `cd <working_dir>` so the resume runs in the correct project
+        // context -- Claude Code stores sessions under project-specific paths.
+        let quoted_dir = shell_quote(&self.working_dir.display().to_string());
         Some(vec![
+            format!("cd {quoted_dir} &&"),
             "claude".to_string(),
             "--resume".to_string(),
             self.session_id.clone(),
@@ -336,8 +345,22 @@ mod tests {
 
     #[test]
     fn session_id_is_valid_uuid() {
-        // Just verify the UUID generation doesn't panic
         let id = uuid::Uuid::new_v4().to_string();
         assert!(uuid::Uuid::parse_str(&id).is_ok());
+    }
+
+    #[test]
+    fn shell_quote_simple() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_quote_spaces() {
+        assert_eq!(shell_quote("/path/with spaces"), "'/path/with spaces'");
+    }
+
+    #[test]
+    fn shell_quote_single_quotes() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
 }
