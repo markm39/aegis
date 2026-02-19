@@ -86,6 +86,17 @@
         color: var(--muted);
         font-size: 12px;
       }
+      .log {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .log-line { margin-bottom: 2px; }
+      .log-title { color: var(--text); font-weight: 600; }
+      .log-cmd { color: var(--accent); }
+      .log-running { color: var(--warn); }
+      .log-output { color: #7ee787; }
       .row { display: flex; gap: 12px; align-items: center; }
       .muted { color: var(--muted); }
     </style>
@@ -116,7 +127,7 @@
         </div>
         <div style="margin-top: 12px;">
           <div class="muted">Logs</div>
-          <pre id="logs"></pre>
+          <div id="logs" class="log"></div>
         </div>
       </div>
     </div>
@@ -174,6 +185,44 @@
         ctx.putImageData(img, 0, 0);
       }
 
+      function escapeHtml(str) {
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function formatLogLine(line) {
+        if (line.startsWith("**") && line.endsWith("**") && line.length > 4) {
+          const title = line.slice(2, -2).trim();
+          return `<div class="log-line log-title">${escapeHtml(title)}</div>`;
+        }
+        if (line.startsWith("> ")) {
+          const rest = line.slice(2);
+          if (rest.startsWith("Bash (running):")) {
+            return `<div class="log-line log-running">${escapeHtml(rest)}</div>`;
+          }
+          if (rest.startsWith("Bash:")) {
+            return `<div class="log-line log-output">${escapeHtml(rest)}</div>`;
+          }
+          return `<div class="log-line log-cmd">${escapeHtml(rest)}</div>`;
+        }
+        if (line.startsWith("Bash (running):")) {
+          return `<div class="log-line log-running">${escapeHtml(line)}</div>`;
+        }
+        if (line.startsWith("Bash:")) {
+          return `<div class="log-line log-output">${escapeHtml(line)}</div>`;
+        }
+        return `<div class="log-line">${escapeHtml(line)}</div>`;
+      }
+
+      function formatLogs(lines) {
+        if (!lines || !lines.length) return "<div class=\"log-line\">(none)</div>";
+        return lines.map(formatLogLine).join("");
+      }
+
       async function renderDetail() {
         if (!snapshot || !selected) return;
         const agent = snapshot.agents.find(a => a.name === selected);
@@ -185,7 +234,7 @@
           agent.last_tool_action ? `${agent.last_tool_action}\n${agent.last_tool_note || ""}` : "(none)";
         document.getElementById("pending").textContent =
           agent.pending_prompts.length ? agent.pending_prompts.map(p => `${p.raw_prompt}`).join("\n") : "(none)";
-        document.getElementById("logs").textContent = agent.last_output.join("\n");
+        document.getElementById("logs").innerHTML = formatLogs(agent.last_output);
 
         const res = await fetch(`/api/frame/${encodeURIComponent(agent.name)}?token=${encodeURIComponent(token)}`);
         if (res.ok) {

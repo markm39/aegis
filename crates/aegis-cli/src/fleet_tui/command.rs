@@ -140,6 +140,7 @@ pub enum FleetCommand {
 
 /// All known command names for completion.
 const COMMAND_NAMES: &[&str] = &[
+    "agent",
     "add",
     "alerts",
     "approve",
@@ -194,6 +195,7 @@ const COMMAND_NAMES: &[&str] = &[
 
 /// Commands that take an agent name as the second token.
 const AGENT_COMMANDS: &[&str] = &[
+    "agent",
     "approve",
     "capture-start",
     "capture-stop",
@@ -231,6 +233,61 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
     let arg2 = parts.next().unwrap_or("").trim();
 
     match cmd {
+        "agent" => {
+            let rest = input.strip_prefix("agent").unwrap_or("").trim();
+            if rest.is_empty() {
+                return Err("usage: agent <agent> [role|goal|context|task [value]]".into());
+            }
+            let mut agent_parts = rest.splitn(3, ' ');
+            let first = agent_parts.next().unwrap_or("").trim();
+            let second = agent_parts.next().unwrap_or("").trim();
+            let third = agent_parts.next().unwrap_or("").trim();
+
+            if first == "set" {
+                if second.is_empty() {
+                    return Err("usage: agent set <agent> <field> <value>".into());
+                }
+                if third.is_empty() {
+                    return Err("usage: agent set <agent> <field> <value>".into());
+                }
+                match third.split_once(' ') {
+                    Some((f, v)) => Ok(Some(FleetCommand::Context {
+                        agent: second.into(),
+                        field: Some(f.to_string()),
+                        value: Some(v.to_string()),
+                    })),
+                    None => Ok(Some(FleetCommand::Context {
+                        agent: second.into(),
+                        field: Some(third.to_string()),
+                        value: Some(String::new()),
+                    })),
+                }
+            } else if second.is_empty() {
+                Ok(Some(FleetCommand::Context {
+                    agent: first.into(),
+                    field: None,
+                    value: None,
+                }))
+            } else {
+                let combined = if third.is_empty() {
+                    second.to_string()
+                } else {
+                    format!("{second} {third}")
+                };
+                match combined.trim().split_once(' ') {
+                    Some((f, v)) => Ok(Some(FleetCommand::Context {
+                        agent: first.into(),
+                        field: Some(f.to_string()),
+                        value: Some(v.to_string()),
+                    })),
+                    None => Ok(Some(FleetCommand::Context {
+                        agent: first.into(),
+                        field: Some(second.to_string()),
+                        value: Some(String::new()),
+                    })),
+                }
+            }
+        }
         "add" => Ok(Some(FleetCommand::Add)),
         "remove" => {
             if arg1.is_empty() {
@@ -565,6 +622,53 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
         let cmd = parts[0];
         let sub = parts.get(1).copied().unwrap_or("");
 
+        if cmd == "agent" {
+            let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+            let ends_with_space = trimmed.ends_with(' ');
+            if tokens.len() == 1 && ends_with_space {
+                return agent_names.clone();
+            }
+            if tokens.len() == 2 {
+                if tokens[1] == "set" {
+                    return agent_names.clone();
+                }
+                if ends_with_space {
+                    return CONTEXT_FIELDS.iter().map(|f| f.to_string()).collect();
+                }
+                return agent_names
+                    .iter()
+                    .filter(|name| name.starts_with(tokens[1]))
+                    .cloned()
+                    .collect();
+            }
+            if tokens.len() == 3 {
+                if tokens[1] == "set" {
+                    if ends_with_space {
+                        return CONTEXT_FIELDS.iter().map(|f| f.to_string()).collect();
+                    }
+                    return agent_names
+                        .iter()
+                        .filter(|name| name.starts_with(tokens[2]))
+                        .cloned()
+                        .collect();
+                }
+                let field_prefix = tokens[2];
+                return CONTEXT_FIELDS
+                    .iter()
+                    .filter(|f| f.starts_with(field_prefix))
+                    .map(|f| f.to_string())
+                    .collect();
+            }
+            if tokens.len() == 4 && tokens[1] == "set" {
+                let field_prefix = tokens[3];
+                return CONTEXT_FIELDS
+                    .iter()
+                    .filter(|f| f.starts_with(field_prefix))
+                    .map(|f| f.to_string())
+                    .collect();
+            }
+        }
+
         // Complete daemon subcommands
         if cmd == "daemon" {
             return DAEMON_SUBCOMMANDS
@@ -616,19 +720,23 @@ pub fn apply_completion(buffer: &str, completion: &str) -> String {
         // Completing command name
         format!("{completion} ")
     } else {
-        // Rebuild by replacing the last token with the completion
-        let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
-        match parts.len() {
-            2 => format!("{} {completion} ", parts[0]),
-            3 => format!("{} {} {completion} ", parts[0], parts[1]),
-            _ => format!("{} {completion} ", parts[0]),
+        let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if trimmed.ends_with(' ') {
+            parts.push("");
         }
+        if let Some(last) = parts.last_mut() {
+            *last = completion;
+        }
+        format!("{} ", parts.join(" "))
     }
 }
 
 /// Help text listing all available commands.
 pub fn help_text() -> &'static str {
     ":add                     Add a new agent\n\
+     :agent <a>               View agent context\n\
+     :agent <a> <f> <val>     Set field (role/goal/context/task)\n\
+     :agent set <a> <f> <val> Set field (explicit)\n\
      :alerts                  Show alert rules\n\
      :approve <agent>         Approve first pending prompt\n\
      :config                  Edit daemon.toml in $EDITOR\n\
@@ -1352,6 +1460,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_agent_alias_set_field() {
+        let result = parse("agent claude-1 goal Ship it").unwrap();
+        assert_eq!(
+            result,
+            Some(FleetCommand::Context {
+                agent: "claude-1".into(),
+                field: Some("goal".into()),
+                value: Some("Ship it".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_agent_set_explicit() {
+        let result = parse("agent set claude-1 role Lead dev").unwrap();
+        assert_eq!(
+            result,
+            Some(FleetCommand::Context {
+                agent: "claude-1".into(),
+                field: Some("role".into()),
+                value: Some("Lead dev".into()),
+            })
+        );
+    }
+
+    #[test]
     fn completions_context_field_names() {
         let agents = vec!["claude-1".to_string()];
         // After agent name, should complete field names
@@ -1374,6 +1508,20 @@ mod tests {
             apply_completion("context claude-1 ro", "role"),
             "context claude-1 role "
         );
+    }
+
+    #[test]
+    fn completions_agent_after_name() {
+        let agents = vec!["claude-1".to_string()];
+        let c = completions("agent claude-1 ", &agents);
+        assert_eq!(c, vec!["context", "goal", "role", "task"]);
+    }
+
+    #[test]
+    fn completions_agent_set_name() {
+        let agents = vec!["claude-1".to_string(), "codex-1".to_string()];
+        let c = completions("agent set c", &agents);
+        assert_eq!(c, vec!["claude-1", "codex-1"]);
     }
 
     #[test]
