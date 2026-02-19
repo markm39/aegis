@@ -31,7 +31,7 @@ use tracing::{info, warn};
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, DaemonCommand, DaemonPing, DaemonResponse, OrchestratorAgentView,
-    OrchestratorSnapshot, PendingPromptSummary, ToolUseVerdict,
+    OrchestratorSnapshot, PendingPromptSummary, RuntimeCapabilities, ToolUseVerdict,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
@@ -55,6 +55,52 @@ fn hook_fail_open_enabled() -> bool {
             matches!(v.as_str(), "1" | "true" | "yes" | "on")
         })
         .unwrap_or(false)
+}
+
+/// Compute runtime capability and policy-mediation coverage for an agent slot.
+fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
+    use aegis_types::daemon::AgentToolConfig;
+
+    let (tool, headless, policy_mediation, mediation_note) = match &config.tool {
+        AgentToolConfig::ClaudeCode { .. } => (
+            "ClaudeCode".to_string(),
+            true,
+            "enforced".to_string(),
+            "Cedar policy checks are enforced via PreToolUse hooks".to_string(),
+        ),
+        AgentToolConfig::Cursor { .. } => (
+            "Cursor".to_string(),
+            false,
+            "enforced".to_string(),
+            "Cedar policy checks are enforced via Cursor hooks".to_string(),
+        ),
+        AgentToolConfig::Codex { .. } => (
+            "Codex".to_string(),
+            true,
+            "partial".to_string(),
+            "Codex hook bridge is not available yet; policy mediation is limited".to_string(),
+        ),
+        AgentToolConfig::OpenClaw { .. } => (
+            "OpenClaw".to_string(),
+            true,
+            "partial".to_string(),
+            "OpenClaw hook bridge is not implemented yet; policy mediation is limited".to_string(),
+        ),
+        AgentToolConfig::Custom { .. } => (
+            "Custom".to_string(),
+            true,
+            "custom".to_string(),
+            "Custom runtime; policy mediation depends on external integration".to_string(),
+        ),
+    };
+
+    RuntimeCapabilities {
+        name: config.name.clone(),
+        tool,
+        headless,
+        policy_mediation,
+        mediation_note,
+    }
 }
 
 /// The daemon runtime: main loop managing the fleet and control plane.
@@ -718,6 +764,18 @@ impl DaemonRuntime {
                 };
                 match serde_json::to_value(&tool_verdict) {
                     Ok(data) => DaemonResponse::ok_with_data(&decision_str, data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::RuntimeCapabilities { ref name } => {
+                let slot = match self.fleet.slot(name) {
+                    Some(s) => s,
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                };
+                let caps = runtime_capabilities(&slot.config);
+                match serde_json::to_value(&caps) {
+                    Ok(data) => DaemonResponse::ok_with_data("runtime capabilities", data),
                     Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                 }
             }
@@ -1528,6 +1586,18 @@ mod tests {
         let verdict: ToolUseVerdict = serde_json::from_value(data).unwrap();
         assert_eq!(verdict.decision, "deny");
         assert!(verdict.reason.contains("fail-closed"));
+    }
+
+    #[test]
+    fn handle_command_runtime_capabilities() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::RuntimeCapabilities { name: "a1".into() });
+        assert!(resp.ok);
+        let caps: RuntimeCapabilities = serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(caps.name, "a1");
+        assert_eq!(caps.tool, "ClaudeCode");
+        assert_eq!(caps.policy_mediation, "enforced");
+        assert!(caps.headless);
     }
 
     #[test]

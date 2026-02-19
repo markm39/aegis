@@ -17,19 +17,19 @@ use std::sync::{Arc, Mutex};
 
 use tracing::{error, info, warn};
 
+use aegis_control::hooks;
 use aegis_ledger::AuditStore;
+use aegis_pilot::driver::ProcessKind;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
-use aegis_pilot::driver::ProcessKind;
 use aegis_pilot::json_stream::JsonStreamSession;
 use aegis_pilot::jsonl::{CodexJsonProtocol, JsonlSession};
-use aegis_pilot::session::ToolKind;
 use aegis_pilot::pty::PtySession;
 use aegis_pilot::session::AgentSession;
-use aegis_pilot::tmux::TmuxSession;
+use aegis_pilot::session::ToolKind;
 use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, SupervisorConfig};
+use aegis_pilot::tmux::TmuxSession;
 use aegis_policy::PolicyEngine;
-use aegis_control::hooks;
 use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, OrchestratorConfig};
 use aegis_types::AegisConfig;
 
@@ -71,7 +71,17 @@ pub fn run_agent_slot(
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
-    match run_agent_slot_inner(slot_config, aegis_config, fleet_goal, orchestrator_name, &output_tx, update_tx.as_ref(), command_rx.as_ref(), &child_pid, &shared_session_id) {
+    match run_agent_slot_inner(
+        slot_config,
+        aegis_config,
+        fleet_goal,
+        orchestrator_name,
+        &output_tx,
+        update_tx.as_ref(),
+        command_rx.as_ref(),
+        &child_pid,
+        &shared_session_id,
+    ) {
         Ok(result) => result,
         Err(e) => {
             error!(agent = name, error = %e, "agent lifecycle failed");
@@ -102,8 +112,12 @@ fn run_agent_slot_inner(
     info!(agent = name, "agent lifecycle starting");
 
     // 0. Validate and canonicalize working directory
-    let working_dir = slot_config.working_dir.canonicalize()
-        .map_err(|e| format!("working directory '{}' for agent {name}: {e}", slot_config.working_dir.display()))?;
+    let working_dir = slot_config.working_dir.canonicalize().map_err(|e| {
+        format!(
+            "working directory '{}' for agent {name}: {e}",
+            slot_config.working_dir.display()
+        )
+    })?;
     if !working_dir.is_dir() {
         return Err(format!(
             "working directory '{}' for agent {name} is not a directory",
@@ -159,52 +173,51 @@ fn run_agent_slot_inner(
         Some(session_id),
         matches!(
             aegis_config.observer,
-            aegis_types::ObserverConfig::FsEvents { enable_snapshots: true }
+            aegis_types::ObserverConfig::FsEvents {
+                enable_snapshots: true
+            }
         ),
     )
     .map_err(|e| format!("failed to start observer for {name}: {e}"))?;
 
     // 3b. Start usage proxy if configured
-    let usage_proxy_handle = if let Some(proxy_config) = aegis_config
-        .usage_proxy
-        .as_ref()
-        .filter(|p| p.enabled)
-    {
-        let proxy = aegis_proxy::UsageProxy::new(
-            Arc::clone(&store),
-            name.clone(),
-            Some(session_id),
-            proxy_config.port,
-        );
+    let usage_proxy_handle =
+        if let Some(proxy_config) = aegis_config.usage_proxy.as_ref().filter(|p| p.enabled) {
+            let proxy = aegis_proxy::UsageProxy::new(
+                Arc::clone(&store),
+                name.clone(),
+                Some(session_id),
+                proxy_config.port,
+            );
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("failed to create tokio runtime for usage proxy: {e}"))?;
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| format!("failed to create tokio runtime for usage proxy: {e}"))?;
 
-        let handle = rt
-            .block_on(proxy.start())
-            .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?;
+            let handle = rt
+                .block_on(proxy.start())
+                .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?;
 
-        let port = handle.port;
-        info!(agent = name, port, "usage proxy started");
+            let port = handle.port;
+            info!(agent = name, port, "usage proxy started");
 
-        // Subscribe to the proxy's shutdown signal so the runtime thread
-        // exits cleanly when the agent stops (instead of blocking on ctrl_c
-        // which never arrives in a background thread).
-        let mut shutdown_sub = handle.shutdown_tx.subscribe();
+            // Subscribe to the proxy's shutdown signal so the runtime thread
+            // exits cleanly when the agent stops (instead of blocking on ctrl_c
+            // which never arrives in a background thread).
+            let mut shutdown_sub = handle.shutdown_tx.subscribe();
 
-        std::thread::Builder::new()
-            .name(format!("usage-proxy-rt-{name}"))
-            .spawn(move || {
-                rt.block_on(async move {
-                    let _ = shutdown_sub.wait_for(|&v| v).await;
-                });
-            })
-            .map_err(|e| format!("failed to spawn usage proxy runtime thread: {e}"))?;
+            std::thread::Builder::new()
+                .name(format!("usage-proxy-rt-{name}"))
+                .spawn(move || {
+                    rt.block_on(async move {
+                        let _ = shutdown_sub.wait_for(|&v| v).await;
+                    });
+                })
+                .map_err(|e| format!("failed to spawn usage proxy runtime thread: {e}"))?;
 
-        Some(handle)
-    } else {
-        None
-    };
+            Some(handle)
+        } else {
+            None
+        };
 
     // 3c. Install hook settings so pre-tool-use hooks route every tool call
     // through the daemon for Cedar policy evaluation.
@@ -227,15 +240,46 @@ fn run_agent_slot_inner(
             // Codex CLI does not have a hooks system yet (PR #11067 in review).
             // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the
             // driver for forward-compatibility when hooks ship.
-            info!(agent = name, "Codex hooks not yet available, env vars set for future use");
+            info!(
+                agent = name,
+                "Codex hooks not yet available, env vars set for future use"
+            );
         }
         AgentToolConfig::OpenClaw { .. } => {
             // OpenClaw's before_tool_call plugin hook is not fully wired (Issue #6535).
             // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the driver.
-            info!(agent = name, "OpenClaw hook bridge not yet implemented, env vars set");
+            info!(
+                agent = name,
+                "OpenClaw hook bridge not yet implemented, env vars set"
+            );
         }
         AgentToolConfig::Custom { .. } => {
             // Custom agents may or may not support hooks -- skip.
+        }
+    }
+
+    // Runtime mediation hardening:
+    // If the runtime doesn't have enforced hook mediation, mark it as needing
+    // attention so operators/orchestrators keep a human in the loop.
+    let mediation_enforced = matches!(
+        &slot_config.tool,
+        AgentToolConfig::ClaudeCode { .. } | AgentToolConfig::Cursor { .. }
+    );
+    if !mediation_enforced {
+        let note = match &slot_config.tool {
+            AgentToolConfig::Codex { .. } => {
+                "policy mediation is partial (Codex hook bridge unavailable)"
+            }
+            AgentToolConfig::OpenClaw { .. } => {
+                "policy mediation is partial (OpenClaw hook bridge unavailable)"
+            }
+            AgentToolConfig::Custom { .. } => "policy mediation is custom and may be incomplete",
+            _ => "policy mediation is not fully enforced",
+        };
+        warn!(agent = name, "{note}");
+        let _ = output_tx.send(format!("[Aegis] Warning: {note}"));
+        if let Some(tx) = update_tx {
+            let _ = tx.send(PilotUpdate::AttentionNeeded { nudge_count: 0 });
         }
     }
 
@@ -274,30 +318,67 @@ fn run_agent_slot_inner(
     };
 
     let session: Box<dyn AgentSession> = match strategy {
-        SpawnStrategy::Process { command, args, mut env, kind } => {
+        SpawnStrategy::Process {
+            command,
+            args,
+            mut env,
+            kind,
+        } => {
             // Process strategy: JSONL sessions with structured output (Claude/Codex),
             // or detached GUI tools (Cursor).
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
-                env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
-                env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+                env.push((
+                    "ANTHROPIC_BASE_URL".into(),
+                    format!("http://127.0.0.1:{port}/anthropic/v1"),
+                ));
+                env.push((
+                    "OPENAI_BASE_URL".into(),
+                    format!("http://127.0.0.1:{port}/openai/v1"),
+                ));
             }
 
             let prompt = prompt_text.as_deref().unwrap_or("");
             match kind {
-                ProcessKind::Json { tool: ToolKind::ClaudeCode, .. } => {
-                    info!(agent = name, command = command, "spawning agent via JsonStreamSession");
+                ProcessKind::Json {
+                    tool: ToolKind::ClaudeCode,
+                    ..
+                } => {
+                    info!(
+                        agent = name,
+                        command = command,
+                        "spawning agent via JsonStreamSession"
+                    );
                     Box::new(
                         JsonStreamSession::spawn(name, &command, &args, &working_dir, &env, prompt)
-                            .map_err(|e| format!("failed to spawn json-stream session for {name}: {e}"))?,
+                            .map_err(|e| {
+                                format!("failed to spawn json-stream session for {name}: {e}")
+                            })?,
                     )
                 }
-                ProcessKind::Json { tool: ToolKind::Codex, global_args } => {
-                    info!(agent = name, command = command, "spawning agent via Codex JSON session");
+                ProcessKind::Json {
+                    tool: ToolKind::Codex,
+                    global_args,
+                } => {
+                    info!(
+                        agent = name,
+                        command = command,
+                        "spawning agent via Codex JSON session"
+                    );
                     let protocol = CodexJsonProtocol::new(global_args);
                     Box::new(
-                        JsonlSession::spawn(name, protocol, &command, &args, &working_dir, &env, prompt)
-                            .map_err(|e| format!("failed to spawn codex json session for {name}: {e}"))?,
+                        JsonlSession::spawn(
+                            name,
+                            protocol,
+                            &command,
+                            &args,
+                            &working_dir,
+                            &env,
+                            prompt,
+                        )
+                        .map_err(|e| {
+                            format!("failed to spawn codex json session for {name}: {e}")
+                        })?,
                     )
                 }
                 ProcessKind::Detached => {
@@ -307,7 +388,8 @@ fn run_agent_slot_inner(
                     cmd.stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null());
-                    let _child = cmd.spawn()
+                    let _child = cmd
+                        .spawn()
                         .map_err(|e| format!("failed to spawn detached process for {name}: {e}"))?;
 
                     // Stop usage proxy, observer, end session
@@ -328,20 +410,38 @@ fn run_agent_slot_inner(
                 }
             }
         }
-        SpawnStrategy::Pty { command, mut args, mut env } => {
+        SpawnStrategy::Pty {
+            command,
+            mut args,
+            mut env,
+        } => {
             // PTY strategy: legacy path for non-Claude-Code agents.
             // Append CLI-arg task injection if needed.
-            if let Some(TaskInjection::CliArg { ref flag, ref value }) = injection {
+            if let Some(TaskInjection::CliArg {
+                ref flag,
+                ref value,
+            }) = injection
+            {
                 args.extend([flag.clone(), value.clone()]);
             }
             if let Some(ref handle) = usage_proxy_handle {
                 let port = handle.port;
-                env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
-                env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+                env.push((
+                    "ANTHROPIC_BASE_URL".into(),
+                    format!("http://127.0.0.1:{port}/anthropic/v1"),
+                ));
+                env.push((
+                    "OPENAI_BASE_URL".into(),
+                    format!("http://127.0.0.1:{port}/openai/v1"),
+                ));
             }
 
             if aegis_pilot::tmux::tmux_available() {
-                info!(agent = name, command = command, "spawning agent in tmux session");
+                info!(
+                    agent = name,
+                    command = command,
+                    "spawning agent in tmux session"
+                );
                 Box::new(
                     TmuxSession::spawn(name, &command, &args, &working_dir, &env)
                         .map_err(|e| format!("failed to spawn tmux session for {name}: {e}"))?,
@@ -386,7 +486,10 @@ fn run_agent_slot_inner(
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
             Ok(false) => {
-                warn!(agent = name, "agent produced no output after 15s, injecting prompt anyway");
+                warn!(
+                    agent = name,
+                    "agent produced no output after 15s, injecting prompt anyway"
+                );
             }
             Err(e) => {
                 warn!(agent = name, error = %e, "error waiting for agent output");
@@ -400,18 +503,15 @@ fn run_agent_slot_inner(
     }
 
     // 6. Create adapter and run supervisor
-    let mut adapter: Box<dyn aegis_pilot::adapter::AgentAdapter> =
-        match driver.create_adapter() {
-            Some(a) => a,
-            None => Box::new(aegis_pilot::adapters::passthrough::PassthroughAdapter),
-        };
+    let mut adapter: Box<dyn aegis_pilot::adapter::AgentAdapter> = match driver.create_adapter() {
+        Some(a) => a,
+        None => Box::new(aegis_pilot::adapters::passthrough::PassthroughAdapter),
+    };
 
     let pilot_config = slot_config
         .pilot
         .clone()
-        .unwrap_or_else(|| {
-            aegis_config.pilot.clone().unwrap_or_default()
-        });
+        .unwrap_or_else(|| aegis_config.pilot.clone().unwrap_or_default());
 
     let engine_for_supervisor = PolicyEngine::new(&policy_dir, None)
         .map_err(|e| format!("failed to create supervisor policy engine: {e}"))?;
@@ -434,7 +534,7 @@ fn run_agent_slot_inner(
         adapter.as_mut(),
         &engine_for_supervisor,
         &sup_config,
-        None,       // no event_tx (could be added for alerting)
+        None, // no event_tx (could be added for alerting)
         Some(output_tx),
         update_tx,
         command_rx,
@@ -543,7 +643,8 @@ fn compose_orchestrator_prompt(
     let mut sections = Vec::new();
 
     // Identity and mission
-    sections.push("# Orchestrator Agent\n\
+    sections.push(
+        "# Orchestrator Agent\n\
         You are the orchestrator for an Aegis-managed fleet of coding agents. \
         Your job is strategic oversight: review what agents are doing, evaluate \
         whether their work is high-value, redirect them when they drift, and \
@@ -553,7 +654,9 @@ fn compose_orchestrator_prompt(
         - You ONLY review, direct, and verify.\n\
         - You use `aegis` CLI commands to interact with the fleet.\n\
         - You use `git log`, `git diff`, and `git show` to review work.\n\
-        - You evaluate every piece of work against the backlog priorities.".to_string());
+        - You evaluate every piece of work against the backlog priorities."
+            .to_string(),
+    );
 
     // Fleet goal
     if let Some(g) = fleet_goal.filter(|s| !s.is_empty()) {

@@ -62,6 +62,8 @@ pub enum DaemonCommand {
         /// Full tool input as JSON.
         tool_input: serde_json::Value,
     },
+    /// Get runtime capability and policy-mediation coverage for an agent.
+    RuntimeCapabilities { name: String },
     /// Get or set the fleet-wide goal.
     FleetGoal {
         /// If Some, sets the fleet goal. If None, returns the current goal.
@@ -243,6 +245,21 @@ pub struct ToolUseVerdict {
     pub decision: String,
     /// Human-readable reason for the decision.
     pub reason: String,
+}
+
+/// Capability and mediation profile for one runtime/agent tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCapabilities {
+    /// Agent slot name.
+    pub name: String,
+    /// Tool type (e.g., ClaudeCode, OpenClaw).
+    pub tool: String,
+    /// Whether the runtime supports headless/non-interactive execution.
+    pub headless: bool,
+    /// One of: "enforced", "partial", "observe_only", "custom".
+    pub policy_mediation: String,
+    /// One-line explanation of mediation coverage.
+    pub mediation_note: String,
 }
 
 /// Bulk fleet snapshot returned by `OrchestratorContext`.
@@ -447,6 +464,9 @@ mod tests {
                 tool_name: "Bash".into(),
                 tool_input: serde_json::json!({"command": "ls -la"}),
             },
+            DaemonCommand::RuntimeCapabilities {
+                name: "claude-1".into(),
+            },
             DaemonCommand::FleetGoal { goal: None },
             DaemonCommand::FleetGoal {
                 goal: Some("Build a chess app".into()),
@@ -597,5 +617,22 @@ mod tests {
         assert_eq!(back.running_count, 3);
         assert!(back.policy_engine_loaded);
         assert!(!back.hook_fail_open);
+    }
+
+    #[test]
+    fn runtime_capabilities_serialization() {
+        let caps = RuntimeCapabilities {
+            name: "worker-1".into(),
+            tool: "OpenClaw".into(),
+            headless: true,
+            policy_mediation: "partial".into(),
+            mediation_note: "OpenClaw hook bridge not yet implemented".into(),
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        let back: RuntimeCapabilities = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "worker-1");
+        assert_eq!(back.tool, "OpenClaw");
+        assert!(back.headless);
+        assert_eq!(back.policy_mediation, "partial");
     }
 }
