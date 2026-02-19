@@ -23,8 +23,9 @@ pub mod state;
 pub mod stream_fmt;
 pub mod toolkit_runtime;
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
@@ -32,13 +33,13 @@ use tracing::{info, warn};
 use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
-    DaemonResponse, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
-    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, ToolActionExecution,
-    ToolActionOutcome, ToolUseVerdict, TuiToolData,
+    DaemonResponse, FramePayload, OrchestratorAgentView, OrchestratorSnapshot,
+    PendingPromptSummary, RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation,
+    ToolActionExecution, ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_ledger::AuditStore;
-use aegis_toolkit::contract::{CaptureRegion as ToolkitCaptureRegion, ToolAction};
+use aegis_toolkit::contract::{CaptureRegion as ToolkitCaptureRegion, RiskTag, ToolAction};
 use aegis_toolkit::policy::map_tool_action;
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
 use aegis_types::AegisConfig;
@@ -49,6 +50,52 @@ use crate::fleet::Fleet;
 use crate::slot::NotableEvent;
 use crate::state::DaemonState;
 use crate::toolkit_runtime::{ToolkitOutput, ToolkitRuntime};
+
+const FRAME_RING_CAPACITY: usize = 5;
+const CAPTURE_DEFAULT_FPS: u16 = 30;
+const BROWSER_SESSION_TTL: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone)]
+struct CachedFrame {
+    payload: FramePayload,
+    frame_id: u64,
+    captured_at: Instant,
+}
+
+struct FrameRing {
+    frames: VecDeque<CachedFrame>,
+    capacity: usize,
+}
+
+impl FrameRing {
+    fn new(capacity: usize) -> Self {
+        Self {
+            frames: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn push(&mut self, frame: CachedFrame) {
+        if self.frames.len() >= self.capacity {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(frame);
+    }
+
+    fn latest(&self) -> Option<&CachedFrame> {
+        self.frames.back()
+    }
+}
+
+#[allow(dead_code)]
+struct CaptureStream {
+    session_id: String,
+    target_fps: u16,
+    region: Option<ToolkitCaptureRegion>,
+    stop: Arc<AtomicBool>,
+    frames: Arc<Mutex<FrameRing>>,
+    handle: std::thread::JoinHandle<()>,
+}
 
 /// Whether hook policy checks should fail open on control/policy failures.
 ///
@@ -131,7 +178,9 @@ pub struct DaemonRuntime {
     /// Aegis config (needed for policy reload).
     aegis_config: AegisConfig,
     /// Active capture sessions keyed by agent name.
-    capture_sessions: std::collections::HashMap<String, CaptureSessionStarted>,
+    capture_sessions: HashMap<String, CaptureSessionStarted>,
+    /// Active capture streams keyed by agent name.
+    capture_streams: HashMap<String, CaptureStream>,
     /// Last tool-action execution metadata keyed by agent name.
     last_tool_actions: std::collections::HashMap<String, ToolActionExecution>,
     /// Optional computer-use runtime for orchestrator actions.
@@ -185,20 +234,173 @@ impl DaemonRuntime {
             channel_thread: None,
             policy_engine,
             aegis_config,
-            capture_sessions: std::collections::HashMap::new(),
-            last_tool_actions: std::collections::HashMap::new(),
+            capture_sessions: HashMap::new(),
+            capture_streams: HashMap::new(),
+            last_tool_actions: HashMap::new(),
             toolkit_runtime: None,
         }
     }
 
     fn ensure_toolkit_runtime(&mut self) -> Result<&mut ToolkitRuntime, String> {
         if self.toolkit_runtime.is_none() {
-            self.toolkit_runtime = Some(ToolkitRuntime::new()?);
+            self.toolkit_runtime = Some(ToolkitRuntime::new(&self.config.toolkit)?);
         }
         Ok(self
             .toolkit_runtime
             .as_mut()
             .expect("toolkit runtime just initialized"))
+    }
+
+    fn stop_capture_stream(&mut self, name: &str) {
+        if let Some(stream) = self.capture_streams.remove(name) {
+            stream.stop.store(true, Ordering::Relaxed);
+            let _ = stream.handle.join();
+        }
+    }
+
+    fn stop_all_capture_streams(&mut self) {
+        let names: Vec<String> = self.capture_streams.keys().cloned().collect();
+        for name in names {
+            self.stop_capture_stream(&name);
+        }
+    }
+
+    fn latest_cached_frame(
+        &self,
+        name: &str,
+        region: &Option<ToolkitCaptureRegion>,
+    ) -> Option<CachedFrame> {
+        let stream = self.capture_streams.get(name)?;
+        if stream.region != *region {
+            return None;
+        }
+        let ring = stream.frames.lock().ok()?;
+        ring.latest().cloned()
+    }
+
+    fn spawn_capture_stream(
+        &mut self,
+        name: &str,
+        session: &CaptureSessionStarted,
+        region: Option<ToolkitCaptureRegion>,
+    ) -> Result<(), String> {
+        self.stop_capture_stream(name);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let frames = Arc::new(Mutex::new(FrameRing::new(FRAME_RING_CAPACITY)));
+        let stop_clone = Arc::clone(&stop);
+        let frames_clone = Arc::clone(&frames);
+        let target_fps = session.target_fps;
+        let region_clone = region.clone();
+        let toolkit_config = self.config.toolkit.clone();
+
+        let handle = std::thread::Builder::new()
+            .name(format!("capture-{name}"))
+            .spawn(move || {
+                let mut runtime = match ToolkitRuntime::new(&toolkit_config) {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "capture stream runtime unavailable");
+                        return;
+                    }
+                };
+
+                let fps = if target_fps == 0 {
+                    CAPTURE_DEFAULT_FPS
+                } else {
+                    target_fps
+                };
+                let interval_ms = 1000u64.saturating_div(fps as u64).max(1);
+                let interval = Duration::from_millis(interval_ms);
+
+                while !stop_clone.load(Ordering::Relaxed) {
+                    let started = Instant::now();
+                    let action = ToolAction::ScreenCapture {
+                        region: region_clone.clone(),
+                        target_fps: fps,
+                    };
+
+                    match runtime.execute(&action) {
+                        Ok(output) => {
+                            if let (Some(frame), Some(frame_id)) =
+                                (output.frame, output.execution.result.frame_id)
+                            {
+                                if let Ok(mut ring) = frames_clone.lock() {
+                                    ring.push(CachedFrame {
+                                        payload: frame,
+                                        frame_id,
+                                        captured_at: Instant::now(),
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "capture stream failed");
+                        }
+                    }
+
+                    let elapsed = started.elapsed();
+                    if elapsed < interval {
+                        std::thread::sleep(interval - elapsed);
+                    }
+                }
+            })
+            .map_err(|e| format!("failed to spawn capture stream: {e}"))?;
+
+        self.capture_streams.insert(
+            name.to_string(),
+            CaptureStream {
+                session_id: session.session_id.clone(),
+                target_fps: session.target_fps,
+                region,
+                stop,
+                frames,
+                handle,
+            },
+        );
+
+        Ok(())
+    }
+
+    fn precheck_tool_action(&self, action: &ToolAction) -> Result<(), String> {
+        let toolkit = &self.config.toolkit;
+        match action {
+            ToolAction::ScreenCapture { target_fps, .. } => {
+                if !toolkit.capture.enabled {
+                    return Err("capture actions are disabled by daemon toolkit config".to_string());
+                }
+                if *target_fps < toolkit.capture.min_fps || *target_fps > toolkit.capture.max_fps {
+                    return Err(format!(
+                        "capture fps {} outside allowed range {}..={}",
+                        target_fps, toolkit.capture.min_fps, toolkit.capture.max_fps
+                    ));
+                }
+            }
+            ToolAction::WindowFocus { .. }
+            | ToolAction::MouseMove { .. }
+            | ToolAction::MouseClick { .. }
+            | ToolAction::MouseDrag { .. }
+            | ToolAction::KeyPress { .. }
+            | ToolAction::TypeText { .. }
+            | ToolAction::InputBatch { .. } => {
+                if !toolkit.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
+            }
+            ToolAction::BrowserNavigate { .. } | ToolAction::BrowserSnapshot { .. } => {
+                if !toolkit.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if toolkit.browser.backend.trim().to_ascii_lowercase() != "cdp" {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        toolkit.browser.backend
+                    ));
+                }
+            }
+            ToolAction::TuiSnapshot { .. } | ToolAction::TuiInput { .. } => {}
+        }
+        Ok(())
     }
 
     fn evaluate_runtime_tool_action(
@@ -409,6 +611,10 @@ impl DaemonRuntime {
                 // Forward notable events to the notification channel
                 self.forward_to_channel(notable_events);
 
+                if let Some(runtime) = self.toolkit_runtime.as_mut() {
+                    runtime.prune_idle_sessions(BROWSER_SESSION_TTL);
+                }
+
                 // Periodically save state
                 if last_state_save.elapsed() >= state_save_interval {
                     self.save_state();
@@ -423,6 +629,7 @@ impl DaemonRuntime {
 
         // Stop all running agents to prevent orphaned processes
         self.fleet.stop_all();
+        self.stop_all_capture_streams();
 
         // Save final state
         self.save_state();
@@ -918,6 +1125,52 @@ impl DaemonRuntime {
                 }
 
                 let mapping = map_tool_action(action);
+                if let Err(precheck_reason) = self.precheck_tool_action(action) {
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: mapping.cedar_action.to_string(),
+                            risk_tag: mapping.risk_tag,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: self
+                                .capture_sessions
+                                .get(name)
+                                .map(|s| s.session_id.clone()),
+                            note: Some(format!("deny: {precheck_reason}")),
+                        },
+                        risk_tag: mapping.risk_tag,
+                    };
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
+                    let fallback_action = Action::new(
+                        name.clone(),
+                        ActionKind::ToolCall {
+                            tool: mapping.cedar_action.to_string(),
+                            args: serde_json::json!({ "precheck": true }),
+                        },
+                    );
+                    self.append_runtime_audit(
+                        fallback_action,
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::ExecuteToolAction,
+                            action,
+                            "deny",
+                            &precheck_reason,
+                            &execution,
+                        ),
+                    );
+                    let data = serde_json::to_value(ToolActionOutcome {
+                        execution,
+                        frame: None,
+                        tui: None,
+                        browser: None,
+                    })
+                    .unwrap_or(serde_json::Value::Null);
+                    return DaemonResponse::ok_with_data("deny", data);
+                }
                 let (cedar_action, decision, reason) =
                     self.evaluate_runtime_tool_action(name, action);
 
@@ -1126,6 +1379,49 @@ impl DaemonRuntime {
                     return DaemonResponse::ok_with_data("allow", data);
                 }
 
+                if let ToolAction::ScreenCapture { region, .. } = action {
+                    if let Some(cached) = self.latest_cached_frame(name, region) {
+                        let age_ms = cached.captured_at.elapsed().as_millis() as u64;
+                        let execution = ToolActionExecution {
+                            result: aegis_toolkit::contract::ToolResult {
+                                action: mapping.cedar_action.to_string(),
+                                risk_tag: mapping.risk_tag,
+                                capture_latency_ms: Some(age_ms),
+                                input_latency_ms: None,
+                                frame_id: Some(cached.frame_id),
+                                window_id: None,
+                                session_id: self
+                                    .capture_sessions
+                                    .get(name)
+                                    .map(|s| s.session_id.clone()),
+                                note: Some(format!("allow: {reason} (cached {}ms)", age_ms)),
+                            },
+                            risk_tag: mapping.risk_tag,
+                        };
+                        self.last_tool_actions
+                            .insert(name.clone(), execution.clone());
+                        self.append_runtime_audit(
+                            cedar_action.clone(),
+                            self.runtime_provenance(
+                                name,
+                                RuntimeOperation::ExecuteToolAction,
+                                action,
+                                "allow",
+                                &reason,
+                                &execution,
+                            ),
+                        );
+                        let data = serde_json::to_value(ToolActionOutcome {
+                            execution,
+                            frame: Some(cached.payload),
+                            tui: None,
+                            browser: None,
+                        })
+                        .unwrap_or(serde_json::Value::Null);
+                        return DaemonResponse::ok_with_data("allow", data);
+                    }
+                }
+
                 let runtime = match self.ensure_toolkit_runtime() {
                     Ok(rt) => rt,
                     Err(e) => {
@@ -1264,12 +1560,125 @@ impl DaemonRuntime {
                 DaemonResponse::ok_with_data("allow", data)
             }
 
+            DaemonCommand::ExecuteToolBatch {
+                ref name,
+                ref actions,
+                max_actions,
+            } => {
+                if self.fleet.slot(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                if actions.is_empty() {
+                    let empty = ToolBatchOutcome {
+                        executed: 0,
+                        outcomes: vec![],
+                        halted_reason: Some("empty action batch".to_string()),
+                    };
+                    return DaemonResponse::ok_with_data(
+                        "batch halted",
+                        serde_json::to_value(empty).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+
+                let configured_limit = self.config.toolkit.loop_executor.max_micro_actions.max(1);
+                let requested_limit = max_actions.unwrap_or(configured_limit).max(1);
+                let hard_limit = requested_limit.min(configured_limit);
+                let mut outcomes = Vec::new();
+                let started = Instant::now();
+                let mut halted_reason: Option<String> = None;
+
+                for action in actions.iter().take(usize::from(hard_limit)) {
+                    if self.config.toolkit.loop_executor.halt_on_high_risk
+                        && matches!(map_tool_action(action).risk_tag, RiskTag::High)
+                    {
+                        halted_reason = Some(format!(
+                            "policy boundary reached before high-risk action {}",
+                            action.policy_action_name()
+                        ));
+                        break;
+                    }
+                    if started.elapsed().as_millis() as u64
+                        > self.config.toolkit.loop_executor.time_budget_ms
+                    {
+                        halted_reason = Some(format!(
+                            "time budget exceeded ({}ms)",
+                            self.config.toolkit.loop_executor.time_budget_ms
+                        ));
+                        break;
+                    }
+
+                    let response = self.handle_command(DaemonCommand::ExecuteToolAction {
+                        name: name.clone(),
+                        action: action.clone(),
+                    });
+                    if !response.ok {
+                        halted_reason = Some(response.message.clone());
+                        break;
+                    }
+                    let Some(data) = response.data else {
+                        halted_reason = Some("missing action outcome data".to_string());
+                        break;
+                    };
+                    let outcome: ToolActionOutcome = match serde_json::from_value(data) {
+                        Ok(outcome) => outcome,
+                        Err(e) => {
+                            halted_reason = Some(format!("invalid action outcome: {e}"));
+                            break;
+                        }
+                    };
+                    let denied = outcome
+                        .execution
+                        .result
+                        .note
+                        .as_deref()
+                        .map(|note| note.starts_with("deny:"))
+                        .unwrap_or(false);
+                    outcomes.push(outcome);
+                    if denied {
+                        halted_reason = Some("batch halted on denied action".to_string());
+                        break;
+                    }
+                }
+
+                if outcomes.len() == usize::from(hard_limit)
+                    && actions.len() > outcomes.len()
+                    && halted_reason.is_none()
+                {
+                    halted_reason = Some(format!("batch cap reached ({hard_limit} actions)"));
+                }
+
+                let batch = ToolBatchOutcome {
+                    executed: outcomes.len(),
+                    outcomes,
+                    halted_reason,
+                };
+                DaemonResponse::ok_with_data(
+                    "batch executed",
+                    serde_json::to_value(batch).unwrap_or(serde_json::Value::Null),
+                )
+            }
+
             DaemonCommand::StartCaptureSession {
                 ref name,
                 ref request,
             } => {
                 if self.fleet.slot(name).is_none() {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                if !self.config.toolkit.capture.enabled {
+                    return DaemonResponse::error(
+                        "capture start denied: capture actions are disabled by daemon toolkit config",
+                    );
+                }
+                if request.target_fps < self.config.toolkit.capture.min_fps
+                    || request.target_fps > self.config.toolkit.capture.max_fps
+                {
+                    return DaemonResponse::error(format!(
+                        "capture start denied: fps {} outside allowed range {}..={}",
+                        request.target_fps,
+                        self.config.toolkit.capture.min_fps,
+                        self.config.toolkit.capture.max_fps
+                    ));
                 }
                 let screen_action = ToolAction::ScreenCapture {
                     region: request.region.as_ref().map(|r| ToolkitCaptureRegion {
@@ -1320,6 +1729,15 @@ impl DaemonRuntime {
                     target_fps: request.target_fps,
                 };
                 self.capture_sessions.insert(name.clone(), session.clone());
+                let stream_region = request.region.as_ref().map(|r| ToolkitCaptureRegion {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                });
+                if let Err(e) = self.spawn_capture_stream(name, &session, stream_region) {
+                    warn!(error = %e, "failed to start capture stream");
+                }
                 let execution = ToolActionExecution {
                     result: aegis_toolkit::contract::ToolResult {
                         action: "CaptureStart".to_string(),
@@ -1360,6 +1778,11 @@ impl DaemonRuntime {
             } => {
                 if self.fleet.slot(name).is_none() {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                if !self.config.toolkit.capture.enabled {
+                    return DaemonResponse::error(
+                        "capture stop denied: capture actions are disabled by daemon toolkit config",
+                    );
                 }
                 let target_fps = self
                     .capture_sessions
@@ -1407,6 +1830,7 @@ impl DaemonRuntime {
                 match self.capture_sessions.get(name) {
                     Some(s) if s.session_id == *session_id => {
                         self.capture_sessions.remove(name);
+                        self.stop_capture_stream(name);
                         let execution = ToolActionExecution {
                             result: aegis_toolkit::contract::ToolResult {
                                 action: "CaptureStop".to_string(),
@@ -2094,6 +2518,7 @@ mod tests {
             alerts: vec![],
             agents,
             channel: None,
+            toolkit: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)

@@ -1,8 +1,9 @@
 //! Orchestrator computer-use runtime backed by aegis-toolkit.
 
+use std::collections::HashMap;
 use std::env;
 use std::net::TcpStream;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -14,6 +15,7 @@ use aegis_toolkit::input::{InputProvider, KeyPress, MouseButton, MouseClick, Mou
 use aegis_toolkit::policy::map_tool_action;
 use aegis_toolkit::window::{WindowProvider, WindowRef};
 use aegis_toolkit::{CaptureFrame, ToolkitError};
+use aegis_types::daemon::ToolkitConfig;
 
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Message, WebSocket};
@@ -27,25 +29,32 @@ pub struct ToolkitOutput {
 }
 
 pub struct ToolkitRuntime {
+    config: ToolkitConfig,
     #[cfg(target_os = "macos")]
     helper: aegis_toolkit::macos_helper::MacosHelper,
+    browser_sessions: HashMap<String, BrowserSession>,
 }
 
 impl ToolkitRuntime {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(config: &ToolkitConfig) -> Result<Self, String> {
         #[cfg(target_os = "macos")]
         {
             let helper = aegis_toolkit::macos_helper()
                 .map_err(|e| format!("macos helper unavailable: {e}"))?;
-            Ok(Self { helper })
+            Ok(Self {
+                config: config.clone(),
+                helper,
+                browser_sessions: HashMap::new(),
+            })
         }
         #[cfg(not(target_os = "macos"))]
         {
+            let _ = config;
             Err("toolkit runtime only implemented on macOS".to_string())
         }
     }
 
-    pub fn execute(&self, action: &ToolAction) -> Result<ToolkitOutput, String> {
+    pub fn execute(&mut self, action: &ToolAction) -> Result<ToolkitOutput, String> {
         let mapping = map_tool_action(action);
         let mut result = ToolResult {
             action: mapping.cedar_action.to_string(),
@@ -63,6 +72,9 @@ impl ToolkitRuntime {
 
         match action {
             ToolAction::ScreenCapture { region, target_fps } => {
+                if !self.config.capture.enabled {
+                    return Err("capture actions are disabled by daemon toolkit config".to_string());
+                }
                 let request = CaptureRequest {
                     target_fps: (*target_fps).into(),
                     region: region.as_ref().map(|r| aegis_toolkit::capture::Region {
@@ -80,17 +92,26 @@ impl ToolkitRuntime {
                 frame_payload = Some(frame_to_payload(frame)?);
             }
             ToolAction::WindowFocus { app_id, window_id } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
                 let started = Instant::now();
                 self.focus(app_id, *window_id).map_err(|e| e.to_string())?;
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
                 result.window_id = *window_id;
             }
             ToolAction::MouseMove { x, y } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
                 let started = Instant::now();
                 self.move_mouse(*x, *y).map_err(|e| e.to_string())?;
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
             ToolAction::MouseClick { x, y, button } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
                 let started = Instant::now();
                 self.click_mouse(*x, *y, button.clone())
                     .map_err(|e| e.to_string())?;
@@ -102,12 +123,18 @@ impl ToolkitRuntime {
                 to_x,
                 to_y,
             } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
                 let started = Instant::now();
                 self.drag_mouse(*from_x, *from_y, *to_x, *to_y)
                     .map_err(|e| e.to_string())?;
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
             ToolAction::KeyPress { keys } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
                 let started = Instant::now();
                 for key in keys {
                     self.key_press(key).map_err(|e| e.to_string())?;
@@ -115,6 +142,9 @@ impl ToolkitRuntime {
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
             ToolAction::TypeText { text } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
                 let started = Instant::now();
                 self.type_text(text).map_err(|e| e.to_string())?;
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
@@ -123,10 +153,27 @@ impl ToolkitRuntime {
                 return Err("tui runtime not implemented".to_string());
             }
             ToolAction::BrowserNavigate { session_id, url } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if self.config.browser.backend.trim().to_ascii_lowercase() != "cdp" {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
                 let started = Instant::now();
-                let mut client = CdpClient::connect_from_env()?;
-                client.call("Page.enable", serde_json::json!({}))?;
-                client.call("Page.navigate", serde_json::json!({ "url": url }))?;
+                let res = self.with_browser_session(session_id, |session| {
+                    session.client.call("Page.enable", serde_json::json!({}))?;
+                    session
+                        .client
+                        .call("Page.navigate", serde_json::json!({ "url": url }))?;
+                    Ok(())
+                });
+                if let Err(e) = res {
+                    self.browser_sessions.remove(session_id);
+                    return Err(e);
+                }
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
                 browser_payload = Some(BrowserToolData {
                     session_id: session_id.clone(),
@@ -140,23 +187,57 @@ impl ToolkitRuntime {
                 session_id,
                 include_screenshot,
             } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if self.config.browser.backend.trim().to_ascii_lowercase() != "cdp" {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
+                let allow_screenshot = self.config.browser.allow_screenshot;
                 let started = Instant::now();
-                let mut client = CdpClient::connect_from_env()?;
-                client.call("Page.enable", serde_json::json!({}))?;
-                let screenshot_base64 = if *include_screenshot {
-                    let res = client.call("Page.captureScreenshot", serde_json::json!({ "format": "png" }))?;
-                    res.get("data").and_then(|v| v.as_str()).map(|s| s.to_string())
-                } else {
-                    None
-                };
+                let mut screenshot_base64 = None;
+                let res = self.with_browser_session(session_id, |session| {
+                    session.client.call("Page.enable", serde_json::json!({}))?;
+                    if *include_screenshot && allow_screenshot {
+                        let res = session.client.call(
+                            "Page.captureScreenshot",
+                            serde_json::json!({ "format": "png" }),
+                        )?;
+                        screenshot_base64 =
+                            res.get("data").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    }
+                    Ok(())
+                });
+                if let Err(e) = res {
+                    self.browser_sessions.remove(session_id);
+                    return Err(e);
+                }
                 browser_payload = Some(BrowserToolData {
                     session_id: session_id.clone(),
                     backend: "cdp".to_string(),
                     available: true,
-                    note: "snapshot captured".to_string(),
+                    note: if *include_screenshot && !allow_screenshot {
+                        "snapshot captured (screenshots disabled by toolkit policy config)"
+                            .to_string()
+                    } else {
+                        "snapshot captured".to_string()
+                    },
                     screenshot_base64,
                 });
                 result.capture_latency_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            ToolAction::InputBatch { actions } => {
+                if !self.config.input.enabled {
+                    return Err("input actions are disabled by daemon toolkit config".to_string());
+                }
+                let started = Instant::now();
+                for action in actions {
+                    self.apply_input_action(action).map_err(|e| e.to_string())?;
+                }
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
         }
 
@@ -285,6 +366,70 @@ impl ToolkitRuntime {
             Err(ToolkitError::Unavailable("input not supported".into()))
         }
     }
+
+    fn apply_input_action(&self, action: &aegis_toolkit::contract::InputAction) -> Result<(), ToolkitError> {
+        use aegis_toolkit::contract::InputAction;
+        match action {
+            InputAction::MouseMove { x, y } => self.move_mouse(*x, *y),
+            InputAction::MouseClick { x, y, button } => self.click_mouse(*x, *y, button.clone()),
+            InputAction::MouseDrag {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => self.drag_mouse(*from_x, *from_y, *to_x, *to_y),
+            InputAction::KeyPress { keys } => {
+                for key in keys {
+                    self.key_press(key)?;
+                }
+                Ok(())
+            }
+            InputAction::TypeText { text } => self.type_text(text),
+        }
+    }
+
+    pub fn prune_idle_sessions(&mut self, max_idle: Duration) {
+        let now = Instant::now();
+        self.browser_sessions
+            .retain(|_, session| now.duration_since(session.last_used) <= max_idle);
+    }
+
+    fn with_browser_session<F>(&mut self, session_id: &str, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&mut BrowserSession) -> Result<(), String>,
+    {
+        let session = match self.browser_sessions.get_mut(session_id) {
+            Some(session) => session,
+            None => {
+                let (client, endpoint) =
+                    CdpClient::connect(self.config.browser.cdp_ws_url.as_deref())?;
+                self.browser_sessions.insert(
+                    session_id.to_string(),
+                    BrowserSession {
+                        client,
+                        endpoint,
+                        last_used: Instant::now(),
+                    },
+                );
+                self.browser_sessions
+                    .get_mut(session_id)
+                    .expect("browser session just inserted")
+            }
+        };
+
+        let res = f(session);
+        if res.is_ok() {
+            session.last_used = Instant::now();
+        }
+        res
+    }
+}
+
+struct BrowserSession {
+    client: CdpClient,
+    #[allow(dead_code)]
+    endpoint: String,
+    last_used: Instant,
 }
 
 struct CdpClient {
@@ -293,19 +438,22 @@ struct CdpClient {
 }
 
 impl CdpClient {
-    fn connect_from_env() -> Result<Self, String> {
-        let ws_url = env::var("AEGIS_CDP_WS")
-            .or_else(|_| env::var("CHROME_DEVTOOLS_WS"))
-            .map_err(|_| {
-                "missing CDP websocket endpoint (set AEGIS_CDP_WS or CHROME_DEVTOOLS_WS)"
-                    .to_string()
-            })?;
+    fn connect(ws_url_override: Option<&str>) -> Result<(Self, String), String> {
+        let ws_url = match ws_url_override {
+            Some(url) if !url.trim().is_empty() => url.to_string(),
+            _ => env::var("AEGIS_CDP_WS")
+                .or_else(|_| env::var("CHROME_DEVTOOLS_WS"))
+                .map_err(|_| {
+                    "missing CDP websocket endpoint (set toolkit.browser.cdp_ws_url or AEGIS_CDP_WS/CHROME_DEVTOOLS_WS)"
+                        .to_string()
+                })?,
+        };
 
         let url = Url::parse(&ws_url)
             .map_err(|e| format!("invalid CDP websocket URL ({ws_url}): {e}"))?;
         let (socket, _) = connect(url).map_err(|e| format!("cdp connect failed: {e}"))?;
 
-        Ok(Self { socket, next_id: 1 })
+        Ok((Self { socket, next_id: 1 }, ws_url))
     }
 
     fn call(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {

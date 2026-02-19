@@ -90,6 +90,9 @@ pub enum ToolAction {
         session_id: String,
         include_screenshot: bool,
     },
+    InputBatch {
+        actions: Vec<InputAction>,
+    },
 }
 
 impl ToolAction {
@@ -107,6 +110,7 @@ impl ToolAction {
             ToolAction::TuiInput { .. } => "TuiInput",
             ToolAction::BrowserNavigate { .. } => "BrowserNavigate",
             ToolAction::BrowserSnapshot { .. } => "BrowserSnapshot",
+            ToolAction::InputBatch { .. } => "InputBatch",
         }
     }
 
@@ -123,6 +127,55 @@ impl ToolAction {
             | ToolAction::TypeText { .. }
             | ToolAction::TuiInput { .. } => RiskTag::Medium,
             ToolAction::WindowFocus { .. } | ToolAction::BrowserNavigate { .. } => RiskTag::High,
+            ToolAction::InputBatch { actions } => max_risk_tag(actions.iter().map(InputAction::risk_tag)),
+        }
+    }
+}
+
+fn max_risk_tag<I>(tags: I) -> RiskTag
+where
+    I: IntoIterator<Item = RiskTag>,
+{
+    let mut max = RiskTag::Low;
+    for tag in tags {
+        if risk_rank(tag) > risk_rank(max) {
+            max = tag;
+        }
+    }
+    max
+}
+
+fn risk_rank(tag: RiskTag) -> u8 {
+    match tag {
+        RiskTag::Low => 0,
+        RiskTag::Medium => 1,
+        RiskTag::High => 2,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InputAction {
+    MouseMove { x: i32, y: i32 },
+    MouseClick { x: i32, y: i32, button: MouseButton },
+    MouseDrag {
+        from_x: i32,
+        from_y: i32,
+        to_x: i32,
+        to_y: i32,
+    },
+    KeyPress { keys: Vec<String> },
+    TypeText { text: String },
+}
+
+impl InputAction {
+    pub fn risk_tag(&self) -> RiskTag {
+        match self {
+            InputAction::MouseMove { .. } => RiskTag::Low,
+            InputAction::MouseClick { .. }
+            | InputAction::MouseDrag { .. }
+            | InputAction::KeyPress { .. }
+            | InputAction::TypeText { .. } => RiskTag::Medium,
         }
     }
 }
@@ -183,6 +236,21 @@ mod tests {
     }
 
     #[test]
+    fn input_batch_roundtrip_serde() {
+        let action = ToolAction::InputBatch {
+            actions: vec![
+                InputAction::MouseMove { x: 1, y: 2 },
+                InputAction::TypeText {
+                    text: "hi".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let back: ToolAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(action, back);
+    }
+
+    #[test]
     fn risk_tags_map_as_expected() {
         assert_eq!(
             ToolAction::ScreenCapture {
@@ -206,6 +274,20 @@ mod tests {
             }
             .risk_tag(),
             RiskTag::High
+        );
+        assert_eq!(
+            ToolAction::InputBatch {
+                actions: vec![
+                    InputAction::MouseMove { x: 1, y: 2 },
+                    InputAction::MouseClick {
+                        x: 3,
+                        y: 4,
+                        button: MouseButton::Left
+                    }
+                ],
+            }
+            .risk_tag(),
+            RiskTag::Medium
         );
     }
 
