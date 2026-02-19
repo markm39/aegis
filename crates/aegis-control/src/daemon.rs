@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use aegis_toolkit::contract::{RiskTag, ToolAction, ToolResult};
 use aegis_types::daemon::AgentSlotConfig;
 use aegis_types::AgentStatus;
 
@@ -64,6 +65,18 @@ pub enum DaemonCommand {
     },
     /// Get runtime capability and policy-mediation coverage for an agent.
     RuntimeCapabilities { name: String },
+    /// Execute one computer-use action through the orchestrator runtime.
+    ///
+    /// This path is expected to be policy-gated and fail closed if runtime
+    /// mediation is unavailable.
+    ExecuteToolAction { name: String, action: ToolAction },
+    /// Start a streaming capture session for the given runtime/agent.
+    StartCaptureSession {
+        name: String,
+        request: CaptureSessionRequest,
+    },
+    /// Stop a previously started capture session.
+    StopCaptureSession { name: String, session_id: String },
     /// Get or set the fleet-wide goal.
     FleetGoal {
         /// If Some, sets the fleet goal. If None, returns the current goal.
@@ -260,6 +273,39 @@ pub struct RuntimeCapabilities {
     pub policy_mediation: String,
     /// One-line explanation of mediation coverage.
     pub mediation_note: String,
+}
+
+/// Parameters used to start a capture stream.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CaptureSessionRequest {
+    /// Desired frames per second.
+    pub target_fps: u16,
+    /// Optional capture bounds.
+    #[serde(default)]
+    pub region: Option<CaptureRegion>,
+}
+
+/// Capture region bounds.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CaptureRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Data returned when a capture session is started.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CaptureSessionStarted {
+    pub session_id: String,
+    pub target_fps: u16,
+}
+
+/// Result wrapper for one tool-action execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolActionExecution {
+    pub result: ToolResult,
+    pub risk_tag: RiskTag,
 }
 
 /// Bulk fleet snapshot returned by `OrchestratorContext`.
@@ -467,6 +513,30 @@ mod tests {
             DaemonCommand::RuntimeCapabilities {
                 name: "claude-1".into(),
             },
+            DaemonCommand::ExecuteToolAction {
+                name: "claude-1".into(),
+                action: ToolAction::MouseClick {
+                    x: 120,
+                    y: 240,
+                    button: aegis_toolkit::contract::MouseButton::Left,
+                },
+            },
+            DaemonCommand::StartCaptureSession {
+                name: "claude-1".into(),
+                request: CaptureSessionRequest {
+                    target_fps: 30,
+                    region: Some(CaptureRegion {
+                        x: 0,
+                        y: 0,
+                        width: 1280,
+                        height: 720,
+                    }),
+                },
+            },
+            DaemonCommand::StopCaptureSession {
+                name: "claude-1".into(),
+                session_id: "cap-1".into(),
+            },
             DaemonCommand::FleetGoal { goal: None },
             DaemonCommand::FleetGoal {
                 goal: Some("Build a chess app".into()),
@@ -634,5 +704,22 @@ mod tests {
         assert_eq!(back.tool, "OpenClaw");
         assert!(back.headless);
         assert_eq!(back.policy_mediation, "partial");
+    }
+
+    #[test]
+    fn capture_session_request_roundtrip() {
+        let req = CaptureSessionRequest {
+            target_fps: 60,
+            region: Some(CaptureRegion {
+                x: 10,
+                y: 20,
+                width: 400,
+                height: 300,
+            }),
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        let back: CaptureSessionRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
     }
 }
