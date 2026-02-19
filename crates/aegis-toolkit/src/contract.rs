@@ -90,6 +90,13 @@ pub enum ToolAction {
         session_id: String,
         include_screenshot: bool,
     },
+    BrowserProfileStart {
+        session_id: String,
+        #[serde(default)]
+        headless: bool,
+        #[serde(default)]
+        url: Option<String>,
+    },
     InputBatch {
         actions: Vec<InputAction>,
     },
@@ -110,6 +117,7 @@ impl ToolAction {
             ToolAction::TuiInput { .. } => "TuiInput",
             ToolAction::BrowserNavigate { .. } => "BrowserNavigate",
             ToolAction::BrowserSnapshot { .. } => "BrowserSnapshot",
+            ToolAction::BrowserProfileStart { .. } => "BrowserProfileStart",
             ToolAction::InputBatch { .. } => "InputBatch",
         }
     }
@@ -126,7 +134,9 @@ impl ToolAction {
             | ToolAction::KeyPress { .. }
             | ToolAction::TypeText { .. }
             | ToolAction::TuiInput { .. } => RiskTag::Medium,
-            ToolAction::WindowFocus { .. } | ToolAction::BrowserNavigate { .. } => RiskTag::High,
+            ToolAction::WindowFocus { .. }
+            | ToolAction::BrowserNavigate { .. }
+            | ToolAction::BrowserProfileStart { .. } => RiskTag::High,
             ToolAction::InputBatch { actions } => max_risk_tag(actions.iter().map(InputAction::risk_tag)),
         }
     }
@@ -166,6 +176,7 @@ pub enum InputAction {
     },
     KeyPress { keys: Vec<String> },
     TypeText { text: String },
+    Wait { duration_ms: u64 },
 }
 
 impl InputAction {
@@ -176,6 +187,7 @@ impl InputAction {
             | InputAction::MouseDrag { .. }
             | InputAction::KeyPress { .. }
             | InputAction::TypeText { .. } => RiskTag::Medium,
+            InputAction::Wait { .. } => RiskTag::Low,
         }
     }
 }
@@ -243,6 +255,7 @@ mod tests {
                 InputAction::TypeText {
                     text: "hi".into(),
                 },
+                InputAction::Wait { duration_ms: 10 },
             ],
         };
         let json = serde_json::to_string(&action).unwrap();
@@ -271,6 +284,15 @@ mod tests {
             ToolAction::BrowserNavigate {
                 session_id: "s1".into(),
                 url: "https://example.com".into()
+            }
+            .risk_tag(),
+            RiskTag::High
+        );
+        assert_eq!(
+            ToolAction::BrowserProfileStart {
+                session_id: "s2".into(),
+                headless: false,
+                url: None,
             }
             .risk_tag(),
             RiskTag::High

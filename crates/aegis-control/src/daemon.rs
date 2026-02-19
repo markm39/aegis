@@ -70,6 +70,16 @@ pub enum DaemonCommand {
     /// This path is expected to be policy-gated and fail closed if runtime
     /// mediation is unavailable.
     ExecuteToolAction { name: String, action: ToolAction },
+    /// Execute a short sequence of computer-use actions in one tight loop.
+    ///
+    /// Intended for orchestrator micro-action batches where the model emits
+    /// several low-latency actions per reasoning step.
+    ExecuteToolBatch {
+        name: String,
+        actions: Vec<ToolAction>,
+        #[serde(default)]
+        max_actions: Option<u8>,
+    },
     /// Start a streaming capture session for the given runtime/agent.
     StartCaptureSession {
         name: String,
@@ -77,6 +87,12 @@ pub enum DaemonCommand {
     },
     /// Stop a previously started capture session.
     StopCaptureSession { name: String, session_id: String },
+    /// Fetch the latest cached capture frame for an agent.
+    LatestCaptureFrame {
+        name: String,
+        #[serde(default)]
+        region: Option<CaptureRegion>,
+    },
     /// Get or set the fleet-wide goal.
     FleetGoal {
         /// If Some, sets the fleet goal. If None, returns the current goal.
@@ -291,6 +307,24 @@ pub struct RuntimeCapabilities {
     /// Last tool action note/reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_tool_note: Option<String>,
+    /// Whether capture actions are enabled by toolkit config.
+    #[serde(default)]
+    pub toolkit_capture_enabled: bool,
+    /// Whether input actions are enabled by toolkit config.
+    #[serde(default)]
+    pub toolkit_input_enabled: bool,
+    /// Whether browser actions are enabled by toolkit config.
+    #[serde(default)]
+    pub toolkit_browser_enabled: bool,
+    /// Browser backend configured for toolkit runtime.
+    #[serde(default)]
+    pub toolkit_browser_backend: String,
+    /// Max micro-actions for fast executor batches.
+    #[serde(default)]
+    pub loop_max_micro_actions: u8,
+    /// Time budget (ms) for fast executor batches.
+    #[serde(default)]
+    pub loop_time_budget_ms: u64,
 }
 
 /// Parameters used to start a capture stream.
@@ -346,6 +380,15 @@ pub struct FramePayload {
     pub rgba_base64: String,
 }
 
+/// Latest cached capture frame payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LatestCaptureFrame {
+    pub session_id: Option<String>,
+    pub frame_id: u64,
+    pub age_ms: u64,
+    pub frame: FramePayload,
+}
+
 /// TUI-specific result payload for TUI actions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -368,6 +411,8 @@ pub struct BrowserToolData {
     pub note: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
 }
 
 /// Runtime operation category used for typed audit provenance.
@@ -390,6 +435,15 @@ pub struct RuntimeAuditProvenance {
     pub decision: String,
     pub reason: String,
     pub outcome: ToolActionExecution,
+}
+
+/// Response payload for `ExecuteToolBatch`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolBatchOutcome {
+    pub executed: usize,
+    pub outcomes: Vec<ToolActionOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub halted_reason: Option<String>,
 }
 
 /// Bulk fleet snapshot returned by `OrchestratorContext`.
@@ -605,6 +659,18 @@ mod tests {
                     button: aegis_toolkit::contract::MouseButton::Left,
                 },
             },
+            DaemonCommand::ExecuteToolBatch {
+                name: "claude-1".into(),
+                actions: vec![
+                    ToolAction::MouseMove { x: 100, y: 200 },
+                    ToolAction::MouseClick {
+                        x: 100,
+                        y: 200,
+                        button: aegis_toolkit::contract::MouseButton::Left,
+                    },
+                ],
+                max_actions: Some(2),
+            },
             DaemonCommand::StartCaptureSession {
                 name: "claude-1".into(),
                 request: CaptureSessionRequest {
@@ -787,6 +853,12 @@ mod tests {
             last_tool_risk_tag: Some(RiskTag::Medium),
             last_tool_decision: Some("deny".into()),
             last_tool_note: Some("runtime unavailable".into()),
+            toolkit_capture_enabled: true,
+            toolkit_input_enabled: true,
+            toolkit_browser_enabled: false,
+            toolkit_browser_backend: "cdp".into(),
+            loop_max_micro_actions: 8,
+            loop_time_budget_ms: 1200,
         };
         let json = serde_json::to_string(&caps).unwrap();
         let back: RuntimeCapabilities = serde_json::from_str(&json).unwrap();
@@ -846,6 +918,7 @@ mod tests {
                 available: false,
                 note: "backend unavailable".into(),
                 screenshot_base64: None,
+                ws_url: None,
             }),
         };
 
@@ -882,5 +955,35 @@ mod tests {
         let json = serde_json::to_string(&provenance).unwrap();
         let back: RuntimeAuditProvenance = serde_json::from_str(&json).unwrap();
         assert_eq!(back, provenance);
+    }
+
+    #[test]
+    fn tool_batch_outcome_roundtrip() {
+        let batch = ToolBatchOutcome {
+            executed: 1,
+            outcomes: vec![ToolActionOutcome {
+                execution: ToolActionExecution {
+                    result: ToolResult {
+                        action: "MouseMove".into(),
+                        risk_tag: RiskTag::Low,
+                        capture_latency_ms: None,
+                        input_latency_ms: Some(4),
+                        frame_id: None,
+                        window_id: None,
+                        session_id: None,
+                        note: Some("allow: ok".into()),
+                    },
+                    risk_tag: RiskTag::Low,
+                },
+                frame: None,
+                tui: None,
+                browser: None,
+            }],
+            halted_reason: Some("time budget exceeded".into()),
+        };
+
+        let json = serde_json::to_string(&batch).unwrap();
+        let back: ToolBatchOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, batch);
     }
 }

@@ -19,7 +19,8 @@ use anyhow::Context;
 use tracing::info;
 
 use aegis_control::daemon::{
-    CaptureSessionRequest, DaemonClient, DaemonCommand, ToolActionOutcome,
+    CaptureSessionRequest, DaemonClient, DaemonCommand, LatestCaptureFrame, ToolActionOutcome,
+    ToolBatchOutcome,
 };
 use aegis_daemon::persistence;
 use aegis_toolkit::contract::ToolAction;
@@ -72,6 +73,7 @@ pub fn init() -> anyhow::Result<()> {
             isolation: None,
         }],
         channel: None,
+        toolkit: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -131,6 +133,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
             isolation: None,
         }],
         channel: None,
+        toolkit: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -821,6 +824,17 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
         println!("  Headless:          {}", caps.headless);
         println!("  Policy mediation:  {}", caps.policy_mediation);
         println!("  Note:              {}", caps.mediation_note);
+        println!(
+            "  Toolkit:           capture={} input={} browser={} ({})",
+            caps.toolkit_capture_enabled,
+            caps.toolkit_input_enabled,
+            caps.toolkit_browser_enabled,
+            caps.toolkit_browser_backend
+        );
+        println!(
+            "  Loop executor:     max_micro_actions={} time_budget_ms={}",
+            caps.loop_max_micro_actions, caps.loop_time_budget_ms
+        );
         if let Some(session_id) = caps.active_capture_session_id {
             println!(
                 "  Capture session:   {} ({} fps)",
@@ -885,6 +899,98 @@ pub fn tool_action(name: &str, action_json: &str) -> anyhow::Result<()> {
                 "  Browser:   backend={} available={} ({})",
                 browser.backend, browser.available, browser.note
             );
+            if let Some(ws_url) = browser.ws_url {
+                println!("  WS URL:    {ws_url}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Start a managed browser profile for an agent and return its CDP websocket.
+pub fn browser_profile(
+    name: &str,
+    session_id: &str,
+    headless: bool,
+    url: Option<&str>,
+) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let action = ToolAction::BrowserProfileStart {
+        session_id: session_id.to_string(),
+        headless,
+        url: url.map(|u| u.to_string()),
+    };
+
+    let response = client
+        .send(&DaemonCommand::ExecuteToolAction {
+            name: name.to_string(),
+            action,
+        })
+        .map_err(|e| anyhow::anyhow!("failed to start browser profile: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let outcome: ToolActionOutcome = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse browser profile result: {e}"))?;
+        if let Some(browser) = outcome.browser {
+            println!("Browser profile for '{name}':");
+            println!("  Session:   {}", browser.session_id);
+            println!("  Backend:   {}", browser.backend);
+            println!("  Note:      {}", browser.note);
+            if let Some(ws_url) = browser.ws_url {
+                println!("  WS URL:    {ws_url}");
+            }
+        } else {
+            println!("Browser profile started (no browser payload).");
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute a short tool-action batch payload for an agent.
+pub fn tool_batch(name: &str, actions_json: &str, max_actions: Option<u8>) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let actions: Vec<ToolAction> = serde_json::from_str(actions_json)
+        .map_err(|e| anyhow::anyhow!("invalid ToolAction batch JSON: {e}"))?;
+
+    let response = client
+        .send(&DaemonCommand::ExecuteToolBatch {
+            name: name.to_string(),
+            actions,
+            max_actions,
+        })
+        .map_err(|e| anyhow::anyhow!("failed to execute tool batch: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let outcome: ToolBatchOutcome = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse tool batch result: {e}"))?;
+        println!("Tool batch result for '{name}':");
+        println!("  Executed:  {}", outcome.executed);
+        if let Some(reason) = outcome.halted_reason {
+            println!("  Halted:    {reason}");
         }
     }
 
@@ -947,6 +1053,49 @@ pub fn capture_stop(name: &str, session_id: &str) -> anyhow::Result<()> {
         println!("Capture session stopped for '{name}': {session_id}");
     } else {
         println!("Error: {}", response.message);
+    }
+
+    Ok(())
+}
+
+/// Fetch the latest cached capture frame for an agent.
+pub fn latest_frame(
+    name: &str,
+    region: Option<aegis_control::daemon::CaptureRegion>,
+) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::LatestCaptureFrame {
+            name: name.to_string(),
+            region,
+        })
+        .map_err(|e| anyhow::anyhow!("failed to fetch latest frame: {e}"))?;
+
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+
+    if let Some(data) = response.data {
+        let payload: LatestCaptureFrame = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse latest frame: {e}"))?;
+        println!("Latest frame for '{name}':");
+        println!(
+            "  Session:   {}",
+            payload.session_id.unwrap_or_else(|| "(none)".to_string())
+        );
+        println!("  Frame ID:  {}", payload.frame_id);
+        println!("  Age:       {}ms", payload.age_ms);
+        println!(
+            "  Size:      {}x{}",
+            payload.frame.width, payload.frame.height
+        );
     }
 
     Ok(())

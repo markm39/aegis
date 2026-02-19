@@ -49,6 +49,118 @@ pub struct DaemonConfig {
     /// Bidirectional messaging channel (Telegram, Slack, etc.).
     #[serde(default)]
     pub channel: Option<ChannelConfig>,
+    /// Computer-use runtime configuration (capture/input/browser/loop behavior).
+    #[serde(default)]
+    pub toolkit: ToolkitConfig,
+}
+
+/// Top-level configuration for orchestrator computer-use runtime behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ToolkitConfig {
+    #[serde(default)]
+    pub capture: ToolkitCaptureConfig,
+    #[serde(default)]
+    pub input: ToolkitInputConfig,
+    #[serde(default)]
+    pub browser: ToolkitBrowserConfig,
+    #[serde(default)]
+    pub loop_executor: ToolkitLoopExecutorConfig,
+}
+
+/// Screen capture runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolkitCaptureConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_capture_default_fps")]
+    pub default_fps: u16,
+    #[serde(default = "default_capture_min_fps")]
+    pub min_fps: u16,
+    #[serde(default = "default_capture_max_fps")]
+    pub max_fps: u16,
+}
+
+impl Default for ToolkitCaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_fps: default_capture_default_fps(),
+            min_fps: default_capture_min_fps(),
+            max_fps: default_capture_max_fps(),
+        }
+    }
+}
+
+/// Input runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolkitInputConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_input_max_batch_actions")]
+    pub max_batch_actions: u8,
+}
+
+impl Default for ToolkitInputConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_batch_actions: default_input_max_batch_actions(),
+        }
+    }
+}
+
+/// Browser automation runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolkitBrowserConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_browser_backend")]
+    pub backend: String,
+    #[serde(default)]
+    pub cdp_ws_url: Option<String>,
+    #[serde(default = "default_true")]
+    pub allow_screenshot: bool,
+    #[serde(default)]
+    pub binary_path: Option<String>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub user_data_root: Option<String>,
+}
+
+impl Default for ToolkitBrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: default_browser_backend(),
+            cdp_ws_url: None,
+            allow_screenshot: true,
+            binary_path: None,
+            extra_args: Vec::new(),
+            user_data_root: None,
+        }
+    }
+}
+
+/// Fast loop executor controls for orchestrator micro-action batches.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolkitLoopExecutorConfig {
+    #[serde(default = "default_loop_max_micro_actions")]
+    pub max_micro_actions: u8,
+    #[serde(default = "default_loop_time_budget_ms")]
+    pub time_budget_ms: u64,
+    #[serde(default = "default_true")]
+    pub halt_on_high_risk: bool,
+}
+
+impl Default for ToolkitLoopExecutorConfig {
+    fn default() -> Self {
+        Self {
+            max_micro_actions: default_loop_max_micro_actions(),
+            time_budget_ms: default_loop_time_budget_ms(),
+            halt_on_high_risk: true,
+        }
+    }
 }
 
 /// Configuration for a single agent slot in the fleet.
@@ -130,6 +242,38 @@ fn default_max_restarts() -> u32 {
 
 fn default_enabled() -> bool {
     true
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_capture_default_fps() -> u16 {
+    30
+}
+
+fn default_capture_min_fps() -> u16 {
+    5
+}
+
+fn default_capture_max_fps() -> u16 {
+    60
+}
+
+fn default_input_max_batch_actions() -> u8 {
+    10
+}
+
+fn default_browser_backend() -> String {
+    "cdp".to_string()
+}
+
+fn default_loop_max_micro_actions() -> u8 {
+    8
+}
+
+fn default_loop_time_budget_ms() -> u64 {
+    1_200
 }
 
 /// Which AI tool to run in an agent slot.
@@ -371,6 +515,7 @@ mod tests {
             control: DaemonControlConfig::default(),
             alerts: vec![],
             channel: None,
+            toolkit: ToolkitConfig::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

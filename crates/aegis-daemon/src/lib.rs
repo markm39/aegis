@@ -154,6 +154,12 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
         last_tool_risk_tag: None,
         last_tool_decision: None,
         last_tool_note: None,
+        toolkit_capture_enabled: true,
+        toolkit_input_enabled: true,
+        toolkit_browser_enabled: true,
+        toolkit_browser_backend: "cdp".to_string(),
+        loop_max_micro_actions: 8,
+        loop_time_budget_ms: 1200,
     }
 }
 
@@ -387,11 +393,13 @@ impl DaemonRuntime {
                     return Err("input actions are disabled by daemon toolkit config".to_string());
                 }
             }
-            ToolAction::BrowserNavigate { .. } | ToolAction::BrowserSnapshot { .. } => {
+            ToolAction::BrowserNavigate { .. }
+            | ToolAction::BrowserSnapshot { .. }
+            | ToolAction::BrowserProfileStart { .. } => {
                 if !toolkit.browser.enabled {
                     return Err("browser actions are disabled by daemon toolkit config".to_string());
                 }
-                if toolkit.browser.backend.trim().to_ascii_lowercase() != "cdp" {
+                if !toolkit.browser.backend.trim().eq_ignore_ascii_case("cdp") {
                     return Err(format!(
                         "unsupported browser backend '{}' (expected 'cdp')",
                         toolkit.browser.backend
@@ -399,6 +407,15 @@ impl DaemonRuntime {
                 }
             }
             ToolAction::TuiSnapshot { .. } | ToolAction::TuiInput { .. } => {}
+        }
+        if let ToolAction::InputBatch { actions } = action {
+            if actions.len() > toolkit.input.max_batch_actions as usize {
+                return Err(format!(
+                    "input batch has {} actions (max {})",
+                    actions.len(),
+                    toolkit.input.max_batch_actions
+                ));
+            }
         }
         Ok(())
     }
@@ -630,6 +647,9 @@ impl DaemonRuntime {
         // Stop all running agents to prevent orphaned processes
         self.fleet.stop_all();
         self.stop_all_capture_streams();
+        if let Some(runtime) = self.toolkit_runtime.as_mut() {
+            runtime.shutdown();
+        }
 
         // Save final state
         self.save_state();
@@ -1089,6 +1109,12 @@ impl DaemonRuntime {
                     None => return DaemonResponse::error(format!("unknown agent: {name}")),
                 };
                 let mut caps = runtime_capabilities(&slot.config);
+                caps.toolkit_capture_enabled = self.config.toolkit.capture.enabled;
+                caps.toolkit_input_enabled = self.config.toolkit.input.enabled;
+                caps.toolkit_browser_enabled = self.config.toolkit.browser.enabled;
+                caps.toolkit_browser_backend = self.config.toolkit.browser.backend.clone();
+                caps.loop_max_micro_actions = self.config.toolkit.loop_executor.max_micro_actions;
+                caps.loop_time_budget_ms = self.config.toolkit.loop_executor.time_budget_ms;
                 if let Some(session) = self.capture_sessions.get(name) {
                     caps.active_capture_session_id = Some(session.session_id.clone());
                     caps.active_capture_target_fps = Some(session.target_fps);
@@ -1461,13 +1487,15 @@ impl DaemonRuntime {
                             tui: None,
                             browser: match action {
                                 ToolAction::BrowserNavigate { session_id, .. }
-                                | ToolAction::BrowserSnapshot { session_id, .. } => {
+                                | ToolAction::BrowserSnapshot { session_id, .. }
+                                | ToolAction::BrowserProfileStart { session_id, .. } => {
                                     Some(BrowserToolData {
                                         session_id: session_id.clone(),
                                         backend: "cdp".to_string(),
                                         available: false,
                                         note: "browser backend unavailable".to_string(),
                                         screenshot_base64: None,
+                                        ws_url: self.config.toolkit.browser.cdp_ws_url.clone(),
                                     })
                                 }
                                 _ => None,
@@ -1517,7 +1545,8 @@ impl DaemonRuntime {
                             tui: None,
                             browser: match action {
                                 ToolAction::BrowserNavigate { session_id, .. }
-                                | ToolAction::BrowserSnapshot { session_id, .. } => {
+                                | ToolAction::BrowserSnapshot { session_id, .. }
+                                | ToolAction::BrowserProfileStart { session_id, .. } => {
                                     Some(BrowserToolData {
                                         session_id: session_id.clone(),
                                         backend: "cdp".to_string(),
@@ -1525,6 +1554,7 @@ impl DaemonRuntime {
                                         note: "browser action denied: CDP backend unavailable"
                                             .to_string(),
                                         screenshot_base64: None,
+                                        ws_url: self.config.toolkit.browser.cdp_ws_url.clone(),
                                     })
                                 }
                                 _ => None,
@@ -1925,6 +1955,36 @@ impl DaemonRuntime {
                         );
                         DaemonResponse::error(reason)
                     }
+                }
+            }
+
+            DaemonCommand::LatestCaptureFrame { ref name, ref region } => {
+                if self.fleet.slot(name).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {name}"));
+                }
+                let region = region.as_ref().map(|r| ToolkitCaptureRegion {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                });
+                match self.latest_cached_frame(name, &region) {
+                    Some(cached) => {
+                        let payload = aegis_control::daemon::LatestCaptureFrame {
+                            session_id: self
+                                .capture_sessions
+                                .get(name)
+                                .map(|s| s.session_id.clone()),
+                            frame_id: cached.frame_id,
+                            age_ms: cached.captured_at.elapsed().as_millis() as u64,
+                            frame: cached.payload,
+                        };
+                        match serde_json::to_value(payload) {
+                            Ok(data) => DaemonResponse::ok_with_data("latest frame", data),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        }
+                    }
+                    None => DaemonResponse::error("no cached frame available"),
                 }
             }
 
@@ -2768,6 +2828,31 @@ mod tests {
         assert_eq!(outcome.execution.risk_tag, outcome.execution.result.risk_tag);
         let note = outcome.execution.result.note.unwrap_or_default();
         assert!(note.contains("deny"));
+    }
+
+    #[test]
+    fn handle_command_execute_tool_batch_halts_on_high_risk_boundary() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+        let resp = runtime.handle_command(DaemonCommand::ExecuteToolBatch {
+            name: "a1".into(),
+            actions: vec![
+                ToolAction::MouseMove { x: 10, y: 20 },
+                ToolAction::BrowserNavigate {
+                    session_id: "b1".into(),
+                    url: "https://example.com".into(),
+                },
+            ],
+            max_actions: Some(5),
+        });
+        assert!(resp.ok);
+        let batch: ToolBatchOutcome = serde_json::from_value(resp.data.unwrap()).unwrap();
+        assert_eq!(batch.executed, 1);
+        assert!(
+            batch
+                .halted_reason
+                .unwrap_or_default()
+                .contains("policy boundary")
+        );
     }
 
     #[test]

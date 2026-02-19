@@ -2,7 +2,11 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::net::TcpStream;
+use std::fs;
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -33,6 +37,7 @@ pub struct ToolkitRuntime {
     #[cfg(target_os = "macos")]
     helper: aegis_toolkit::macos_helper::MacosHelper,
     browser_sessions: HashMap<String, BrowserSession>,
+    managed_browsers: HashMap<String, ManagedBrowser>,
 }
 
 impl ToolkitRuntime {
@@ -45,6 +50,7 @@ impl ToolkitRuntime {
                 config: config.clone(),
                 helper,
                 browser_sessions: HashMap::new(),
+                managed_browsers: HashMap::new(),
             })
         }
         #[cfg(not(target_os = "macos"))]
@@ -156,7 +162,13 @@ impl ToolkitRuntime {
                 if !self.config.browser.enabled {
                     return Err("browser actions are disabled by daemon toolkit config".to_string());
                 }
-                if self.config.browser.backend.trim().to_ascii_lowercase() != "cdp" {
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
                     return Err(format!(
                         "unsupported browser backend '{}' (expected 'cdp')",
                         self.config.browser.backend
@@ -175,12 +187,17 @@ impl ToolkitRuntime {
                     return Err(e);
                 }
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                let ws_url = self
+                    .browser_sessions
+                    .get(session_id)
+                    .map(|s| s.endpoint.clone());
                 browser_payload = Some(BrowserToolData {
                     session_id: session_id.clone(),
                     backend: "cdp".to_string(),
                     available: true,
                     note: "navigated".to_string(),
                     screenshot_base64: None,
+                    ws_url,
                 });
             }
             ToolAction::BrowserSnapshot {
@@ -190,7 +207,13 @@ impl ToolkitRuntime {
                 if !self.config.browser.enabled {
                     return Err("browser actions are disabled by daemon toolkit config".to_string());
                 }
-                if self.config.browser.backend.trim().to_ascii_lowercase() != "cdp" {
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
                     return Err(format!(
                         "unsupported browser backend '{}' (expected 'cdp')",
                         self.config.browser.backend
@@ -215,6 +238,10 @@ impl ToolkitRuntime {
                     self.browser_sessions.remove(session_id);
                     return Err(e);
                 }
+                let ws_url = self
+                    .browser_sessions
+                    .get(session_id)
+                    .map(|s| s.endpoint.clone());
                 browser_payload = Some(BrowserToolData {
                     session_id: session_id.clone(),
                     backend: "cdp".to_string(),
@@ -226,8 +253,45 @@ impl ToolkitRuntime {
                         "snapshot captured".to_string()
                     },
                     screenshot_base64,
+                    ws_url,
                 });
                 result.capture_latency_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            ToolAction::BrowserProfileStart {
+                session_id,
+                headless,
+                url,
+            } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
+                let started = Instant::now();
+                let ws_url = self.ensure_managed_browser(session_id, *headless, url.as_deref())?;
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                browser_payload = Some(BrowserToolData {
+                    session_id: session_id.clone(),
+                    backend: "cdp".to_string(),
+                    available: true,
+                    note: if *headless {
+                        "browser profile ready (headless requested)".to_string()
+                    } else {
+                        "browser profile ready".to_string()
+                    },
+                    screenshot_base64: None,
+                    ws_url: Some(ws_url),
+                });
             }
             ToolAction::InputBatch { actions } => {
                 if !self.config.input.enabled {
@@ -385,6 +449,10 @@ impl ToolkitRuntime {
                 Ok(())
             }
             InputAction::TypeText { text } => self.type_text(text),
+            InputAction::Wait { duration_ms } => {
+                thread::sleep(Duration::from_millis(*duration_ms));
+                Ok(())
+            }
         }
     }
 
@@ -392,6 +460,20 @@ impl ToolkitRuntime {
         let now = Instant::now();
         self.browser_sessions
             .retain(|_, session| now.duration_since(session.last_used) <= max_idle);
+        let expired: Vec<String> = self
+            .managed_browsers
+            .iter()
+            .filter_map(|(id, browser)| {
+                if now.duration_since(browser.last_used) > max_idle {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for id in expired {
+            self.stop_managed_browser(&id);
+        }
     }
 
     fn with_browser_session<F>(&mut self, session_id: &str, f: F) -> Result<(), String>
@@ -401,8 +483,13 @@ impl ToolkitRuntime {
         let session = match self.browser_sessions.get_mut(session_id) {
             Some(session) => session,
             None => {
-                let (client, endpoint) =
-                    CdpClient::connect(self.config.browser.cdp_ws_url.as_deref())?;
+                let ws_override = self
+                    .managed_browsers
+                    .get(session_id)
+                    .map(|browser| browser.ws_url.as_str());
+                let (client, endpoint) = CdpClient::connect(
+                    ws_override.or(self.config.browser.cdp_ws_url.as_deref()),
+                )?;
                 self.browser_sessions.insert(
                     session_id.to_string(),
                     BrowserSession {
@@ -420,8 +507,134 @@ impl ToolkitRuntime {
         let res = f(session);
         if res.is_ok() {
             session.last_used = Instant::now();
+            if let Some(browser) = self.managed_browsers.get_mut(session_id) {
+                browser.last_used = Instant::now();
+            }
         }
         res
+    }
+
+    pub fn shutdown(&mut self) {
+        let ids: Vec<String> = self.managed_browsers.keys().cloned().collect();
+        for id in ids {
+            self.stop_managed_browser(&id);
+        }
+        self.browser_sessions.clear();
+    }
+
+    fn ensure_managed_browser(
+        &mut self,
+        session_id: &str,
+        headless: bool,
+        url: Option<&str>,
+    ) -> Result<String, String> {
+        if let Some(browser) = self.managed_browsers.get_mut(session_id) {
+            browser.last_used = Instant::now();
+            return Ok(browser.ws_url.clone());
+        }
+
+        let (child, ws_url, data_dir) =
+            self.spawn_managed_browser(session_id, headless, url)?;
+        let (client, endpoint) = CdpClient::connect(Some(&ws_url))?;
+        self.browser_sessions.insert(
+            session_id.to_string(),
+            BrowserSession {
+                client,
+                endpoint: endpoint.clone(),
+                last_used: Instant::now(),
+            },
+        );
+        self.managed_browsers.insert(
+            session_id.to_string(),
+            ManagedBrowser {
+                child,
+                ws_url: endpoint.clone(),
+                last_used: Instant::now(),
+                data_dir,
+            },
+        );
+        Ok(endpoint)
+    }
+
+    fn stop_managed_browser(&mut self, session_id: &str) {
+        if let Some(mut browser) = self.managed_browsers.remove(session_id) {
+            let _ = browser.child.kill();
+        }
+        self.browser_sessions.remove(session_id);
+    }
+
+    fn spawn_managed_browser(
+        &self,
+        session_id: &str,
+        headless: bool,
+        url: Option<&str>,
+    ) -> Result<(Child, String, PathBuf), String> {
+        let port = pick_ephemeral_port()?;
+        let data_dir = self
+            .config
+            .browser
+            .user_data_root
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp/aegis-browser-profiles"))
+            .join(session_id);
+        fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("failed to create browser data dir: {e}"))?;
+
+        let mut args = Vec::new();
+        args.push(format!("--remote-debugging-port={port}"));
+        args.push("--remote-debugging-address=127.0.0.1".to_string());
+        args.push(format!("--user-data-dir={}", data_dir.display()));
+        args.push("--no-first-run".to_string());
+        args.push("--no-default-browser-check".to_string());
+        args.push("--disable-popup-blocking".to_string());
+        if headless {
+            args.push("--headless=new".to_string());
+            args.push("--disable-gpu".to_string());
+        }
+        for extra in &self.config.browser.extra_args {
+            if !extra.trim().is_empty() {
+                args.push(extra.to_string());
+            }
+        }
+        if let Some(u) = url.filter(|u| !u.trim().is_empty()) {
+            args.push(u.to_string());
+        }
+
+        let mut last_error = None;
+        let mut child = None;
+        for candidate in browser_binary_candidates(self.config.browser.binary_path.as_deref()) {
+            let mut cmd = Command::new(&candidate);
+            cmd.args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            match cmd.spawn() {
+                Ok(proc) => {
+                    child = Some(proc);
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(format!("{candidate}: {e}"));
+                }
+            }
+        }
+        let mut child = child.ok_or_else(|| {
+            format!(
+                "failed to launch browser: {}",
+                last_error.unwrap_or_else(|| "no candidates available".to_string())
+            )
+        })?;
+
+        let ws_url = match wait_for_cdp_ws(port, Duration::from_secs(3)) {
+            Ok(ws) => ws,
+            Err(e) => {
+                let _ = child.kill();
+                return Err(e);
+            }
+        };
+
+        Ok((child, ws_url, data_dir))
     }
 }
 
@@ -430,6 +643,74 @@ struct BrowserSession {
     #[allow(dead_code)]
     endpoint: String,
     last_used: Instant,
+}
+
+struct ManagedBrowser {
+    child: Child,
+    ws_url: String,
+    last_used: Instant,
+    #[allow(dead_code)]
+    data_dir: PathBuf,
+}
+
+fn browser_binary_candidates(configured: Option<&str>) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(path) = configured {
+        if !path.trim().is_empty() {
+            candidates.push(path.to_string());
+        }
+    }
+    if let Ok(env_path) = env::var("AEGIS_BROWSER_BIN") {
+        if !env_path.trim().is_empty() {
+            candidates.push(env_path);
+        }
+    }
+    candidates.extend(
+        [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    candidates.extend(
+        ["google-chrome", "chromium", "chrome"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    candidates
+}
+
+fn pick_ephemeral_port() -> Result<u16, String> {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("port bind failed: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("port lookup failed: {e}"))?
+        .port();
+    Ok(port)
+}
+
+fn wait_for_cdp_ws(port: u16, timeout: Duration) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let url = format!("http://127.0.0.1:{port}/json/version");
+    while Instant::now() < deadline {
+        match reqwest::blocking::get(&url) {
+            Ok(resp) => {
+                if let Ok(value) = resp.json::<serde_json::Value>() {
+                    if let Some(ws) = value
+                        .get("webSocketDebuggerUrl")
+                        .and_then(|v| v.as_str())
+                    {
+                        return Ok(ws.to_string());
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("timed out waiting for CDP endpoint on {url}"))
 }
 
 struct CdpClient {

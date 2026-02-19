@@ -654,6 +654,20 @@ enum DaemonCommands {
         action_json: String,
     },
 
+    /// Execute a computer-use ToolAction batch JSON payload for an agent
+    #[command(name = "tool-batch")]
+    ToolBatch {
+        /// Agent name
+        name: String,
+
+        /// ToolAction array JSON payload
+        actions_json: String,
+
+        /// Optional hard cap for actions executed from the payload
+        #[arg(long)]
+        max_actions: Option<u8>,
+    },
+
     /// Start a capture session for an agent
     #[command(name = "capture-start")]
     CaptureStart {
@@ -673,6 +687,47 @@ enum DaemonCommands {
 
         /// Capture session id
         session_id: String,
+    },
+
+    /// Fetch the latest cached capture frame for an agent
+    #[command(name = "latest-frame")]
+    LatestFrame {
+        /// Agent name
+        name: String,
+
+        /// Optional capture region x
+        #[arg(long)]
+        x: Option<i32>,
+
+        /// Optional capture region y
+        #[arg(long)]
+        y: Option<i32>,
+
+        /// Optional capture region width
+        #[arg(long)]
+        width: Option<u32>,
+
+        /// Optional capture region height
+        #[arg(long)]
+        height: Option<u32>,
+    },
+
+    /// Start a managed browser profile for an agent
+    #[command(name = "browser-profile")]
+    BrowserProfile {
+        /// Agent name
+        name: String,
+
+        /// Browser session id
+        session_id: String,
+
+        /// Launch in headless mode
+        #[arg(long)]
+        headless: bool,
+
+        /// Optional URL to open
+        #[arg(long)]
+        url: Option<String>,
     },
 
     /// Follow (tail) agent output in real time
@@ -1061,12 +1116,48 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Tool { name, action_json } => {
                 commands::daemon::tool_action(&name, &action_json)
             }
+            DaemonCommands::ToolBatch {
+                name,
+                actions_json,
+                max_actions,
+            } => commands::daemon::tool_batch(&name, &actions_json, max_actions),
             DaemonCommands::CaptureStart { name, fps } => {
                 commands::daemon::capture_start(&name, fps)
             }
             DaemonCommands::CaptureStop { name, session_id } => {
                 commands::daemon::capture_stop(&name, &session_id)
             }
+            DaemonCommands::LatestFrame {
+                name,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let region = match (x, y, width, height) {
+                    (None, None, None, None) => None,
+                    (Some(x), Some(y), Some(width), Some(height)) => {
+                        Some(aegis_control::daemon::CaptureRegion {
+                            x,
+                            y,
+                            width,
+                            height,
+                        })
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "latest-frame requires all of --x, --y, --width, --height"
+                        ))
+                    }
+                };
+                commands::daemon::latest_frame(&name, region)
+            }
+            DaemonCommands::BrowserProfile {
+                name,
+                session_id,
+                headless,
+                url,
+            } => commands::daemon::browser_profile(&name, &session_id, headless, url.as_deref()),
             DaemonCommands::Follow { name } => commands::daemon::follow(&name),
             DaemonCommands::Enable { name } => commands::daemon::enable_agent(&name),
             DaemonCommands::Disable { name } => commands::daemon::disable_agent(&name),
@@ -2360,6 +2451,36 @@ mod tests {
     }
 
     #[test]
+    fn cli_parse_daemon_tool_batch() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "tool-batch",
+            "claude-1",
+            "[{\"action\":\"mouse_move\",\"x\":1,\"y\":2}]",
+            "--max-actions",
+            "3",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon tool-batch: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action:
+                    DaemonCommands::ToolBatch {
+                        name,
+                        actions_json,
+                        max_actions,
+                    },
+            } => {
+                assert_eq!(name, "claude-1");
+                assert!(actions_json.contains("mouse_move"));
+                assert_eq!(max_actions, Some(3));
+            }
+            _ => panic!("expected Daemon ToolBatch command"),
+        }
+    }
+
+    #[test]
     fn cli_parse_daemon_capture_start() {
         let cli = Cli::try_parse_from([
             "aegis",
@@ -2396,6 +2517,40 @@ mod tests {
             }
             _ => panic!("expected Daemon CaptureStop command"),
         }
+    }
+
+    #[test]
+    fn cli_parse_daemon_latest_frame() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "latest-frame",
+            "claude-1",
+            "--x",
+            "1",
+            "--y",
+            "2",
+            "--width",
+            "3",
+            "--height",
+            "4",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon latest-frame: {cli:?}");
+    }
+
+    #[test]
+    fn cli_parse_daemon_browser_profile() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "browser-profile",
+            "claude-1",
+            "browser-1",
+            "--headless",
+            "--url",
+            "https://example.com",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon browser-profile: {cli:?}");
     }
 
     #[test]
