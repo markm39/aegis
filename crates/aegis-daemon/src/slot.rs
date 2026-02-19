@@ -149,6 +149,9 @@ impl AgentSlot {
 
     /// Drain new output lines from the channel into the recent_output buffer.
     ///
+    /// For Claude Code agents (identified by `cc_session_id`), raw NDJSON lines
+    /// are formatted into human-readable display lines before storage.
+    ///
     /// Returns the number of new lines drained.
     pub fn drain_output(&self) -> usize {
         let rx = match &self.output_rx {
@@ -161,13 +164,25 @@ impl AgentSlot {
             Err(_) => return 0,
         };
 
+        let is_cc = self.cc_session_id.is_some();
         let mut count = 0;
         while let Ok(line) = rx.try_recv() {
-            if buf.len() >= self.output_capacity {
-                buf.pop_front();
+            if is_cc {
+                let formatted = crate::ndjson_fmt::format_ndjson_line(&line);
+                for fline in formatted {
+                    if buf.len() >= self.output_capacity {
+                        buf.pop_front();
+                    }
+                    buf.push_back(fline);
+                    count += 1;
+                }
+            } else {
+                if buf.len() >= self.output_capacity {
+                    buf.pop_front();
+                }
+                buf.push_back(line);
+                count += 1;
             }
-            buf.push_back(line);
-            count += 1;
         }
         count
     }

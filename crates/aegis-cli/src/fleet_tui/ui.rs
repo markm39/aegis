@@ -526,6 +526,26 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
                 Style::default().fg(Color::Yellow)
             } else if line.contains("[NUDGE") {
                 Style::default().fg(Color::Magenta)
+            } else if line.starts_with("> Bash:") {
+                Style::default().fg(Color::Rgb(253, 93, 177)) // hot pink (CC bash border)
+            } else if line.starts_with("> Read:")
+                || line.starts_with("> Write:")
+                || line.starts_with("> Edit:")
+                || line.starts_with("> Glob:")
+            {
+                Style::default().fg(Color::Cyan)
+            } else if line.starts_with("> Grep:") || line.starts_with("> WebSearch:") {
+                Style::default().fg(Color::Rgb(177, 185, 249)) // light purple-blue
+            } else if line.starts_with("> Task:") {
+                Style::default().fg(Color::Rgb(215, 119, 87)) // claude brand color
+            } else if line.starts_with("> ") {
+                Style::default().fg(Color::DarkGray)
+            } else if line.starts_with("Done (") {
+                Style::default().fg(Color::Green)
+            } else if line.starts_with("Error:") {
+                Style::default().fg(Color::Red)
+            } else if line.starts_with("Session started") || line.starts_with("--- ") {
+                Style::default().fg(Color::DarkGray)
             } else {
                 Style::default().fg(Color::White)
             };
