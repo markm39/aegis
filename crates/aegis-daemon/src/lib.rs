@@ -198,6 +198,7 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
             "Custom runtime; policy mediation depends on external integration".to_string(),
         ),
     };
+    let (auth_mode, auth_ready, auth_hint) = tool_auth_readiness(config);
 
     RuntimeCapabilities {
         name: config.name.clone(),
@@ -217,7 +218,93 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
         toolkit_browser_backend: "cdp".to_string(),
         loop_max_micro_actions: 8,
         loop_time_budget_ms: 1200,
+        auth_mode,
+        auth_ready,
+        auth_hint,
         tool_contract: String::new(),
+    }
+}
+
+fn env_present(var: &str) -> bool {
+    std::env::var(var)
+        .ok()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn tool_auth_readiness(config: &AgentSlotConfig) -> (String, bool, String) {
+    use aegis_types::daemon::AgentToolConfig;
+
+    match &config.tool {
+        AgentToolConfig::ClaudeCode { .. } => {
+            let oauth = env_present("CLAUDE_CODE_OAUTH_TOKEN");
+            let api_key = env_present("ANTHROPIC_API_KEY") || env_present("CLAUDE_API_KEY");
+            if oauth {
+                (
+                    "oauth".to_string(),
+                    true,
+                    "Claude OAuth token detected in daemon environment".to_string(),
+                )
+            } else if api_key {
+                (
+                    "api-key".to_string(),
+                    true,
+                    "Anthropic API key detected in daemon environment".to_string(),
+                )
+            } else {
+                (
+                    "oauth|api-key".to_string(),
+                    false,
+                    "No Claude auth detected. Configure with `aegis auth add anthropic --method oauth` or provide ANTHROPIC_API_KEY.".to_string(),
+                )
+            }
+        }
+        AgentToolConfig::Codex { .. } => {
+            let oauth = env_present("OPENAI_ACCESS_TOKEN");
+            let api_key = env_present("OPENAI_API_KEY");
+            if oauth {
+                (
+                    "oauth".to_string(),
+                    true,
+                    "OpenAI OAuth token detected in daemon environment".to_string(),
+                )
+            } else if api_key {
+                (
+                    "api-key".to_string(),
+                    true,
+                    "OpenAI API key detected in daemon environment".to_string(),
+                )
+            } else {
+                (
+                    "oauth|api-key".to_string(),
+                    false,
+                    "No OpenAI auth detected. Configure with `aegis auth add openai --method oauth` or provide OPENAI_API_KEY.".to_string(),
+                )
+            }
+        }
+        AgentToolConfig::OpenClaw { .. } => {
+            let token = env_present("OPENCLAW_GATEWAY_TOKEN")
+                || env_present("OPENCLAW_AUTH_TOKEN")
+                || env_present("OPENCLAW_API_KEY");
+            if token {
+                (
+                    "token".to_string(),
+                    true,
+                    "OpenClaw auth token detected in daemon environment".to_string(),
+                )
+            } else {
+                (
+                    "token".to_string(),
+                    false,
+                    "No OpenClaw token detected. Configure gateway token or OPENCLAW_GATEWAY_TOKEN.".to_string(),
+                )
+            }
+        }
+        AgentToolConfig::Custom { .. } => (
+            "custom".to_string(),
+            false,
+            "Custom runtime auth must be configured by the command/tool itself".to_string(),
+        ),
     }
 }
 
@@ -889,6 +976,11 @@ impl DaemonRuntime {
                         };
                         let tool = self.fleet.agent_tool_name(name).unwrap_or_default();
                         let config = self.fleet.agent_config(name)?;
+                        let fallback = slot
+                            .fallback_state
+                            .lock()
+                            .ok()
+                            .and_then(|state| state.clone());
                         Some(AgentSummary {
                             name: name.clone(),
                             status,
@@ -900,6 +992,7 @@ impl DaemonRuntime {
                             attention_needed: self.fleet.agent_attention_needed(name),
                             is_orchestrator: config.orchestrator.is_some(),
                             attach_command: slot.attach_command.clone(),
+                            fallback,
                         })
                     })
                     .collect();
@@ -927,6 +1020,11 @@ impl DaemonRuntime {
                     }
                     other => other.clone(),
                 };
+                let fallback = slot
+                    .fallback_state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.clone());
                 let detail = AgentDetail {
                     name: name.clone(),
                     status,
@@ -950,6 +1048,7 @@ impl DaemonRuntime {
                     enabled: slot.config.enabled,
                     pending_count: slot.pending_prompts.len(),
                     attention_needed: slot.attention_needed,
+                    fallback,
                 };
                 match serde_json::to_value(&detail) {
                     Ok(data) => DaemonResponse::ok_with_data("agent detail", data),
@@ -2001,6 +2100,10 @@ impl DaemonRuntime {
                     let latest_frame_age_ms = self
                         .latest_cached_frame_any(&name)
                         .map(|f| f.captured_at.elapsed().as_millis() as u64);
+                    let fallback = self
+                        .fleet
+                        .slot(&name)
+                        .and_then(|slot| slot.fallback_state.lock().ok().and_then(|s| s.clone()));
 
                     agents.push(DashboardAgent {
                         name,
@@ -2015,6 +2118,7 @@ impl DaemonRuntime {
                         last_tool_note,
                         last_output,
                         latest_frame_age_ms,
+                        fallback,
                     });
                 }
                 let snapshot = DashboardSnapshot {
@@ -2856,6 +2960,8 @@ mod tests {
         assert_eq!(caps.tool, "ClaudeCode");
         assert_eq!(caps.policy_mediation, "enforced");
         assert!(caps.headless);
+        assert!(!caps.auth_mode.is_empty());
+        assert!(!caps.auth_hint.is_empty());
     }
 
     #[test]

@@ -29,6 +29,8 @@ pub enum FleetCommand {
     },
     /// Drill into an agent's output (switch to detail view).
     Follow { agent: String },
+    /// Open orchestrator chat view, or a specific agent detail view.
+    Chat { agent: Option<String> },
     /// Pop an agent's output into a new terminal window.
     Pop { agent: String },
     /// Open the monitor TUI in a new terminal window.
@@ -105,10 +107,7 @@ pub enum FleetCommand {
         value: Option<String>,
     },
     /// Open the context editor for an agent field.
-    ContextEdit {
-        agent: String,
-        field: String,
-    },
+    ContextEdit { agent: String, field: String },
     /// Start the daemon in the background.
     DaemonStart,
     /// Stop the running daemon.
@@ -141,6 +140,20 @@ pub enum FleetCommand {
     Export { format: Option<String> },
     /// Show orchestrator overview (bulk fleet status for review).
     OrchestratorStatus,
+    /// List configured model/provider auth profiles.
+    AuthList,
+    /// Add a provider auth profile.
+    AuthAdd {
+        provider: String,
+        method: Option<String>,
+    },
+    /// Login a provider auth profile (OAuth/setup-token/API key flow).
+    AuthLogin {
+        provider: String,
+        method: Option<String>,
+    },
+    /// Test provider auth profile readiness.
+    AuthTest { target: Option<String> },
 }
 
 /// All known command names for completion.
@@ -148,11 +161,13 @@ const COMMAND_NAMES: &[&str] = &[
     "agent",
     "add",
     "alerts",
+    "auth",
     "approve",
     "capture-start",
     "capture-stop",
     "browser-profile-stop",
     "capabilities",
+    "chat",
     "config",
     "context",
     "daemon",
@@ -206,6 +221,7 @@ const AGENT_COMMANDS: &[&str] = &[
     "capture-stop",
     "browser-profile-stop",
     "capabilities",
+    "chat",
     "context",
     "deny",
     "disable",
@@ -275,10 +291,10 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                     return Err("usage: agent edit <agent> <field>".into());
                 }
                 let field = third.split_whitespace().next().unwrap_or("").to_string();
-                return Ok(Some(FleetCommand::ContextEdit {
+                Ok(Some(FleetCommand::ContextEdit {
                     agent: second.into(),
                     field,
-                }));
+                }))
             } else if second.is_empty() {
                 Ok(Some(FleetCommand::Context {
                     agent: first.into(),
@@ -397,6 +413,57 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Ok(Some(FleetCommand::Follow { agent: arg1.into() }))
             }
         }
+        "chat" => {
+            if arg1.is_empty() {
+                Ok(Some(FleetCommand::Chat { agent: None }))
+            } else {
+                Ok(Some(FleetCommand::Chat {
+                    agent: Some(arg1.into()),
+                }))
+            }
+        }
+        "auth" => match arg1 {
+            "" | "list" => Ok(Some(FleetCommand::AuthList)),
+            "add" => {
+                if arg2.is_empty() {
+                    return Err("usage: auth add <provider> [oauth|api-key|setup-token]".into());
+                }
+                let mut parts = arg2.splitn(2, ' ');
+                let provider = parts.next().unwrap_or("").trim().to_string();
+                if provider.is_empty() {
+                    return Err("usage: auth add <provider> [oauth|api-key|setup-token]".into());
+                }
+                let method = parts.next().map(|s| s.trim().to_string());
+                Ok(Some(FleetCommand::AuthAdd { provider, method }))
+            }
+            "login" => {
+                if arg2.is_empty() {
+                    return Err(
+                        "usage: auth login <provider> [oauth|api-key|setup-token]".into(),
+                    );
+                }
+                let mut parts = arg2.splitn(2, ' ');
+                let provider = parts.next().unwrap_or("").trim().to_string();
+                if provider.is_empty() {
+                    return Err(
+                        "usage: auth login <provider> [oauth|api-key|setup-token]".into(),
+                    );
+                }
+                let method = parts.next().map(|s| s.trim().to_string());
+                Ok(Some(FleetCommand::AuthLogin { provider, method }))
+            }
+            "test" => {
+                let target = if arg2.is_empty() {
+                    None
+                } else {
+                    Some(arg2.to_string())
+                };
+                Ok(Some(FleetCommand::AuthTest { target }))
+            }
+            other => Err(format!(
+                "unknown auth subcommand: {other}. Use: list, add, login, test"
+            )),
+        },
         "pop" => {
             if arg1.is_empty() {
                 Err("usage: pop <agent>".into())
@@ -613,6 +680,8 @@ const DAEMON_SUBCOMMANDS: &[&str] = &[
 
 /// Subcommands for `:telegram`.
 const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
+/// Subcommands for `:auth`.
+const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -739,6 +808,15 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .collect();
         }
 
+        // Complete auth subcommands
+        if cmd == "auth" {
+            return AUTH_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
+
         // Third token: context field completion
         if cmd == "context" && parts.len() == 3 {
             let field_prefix = parts[2].trim();
@@ -791,7 +869,12 @@ pub fn help_text() -> &'static str {
      :agent set <a> <f> <val> Set field (explicit)\n\
      :agent edit <a> <f>      Edit field in multiline editor\n\
      :alerts                  Show alert rules\n\
+     :auth list               List auth profiles\n\
+     :auth add <p> [m]        Add auth profile (m: oauth/api-key/setup-token)\n\
+     :auth login <p> [m]      Run provider auth flow\n\
+     :auth test [target]      Test auth readiness\n\
      :approve <agent>         Approve first pending prompt\n\
+     :chat [agent]            Open orchestrator chat (or agent detail)\n\
      :config                  Edit daemon.toml in $EDITOR\n\
      :context <agent>         View agent context\n\
      :context <a> <field>     Clear field\n\
@@ -969,6 +1052,20 @@ mod tests {
             parse("follow claude-1").unwrap(),
             Some(FleetCommand::Follow {
                 agent: "claude-1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_chat() {
+        assert_eq!(
+            parse("chat").unwrap(),
+            Some(FleetCommand::Chat { agent: None })
+        );
+        assert_eq!(
+            parse("chat claude-1").unwrap(),
+            Some(FleetCommand::Chat {
+                agent: Some("claude-1".into())
             })
         );
     }
@@ -1338,6 +1435,37 @@ mod tests {
     }
 
     #[test]
+    fn parse_auth_commands() {
+        assert_eq!(parse("auth").unwrap(), Some(FleetCommand::AuthList));
+        assert_eq!(parse("auth list").unwrap(), Some(FleetCommand::AuthList));
+        assert_eq!(
+            parse("auth add openai oauth").unwrap(),
+            Some(FleetCommand::AuthAdd {
+                provider: "openai".into(),
+                method: Some("oauth".into())
+            })
+        );
+        assert_eq!(
+            parse("auth login anthropic setup-token").unwrap(),
+            Some(FleetCommand::AuthLogin {
+                provider: "anthropic".into(),
+                method: Some("setup-token".into())
+            })
+        );
+        assert_eq!(
+            parse("auth test").unwrap(),
+            Some(FleetCommand::AuthTest { target: None })
+        );
+        assert_eq!(
+            parse("auth test openai").unwrap(),
+            Some(FleetCommand::AuthTest {
+                target: Some("openai".into())
+            })
+        );
+        assert!(parse("auth nope").is_err());
+    }
+
+    #[test]
     fn completions_new_commands() {
         let agents = vec![];
         let c = completions("lo", &agents);
@@ -1445,6 +1573,16 @@ mod tests {
 
         let c = completions("telegram d", &agents);
         assert_eq!(c, vec!["disable"]);
+    }
+
+    #[test]
+    fn completions_auth_subcommands() {
+        let agents = vec![];
+        let c = completions("auth ", &agents);
+        assert!(c.contains(&"add".to_string()));
+        assert!(c.contains(&"list".to_string()));
+        assert!(c.contains(&"login".to_string()));
+        assert!(c.contains(&"test".to_string()));
     }
 
     #[test]

@@ -132,6 +132,8 @@ pub struct FleetApp {
     pub help_scroll: usize,
     /// Context editor state for multi-line edits.
     pub context_editor: Option<ContextEditor>,
+    /// Whether chat-first auto-focus has already run.
+    pub chat_bootstrapped: bool,
 
     // -- Internal --
     /// Daemon client for sending commands.
@@ -184,6 +186,7 @@ impl FleetApp {
             wizard: None,
             help_scroll: 0,
             context_editor: None,
+            chat_bootstrapped: false,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
         }
@@ -267,6 +270,7 @@ impl FleetApp {
             Some(c) => c,
             None => return,
         };
+        let mut agents_updated = false;
 
         match client.send(&DaemonCommand::ListAgents) {
             Ok(resp) if resp.ok => {
@@ -280,6 +284,7 @@ impl FleetApp {
                             } else if self.agent_selected >= self.agents.len() {
                                 self.agent_selected = self.agents.len() - 1;
                             }
+                            agents_updated = true;
                         }
                         Err(e) => {
                             self.last_error = Some(format!("failed to parse agent list: {e}"));
@@ -305,6 +310,41 @@ impl FleetApp {
             }
             _ => {} // Non-critical, don't overwrite errors
         }
+
+        if agents_updated {
+            self.maybe_open_chat_first();
+        }
+    }
+
+    /// Auto-focus orchestrator detail once to make chat the default workflow.
+    fn maybe_open_chat_first(&mut self) {
+        if self.chat_bootstrapped || self.view != FleetView::Overview || !self.connected {
+            return;
+        }
+        if let Some(name) = self
+            .agents
+            .iter()
+            .find(|a| a.is_orchestrator)
+            .map(|a| a.name.clone())
+        {
+            self.open_agent_detail(name.clone(), false);
+            self.set_result(format!("Chat focused on orchestrator '{name}'"));
+            self.chat_bootstrapped = true;
+        }
+    }
+
+    /// Switch into agent detail view and optionally focus pending panel.
+    fn open_agent_detail(&mut self, agent: String, focus_pending: bool) {
+        self.detail_name = agent;
+        self.detail_output.clear();
+        self.detail_scroll = 0;
+        self.detail_pending.clear();
+        self.pending_selected = 0;
+        self.focus_pending = focus_pending;
+        self.detail_attention = false;
+        self.detail_runtime = None;
+        self.view = FleetView::AgentDetail;
+        self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
     }
 
     /// Fetch output and pending prompts for the currently viewed agent.
@@ -495,17 +535,7 @@ impl FleetApp {
             }
             KeyCode::Enter => {
                 if let Some(agent) = self.agents.get(self.agent_selected) {
-                    self.detail_name = agent.name.clone();
-                    self.detail_output.clear();
-                    self.detail_scroll = 0;
-                    self.detail_pending.clear();
-                    self.pending_selected = 0;
-                    self.focus_pending = false;
-                    self.detail_attention = false;
-                    self.detail_runtime = None;
-                    self.view = FleetView::AgentDetail;
-                    // Force immediate poll for output
-                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                    self.open_agent_detail(agent.name.clone(), false);
                 }
             }
             KeyCode::Char('s') => {
@@ -1304,16 +1334,27 @@ impl FleetApp {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    self.detail_name = agent;
-                    self.detail_output.clear();
-                    self.detail_scroll = 0;
-                    self.detail_pending.clear();
-                    self.pending_selected = 0;
-                    self.focus_pending = false;
-                    self.detail_attention = false;
-                    self.detail_runtime = None;
-                    self.view = FleetView::AgentDetail;
-                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                    self.open_agent_detail(agent, false);
+                }
+            }
+            FleetCommand::Chat { agent } => {
+                if let Some(agent) = agent {
+                    if !self.agent_exists(&agent) {
+                        self.set_result(format!("unknown agent: '{agent}'"));
+                    } else {
+                        self.open_agent_detail(agent, false);
+                    }
+                } else if let Some(name) = self
+                    .agents
+                    .iter()
+                    .find(|a| a.is_orchestrator)
+                    .map(|a| a.name.clone())
+                {
+                    self.open_agent_detail(name, false);
+                } else if let Some(agent) = self.agents.get(self.agent_selected) {
+                    self.open_agent_detail(agent.name.clone(), false);
+                } else {
+                    self.set_result("No agents available to open chat");
                 }
             }
             FleetCommand::Remove { agent } => {
@@ -1400,16 +1441,7 @@ impl FleetApp {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    self.detail_name = agent;
-                    self.detail_output.clear();
-                    self.detail_scroll = 0;
-                    self.detail_pending.clear();
-                    self.pending_selected = 0;
-                    self.focus_pending = true;
-                    self.detail_attention = false;
-                    self.detail_runtime = None;
-                    self.view = FleetView::AgentDetail;
-                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                    self.open_agent_detail(agent, true);
                 }
             }
             FleetCommand::Capabilities { agent } => {
@@ -1426,9 +1458,11 @@ impl FleetApp {
                                 match serde_json::from_value::<RuntimeCapabilities>(data) {
                                     Ok(caps) => {
                                         self.set_result(format!(
-                                            "{agent}: mediation={} headless={} ({})",
+                                            "{agent}: mediation={} headless={} auth={} ready={} ({})",
                                             caps.policy_mediation,
                                             caps.headless,
+                                            caps.auth_mode,
+                                            caps.auth_ready,
                                             caps.mediation_note
                                         ));
                                     }
@@ -1827,6 +1861,48 @@ impl FleetApp {
                     "Opened orchestrator overview in new terminal",
                 );
             }
+            FleetCommand::AuthList => {
+                self.spawn_terminal(
+                    "aegis auth list",
+                    "Opened auth profile list in new terminal",
+                );
+            }
+            FleetCommand::AuthAdd { provider, method } => {
+                let cmd = match method {
+                    Some(method) => format!(
+                        "aegis auth add {} --method {}",
+                        crate::terminal::shell_quote(&provider),
+                        crate::terminal::shell_quote(&method)
+                    ),
+                    None => format!("aegis auth add {}", crate::terminal::shell_quote(&provider)),
+                };
+                self.spawn_terminal(&cmd, &format!("Adding auth profile for '{provider}'"));
+            }
+            FleetCommand::AuthLogin { provider, method } => {
+                let cmd = match method {
+                    Some(method) => format!(
+                        "aegis auth login {} --method {}",
+                        crate::terminal::shell_quote(&provider),
+                        crate::terminal::shell_quote(&method)
+                    ),
+                    None => {
+                        format!(
+                            "aegis auth login {}",
+                            crate::terminal::shell_quote(&provider)
+                        )
+                    }
+                };
+                self.spawn_terminal(&cmd, &format!("Starting auth flow for '{provider}'"));
+            }
+            FleetCommand::AuthTest { target } => {
+                let cmd = match target {
+                    Some(target) => {
+                        format!("aegis auth test {}", crate::terminal::shell_quote(&target))
+                    }
+                    None => "aegis auth test".to_string(),
+                };
+                self.spawn_terminal(&cmd, "Testing auth readiness in new terminal");
+            }
         }
     }
 
@@ -1948,7 +2024,9 @@ impl FleetApp {
             self.last_error = Some("Not connected to daemon. Use :daemon start".into());
             return;
         };
-        match client.send(&DaemonCommand::GetAgentContext { name: agent.clone() }) {
+        match client.send(&DaemonCommand::GetAgentContext {
+            name: agent.clone(),
+        }) {
             Ok(resp) if resp.ok => {
                 let value = resp
                     .data
@@ -2167,6 +2245,7 @@ mod tests {
                 attention_needed: false,
                 is_orchestrator: false,
                 attach_command: None,
+                fallback: None,
             },
             AgentSummary {
                 name: "beta".into(),
@@ -2179,6 +2258,7 @@ mod tests {
                 attention_needed: false,
                 is_orchestrator: false,
                 attach_command: None,
+                fallback: None,
             },
             AgentSummary {
                 name: "gamma".into(),
@@ -2194,6 +2274,7 @@ mod tests {
                 attention_needed: false,
                 is_orchestrator: false,
                 attach_command: None,
+                fallback: None,
             },
         ];
         app
@@ -2842,6 +2923,62 @@ mod tests {
         app.handle_key(press(KeyCode::Enter));
         assert_eq!(app.view, FleetView::AgentDetail);
         assert_eq!(app.detail_name, "alpha");
+    }
+
+    #[test]
+    fn chat_command_without_agent_prefers_orchestrator() {
+        let mut app = make_app();
+        app.connected = true;
+        app.agents.insert(
+            0,
+            AgentSummary {
+                name: "orch".into(),
+                status: AgentStatus::Running { pid: 42 },
+                tool: "ClaudeCode".into(),
+                working_dir: "/tmp/orch".into(),
+                role: Some("Orchestrator".into()),
+                restart_count: 0,
+                pending_count: 0,
+                attention_needed: false,
+                is_orchestrator: true,
+                attach_command: None,
+                fallback: None,
+            },
+        );
+        app.command_mode = true;
+        app.command_buffer = "chat".into();
+        app.command_cursor = 4;
+
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.view, FleetView::AgentDetail);
+        assert_eq!(app.detail_name, "orch");
+    }
+
+    #[test]
+    fn chat_first_bootstrap_opens_orchestrator_detail() {
+        let mut app = make_app();
+        app.connected = true;
+        app.agents.insert(
+            0,
+            AgentSummary {
+                name: "orch".into(),
+                status: AgentStatus::Running { pid: 42 },
+                tool: "ClaudeCode".into(),
+                working_dir: "/tmp/orch".into(),
+                role: Some("Orchestrator".into()),
+                restart_count: 0,
+                pending_count: 0,
+                attention_needed: false,
+                is_orchestrator: true,
+                attach_command: None,
+                fallback: None,
+            },
+        );
+
+        app.maybe_open_chat_first();
+        assert_eq!(app.view, FleetView::AgentDetail);
+        assert_eq!(app.detail_name, "orch");
+        assert!(app.chat_bootstrapped);
     }
 
     #[test]

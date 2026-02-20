@@ -225,6 +225,12 @@ enum Commands {
         action: TelegramCommands,
     },
 
+    /// Manage model/provider authentication profiles
+    Auth {
+        #[command(subcommand)]
+        action: AuthCommands,
+    },
+
     /// Open the fleet dashboard (live agent management TUI)
     Fleet,
 
@@ -506,6 +512,45 @@ enum TelegramCommands {
     Status,
     /// Remove Telegram notifications from the config
     Disable,
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthCommands {
+    /// List configured auth profiles and readiness.
+    List,
+    /// Add or update an auth profile.
+    Add {
+        /// Provider id (e.g., openai, anthropic).
+        provider: String,
+        /// Auth method (oauth, api-key, setup-token).
+        #[arg(long)]
+        method: Option<String>,
+        /// Explicit profile id (defaults to provider:method).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Credential env var reference (never stores the secret itself).
+        #[arg(long = "credential-env")]
+        credential_env: Option<String>,
+        /// Set this profile as default.
+        #[arg(long)]
+        set_default: bool,
+    },
+    /// Run provider login guidance and mark profile default.
+    Login {
+        /// Provider id (e.g., openai, anthropic).
+        provider: String,
+        /// Auth method (oauth, api-key, setup-token).
+        #[arg(long)]
+        method: Option<String>,
+        /// Explicit profile id.
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Test auth readiness for a profile/provider (default profile if omitted).
+    Test {
+        /// Profile id or provider name.
+        target: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1103,6 +1148,28 @@ fn main() -> anyhow::Result<()> {
             TelegramCommands::Setup => commands::telegram::run(),
             TelegramCommands::Status => commands::telegram::status(),
             TelegramCommands::Disable => commands::telegram::disable(),
+        },
+        Commands::Auth { action } => match action {
+            AuthCommands::List => commands::auth::list(),
+            AuthCommands::Add {
+                provider,
+                method,
+                profile,
+                credential_env,
+                set_default,
+            } => commands::auth::add(
+                &provider,
+                method.as_deref(),
+                profile.as_deref(),
+                credential_env.as_deref(),
+                set_default,
+            ),
+            AuthCommands::Login {
+                provider,
+                method,
+                profile,
+            } => commands::auth::login(&provider, method.as_deref(), profile.as_deref()),
+            AuthCommands::Test { target } => commands::auth::test(target.as_deref()),
         },
         Commands::Fleet => fleet_tui::run_fleet_tui(),
         Commands::Daemon { action } => match action {
@@ -2638,6 +2705,53 @@ mod tests {
                 action: TelegramCommands::Disable,
             } => {}
             _ => panic!("expected Telegram Disable command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_auth_add() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "auth",
+            "add",
+            "openai",
+            "--method",
+            "oauth",
+            "--set-default",
+        ]);
+        assert!(cli.is_ok(), "should parse auth add: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Auth {
+                action:
+                    AuthCommands::Add {
+                        provider,
+                        method,
+                        profile: _,
+                        credential_env: _,
+                        set_default,
+                    },
+            } => {
+                assert_eq!(provider, "openai");
+                assert_eq!(method.as_deref(), Some("oauth"));
+                assert!(set_default);
+            }
+            _ => panic!("expected Auth Add command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_auth_test() {
+        let cli = Cli::try_parse_from(["aegis", "auth", "test", "anthropic"]);
+        assert!(cli.is_ok(), "should parse auth test: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Auth {
+                action: AuthCommands::Test { target },
+            } => {
+                assert_eq!(target.as_deref(), Some("anthropic"));
+            }
+            _ => panic!("expected Auth Test command"),
         }
     }
 

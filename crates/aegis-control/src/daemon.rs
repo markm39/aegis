@@ -99,6 +99,8 @@ pub enum DaemonCommand {
     DashboardStatus,
     /// Snapshot payload for dashboard updates.
     DashboardSnapshot,
+    /// Request a Telegram snapshot for an agent (photo payload).
+    TelegramSnapshot { name: String },
     /// Get or set the fleet-wide goal.
     FleetGoal {
         /// If Some, sets the fleet goal. If None, returns the current goal.
@@ -216,6 +218,9 @@ pub struct AgentSummary {
     /// Whether this agent is an orchestrator (vs a worker).
     #[serde(default)]
     pub is_orchestrator: bool,
+    /// Model fallback lifecycle status (if available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<ModelFallbackState>,
     /// If the agent's session supports external attach (e.g., tmux),
     /// the command components to attach (e.g., ["tmux", "attach-session", "-t", "aegis-foo"]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -260,6 +265,19 @@ pub struct AgentDetail {
     /// Whether this agent needs human attention.
     #[serde(default)]
     pub attention_needed: bool,
+    /// Model fallback lifecycle status (if available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<ModelFallbackState>,
+}
+
+/// Model fallback lifecycle status for an agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelFallbackState {
+    pub active: bool,
+    pub selected_model: Option<String>,
+    pub active_model: Option<String>,
+    pub reason: Option<String>,
+    pub updated_at_ms: u128,
 }
 
 /// Summary of a pending permission prompt, returned by ListPending.
@@ -331,6 +349,15 @@ pub struct RuntimeCapabilities {
     /// Time budget (ms) for fast executor batches.
     #[serde(default)]
     pub loop_time_budget_ms: u64,
+    /// Auth mode for the agent tool runtime (oauth/api-key/setup-token/none).
+    #[serde(default)]
+    pub auth_mode: String,
+    /// Whether required provider auth appears ready for this runtime.
+    #[serde(default)]
+    pub auth_ready: bool,
+    /// Human-readable auth readiness hint for operators/orchestrators.
+    #[serde(default)]
+    pub auth_hint: String,
     /// Config-derived tool capability contract for orchestrator usage.
     #[serde(default)]
     pub tool_contract: String,
@@ -458,6 +485,8 @@ pub struct DashboardAgent {
     pub last_tool_note: Option<String>,
     pub last_output: Vec<String>,
     pub latest_frame_age_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<ModelFallbackState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -817,6 +846,7 @@ mod tests {
             attention_needed: true,
             is_orchestrator: false,
             attach_command: None,
+            fallback: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         let back: AgentSummary = serde_json::from_str(&json).unwrap();
@@ -915,6 +945,9 @@ mod tests {
             toolkit_browser_backend: "cdp".into(),
             loop_max_micro_actions: 8,
             loop_time_budget_ms: 1200,
+            auth_mode: "oauth".into(),
+            auth_ready: true,
+            auth_hint: "provider auth appears configured".into(),
             tool_contract: "contract text".into(),
         };
         let json = serde_json::to_string(&caps).unwrap();
@@ -925,6 +958,8 @@ mod tests {
         assert_eq!(back.policy_mediation, "partial");
         assert_eq!(back.active_capture_target_fps, Some(30));
         assert_eq!(back.last_tool_decision.as_deref(), Some("deny"));
+        assert_eq!(back.auth_mode, "oauth");
+        assert!(back.auth_ready);
     }
 
     #[test]

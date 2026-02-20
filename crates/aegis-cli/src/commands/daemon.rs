@@ -540,21 +540,42 @@ pub fn agents() -> anyhow::Result<()> {
 
             // Table header
             println!(
-                "{:<20} {:<12} {:<15} {:<8}",
-                "NAME", "STATUS", "TOOL", "RESTARTS"
+                "{:<20} {:<12} {:<15} {:<8} {:<24}",
+                "NAME", "STATUS", "TOOL", "RESTARTS", "FALLBACK"
             );
-            println!("{}", "-".repeat(60));
+            println!("{}", "-".repeat(86));
 
             for agent in &agents {
                 println!(
-                    "{:<20} {:<12} {:<15} {:<8}",
-                    agent.name, agent.status, agent.tool, agent.restart_count
+                    "{:<20} {:<12} {:<15} {:<8} {:<24}",
+                    agent.name,
+                    agent.status,
+                    agent.tool,
+                    agent.restart_count,
+                    format_fallback_cell(agent)
                 );
             }
         }
     }
 
     Ok(())
+}
+
+fn format_fallback_cell(agent: &aegis_control::daemon::AgentSummary) -> String {
+    let Some(state) = &agent.fallback else {
+        return "-".to_string();
+    };
+    if state.active {
+        let active = state.active_model.as_deref().unwrap_or("unknown");
+        let selected = state.selected_model.as_deref().unwrap_or("unknown");
+        let reason = state.reason.as_deref().unwrap_or("unknown");
+        let summary = format!("{active}<-{selected} {reason}");
+        truncate_str(&summary, 22)
+    } else if let Some(selected) = &state.selected_model {
+        truncate_str(&format!("cleared {selected}"), 22)
+    } else {
+        "cleared".to_string()
+    }
 }
 
 /// Show recent output from an agent.
@@ -837,6 +858,10 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
         println!(
             "  Loop executor:     max_micro_actions={} time_budget_ms={}",
             caps.loop_max_micro_actions, caps.loop_time_budget_ms
+        );
+        println!(
+            "  Auth readiness:    mode={} ready={} ({})",
+            caps.auth_mode, caps.auth_ready, caps.auth_hint
         );
         if !caps.tool_contract.trim().is_empty() {
             println!("\n{}", caps.tool_contract);

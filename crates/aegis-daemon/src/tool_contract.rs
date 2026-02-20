@@ -64,6 +64,11 @@ pub fn render_orchestrator_tool_contract(
          - Browser profile stop: `aegis daemon browser-profile-stop <agent> <session_id>`\n\
          - Browser navigate: `aegis daemon tool <agent> '{{\"action\":\"browser_navigate\",\"session_id\":\"web-1\",\"url\":\"https://example.com\"}}'`\n\
          - Browser snapshot: `aegis daemon tool <agent> '{{\"action\":\"browser_snapshot\",\"session_id\":\"web-1\",\"include_screenshot\":true}}'`\n\n\
+         Auth command patterns:\n\
+         - List auth profiles: `aegis auth list`\n\
+         - Add provider profile: `aegis auth add <provider> --method oauth|api-key|setup-token`\n\
+         - Login guidance: `aegis auth login <provider> --method oauth|api-key|setup-token`\n\
+         - Test readiness: `aegis auth test [provider-or-profile]`\n\n\
          Runtime notes:\n\
          - For `tui_snapshot` and `tui_input`, empty `session_id` targets the current agent.\n\
          - Managed browser profiles should be explicitly stopped when no longer needed.\n\n\

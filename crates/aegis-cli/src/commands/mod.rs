@@ -42,11 +42,12 @@ pub(crate) fn build_agent_slot(
 
 pub mod alerts;
 pub mod audit;
+pub mod auth;
 pub mod config;
 pub mod daemon;
 pub mod default_action;
-pub mod hook;
 pub mod diff;
+pub mod hook;
 pub mod init;
 pub mod list;
 pub mod monitor;

@@ -347,7 +347,7 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             Span::styled("j/k", Style::default().fg(Color::Yellow)),
             Span::styled(" nav  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Yellow)),
-            Span::styled(" detail  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" chat  ", Style::default().fg(Color::DarkGray)),
             Span::styled("s", Style::default().fg(Color::Green)),
             Span::styled("/", Style::default().fg(Color::DarkGray)),
             Span::styled("x", Style::default().fg(Color::Red)),
@@ -361,6 +361,8 @@ fn draw_overview_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout
             Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
             Span::styled("?", Style::default().fg(Color::Cyan)),
             Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(":", Style::default().fg(Color::Yellow)),
+            Span::styled("chat  ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::DarkGray)),
             Span::styled(" quit", Style::default().fg(Color::DarkGray)),
         ]
@@ -495,6 +497,14 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         ));
     }
 
+    if let Some(fallback) = agent_summary.and_then(|a| a.fallback.as_ref()) {
+        let summary = format_fallback_summary(fallback);
+        header_spans.push(Span::styled(
+            format!("  [fallback:{summary}]"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
     if let Some(caps) = &app.detail_runtime {
         let med_color = match caps.policy_mediation.as_str() {
             "enforced" => Color::Green,
@@ -518,6 +528,25 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
                 Style::default().fg(Color::Cyan),
             ));
         }
+
+        let auth_color = if caps.auth_ready {
+            Color::Green
+        } else {
+            Color::Yellow
+        };
+        header_spans.push(Span::styled(
+            format!("  [auth:{} ", caps.auth_mode),
+            Style::default().fg(Color::DarkGray),
+        ));
+        header_spans.push(Span::styled(
+            if caps.auth_ready {
+                "ready"
+            } else {
+                "not-ready"
+            },
+            Style::default().fg(auth_color).add_modifier(Modifier::BOLD),
+        ));
+        header_spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
 
         if let Some(action) = &caps.last_tool_action {
             let decision = caps
@@ -1341,7 +1370,11 @@ fn draw_context_editor(frame: &mut Frame, app: &FleetApp, area: ratatui::layout:
     frame.render_widget(help_widget, chunks[1]);
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1545,6 +1578,20 @@ fn status_display(status: &AgentStatus) -> (String, Color) {
     }
 }
 
+fn format_fallback_summary(fallback: &aegis_control::daemon::ModelFallbackState) -> String {
+    if fallback.active {
+        let active = fallback.active_model.as_deref().unwrap_or("unknown");
+        let selected = fallback.selected_model.as_deref().unwrap_or("unknown");
+        let reason = fallback.reason.as_deref().unwrap_or("unknown");
+        let raw = format!("{active} <- {selected}; {reason}");
+        truncate_str(&raw, 42)
+    } else if let Some(selected) = &fallback.selected_model {
+        truncate_str(&format!("cleared {selected}"), 42)
+    } else {
+        "cleared".to_string()
+    }
+}
+
 /// Truncate a path string, keeping the tail.
 fn truncate_path(path: &str, max: usize) -> String {
     let char_count = path.chars().count();
@@ -1643,6 +1690,7 @@ mod tests {
             attention_needed: false,
             is_orchestrator: false,
             attach_command: None,
+            fallback: None,
         }];
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
