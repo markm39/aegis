@@ -203,6 +203,12 @@ pub fn status() -> anyhow::Result<()> {
             println!("To reconfigure: aegis telegram setup");
             println!("To disable:     aegis telegram disable");
         }
+        Some(ChannelConfig::Slack(slack)) => {
+            println!("Telegram: not configured (Slack channel active)");
+            println!("  Slack channel: {}", slack.channel_id);
+            println!();
+            println!("To set up Telegram: aegis telegram setup");
+        }
         None => {
             println!("Telegram: not configured");
             println!();

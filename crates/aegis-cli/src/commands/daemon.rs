@@ -21,7 +21,7 @@ use tracing::info;
 use crate::terminal::open_url;
 use aegis_control::daemon::{
     CaptureSessionRequest, DaemonClient, DaemonCommand, DashboardStatus, LatestCaptureFrame,
-    ToolActionOutcome, ToolBatchOutcome,
+    SpawnSubagentRequest, SpawnSubagentResult, ToolActionOutcome, ToolBatchOutcome,
 };
 use aegis_daemon::persistence;
 use aegis_toolkit::contract::ToolAction;
@@ -1307,14 +1307,33 @@ pub fn config_show() -> anyhow::Result<()> {
     match &config.channel {
         Some(aegis_types::config::ChannelConfig::Telegram(tg)) => {
             println!("Telegram:");
-            println!("  Chat ID:     {}", tg.chat_id);
+            println!("  Chat ID:      {}", tg.chat_id);
             println!("  Poll timeout: {}s", tg.poll_timeout_secs);
-            // Don't print the full token for security
             let token_preview = truncate_str(&tg.bot_token, 13);
+            println!("  Bot token:    {token_preview}");
+        }
+        Some(aegis_types::config::ChannelConfig::Slack(slack)) => {
+            println!("Slack:");
+            println!("  Channel ID:  {}", slack.channel_id);
+            println!(
+                "  Streaming:   {}",
+                if slack.streaming {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            if let Some(team_id) = &slack.recipient_team_id {
+                println!("  Team ID:     {team_id}");
+            }
+            if let Some(user_id) = &slack.recipient_user_id {
+                println!("  User ID:     {user_id}");
+            }
+            let token_preview = truncate_str(&slack.bot_token, 13);
             println!("  Bot token:   {token_preview}");
         }
         None => {
-            println!("Telegram: not configured");
+            println!("Channel: not configured");
         }
     }
     println!();
@@ -1451,6 +1470,42 @@ pub fn add_agent() -> anyhow::Result<()> {
         println!("Daemon is not running. Start it with: aegis daemon start");
     }
 
+    Ok(())
+}
+
+/// Spawn a constrained runtime subagent from an orchestrator/subagent parent.
+pub fn spawn_subagent(
+    parent: &str,
+    name: Option<&str>,
+    role: Option<&str>,
+    task: Option<&str>,
+    depth_limit: Option<u8>,
+) -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+    let request = SpawnSubagentRequest {
+        parent: parent.to_string(),
+        name: name.map(str::to_string),
+        role: role.map(str::to_string),
+        task: task.map(str::to_string),
+        depth_limit,
+        start: true,
+    };
+
+    let resp = client
+        .send(&DaemonCommand::SpawnSubagent { request })
+        .map_err(|e| anyhow::anyhow!("failed to contact daemon: {e}"))?;
+    if !resp.ok {
+        anyhow::bail!("{}", resp.message);
+    }
+
+    let data = resp
+        .data
+        .ok_or_else(|| anyhow::anyhow!("daemon did not return spawn payload"))?;
+    let payload: SpawnSubagentResult = serde_json::from_value(data)?;
+    println!(
+        "Spawned subagent '{}' from '{}' (depth {}), workspace {}, tool {}",
+        payload.child, payload.parent, payload.depth, payload.working_dir, payload.tool
+    );
     Ok(())
 }
 

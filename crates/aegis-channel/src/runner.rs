@@ -16,6 +16,7 @@ use aegis_types::ChannelConfig;
 use crate::active_hours;
 use crate::channel::{InboundAction, OutboundPhoto};
 use crate::format;
+use crate::slack;
 use crate::telegram;
 
 /// Input events fed to the channel runner from the pilot/alert system.
@@ -75,8 +76,86 @@ pub fn run_fleet(
             ChannelConfig::Telegram(tg_config) => {
                 run_telegram(tg_config, input_rx, feedback_tx).await;
             }
+            ChannelConfig::Slack(slack_config) => {
+                run_slack(slack_config, input_rx, feedback_tx).await;
+            }
         }
     });
+}
+
+async fn run_slack(
+    config: aegis_types::SlackConfig,
+    input_rx: Receiver<ChannelInput>,
+    feedback_tx: Option<Sender<DaemonCommand>>,
+) {
+    use crate::channel::Channel;
+
+    let mut channel = slack::SlackChannel::new(config.clone());
+
+    info!("Slack channel starting");
+
+    let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<ChannelInput>(64);
+    tokio::task::spawn_blocking(move || {
+        while let Ok(input) = input_rx.recv() {
+            if bridge_tx.blocking_send(input).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+
+    loop {
+        tokio::select! {
+            Some(input) = bridge_rx.recv() => {
+                let message = match input {
+                    ChannelInput::Alert { ref event, ref rule_name } => {
+                        format::format_alert(event, rule_name)
+                    }
+                    ChannelInput::PilotEvent(ref event) => {
+                        format::format_pilot_event(event)
+                    }
+                    ChannelInput::TextMessage(ref text) => {
+                        crate::channel::OutboundMessage::text(text)
+                    }
+                    ChannelInput::Photo(_) => {
+                        warn!("slack channel does not support photos");
+                        continue;
+                    }
+                };
+
+                if !active_hours::within_active_hours(
+                    config.active_hours.as_ref(),
+                    chrono::Utc::now(),
+                ) {
+                    warn!("outbound message suppressed (inactive hours)");
+                    continue;
+                }
+
+                if let Err(e) = channel.send(message).await {
+                    warn!("failed to send outbound message: {e}");
+                }
+            }
+            _ = interval.tick() => {
+                match channel.recv().await {
+                    Ok(Some(action)) => {
+                        handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
+                    }
+                    Ok(None) => {}
+                    Err(crate::channel::ChannelError::Shutdown) => {
+                        info!("channel shut down");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("channel recv error: {e}");
+                    }
+                }
+            }
+            else => break,
+        }
+    }
+
+    info!("Slack channel stopped");
 }
 
 async fn run_telegram(

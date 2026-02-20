@@ -12,10 +12,11 @@
 //! - [`telegram`]: Telegram Bot API implementation
 //! - [`runner`]: thread/runtime orchestration bridging sync and async worlds
 
-pub mod channel;
 pub mod active_hours;
+pub mod channel;
 pub mod format;
 pub mod runner;
+pub mod slack;
 pub mod telegram;
 
 pub use channel::{Channel, ChannelError, InboundAction, OutboundMessage};

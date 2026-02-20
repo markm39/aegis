@@ -376,6 +376,8 @@ fn default_poll_timeout_secs() -> u64 {
 pub enum ChannelConfig {
     /// Telegram Bot API channel.
     Telegram(TelegramConfig),
+    /// Slack Web API channel.
+    Slack(SlackConfig),
 }
 
 /// Configuration for the Telegram messaging channel.
@@ -391,6 +393,27 @@ pub struct TelegramConfig {
     /// Whether to accept commands from group chats (not just the configured chat_id).
     #[serde(default)]
     pub allow_group_commands: bool,
+    /// Optional active hours window for outbound notifications.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Slack messaging channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SlackConfig {
+    /// Bot token (xoxb-...).
+    pub bot_token: String,
+    /// Default channel ID to post into.
+    pub channel_id: String,
+    /// Optional workspace/team ID for streaming API calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_team_id: Option<String>,
+    /// Optional user ID for DM streaming API calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_user_id: Option<String>,
+    /// Whether to use Slack streaming API for outbound messages.
+    #[serde(default)]
+    pub streaming: bool,
     /// Optional active hours window for outbound notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,

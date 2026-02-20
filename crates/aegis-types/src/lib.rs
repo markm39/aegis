@@ -13,8 +13,8 @@ pub use action::{Action, ActionKind};
 pub use config::{
     validate_config_name, ActiveHoursConfig, AdapterConfig, AegisConfig, AlertRule, ChannelConfig,
     ControlConfig, IsolationConfig, NetworkRule, ObserverConfig, PilotConfig, PromptPatternConfig,
-    Protocol, StallConfig, TelegramConfig, UncertainAction, UsageProxyConfig, CONFIG_FILENAME,
-    DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
+    Protocol, SlackConfig, StallConfig, TelegramConfig, UncertainAction, UsageProxyConfig,
+    CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
 };
 pub use daemon::{
     AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, DaemonControlConfig,

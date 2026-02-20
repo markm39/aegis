@@ -17,7 +17,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{
     AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
-    PendingPromptSummary, RuntimeCapabilities, ToolActionOutcome, ToolBatchOutcome,
+    PendingPromptSummary, RuntimeCapabilities, SpawnSubagentRequest, ToolActionOutcome,
+    ToolBatchOutcome,
 };
 use aegis_toolkit::contract::ToolAction;
 use aegis_types::AgentStatus;
@@ -1246,6 +1247,23 @@ impl FleetApp {
                 self.wizard = Some(AddAgentWizard::new());
                 self.view = FleetView::AddAgent;
             }
+            FleetCommand::Subagent { parent, name } => {
+                if !self.agent_exists(&parent) {
+                    self.set_result(format!("unknown parent agent: '{parent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::SpawnSubagent {
+                        request: SpawnSubagentRequest {
+                            parent,
+                            name,
+                            role: None,
+                            task: None,
+                            depth_limit: None,
+                            start: true,
+                        },
+                    });
+                    self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
+                }
+            }
             FleetCommand::Start { agent } => {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
@@ -1395,6 +1413,12 @@ impl FleetApp {
                                 format!(
                                     "Telegram: configured (token: {token_preview}, chat: {})",
                                     tg.chat_id
+                                )
+                            }
+                            Some(aegis_types::config::ChannelConfig::Slack(slack)) => {
+                                format!(
+                                    "Telegram: disabled (Slack configured for channel {})",
+                                    slack.channel_id
                                 )
                             }
                             None => "Telegram: not configured. Run :telegram setup to configure."
