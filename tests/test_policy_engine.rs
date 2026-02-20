@@ -192,13 +192,22 @@ fn test_orchestrator_computer_use_policy_limits_tool_names() {
     let engine = PolicyEngine::from_policies(ORCHESTRATOR_COMPUTER_USE, None)
         .expect("should create orchestrator-computer-use engine");
 
-    let allowed = tool_call_action("orch-1", "MouseClick");
-    let allowed_verdict = engine.evaluate(&allowed);
-    assert_eq!(
-        allowed_verdict.decision,
-        Decision::Allow,
-        "known computer-use tool should be allowed"
-    );
+    for tool in [
+        "MouseClick",
+        "BrowserNavigate",
+        "BrowserEvaluate",
+        "BrowserClick",
+        "BrowserType",
+        "InputBatch",
+    ] {
+        let allowed = tool_call_action("orch-1", tool);
+        let allowed_verdict = engine.evaluate(&allowed);
+        assert_eq!(
+            allowed_verdict.decision,
+            Decision::Allow,
+            "known computer-use tool should be allowed: {tool}"
+        );
+    }
 
     let denied = tool_call_action("orch-1", "Bash");
     let denied_verdict = engine.evaluate(&denied);

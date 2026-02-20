@@ -80,6 +80,12 @@ pub fn render_orchestrator_tool_contract(
          - Subagent exits are relayed to parents as `AEGIS_SUBAGENT_RESULT <json>` messages when policy permits.\n\
          - For `tui_snapshot` and `tui_input`, empty `session_id` targets the current agent.\n\
          - Managed browser profiles should be explicitly stopped when no longer needed.\n\n\
+         Standard browser loop:\n\
+         1. Start capture cache: `aegis daemon capture-start <agent> --fps 30`\n\
+         2. Start browser profile: `aegis daemon browser-profile <agent> <session_id> --headless --url <url>`\n\
+         3. Execute micro-batch: navigate/click/type/wait via `tool-batch`\n\
+         4. Validate with `aegis daemon latest-frame <agent>` after each batch\n\
+         5. Stop profile when complete: `aegis daemon browser-profile-stop <agent> <session_id>`\n\n\
          Compliance contract:\n\
          - Every computer-use action is Cedar-evaluated and may be denied.\n\
          - Fail closed: if policy/runtime path is unavailable, action is denied.\n\

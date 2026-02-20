@@ -718,6 +718,12 @@ fn compose_orchestrator_prompt(
          1. Planner: produce a short micro-plan (3-10 actions).\n\
          2. Executor: run those actions as a batch.\n\
          3. Observe outcome and only then plan the next batch.\n\n\
+         Runtime bootstrap for browser sessions:\n\
+         - `aegis daemon capture-start <agent> --fps 30`\n\
+         - `aegis daemon browser-profile <agent> <session_id> --headless --url <url>`\n\
+         - `aegis daemon tool-batch <agent> '[{{\"action\":\"browser_navigate\",...}},{{\"action\":\"mouse_click\",...}},{{\"action\":\"type_text\",...}},{{\"action\":\"input_batch\",\"actions\":[{{\"kind\":\"wait\",\"duration_ms\":150}}]}}]' --max-actions 6`\n\
+         - `aegis daemon latest-frame <agent>` after each batch to validate state transitions.\n\
+         - `aegis daemon browser-profile-stop <agent> <session_id>` when done.\n\n\
          Use `aegis daemon tool-batch <agent> '<json-array>' --max-actions <n>` \
          for low-latency execution. Stop a batch when any of these happen:\n\
          - You hit a policy boundary (especially high-risk actions).\n\
@@ -771,6 +777,7 @@ fn compose_orchestrator_prompt(
          - `aegis daemon tool <agent> '{\"action\":\"tui_input\",\"session_id\":\"<id>\",\"text\":\"...\"}'` -- send terminal input via runtime fast path\n\
          - `aegis daemon browser-profile <agent> <session_id> [--headless] [--url <u>]` -- start managed browser profile\n\
          - `aegis daemon browser-profile-stop <agent> <session_id>` -- stop managed browser profile\n\
+         - Parse subagent completion messages starting with `AEGIS_SUBAGENT_RESULT ` as structured JSON results from child sessions\n\
          - `aegis send <agent> \"message\"` -- send text to agent stdin\n\
          - `aegis context <agent> task \"new task\"` -- update agent's task\n\
          - `aegis context <agent> role \"new role\"` -- update agent's role\n\
@@ -916,6 +923,8 @@ mod tests {
         assert!(prompt.contains("300 seconds"));
         assert!(prompt.contains("aegis orchestrator status"));
         assert!(prompt.contains("aegis daemon capabilities orch-1"));
+        assert!(prompt.contains("aegis daemon capture-start <agent> --fps 30"));
+        assert!(prompt.contains("AEGIS_SUBAGENT_RESULT"));
         assert!(prompt.contains("Tool Capability Contract"));
         assert!(prompt.contains("Value Assessment Framework"));
         assert!(prompt.contains("Low value"));
