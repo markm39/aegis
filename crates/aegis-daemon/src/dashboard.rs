@@ -5,13 +5,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, warn};
 
 use aegis_control::daemon::{DaemonCommand, DaemonResponse, DashboardStatus};
@@ -66,6 +67,7 @@ async fn serve(state: DashboardState, shutdown: Arc<AtomicBool>) -> Result<(), S
         .route("/api/frame/{agent}", get(frame))
         .route("/api/logs/{agent}", get(logs))
         .route("/ws", get(ws))
+        .route("/gateway/ws", get(gateway_ws))
         .with_state(state.clone());
 
     let addr: SocketAddr = state
@@ -267,6 +269,329 @@ async fn ws(
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     })
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct GatewayRequest {
+    #[serde(default)]
+    id: Option<String>,
+    method: String,
+    #[serde(default)]
+    params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct GatewayResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct GatewayEvent {
+    event: String,
+    data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SessionParams {
+    session_key: String,
+    #[serde(default)]
+    lines: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SessionSendParams {
+    session_key: String,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct FollowState {
+    session_key: String,
+    lines: usize,
+    last_len: usize,
+    last_tail: Option<String>,
+}
+
+async fn gateway_ws(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    if !auth_ok(&headers, q.token.as_deref(), &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    ws.on_upgrade(move |socket| async move {
+        gateway_loop(socket, state).await;
+    })
+}
+
+async fn gateway_loop(socket: WebSocket, state: DashboardState) {
+    let (sender, mut receiver) = socket.split();
+    let sender = Arc::new(Mutex::new(sender));
+    let follow = Arc::new(Mutex::new(None::<FollowState>));
+
+    let follow_sender = Arc::clone(&sender);
+    let follow_state = Arc::clone(&follow);
+    let cmd_tx = state.cmd_tx.clone();
+
+    let follow_task = tokio::spawn(async move {
+        loop {
+            let config = { follow_state.lock().await.clone() };
+            if let Some(mut cfg) = config {
+                let resp = send_cmd(
+                    &cmd_tx,
+                    DaemonCommand::SessionHistory {
+                        session_key: cfg.session_key.clone(),
+                        lines: Some(cfg.lines),
+                    },
+                )
+                .await;
+                if let Ok(resp) = resp {
+                    if resp.ok {
+                        if let Some(data) = resp.data {
+                            if let Ok(history) = serde_json::from_value::<
+                                aegis_control::daemon::SessionHistory,
+                            >(data)
+                            {
+                                let len = history.lines.len();
+                                let tail = history.lines.last().cloned();
+                                if len != cfg.last_len || tail != cfg.last_tail {
+                                    cfg.last_len = len;
+                                    cfg.last_tail = tail.clone();
+                                    *follow_state.lock().await = Some(cfg.clone());
+                                    let payload = serde_json::json!({
+                                        "session_key": history.session_key,
+                                        "lines": history.lines,
+                                    });
+                                    let event = GatewayEvent {
+                                        event: "session.history".to_string(),
+                                        data: payload,
+                                    };
+                                    if send_gateway(&follow_sender, event).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
+    });
+
+    while let Some(msg) = receiver.next().await {
+        let msg = match msg {
+            Ok(Message::Text(text)) => text.to_string(),
+            Ok(Message::Binary(bin)) => String::from_utf8_lossy(&bin).to_string(),
+            Ok(Message::Close(_)) | Err(_) => break,
+            _ => continue,
+        };
+
+        let parsed: Result<GatewayRequest, _> = serde_json::from_str(&msg);
+        let req = match parsed {
+            Ok(req) => req,
+            Err(err) => {
+                let resp = GatewayResponse {
+                    id: None,
+                    ok: false,
+                    result: None,
+                    error: Some(format!("invalid request: {err}")),
+                };
+                if send_gateway(&sender, resp).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let response = handle_gateway_request(&state, &follow, req).await;
+        if send_gateway(&sender, response).await.is_err() {
+            break;
+        }
+    }
+
+    follow_task.abort();
+}
+
+async fn handle_gateway_request(
+    state: &DashboardState,
+    follow: &Arc<Mutex<Option<FollowState>>>,
+    req: GatewayRequest,
+) -> GatewayResponse {
+    let id = req.id.clone();
+    match req.method.as_str() {
+        "ping" => GatewayResponse {
+            id,
+            ok: true,
+            result: Some(serde_json::json!({"ok": true})),
+            error: None,
+        },
+        "session.list" => match send_cmd(&state.cmd_tx, DaemonCommand::SessionList).await {
+            Ok(resp) if resp.ok => GatewayResponse {
+                id,
+                ok: true,
+                result: resp.data,
+                error: None,
+            },
+            Ok(resp) => GatewayResponse {
+                id,
+                ok: false,
+                result: None,
+                error: Some(resp.message),
+            },
+            Err(e) => GatewayResponse {
+                id,
+                ok: false,
+                result: None,
+                error: Some(e),
+            },
+        },
+        "session.history" => {
+            let params: Result<SessionParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::SessionHistory {
+                    session_key: params.session_key,
+                    lines: params.lines,
+                },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "session.send" => {
+            let params: Result<SessionSendParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::SessionSend {
+                    session_key: params.session_key,
+                    text: params.text,
+                },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "session.follow" => {
+            let params: Result<SessionParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(params) => params,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            let lines = params.lines.unwrap_or(50);
+            let mut guard = follow.lock().await;
+            *guard = Some(FollowState {
+                session_key: params.session_key,
+                lines,
+                last_len: 0,
+                last_tail: None,
+            });
+            GatewayResponse {
+                id,
+                ok: true,
+                result: Some(serde_json::json!({"following": true})),
+                error: None,
+            }
+        }
+        "session.unfollow" => {
+            let mut guard = follow.lock().await;
+            *guard = None;
+            GatewayResponse {
+                id,
+                ok: true,
+                result: Some(serde_json::json!({"following": false})),
+                error: None,
+            }
+        }
+        other => GatewayResponse {
+            id,
+            ok: false,
+            result: None,
+            error: Some(format!("unknown method '{other}'")),
+        },
+    }
+}
+
+async fn send_gateway<T: serde::Serialize>(
+    sender: &Arc<Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+    payload: T,
+) -> Result<(), ()> {
+    let text = serde_json::to_string(&payload).map_err(|_| ())?;
+    let mut guard = sender.lock().await;
+    guard.send(Message::Text(text.into())).await.map_err(|_| ())
 }
 
 async fn send_cmd(cmd_tx: &DaemonCmdTx, cmd: DaemonCommand) -> Result<DaemonResponse, String> {
