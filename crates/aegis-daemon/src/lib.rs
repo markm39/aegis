@@ -36,10 +36,10 @@ use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
-    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
-    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, SpawnSubagentRequest,
-    SpawnSubagentResult, ToolActionExecution, ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict,
-    TuiToolData,
+    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary, SessionHistory,
+    SessionInfo, RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation,
+    SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution, ToolActionOutcome,
+    ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_ledger::AuditStore;
@@ -315,6 +315,25 @@ fn tool_auth_readiness(config: &AgentSlotConfig) -> (String, bool, String) {
             false,
             "Custom runtime auth must be configured by the command/tool itself".to_string(),
         ),
+    }
+}
+
+fn session_key_for_agent(name: &str) -> String {
+    format!("agent:{name}:main")
+}
+
+fn parse_session_key(session_key: &str) -> Option<String> {
+    let trimmed = session_key.trim();
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.len() == 3 && parts[0] == "agent" && parts[2] == "main" {
+        let name = parts[1].to_string();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    } else {
+        None
     }
 }
 
@@ -1057,6 +1076,9 @@ impl DaemonRuntime {
                 // Tick the fleet (check for exits, apply restart policies)
                 let notable_events = self.fleet.tick();
 
+                // Relay completed subagent results back to parent orchestrators.
+                self.relay_subagent_results(&notable_events);
+
                 // Forward notable events to the notification channel
                 self.forward_to_channel(notable_events);
 
@@ -1166,6 +1188,115 @@ impl DaemonRuntime {
             );
             let _ = tx.send(ChannelInput::TextMessage(msg));
             self.heartbeat_last_sent.insert(name.clone(), now);
+        }
+    }
+
+    fn relay_subagent_results(&mut self, events: &[(String, NotableEvent)]) {
+        for (child_name, event) in events {
+            let NotableEvent::ChildExited { exit_code } = event else {
+                continue;
+            };
+            let Some(meta) = self.subagents.get(child_name).cloned() else {
+                continue;
+            };
+            let parent = meta.parent.clone();
+
+            let (status, role, task, working_dir, output_tail) = match self.fleet.slot(child_name) {
+                Some(slot) => {
+                    slot.drain_output();
+                    (
+                        status_label(&slot.status),
+                        slot.config.role.clone(),
+                        slot.config.task.clone(),
+                        slot.config.working_dir.to_string_lossy().into_owned(),
+                        slot.get_recent_output(40),
+                    )
+                }
+                None => ("unknown".to_string(), None, None, String::new(), Vec::new()),
+            };
+
+            let summary = serde_json::json!({
+                "event": "subagent_result",
+                "parent": parent.clone(),
+                "child": child_name,
+                "depth": meta.depth,
+                "exit_code": exit_code,
+                "status": status,
+                "role": role,
+                "task": task,
+                "working_dir": working_dir,
+                "output_tail": output_tail,
+            });
+            let message = format!("AEGIS_SUBAGENT_RESULT {}", summary);
+
+            let policy_action = Action::new(
+                parent.clone(),
+                ActionKind::ToolCall {
+                    tool: "SubagentResultReturn".to_string(),
+                    args: serde_json::json!({
+                        "parent": parent.clone(),
+                        "child": child_name,
+                        "depth": meta.depth,
+                        "exit_code": exit_code,
+                    }),
+                },
+            );
+            let (decision, policy_reason) = match &self.policy_engine {
+                Some(engine) => {
+                    let verdict = engine.evaluate(&policy_action);
+                    (verdict.decision, verdict.reason)
+                }
+                None => (
+                    Decision::Deny,
+                    "policy engine unavailable; denied by fail-closed subagent result policy"
+                        .to_string(),
+                ),
+            };
+
+            let (delivered, delivery_error) = match decision {
+                Decision::Allow => match self.fleet.send_to_agent(&parent, &message) {
+                    Ok(()) => (true, None),
+                    Err(err) => {
+                        warn!(
+                            parent = %parent,
+                            child = %child_name,
+                            error = %err,
+                            "failed to relay subagent result to parent"
+                        );
+                        (false, Some(err))
+                    }
+                },
+                Decision::Deny => (false, None),
+            };
+
+            let audit_action = Action {
+                kind: ActionKind::ToolCall {
+                    tool: "SubagentResultReturn".to_string(),
+                    args: serde_json::json!({
+                        "parent": parent.clone(),
+                        "child": child_name,
+                        "depth": meta.depth,
+                        "exit_code": exit_code,
+                        "decision": decision.to_string(),
+                        "policy_reason": policy_reason,
+                        "delivered": delivered,
+                        "delivery_error": delivery_error,
+                    }),
+                },
+                ..policy_action
+            };
+            let verdict = match decision {
+                Decision::Allow if delivered => {
+                    Verdict::allow(audit_action.id, "subagent result delivered to parent", None)
+                }
+                Decision::Allow => Verdict::allow(
+                    audit_action.id,
+                    "subagent result approved but parent delivery failed",
+                    None,
+                ),
+                Decision::Deny => Verdict::deny(audit_action.id, policy_reason, None),
+            };
+            self.append_audit_entry(&audit_action, &verdict);
         }
     }
 
@@ -1364,6 +1495,61 @@ impl DaemonRuntime {
                         Ok(data) => DaemonResponse::ok_with_data("output", data),
                         Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                     },
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::SessionList => {
+                let sessions: Vec<SessionInfo> = self
+                    .fleet
+                    .agent_names_sorted()
+                    .into_iter()
+                    .filter_map(|name| {
+                        let slot = self.fleet.slot(&name)?;
+                        Some(SessionInfo {
+                            session_key: session_key_for_agent(&name),
+                            agent: name,
+                            is_orchestrator: slot.config.orchestrator.is_some(),
+                            parent: self.subagents.get(&slot.config.name).map(|s| s.parent.clone()),
+                        })
+                    })
+                    .collect();
+                match serde_json::to_value(&sessions) {
+                    Ok(data) => DaemonResponse::ok_with_data("session list", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+            DaemonCommand::SessionHistory {
+                ref session_key,
+                lines,
+            } => {
+                let Some(agent) = parse_session_key(session_key) else {
+                    return DaemonResponse::error(format!("invalid session key: {session_key}"));
+                };
+                let limit = lines.unwrap_or(50);
+                match self.fleet.agent_output(&agent, limit) {
+                    Ok(output) => {
+                        let history = SessionHistory {
+                            session_key: session_key.clone(),
+                            lines: output,
+                        };
+                        match serde_json::to_value(&history) {
+                            Ok(data) => DaemonResponse::ok_with_data("session history", data),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::SessionSend {
+                ref session_key,
+                ref text,
+            } => {
+                let Some(agent) = parse_session_key(session_key) else {
+                    return DaemonResponse::error(format!("invalid session key: {session_key}"));
+                };
+                match self.fleet.send_to_agent(&agent, text) {
+                    Ok(()) => DaemonResponse::ok(format!("sent to '{session_key}'")),
                     Err(e) => DaemonResponse::error(e),
                 }
             }
@@ -3039,13 +3225,16 @@ fn compose_autonomy_prompt(
 mod tests {
     use super::*;
     use aegis_control::daemon::{CaptureSessionRequest, LatestCaptureFrame};
+    use aegis_pilot::supervisor::SupervisorCommand;
     use aegis_policy::builtin::{ORCHESTRATOR_COMPUTER_USE, PERMIT_ALL};
     use aegis_toolkit::contract::InputAction;
     use aegis_toolkit::contract::{MouseButton, ToolAction};
     use aegis_types::daemon::{
-        AgentSlotConfig, AgentToolConfig, DaemonControlConfig, PersistenceConfig, RestartPolicy,
+        AgentSlotConfig, AgentToolConfig, DaemonControlConfig, OrchestratorConfig,
+        PersistenceConfig, RestartPolicy,
     };
     use std::path::PathBuf;
+    use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -3967,8 +4156,6 @@ mod tests {
 
     #[test]
     fn handle_command_spawn_subagent_enforces_depth_limit() {
-        use aegis_types::daemon::OrchestratorConfig;
-
         let mut orch = test_agent("orchestrator");
         orch.orchestrator = Some(OrchestratorConfig::default());
         let mut runtime = test_runtime(vec![orch]);
@@ -3999,6 +4186,153 @@ mod tests {
         });
         assert!(!second.ok);
         assert!(second.message.contains("exceeds depth_limit"));
+    }
+
+    #[test]
+    fn relay_subagent_results_child_exit_sends_parent_message_and_audits() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let base = tmp.path().join("relay-subagent-result-ok");
+        std::fs::create_dir_all(&base).expect("create base dir");
+
+        let mut orchestrator = test_agent("orchestrator");
+        orchestrator.orchestrator = Some(OrchestratorConfig::default());
+        orchestrator.working_dir = base.clone();
+        let config = DaemonConfig {
+            goal: None,
+            persistence: PersistenceConfig::default(),
+            control: DaemonControlConfig::default(),
+            dashboard: Default::default(),
+            alerts: vec![],
+            agents: vec![orchestrator],
+            channel: None,
+            toolkit: Default::default(),
+        };
+        let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
+        let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
+        runtime.policy_engine =
+            Some(aegis_policy::PolicyEngine::from_policies(PERMIT_ALL, None).unwrap());
+
+        let spawn = runtime.spawn_subagent(SpawnSubagentRequest {
+            parent: "orchestrator".into(),
+            name: Some("worker-sub-1".into()),
+            role: Some("Test worker".into()),
+            task: Some("Produce a deterministic output".into()),
+            depth_limit: Some(3),
+            start: false,
+        });
+        assert!(spawn.is_ok(), "subagent spawn should succeed: {spawn:?}");
+
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        runtime.fleet.slot_mut("orchestrator").unwrap().command_tx = Some(cmd_tx);
+        if let Some(slot) = runtime.fleet.slot("worker-sub-1") {
+            if let Ok(mut output) = slot.recent_output.lock() {
+                output.push_back("subagent completed task".to_string());
+            }
+        }
+
+        runtime.relay_subagent_results(&[(
+            "worker-sub-1".to_string(),
+            NotableEvent::ChildExited { exit_code: 0 },
+        )]);
+
+        let cmd = cmd_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("parent should receive subagent result");
+        let text = match cmd {
+            SupervisorCommand::SendInput { text } => text,
+            other => panic!("expected SendInput relay, got {other:?}"),
+        };
+        assert!(text.starts_with("AEGIS_SUBAGENT_RESULT "));
+        let payload = text
+            .strip_prefix("AEGIS_SUBAGENT_RESULT ")
+            .expect("result marker prefix");
+        let parsed: serde_json::Value = serde_json::from_str(payload).expect("parse result JSON");
+        assert_eq!(parsed["event"].as_str(), Some("subagent_result"));
+        assert_eq!(parsed["parent"].as_str(), Some("orchestrator"));
+        assert_eq!(parsed["child"].as_str(), Some("worker-sub-1"));
+        assert_eq!(parsed["exit_code"].as_i64(), Some(0));
+        assert!(parsed["output_tail"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty()));
+
+        let store = AuditStore::open(&aegis_config.ledger_path).expect("open audit ledger");
+        let entries = store.query_last(100).expect("query audit entries");
+        let relay_entry = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.action_kind.contains("SubagentResultReturn"))
+            .expect("expected SubagentResultReturn audit entry");
+        assert_eq!(relay_entry.decision, "Allow");
+        let kind: serde_json::Value =
+            serde_json::from_str(&relay_entry.action_kind).expect("parse action kind");
+        assert_eq!(
+            kind["ToolCall"]["args"]["delivered"].as_bool(),
+            Some(true),
+            "relay audit should record delivered=true"
+        );
+    }
+
+    #[test]
+    fn relay_subagent_results_without_parent_channel_audits_delivery_failure() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let base = tmp.path().join("relay-subagent-result-no-parent-channel");
+        std::fs::create_dir_all(&base).expect("create base dir");
+
+        let mut orchestrator = test_agent("orchestrator");
+        orchestrator.orchestrator = Some(OrchestratorConfig::default());
+        orchestrator.working_dir = base.clone();
+        let config = DaemonConfig {
+            goal: None,
+            persistence: PersistenceConfig::default(),
+            control: DaemonControlConfig::default(),
+            dashboard: Default::default(),
+            alerts: vec![],
+            agents: vec![orchestrator],
+            channel: None,
+            toolkit: Default::default(),
+        };
+        let aegis_config =
+            AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);
+        let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
+        runtime.policy_engine =
+            Some(aegis_policy::PolicyEngine::from_policies(PERMIT_ALL, None).unwrap());
+
+        let spawn = runtime.spawn_subagent(SpawnSubagentRequest {
+            parent: "orchestrator".into(),
+            name: Some("worker-sub-2".into()),
+            role: None,
+            task: Some("Return quickly".into()),
+            depth_limit: Some(3),
+            start: false,
+        });
+        assert!(spawn.is_ok(), "subagent spawn should succeed: {spawn:?}");
+
+        runtime.relay_subagent_results(&[(
+            "worker-sub-2".to_string(),
+            NotableEvent::ChildExited { exit_code: 17 },
+        )]);
+
+        let store = AuditStore::open(&aegis_config.ledger_path).expect("open audit ledger");
+        let entries = store.query_last(100).expect("query audit entries");
+        let relay_entry = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.action_kind.contains("SubagentResultReturn"))
+            .expect("expected SubagentResultReturn audit entry");
+        assert_eq!(relay_entry.decision, "Allow");
+        let kind: serde_json::Value =
+            serde_json::from_str(&relay_entry.action_kind).expect("parse action kind");
+        assert_eq!(
+            kind["ToolCall"]["args"]["delivered"].as_bool(),
+            Some(false),
+            "relay audit should record delivered=false"
+        );
+        assert!(
+            kind["ToolCall"]["args"]["delivery_error"]
+                .as_str()
+                .is_some_and(|v| v.contains("no command channel")),
+            "delivery error should explain parent channel failure"
+        );
     }
 
     #[test]

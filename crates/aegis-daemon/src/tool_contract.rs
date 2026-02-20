@@ -77,6 +77,7 @@ pub fn render_orchestrator_tool_contract(
          Runtime notes:\n\
          - Subagents are separate runtime sessions with isolated workspaces under `<parent>/.aegis/subagents/<child>`.\n\
          - Subagent tool configs are inherited but restricted (safe approval mode, no extra args, no custom runtime passthrough).\n\
+         - Subagent exits are relayed to parents as `AEGIS_SUBAGENT_RESULT <json>` messages when policy permits.\n\
          - For `tui_snapshot` and `tui_input`, empty `session_id` targets the current agent.\n\
          - Managed browser profiles should be explicitly stopped when no longer needed.\n\n\
          Compliance contract:\n\
