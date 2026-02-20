@@ -933,6 +933,11 @@ pub fn tool_action(name: &str, action_json: &str) -> anyhow::Result<()> {
             if let Some(ws_url) = browser.ws_url {
                 println!("  WS URL:    {ws_url}");
             }
+            if let Some(result) = browser.result_json {
+                let rendered = serde_json::to_string_pretty(&result)
+                    .unwrap_or_else(|_| result.to_string());
+                println!("  Result:   {rendered}");
+            }
         }
     }
 

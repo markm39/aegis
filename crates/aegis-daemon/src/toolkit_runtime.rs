@@ -228,6 +228,155 @@ impl ToolkitRuntime {
                     note: "navigated".to_string(),
                     screenshot_base64: None,
                     ws_url,
+                    result_json: None,
+                });
+            }
+            ToolAction::BrowserEvaluate {
+                session_id,
+                expression,
+                return_by_value,
+            } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
+                let started = Instant::now();
+                let mut eval_result = None;
+                let res = self.with_browser_session(session_id, |session| {
+                    session.client.call("Runtime.enable", serde_json::json!({}))?;
+                    let result = session.client.call(
+                        "Runtime.evaluate",
+                        serde_json::json!({
+                            "expression": expression,
+                            "returnByValue": return_by_value,
+                            "awaitPromise": true
+                        }),
+                    )?;
+                    eval_result = Some(result);
+                    Ok(())
+                });
+                if let Err(e) = res {
+                    self.browser_sessions.remove(session_id);
+                    return Err(e);
+                }
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                let ws_url = self
+                    .browser_sessions
+                    .get(session_id)
+                    .map(|s| s.endpoint.clone());
+                browser_payload = Some(BrowserToolData {
+                    session_id: session_id.clone(),
+                    backend: "cdp".to_string(),
+                    available: true,
+                    note: "evaluated expression".to_string(),
+                    screenshot_base64: None,
+                    ws_url,
+                    result_json: eval_result,
+                });
+            }
+            ToolAction::BrowserClick { session_id, selector } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
+                let started = Instant::now();
+                let mut click_point = None;
+                let res = self.with_browser_session(session_id, |session| {
+                    let (x, y) = query_selector_center(session, selector)?;
+                    dispatch_mouse_click(session, x, y)?;
+                    click_point = Some(serde_json::json!({ "x": x, "y": y }));
+                    Ok(())
+                });
+                if let Err(e) = res {
+                    self.browser_sessions.remove(session_id);
+                    return Err(e);
+                }
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                let ws_url = self
+                    .browser_sessions
+                    .get(session_id)
+                    .map(|s| s.endpoint.clone());
+                browser_payload = Some(BrowserToolData {
+                    session_id: session_id.clone(),
+                    backend: "cdp".to_string(),
+                    available: true,
+                    note: format!("clicked selector {}", selector),
+                    screenshot_base64: None,
+                    ws_url,
+                    result_json: click_point,
+                });
+            }
+            ToolAction::BrowserType {
+                session_id,
+                selector,
+                text,
+            } => {
+                if !self.config.browser.enabled {
+                    return Err("browser actions are disabled by daemon toolkit config".to_string());
+                }
+                if !self
+                    .config
+                    .browser
+                    .backend
+                    .trim()
+                    .eq_ignore_ascii_case("cdp")
+                {
+                    return Err(format!(
+                        "unsupported browser backend '{}' (expected 'cdp')",
+                        self.config.browser.backend
+                    ));
+                }
+                let started = Instant::now();
+                let mut typed_point = None;
+                let res = self.with_browser_session(session_id, |session| {
+                    let (x, y) = query_selector_center(session, selector)?;
+                    dispatch_mouse_click(session, x, y)?;
+                    session.client.call(
+                        "Input.insertText",
+                        serde_json::json!({ "text": text }),
+                    )?;
+                    typed_point = Some(serde_json::json!({ "x": x, "y": y }));
+                    Ok(())
+                });
+                if let Err(e) = res {
+                    self.browser_sessions.remove(session_id);
+                    return Err(e);
+                }
+                result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
+                let ws_url = self
+                    .browser_sessions
+                    .get(session_id)
+                    .map(|s| s.endpoint.clone());
+                browser_payload = Some(BrowserToolData {
+                    session_id: session_id.clone(),
+                    backend: "cdp".to_string(),
+                    available: true,
+                    note: format!("typed into selector {}", selector),
+                    screenshot_base64: None,
+                    ws_url,
+                    result_json: typed_point,
                 });
             }
             ToolAction::BrowserSnapshot {
@@ -286,6 +435,7 @@ impl ToolkitRuntime {
                     },
                     screenshot_base64,
                     ws_url,
+                    result_json: None,
                 });
                 result.capture_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
@@ -323,6 +473,7 @@ impl ToolkitRuntime {
                     },
                     screenshot_base64: None,
                     ws_url: Some(ws_url),
+                    result_json: None,
                 });
             }
             ToolAction::BrowserProfileStop { session_id } => {
@@ -356,6 +507,7 @@ impl ToolkitRuntime {
                     },
                     screenshot_base64: None,
                     ws_url: None,
+                    result_json: None,
                 });
             }
             ToolAction::InputBatch { actions } => {
@@ -856,6 +1008,81 @@ impl CdpClient {
                 .unwrap_or(serde_json::Value::Null));
         }
     }
+}
+
+fn query_selector_center(session: &mut BrowserSession, selector: &str) -> Result<(f64, f64), String> {
+    session.client.call("DOM.enable", serde_json::json!({}))?;
+    session.client.call("Page.enable", serde_json::json!({}))?;
+    let document = session
+        .client
+        .call("DOM.getDocument", serde_json::json!({ "depth": 1 }))?;
+    let root_id = document
+        .get("root")
+        .and_then(|v| v.get("nodeId"))
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| "missing root node id from DOM.getDocument".to_string())?;
+    let found = session.client.call(
+        "DOM.querySelector",
+        serde_json::json!({ "nodeId": root_id, "selector": selector }),
+    )?;
+    let node_id = found
+        .get("nodeId")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if node_id == 0 {
+        return Err(format!("selector not found: {selector}"));
+    }
+    let box_model =
+        session
+            .client
+            .call("DOM.getBoxModel", serde_json::json!({ "nodeId": node_id }))?;
+    let content = box_model
+        .get("model")
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "missing box model content".to_string())?;
+    if content.len() < 8 {
+        return Err("insufficient box model points".to_string());
+    }
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    for (idx, value) in content.iter().enumerate() {
+        let number = value
+            .as_f64()
+            .ok_or_else(|| "non-numeric box model coordinate".to_string())?;
+        if idx % 2 == 0 {
+            xs.push(number);
+        } else {
+            ys.push(number);
+        }
+    }
+    let x = xs.iter().sum::<f64>() / xs.len() as f64;
+    let y = ys.iter().sum::<f64>() / ys.len() as f64;
+    Ok((x, y))
+}
+
+fn dispatch_mouse_click(session: &mut BrowserSession, x: f64, y: f64) -> Result<(), String> {
+    session.client.call(
+        "Input.dispatchMouseEvent",
+        serde_json::json!({
+            "type": "mousePressed",
+            "x": x,
+            "y": y,
+            "button": "left",
+            "clickCount": 1
+        }),
+    )?;
+    session.client.call(
+        "Input.dispatchMouseEvent",
+        serde_json::json!({
+            "type": "mouseReleased",
+            "x": x,
+            "y": y,
+            "button": "left",
+            "clickCount": 1
+        }),
+    )?;
+    Ok(())
 }
 
 fn frame_to_payload(frame: CaptureFrame) -> Result<FramePayload, String> {

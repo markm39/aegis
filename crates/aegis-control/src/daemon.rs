@@ -1057,6 +1057,7 @@ mod tests {
                 note: "backend unavailable".into(),
                 screenshot_base64: None,
                 ws_url: None,
+                result_json: None,
             }),
         };
 

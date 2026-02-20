@@ -86,6 +86,21 @@ pub enum ToolAction {
         session_id: String,
         url: String,
     },
+    BrowserEvaluate {
+        session_id: String,
+        expression: String,
+        #[serde(default = "default_true")]
+        return_by_value: bool,
+    },
+    BrowserClick {
+        session_id: String,
+        selector: String,
+    },
+    BrowserType {
+        session_id: String,
+        selector: String,
+        text: String,
+    },
     BrowserSnapshot {
         session_id: String,
         include_screenshot: bool,
@@ -119,6 +134,9 @@ impl ToolAction {
             ToolAction::TuiSnapshot { .. } => "TuiSnapshot",
             ToolAction::TuiInput { .. } => "TuiInput",
             ToolAction::BrowserNavigate { .. } => "BrowserNavigate",
+            ToolAction::BrowserEvaluate { .. } => "BrowserEvaluate",
+            ToolAction::BrowserClick { .. } => "BrowserClick",
+            ToolAction::BrowserType { .. } => "BrowserType",
             ToolAction::BrowserSnapshot { .. } => "BrowserSnapshot",
             ToolAction::BrowserProfileStart { .. } => "BrowserProfileStart",
             ToolAction::BrowserProfileStop { .. } => "BrowserProfileStop",
@@ -137,9 +155,12 @@ impl ToolAction {
             | ToolAction::MouseDrag { .. }
             | ToolAction::KeyPress { .. }
             | ToolAction::TypeText { .. }
-            | ToolAction::TuiInput { .. } => RiskTag::Medium,
+            | ToolAction::TuiInput { .. }
+            | ToolAction::BrowserClick { .. }
+            | ToolAction::BrowserType { .. } => RiskTag::Medium,
             ToolAction::WindowFocus { .. }
             | ToolAction::BrowserNavigate { .. }
+            | ToolAction::BrowserEvaluate { .. }
             | ToolAction::BrowserProfileStart { .. }
             | ToolAction::BrowserProfileStop { .. } => RiskTag::High,
             ToolAction::InputBatch { actions } => {
@@ -168,6 +189,10 @@ fn risk_rank(tag: RiskTag) -> u8 {
         RiskTag::Medium => 1,
         RiskTag::High => 2,
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -307,6 +332,32 @@ mod tests {
             RiskTag::High
         );
         assert_eq!(
+            ToolAction::BrowserEvaluate {
+                session_id: "s1".into(),
+                expression: "document.title".into(),
+                return_by_value: true,
+            }
+            .risk_tag(),
+            RiskTag::High
+        );
+        assert_eq!(
+            ToolAction::BrowserClick {
+                session_id: "s1".into(),
+                selector: "#submit".into(),
+            }
+            .risk_tag(),
+            RiskTag::Medium
+        );
+        assert_eq!(
+            ToolAction::BrowserType {
+                session_id: "s1".into(),
+                selector: "#q".into(),
+                text: "hello".into(),
+            }
+            .risk_tag(),
+            RiskTag::Medium
+        );
+        assert_eq!(
             ToolAction::BrowserProfileStart {
                 session_id: "s2".into(),
                 headless: false,
@@ -345,5 +396,17 @@ mod tests {
             text: "i".into(),
         };
         assert_eq!(action.policy_action_name(), "TuiInput");
+    }
+
+    #[test]
+    fn browser_evaluate_defaults_return_by_value() {
+        let json = r#"{"action":"browser_evaluate","session_id":"s1","expression":"1+1"}"#;
+        let action: ToolAction = serde_json::from_str(json).unwrap();
+        match action {
+            ToolAction::BrowserEvaluate {
+                return_by_value, ..
+            } => assert!(return_by_value),
+            other => panic!("unexpected action: {other:?}"),
+        }
     }
 }
