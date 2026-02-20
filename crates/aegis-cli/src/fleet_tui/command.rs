@@ -8,6 +8,11 @@
 pub enum FleetCommand {
     /// Open the add-agent wizard.
     Add,
+    /// Spawn a constrained subagent from an orchestrator/subagent parent.
+    Subagent {
+        parent: String,
+        name: Option<String>,
+    },
     /// Remove an agent from the config.
     Remove { agent: String },
     /// Start an agent.
@@ -204,6 +209,7 @@ const COMMAND_NAMES: &[&str] = &[
     "start",
     "status",
     "stop",
+    "subagent",
     "tool",
     "tool-batch",
     "telegram",
@@ -235,6 +241,7 @@ const AGENT_COMMANDS: &[&str] = &[
     "send",
     "start",
     "stop",
+    "subagent",
     "tool-batch",
 ];
 
@@ -322,6 +329,25 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "add" => Ok(Some(FleetCommand::Add)),
+        "subagent" => {
+            if arg1.is_empty() {
+                Err("usage: subagent <parent-agent> [child-name]".into())
+            } else if arg2.is_empty() {
+                Ok(Some(FleetCommand::Subagent {
+                    parent: arg1.into(),
+                    name: None,
+                }))
+            } else {
+                let child = arg2.split_whitespace().next().unwrap_or("").trim();
+                if child.is_empty() {
+                    return Err("usage: subagent <parent-agent> [child-name]".into());
+                }
+                Ok(Some(FleetCommand::Subagent {
+                    parent: arg1.into(),
+                    name: Some(child.to_string()),
+                }))
+            }
+        }
         "remove" => {
             if arg1.is_empty() {
                 Err("usage: remove <agent>".into())
@@ -926,6 +952,7 @@ pub fn help_text() -> &'static str {
      :start <agent>           Start agent\n\
      :status                  Daemon status summary\n\
      :stop <agent>            Stop agent\n\
+     :subagent <p> [name]     Spawn constrained subagent session\n\
      :telegram                Show Telegram config status\n\
      :telegram setup           Run Telegram setup wizard\n\
      :telegram disable         Disable Telegram notifications\n\
@@ -948,6 +975,24 @@ mod tests {
     #[test]
     fn parse_add() {
         assert_eq!(parse("add").unwrap(), Some(FleetCommand::Add));
+    }
+
+    #[test]
+    fn parse_subagent() {
+        assert_eq!(
+            parse("subagent orchestrator").unwrap(),
+            Some(FleetCommand::Subagent {
+                parent: "orchestrator".into(),
+                name: None,
+            })
+        );
+        assert_eq!(
+            parse("subagent orchestrator worker-sub-1").unwrap(),
+            Some(FleetCommand::Subagent {
+                parent: "orchestrator".into(),
+                name: Some("worker-sub-1".into()),
+            })
+        );
     }
 
     #[test]

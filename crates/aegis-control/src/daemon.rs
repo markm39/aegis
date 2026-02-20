@@ -38,6 +38,8 @@ pub enum DaemonCommand {
         #[serde(default = "default_true")]
         start: bool,
     },
+    /// Spawn a constrained subagent session from an orchestrator/subagent parent.
+    SpawnSubagent { request: SpawnSubagentRequest },
     /// Remove an agent slot (stops it if running, removes from config, persists).
     RemoveAgent { name: String },
     /// Approve a pending permission request for an agent.
@@ -150,6 +152,38 @@ pub enum DaemonCommand {
 
 fn default_true() -> bool {
     true
+}
+
+/// Request payload for runtime subagent spawning.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnSubagentRequest {
+    /// Parent agent name (orchestrator or existing subagent).
+    pub parent: String,
+    /// Optional explicit child name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Optional role override for the child session.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Optional initial task for the child session.
+    #[serde(default)]
+    pub task: Option<String>,
+    /// Optional maximum depth allowed for this spawn chain.
+    #[serde(default)]
+    pub depth_limit: Option<u8>,
+    /// Whether to start the child immediately after creating the slot.
+    #[serde(default = "default_true")]
+    pub start: bool,
+}
+
+/// Response payload for successful subagent spawn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnSubagentResult {
+    pub parent: String,
+    pub child: String,
+    pub depth: u8,
+    pub working_dir: String,
+    pub tool: String,
 }
 
 /// Response to a daemon command.
@@ -452,6 +486,8 @@ pub struct BrowserToolData {
     pub screenshot_base64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ws_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_json: Option<serde_json::Value>,
 }
 
 /// Dashboard status payload.
@@ -705,6 +741,16 @@ mod tests {
                     isolation: None,
                 }),
                 start: true,
+            },
+            DaemonCommand::SpawnSubagent {
+                request: SpawnSubagentRequest {
+                    parent: "orchestrator".into(),
+                    name: Some("worker-sub-1".into()),
+                    role: Some("Focused implementer".into()),
+                    task: Some("Implement the parser".into()),
+                    depth_limit: Some(3),
+                    start: true,
+                },
             },
             DaemonCommand::RemoveAgent {
                 name: "claude-1".into(),

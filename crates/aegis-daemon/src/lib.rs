@@ -37,14 +37,17 @@ use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
     FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
-    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, ToolActionExecution,
-    ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
+    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, SpawnSubagentRequest,
+    SpawnSubagentResult, ToolActionExecution, ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict,
+    TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_ledger::AuditStore;
 use aegis_toolkit::contract::{CaptureRegion as ToolkitCaptureRegion, RiskTag, ToolAction};
 use aegis_toolkit::policy::map_tool_action;
-use aegis_types::daemon::{AgentSlotConfig, AgentStatus, DaemonConfig};
+use aegis_types::daemon::{
+    AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy,
+};
 use aegis_types::AegisConfig;
 use aegis_types::{Action, ActionKind, Decision, Verdict};
 
@@ -58,6 +61,13 @@ use crate::toolkit_runtime::{ToolkitOutput, ToolkitRuntime, TuiRuntimeBridge};
 const FRAME_RING_CAPACITY: usize = 5;
 const CAPTURE_DEFAULT_FPS: u16 = 30;
 const BROWSER_SESSION_TTL: Duration = Duration::from_secs(300);
+const DEFAULT_SUBAGENT_DEPTH_LIMIT: u8 = 3;
+
+#[derive(Debug, Clone)]
+struct SubagentSession {
+    parent: String,
+    depth: u8,
+}
 
 #[derive(Debug, Clone)]
 struct CachedFrame {
@@ -336,10 +346,14 @@ pub struct DaemonRuntime {
     last_tool_actions: std::collections::HashMap<String, ToolActionExecution>,
     /// Optional computer-use runtime for orchestrator actions.
     toolkit_runtime: Option<ToolkitRuntime>,
+    /// Runtime-only subagent sessions keyed by child agent name.
+    subagents: HashMap<String, SubagentSession>,
     /// Dashboard listen address (if enabled).
     dashboard_listen: Option<String>,
     /// Dashboard access token (if enabled).
     dashboard_token: Option<String>,
+    /// Last heartbeat sent per orchestrator agent.
+    heartbeat_last_sent: HashMap<String, Instant>,
 }
 
 impl DaemonRuntime {
@@ -393,8 +407,10 @@ impl DaemonRuntime {
             capture_streams: HashMap::new(),
             last_tool_actions: HashMap::new(),
             toolkit_runtime: None,
+            subagents: HashMap::new(),
             dashboard_listen: None,
             dashboard_token: None,
+            heartbeat_last_sent: HashMap::new(),
         }
     }
 
@@ -410,6 +426,248 @@ impl DaemonRuntime {
         for name in names {
             self.stop_capture_stream(&name);
         }
+    }
+
+    fn subagent_depth(&self, name: &str) -> u8 {
+        self.subagents.get(name).map(|s| s.depth).unwrap_or(0)
+    }
+
+    fn generated_subagent_name(parent: &str) -> String {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        format!("{parent}-sub-{}", &id[..8])
+    }
+
+    fn restrict_subagent_tool(tool: &AgentToolConfig) -> Result<AgentToolConfig, String> {
+        match tool {
+            AgentToolConfig::ClaudeCode { .. } => Ok(AgentToolConfig::ClaudeCode {
+                skip_permissions: false,
+                one_shot: false,
+                extra_args: Vec::new(),
+            }),
+            AgentToolConfig::Codex { .. } => Ok(AgentToolConfig::Codex {
+                approval_mode: "suggest".to_string(),
+                one_shot: false,
+                extra_args: Vec::new(),
+            }),
+            AgentToolConfig::OpenClaw { agent_name, .. } => Ok(AgentToolConfig::OpenClaw {
+                agent_name: agent_name.clone(),
+                extra_args: Vec::new(),
+            }),
+            AgentToolConfig::Custom { .. } => Err(
+                "custom tool subagent spawn is blocked; configure a bounded first-party tool runtime"
+                    .to_string(),
+            ),
+        }
+    }
+
+    fn append_audit_entry(&self, action: &Action, verdict: &Verdict) {
+        match AuditStore::open(&self.aegis_config.ledger_path) {
+            Ok(mut store) => {
+                if let Err(e) = store.append(action, verdict) {
+                    warn!(?e, "failed to append audit entry");
+                }
+            }
+            Err(e) => {
+                warn!(?e, "failed to open audit ledger");
+            }
+        }
+    }
+
+    fn authorize_subagent_spawn(
+        &self,
+        request: &SpawnSubagentRequest,
+        child_depth: u8,
+    ) -> Result<(), String> {
+        let action = Action::new(
+            request.parent.clone(),
+            ActionKind::ToolCall {
+                tool: "SubagentSpawn".to_string(),
+                args: serde_json::json!({
+                    "parent": request.parent.clone(),
+                    "name": request.name.clone(),
+                    "role": request.role.clone(),
+                    "task": request.task.clone(),
+                    "depth_limit": request.depth_limit,
+                    "start": request.start,
+                    "child_depth": child_depth,
+                }),
+            },
+        );
+
+        let (decision, reason) = match &self.policy_engine {
+            Some(engine) => {
+                let verdict = engine.evaluate(&action);
+                (verdict.decision, verdict.reason)
+            }
+            None => (
+                Decision::Deny,
+                "policy engine unavailable; denied by fail-closed subagent policy".to_string(),
+            ),
+        };
+
+        let verdict = match decision {
+            Decision::Allow => Verdict::allow(action.id, reason.clone(), None),
+            Decision::Deny => Verdict::deny(action.id, reason.clone(), None),
+        };
+        self.append_audit_entry(&action, &verdict);
+
+        match decision {
+            Decision::Allow => Ok(()),
+            Decision::Deny => Err(reason),
+        }
+    }
+
+    fn collect_subagent_descendants(&self, root: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(root.to_string());
+        while let Some(parent) = queue.pop_front() {
+            let mut children: Vec<String> = self
+                .subagents
+                .iter()
+                .filter(|(_, meta)| meta.parent == parent)
+                .map(|(child, _)| child.clone())
+                .collect();
+            children.sort();
+            for child in children {
+                queue.push_back(child.clone());
+                out.push(child);
+            }
+        }
+        out
+    }
+
+    fn cleanup_agent_runtime_state(&mut self, name: &str) {
+        self.stop_capture_stream(name);
+        self.capture_sessions.remove(name);
+        self.last_tool_actions.remove(name);
+    }
+
+    fn remove_subagent_descendants(&mut self, root: &str) {
+        let descendants = self.collect_subagent_descendants(root);
+        for child in descendants.into_iter().rev() {
+            self.cleanup_agent_runtime_state(&child);
+            self.fleet.remove_agent(&child);
+            self.subagents.remove(&child);
+        }
+    }
+
+    fn spawn_subagent(
+        &mut self,
+        request: SpawnSubagentRequest,
+    ) -> Result<SpawnSubagentResult, String> {
+        let parent = request.parent.trim();
+        if parent.is_empty() {
+            return Err("parent agent name is required".to_string());
+        }
+        if self.fleet.slot(parent).is_none() {
+            return Err(format!("unknown parent agent: {parent}"));
+        }
+
+        let parent_config = self
+            .fleet
+            .slot(parent)
+            .map(|slot| slot.config.clone())
+            .ok_or_else(|| format!("unknown parent agent: {parent}"))?;
+        let parent_is_subagent = self.subagents.contains_key(parent);
+        let parent_is_orchestrator = parent_config.orchestrator.is_some();
+        if !parent_is_orchestrator && !parent_is_subagent {
+            return Err(format!(
+                "parent '{parent}' is not an orchestrator/subagent; subagent spawn denied"
+            ));
+        }
+
+        let depth_limit = request.depth_limit.unwrap_or(DEFAULT_SUBAGENT_DEPTH_LIMIT);
+        if depth_limit == 0 {
+            return Err("depth_limit must be >= 1".to_string());
+        }
+        let child_depth = self.subagent_depth(parent).saturating_add(1);
+        if child_depth > depth_limit {
+            return Err(format!(
+                "subagent depth {child_depth} exceeds depth_limit {depth_limit}"
+            ));
+        }
+
+        let child_name = request
+            .name
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| Self::generated_subagent_name(parent));
+        if let Err(e) = aegis_types::validate_config_name(&child_name) {
+            return Err(format!("invalid subagent name: {e}"));
+        }
+        if self.fleet.agent_status(&child_name).is_some() {
+            return Err(format!("agent '{child_name}' already exists"));
+        }
+
+        self.authorize_subagent_spawn(&request, child_depth)?;
+
+        let working_dir = parent_config
+            .working_dir
+            .join(".aegis")
+            .join("subagents")
+            .join(&child_name);
+        std::fs::create_dir_all(&working_dir)
+            .map_err(|e| format!("failed to create subagent workspace: {e}"))?;
+
+        let tool = Self::restrict_subagent_tool(&parent_config.tool)?;
+        let context = match parent_config.context.as_deref() {
+            Some(existing) if !existing.trim().is_empty() => Some(format!(
+                "{existing}\n\nSubagent constraints: stay within workspace {} and follow parent '{parent}' directives.",
+                working_dir.display()
+            )),
+            _ => Some(format!(
+                "Subagent constraints: stay within workspace {} and follow parent '{parent}' directives.",
+                working_dir.display()
+            )),
+        };
+
+        let child_config = AgentSlotConfig {
+            name: child_name.clone(),
+            tool: tool.clone(),
+            working_dir: working_dir.clone(),
+            role: request
+                .role
+                .clone()
+                .or_else(|| Some(format!("Subagent for {parent}"))),
+            agent_goal: parent_config.agent_goal.clone(),
+            context,
+            task: request.task.clone().or_else(|| parent_config.task.clone()),
+            pilot: parent_config.pilot.clone(),
+            restart: RestartPolicy::Never,
+            max_restarts: 0,
+            enabled: true,
+            orchestrator: None,
+            security_preset: parent_config.security_preset.clone(),
+            policy_dir: parent_config.policy_dir.clone(),
+            isolation: parent_config.isolation.clone(),
+        };
+
+        self.fleet.add_agent(child_config);
+        if request.start {
+            self.fleet.start_agent(&child_name);
+        }
+        self.subagents.insert(
+            child_name.clone(),
+            SubagentSession {
+                parent: parent.to_string(),
+                depth: child_depth,
+            },
+        );
+
+        Ok(SpawnSubagentResult {
+            parent: parent.to_string(),
+            child: child_name,
+            depth: child_depth,
+            working_dir: working_dir.to_string_lossy().into_owned(),
+            tool: match tool {
+                AgentToolConfig::ClaudeCode { .. } => "ClaudeCode".to_string(),
+                AgentToolConfig::Codex { .. } => "Codex".to_string(),
+                AgentToolConfig::OpenClaw { .. } => "OpenClaw".to_string(),
+                AgentToolConfig::Custom { .. } => "Custom".to_string(),
+            },
+        })
     }
 
     fn latest_cached_frame(
@@ -541,6 +799,9 @@ impl DaemonRuntime {
                 }
             }
             ToolAction::BrowserNavigate { .. }
+            | ToolAction::BrowserEvaluate { .. }
+            | ToolAction::BrowserClick { .. }
+            | ToolAction::BrowserType { .. }
             | ToolAction::BrowserSnapshot { .. }
             | ToolAction::BrowserProfileStart { .. }
             | ToolAction::BrowserProfileStop { .. } => {
@@ -799,6 +1060,9 @@ impl DaemonRuntime {
                 // Forward notable events to the notification channel
                 self.forward_to_channel(notable_events);
 
+                // Periodic orchestrator heartbeat (review cycle)
+                self.maybe_send_heartbeat();
+
                 if let Some(runtime) = self.toolkit_runtime.as_mut() {
                     runtime.prune_idle_sessions(BROWSER_SESSION_TTL);
                 }
@@ -865,6 +1129,43 @@ impl DaemonRuntime {
                 };
                 let _ = tx.send(ChannelInput::TextMessage(text));
             }
+        }
+    }
+
+    fn maybe_send_heartbeat(&mut self) {
+        let Some(tx) = &self.channel_tx else {
+            return;
+        };
+        let now = Instant::now();
+        for name in self.fleet.agent_names_sorted() {
+            let Some(slot) = self.fleet.slot(&name) else {
+                continue;
+            };
+            let Some(orch) = &slot.config.orchestrator else {
+                continue;
+            };
+            if !matches!(slot.status, AgentStatus::Running { .. }) {
+                continue;
+            }
+            let interval = Duration::from_secs(orch.review_interval_secs.max(30));
+            let due = self
+                .heartbeat_last_sent
+                .get(&name)
+                .map(|t| t.elapsed() >= interval)
+                .unwrap_or(true);
+            if !due {
+                continue;
+            }
+
+            let running = self.fleet.running_count();
+            let total = self.fleet.agent_count();
+            let pending = self.fleet.pending_total();
+            let msg = format!(
+                "Heartbeat: review cycle due for {name} (interval {}s). Agents: {running}/{total} running. Pending prompts: {pending}.",
+                orch.review_interval_secs
+            );
+            let _ = tx.send(ChannelInput::TextMessage(msg));
+            self.heartbeat_last_sent.insert(name.clone(), now);
         }
     }
 
@@ -1136,6 +1437,16 @@ impl DaemonRuntime {
                 DaemonResponse::ok(format!("agent '{name}' added"))
             }
 
+            DaemonCommand::SpawnSubagent { ref request } => {
+                match self.spawn_subagent(request.clone()) {
+                    Ok(result) => match serde_json::to_value(result) {
+                        Ok(data) => DaemonResponse::ok_with_data("subagent spawned", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
             DaemonCommand::RemoveAgent { ref name } => {
                 if self.fleet.agent_status(name).is_none() {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
@@ -1150,7 +1461,10 @@ impl DaemonRuntime {
 
                 // Disk write succeeded -- now safe to update memory
                 self.config = candidate;
+                self.remove_subagent_descendants(name);
+                self.cleanup_agent_runtime_state(name);
                 self.fleet.remove_agent(name); // remove_agent stops the agent internally
+                self.subagents.remove(name);
                 DaemonResponse::ok(format!("agent '{name}' removed"))
             }
 
@@ -1519,6 +1833,9 @@ impl DaemonRuntime {
                                 tui: None,
                                 browser: match action {
                                     ToolAction::BrowserNavigate { session_id, .. }
+                                    | ToolAction::BrowserEvaluate { session_id, .. }
+                                    | ToolAction::BrowserClick { session_id, .. }
+                                    | ToolAction::BrowserType { session_id, .. }
                                     | ToolAction::BrowserSnapshot { session_id, .. }
                                     | ToolAction::BrowserProfileStart { session_id, .. }
                                     | ToolAction::BrowserProfileStop { session_id, .. } => {
@@ -1529,6 +1846,7 @@ impl DaemonRuntime {
                                             note: "browser backend unavailable".to_string(),
                                             screenshot_base64: None,
                                             ws_url: self.config.toolkit.browser.cdp_ws_url.clone(),
+                                            result_json: None,
                                         })
                                     }
                                     _ => None,
@@ -1588,6 +1906,9 @@ impl DaemonRuntime {
                             tui: None,
                             browser: match action {
                                 ToolAction::BrowserNavigate { session_id, .. }
+                                | ToolAction::BrowserEvaluate { session_id, .. }
+                                | ToolAction::BrowserClick { session_id, .. }
+                                | ToolAction::BrowserType { session_id, .. }
                                 | ToolAction::BrowserSnapshot { session_id, .. }
                                 | ToolAction::BrowserProfileStart { session_id, .. }
                                 | ToolAction::BrowserProfileStop { session_id, .. } => {
@@ -1599,6 +1920,7 @@ impl DaemonRuntime {
                                             .to_string(),
                                         screenshot_base64: None,
                                         ws_url: self.config.toolkit.browser.cdp_ws_url.clone(),
+                                        result_json: None,
                                     })
                                 }
                                 _ => None,
@@ -2396,7 +2718,13 @@ impl DaemonRuntime {
 
         // Remove agents no longer in config
         for name in current_names.difference(&new_names) {
+            if self.fleet.agent_status(name).is_none() {
+                continue;
+            }
+            self.remove_subagent_descendants(name);
+            self.cleanup_agent_runtime_state(name);
             self.fleet.remove_agent(name);
+            self.subagents.remove(name);
             removed += 1;
         }
 
@@ -2711,7 +3039,7 @@ fn compose_autonomy_prompt(
 mod tests {
     use super::*;
     use aegis_control::daemon::{CaptureSessionRequest, LatestCaptureFrame};
-    use aegis_policy::builtin::ORCHESTRATOR_COMPUTER_USE;
+    use aegis_policy::builtin::{ORCHESTRATOR_COMPUTER_USE, PERMIT_ALL};
     use aegis_toolkit::contract::InputAction;
     use aegis_toolkit::contract::{MouseButton, ToolAction};
     use aegis_types::daemon::{
@@ -3616,6 +3944,61 @@ mod tests {
         });
         assert!(!resp.ok, "duplicate should fail");
         assert!(resp.message.contains("already exists"));
+    }
+
+    #[test]
+    fn handle_command_spawn_subagent_requires_orchestrator_or_subagent_parent() {
+        let mut runtime = test_runtime(vec![test_agent("worker-1")]);
+        runtime.policy_engine =
+            Some(aegis_policy::PolicyEngine::from_policies(PERMIT_ALL, None).unwrap());
+        let resp = runtime.handle_command(DaemonCommand::SpawnSubagent {
+            request: SpawnSubagentRequest {
+                parent: "worker-1".into(),
+                name: Some("worker-sub-1".into()),
+                role: None,
+                task: None,
+                depth_limit: Some(3),
+                start: false,
+            },
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("not an orchestrator/subagent"));
+    }
+
+    #[test]
+    fn handle_command_spawn_subagent_enforces_depth_limit() {
+        use aegis_types::daemon::OrchestratorConfig;
+
+        let mut orch = test_agent("orchestrator");
+        orch.orchestrator = Some(OrchestratorConfig::default());
+        let mut runtime = test_runtime(vec![orch]);
+        runtime.policy_engine =
+            Some(aegis_policy::PolicyEngine::from_policies(PERMIT_ALL, None).unwrap());
+
+        let first = runtime.handle_command(DaemonCommand::SpawnSubagent {
+            request: SpawnSubagentRequest {
+                parent: "orchestrator".into(),
+                name: Some("worker-sub-1".into()),
+                role: None,
+                task: Some("Implement parser".into()),
+                depth_limit: Some(1),
+                start: false,
+            },
+        });
+        assert!(first.ok, "first spawn should succeed: {}", first.message);
+
+        let second = runtime.handle_command(DaemonCommand::SpawnSubagent {
+            request: SpawnSubagentRequest {
+                parent: "worker-sub-1".into(),
+                name: Some("worker-sub-2".into()),
+                role: None,
+                task: Some("Write tests".into()),
+                depth_limit: Some(1),
+                start: false,
+            },
+        });
+        assert!(!second.ok);
+        assert!(second.message.contains("exceeds depth_limit"));
     }
 
     #[test]

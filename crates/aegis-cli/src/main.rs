@@ -608,6 +608,29 @@ enum DaemonCommands {
     /// Add a new agent interactively
     Add,
 
+    /// Spawn a constrained subagent session from an orchestrator/subagent parent
+    #[command(name = "subagent")]
+    Subagent {
+        /// Parent agent name
+        parent: String,
+
+        /// Optional explicit child name
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Optional role override
+        #[arg(long)]
+        role: Option<String>,
+
+        /// Optional initial task override
+        #[arg(long)]
+        task: Option<String>,
+
+        /// Maximum allowed spawn depth (default: daemon policy default)
+        #[arg(long = "depth-limit")]
+        depth_limit: Option<u8>,
+    },
+
     /// Remove an agent from the configuration
     Remove {
         /// Agent name to remove
@@ -1187,6 +1210,19 @@ fn main() -> anyhow::Result<()> {
                 DaemonConfigCommands::Path => commands::daemon::config_path(),
             },
             DaemonCommands::Add => commands::daemon::add_agent(),
+            DaemonCommands::Subagent {
+                parent,
+                name,
+                role,
+                task,
+                depth_limit,
+            } => commands::daemon::spawn_subagent(
+                &parent,
+                name.as_deref(),
+                role.as_deref(),
+                task.as_deref(),
+                depth_limit,
+            ),
             DaemonCommands::Remove { name } => commands::daemon::remove_agent(&name),
             DaemonCommands::Output { name, lines } => commands::daemon::output(&name, lines),
             DaemonCommands::Send { name, text } => commands::daemon::send(&name, &text),
@@ -2826,6 +2862,45 @@ mod tests {
                 action: DaemonCommands::Add,
             } => {}
             _ => panic!("expected Daemon Add command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_subagent() {
+        let cli = Cli::try_parse_from([
+            "aegis",
+            "daemon",
+            "subagent",
+            "orchestrator",
+            "--name",
+            "worker-sub-1",
+            "--role",
+            "Focused implementer",
+            "--task",
+            "Implement parser",
+            "--depth-limit",
+            "3",
+        ]);
+        assert!(cli.is_ok(), "should parse daemon subagent: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action:
+                    DaemonCommands::Subagent {
+                        parent,
+                        name,
+                        role,
+                        task,
+                        depth_limit,
+                    },
+            } => {
+                assert_eq!(parent, "orchestrator");
+                assert_eq!(name.as_deref(), Some("worker-sub-1"));
+                assert_eq!(role.as_deref(), Some("Focused implementer"));
+                assert_eq!(task.as_deref(), Some("Implement parser"));
+                assert_eq!(depth_limit, Some(3));
+            }
+            _ => panic!("expected Daemon Subagent command"),
         }
     }
 
