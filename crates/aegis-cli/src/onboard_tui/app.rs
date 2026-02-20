@@ -506,6 +506,7 @@ impl OnboardApp {
                 chat_id: *chat_id,
                 poll_timeout_secs: 30,
                 allow_group_commands: false,
+                active_hours: None,
             })
         });
 

@@ -13,6 +13,7 @@
 //! - [`runner`]: thread/runtime orchestration bridging sync and async worlds
 
 pub mod channel;
+pub mod active_hours;
 pub mod format;
 pub mod runner;
 pub mod telegram;

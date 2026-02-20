@@ -301,6 +301,7 @@ mod tests {
                 chat_id: 99999,
                 poll_timeout_secs: 30,
                 allow_group_commands: false,
+                active_hours: None,
             })),
             toolkit: Default::default(),
         };

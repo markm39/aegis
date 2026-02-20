@@ -104,10 +104,14 @@ impl std::fmt::Display for ObserverConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ObserverConfig::None => write!(f, "None"),
-            ObserverConfig::FsEvents { enable_snapshots: true } => {
+            ObserverConfig::FsEvents {
+                enable_snapshots: true,
+            } => {
                 write!(f, "FsEvents (snapshots: enabled)")
             }
-            ObserverConfig::FsEvents { enable_snapshots: false } => {
+            ObserverConfig::FsEvents {
+                enable_snapshots: false,
+            } => {
                 write!(f, "FsEvents (snapshots: disabled)")
             }
             ObserverConfig::EndpointSecurity => write!(f, "Endpoint Security"),
@@ -132,10 +136,14 @@ pub enum IsolationConfig {
 impl std::fmt::Display for IsolationConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IsolationConfig::Seatbelt { profile_overrides: Some(path) } => {
+            IsolationConfig::Seatbelt {
+                profile_overrides: Some(path),
+            } => {
                 write!(f, "Seatbelt (overrides: {})", path.display())
             }
-            IsolationConfig::Seatbelt { profile_overrides: None } => write!(f, "Seatbelt"),
+            IsolationConfig::Seatbelt {
+                profile_overrides: None,
+            } => write!(f, "Seatbelt"),
             IsolationConfig::Process => write!(f, "Process"),
             IsolationConfig::None => write!(f, "None"),
         }
@@ -383,6 +391,21 @@ pub struct TelegramConfig {
     /// Whether to accept commands from group chats (not just the configured chat_id).
     #[serde(default)]
     pub allow_group_commands: bool,
+    /// Optional active hours window for outbound notifications.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Active hours window for channel notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveHoursConfig {
+    /// Start time in HH:MM (24h).
+    pub start: String,
+    /// End time in HH:MM (24h). 24:00 allowed.
+    pub end: String,
+    /// Timezone name (IANA), or "local"/"user" for host local time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
 /// Configuration for the API usage tracking proxy.
@@ -461,16 +484,17 @@ pub fn validate_config_name(name: &str) -> Result<(), AegisError> {
         return Err(AegisError::ConfigError("name cannot be empty".into()));
     }
     if name.chars().all(|c| c == '.') {
-        return Err(AegisError::ConfigError(format!(
-            "name cannot be {name:?}"
-        )));
+        return Err(AegisError::ConfigError(format!("name cannot be {name:?}")));
     }
     // Allow alphanumeric, hyphens, underscores, and dots.
     // This keeps names safe for TOML, command bar tab-completion,
     // daemon protocol, and filesystem paths.
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
         return Err(AegisError::ConfigError(
-            "name may only contain letters, digits, hyphens, underscores, and dots".into()
+            "name may only contain letters, digits, hyphens, underscores, and dots".into(),
         ));
     }
     Ok(())
@@ -616,11 +640,17 @@ mod tests {
     fn observer_config_display() {
         assert_eq!(ObserverConfig::None.to_string(), "None");
         assert_eq!(
-            ObserverConfig::FsEvents { enable_snapshots: true }.to_string(),
+            ObserverConfig::FsEvents {
+                enable_snapshots: true
+            }
+            .to_string(),
             "FsEvents (snapshots: enabled)"
         );
         assert_eq!(
-            ObserverConfig::FsEvents { enable_snapshots: false }.to_string(),
+            ObserverConfig::FsEvents {
+                enable_snapshots: false
+            }
+            .to_string(),
             "FsEvents (snapshots: disabled)"
         );
         assert_eq!(
@@ -668,7 +698,12 @@ mod tests {
 
     #[test]
     fn protocol_display_fromstr_roundtrip() {
-        for proto in [Protocol::Tcp, Protocol::Udp, Protocol::Http, Protocol::Https] {
+        for proto in [
+            Protocol::Tcp,
+            Protocol::Udp,
+            Protocol::Http,
+            Protocol::Https,
+        ] {
             let s = proto.to_string();
             let parsed: Protocol = s.parse().unwrap();
             assert_eq!(parsed, proto);
@@ -721,7 +756,10 @@ mod tests {
     #[test]
     fn from_toml_missing_required_fields_returns_error() {
         let result = AegisConfig::from_toml("name = \"test\"");
-        assert!(result.is_err(), "valid TOML with missing fields should fail");
+        assert!(
+            result.is_err(),
+            "valid TOML with missing fields should fail"
+        );
     }
 
     #[test]
@@ -729,7 +767,10 @@ mod tests {
         assert_eq!(IsolationConfig::Process.to_string(), "Process");
         assert_eq!(IsolationConfig::None.to_string(), "None");
         assert_eq!(
-            IsolationConfig::Seatbelt { profile_overrides: None }.to_string(),
+            IsolationConfig::Seatbelt {
+                profile_overrides: None
+            }
+            .to_string(),
             "Seatbelt"
         );
         assert_eq!(
@@ -754,7 +795,10 @@ mod tests {
         "#;
         let config = AegisConfig::from_toml(toml_str).unwrap();
         assert_eq!(config.name, "legacy-agent");
-        assert!(config.alerts.is_empty(), "alerts should default to empty vec");
+        assert!(
+            config.alerts.is_empty(),
+            "alerts should default to empty vec"
+        );
     }
 
     #[test]

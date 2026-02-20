@@ -105,7 +105,9 @@ pub(crate) fn prompt_token() -> anyhow::Result<String> {
 }
 
 /// Validate a bot token by calling `getMe`.
-pub(crate) async fn validate_token(token: &str) -> anyhow::Result<aegis_channel::telegram::types::User> {
+pub(crate) async fn validate_token(
+    token: &str,
+) -> anyhow::Result<aegis_channel::telegram::types::User> {
     let api = TelegramApi::new(token);
     print!("  Validating token... ");
     io::stdout().flush()?;
@@ -189,7 +191,14 @@ pub fn status() -> anyhow::Result<()> {
             println!("  Bot token:       {token_preview}");
             println!("  Chat ID:         {}", tg.chat_id);
             println!("  Poll timeout:    {}s", tg.poll_timeout_secs);
-            println!("  Group commands:  {}", if tg.allow_group_commands { "enabled" } else { "disabled" });
+            println!(
+                "  Group commands:  {}",
+                if tg.allow_group_commands {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
             println!();
             println!("To reconfigure: aegis telegram setup");
             println!("To disable:     aegis telegram disable");
@@ -260,8 +269,7 @@ pub(crate) fn disable_quiet() -> anyhow::Result<String> {
 /// Write the Telegram config into `daemon.toml`, merging with existing config.
 pub(crate) fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> {
     let dir = daemon_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     let config_path = daemon_config_path();
 
@@ -280,6 +288,7 @@ pub(crate) fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> 
         chat_id,
         poll_timeout_secs: 30,
         allow_group_commands: false,
+        active_hours: None,
     }));
 
     let toml_str = config.to_toml().context("failed to serialize config")?;

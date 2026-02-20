@@ -13,7 +13,8 @@ use aegis_control::daemon::DaemonCommand;
 use aegis_control::event::PilotWebhookEvent;
 use aegis_types::ChannelConfig;
 
-use crate::channel::InboundAction;
+use crate::active_hours;
+use crate::channel::{InboundAction, OutboundPhoto};
 use crate::format;
 use crate::telegram;
 
@@ -29,6 +30,8 @@ pub enum ChannelInput {
     PilotEvent(PilotWebhookEvent),
     /// A plain text message to send (e.g., command response feedback).
     TextMessage(String),
+    /// A photo message to send (e.g., snapshot).
+    Photo(OutboundPhoto),
 }
 
 /// Run the channel on the current thread with a single-threaded tokio runtime.
@@ -117,8 +120,28 @@ async fn run_telegram(
                     ChannelInput::TextMessage(ref text) => {
                         crate::channel::OutboundMessage::text(format::escape_md(text))
                     }
+                    ChannelInput::Photo(ref photo) => {
+                        if !active_hours::within_active_hours(
+                            config.active_hours.as_ref(),
+                            chrono::Utc::now(),
+                        ) {
+                            warn!("outbound photo suppressed (inactive hours)");
+                            continue;
+                        }
+                        if let Err(e) = channel.send_photo(photo.clone()).await {
+                            warn!("failed to send photo: {e}");
+                        }
+                        continue;
+                    }
                 };
 
+                if !active_hours::within_active_hours(
+                    config.active_hours.as_ref(),
+                    chrono::Utc::now(),
+                ) {
+                    warn!("outbound message suppressed (inactive hours)");
+                    continue;
+                }
                 if let Err(e) = channel.send(message).await {
                     warn!("failed to send outbound message: {e}");
                 }
