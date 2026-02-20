@@ -36,8 +36,8 @@ use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
-    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary, SessionHistory,
-    SessionInfo, RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation,
+    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
+    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, SessionHistory, SessionInfo,
     SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution, ToolActionOutcome,
     ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
@@ -1510,7 +1510,10 @@ impl DaemonRuntime {
                             session_key: session_key_for_agent(&name),
                             agent: name,
                             is_orchestrator: slot.config.orchestrator.is_some(),
-                            parent: self.subagents.get(&slot.config.name).map(|s| s.parent.clone()),
+                            parent: self
+                                .subagents
+                                .get(&slot.config.name)
+                                .map(|s| s.parent.clone()),
                         })
                     })
                     .collect();
@@ -3621,32 +3624,7 @@ mod tests {
             start_browser.message
         );
 
-        let batch = runtime.handle_command(DaemonCommand::ExecuteToolBatch {
-            name: "orch".to_string(),
-            actions: vec![
-                ToolAction::BrowserNavigate {
-                    session_id: "live-web".to_string(),
-                    url: "https://example.com".to_string(),
-                },
-                ToolAction::InputBatch {
-                    actions: vec![
-                        InputAction::MouseClick {
-                            x: 20,
-                            y: 20,
-                            button: MouseButton::Left,
-                        },
-                        InputAction::TypeText {
-                            text: "aegis live test".to_string(),
-                        },
-                        InputAction::Wait { duration_ms: 150 },
-                    ],
-                },
-            ],
-            max_actions: Some(4),
-        });
-        assert!(batch.ok, "batch failed: {}", batch.message);
-
-        let mut latest_ok = false;
+        let mut first_frame: Option<LatestCaptureFrame> = None;
         for _ in 0..20 {
             let latest = runtime.handle_command(DaemonCommand::LatestCaptureFrame {
                 name: "orch".to_string(),
@@ -3656,15 +3634,67 @@ mod tests {
                 let payload: LatestCaptureFrame =
                     serde_json::from_value(latest.data.expect("latest frame payload"))
                         .expect("parse latest frame");
-                assert!(payload.frame_id > 0);
-                assert!(payload.frame.width > 0);
-                assert!(payload.frame.height > 0);
-                latest_ok = true;
-                break;
+                if payload.frame_id > 0 && payload.frame.width > 0 && payload.frame.height > 0 {
+                    first_frame = Some(payload);
+                    break;
+                }
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        assert!(latest_ok, "latest-frame never returned a cached frame");
+        let first_frame = first_frame.expect("initial latest-frame should be available");
+
+        let batch = runtime.handle_command(DaemonCommand::ExecuteToolBatch {
+            name: "orch".to_string(),
+            actions: vec![
+                ToolAction::BrowserNavigate {
+                    session_id: "live-web".to_string(),
+                    url: "https://example.com".to_string(),
+                },
+                ToolAction::MouseClick {
+                    x: 20,
+                    y: 20,
+                    button: MouseButton::Left,
+                },
+                ToolAction::TypeText {
+                    text: "aegis live test".to_string(),
+                },
+                ToolAction::InputBatch {
+                    actions: vec![InputAction::Wait { duration_ms: 150 }],
+                },
+            ],
+            max_actions: Some(6),
+        });
+        assert!(batch.ok, "batch failed: {}", batch.message);
+        let batch_outcome: ToolBatchOutcome =
+            serde_json::from_value(batch.data.expect("batch data")).expect("parse batch outcome");
+        assert_eq!(
+            batch_outcome.executed, 4,
+            "all batch actions should execute"
+        );
+
+        let mut advanced_frame: Option<LatestCaptureFrame> = None;
+        for _ in 0..25 {
+            let latest = runtime.handle_command(DaemonCommand::LatestCaptureFrame {
+                name: "orch".to_string(),
+                region: None,
+            });
+            if latest.ok {
+                let payload: LatestCaptureFrame =
+                    serde_json::from_value(latest.data.expect("latest frame payload"))
+                        .expect("parse latest frame");
+                if payload.frame_id > first_frame.frame_id
+                    && payload.frame.width > 0
+                    && payload.frame.height > 0
+                {
+                    advanced_frame = Some(payload);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let advanced_frame =
+            advanced_frame.expect("latest-frame should advance after action batch");
+        assert!(advanced_frame.frame_id > first_frame.frame_id);
 
         let stop_browser = runtime.handle_command(DaemonCommand::StopBrowserProfile {
             name: "orch".to_string(),
@@ -3705,6 +3735,26 @@ mod tests {
                 .iter()
                 .any(|e| e.action_kind.contains("BrowserProfileStop")),
             "expected BrowserProfileStop provenance in audit entries"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.action_kind.contains("BrowserNavigate")),
+            "expected BrowserNavigate provenance in audit entries"
+        );
+        assert!(
+            entries.iter().any(|e| e.action_kind.contains("MouseClick")),
+            "expected MouseClick provenance in audit entries"
+        );
+        assert!(
+            entries.iter().any(|e| e.action_kind.contains("TypeText")),
+            "expected TypeText provenance in audit entries"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.action_kind.contains("duration_ms")),
+            "expected wait action provenance in audit entries"
         );
     }
 

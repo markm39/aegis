@@ -23,6 +23,17 @@ pub enum DaemonCommand {
     AgentStatus { name: String },
     /// Get recent output lines from an agent.
     AgentOutput { name: String, lines: Option<usize> },
+    /// List active sessions (OpenClaw-style session keys).
+    SessionList,
+    /// Fetch recent output lines for a session key.
+    SessionHistory {
+        session_key: String,
+        /// Number of lines to return (default: 50).
+        #[serde(default)]
+        lines: Option<usize>,
+    },
+    /// Send text to a session key (mapped to agent stdin).
+    SessionSend { session_key: String, text: String },
     /// Send text to an agent's stdin (task injection or ad-hoc input).
     SendToAgent { name: String, text: String },
     /// Start a specific agent slot.
@@ -259,6 +270,23 @@ pub struct AgentSummary {
     /// the command components to attach (e.g., ["tmux", "attach-session", "-t", "aegis-foo"]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attach_command: Option<Vec<String>>,
+}
+
+/// OpenClaw-style session summary for gateway/chat tooling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionInfo {
+    pub session_key: String,
+    pub agent: String,
+    pub is_orchestrator: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
+/// Session history payload for chat tooling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionHistory {
+    pub session_key: String,
+    pub lines: Vec<String>,
 }
 
 /// Detailed status for a single agent, returned by AgentStatus.

@@ -109,20 +109,16 @@ pub fn draw(frame: &mut Frame, app: &FleetApp) {
         FleetView::AgentDetail => {
             draw_detail_header(frame, app, chunks[0]);
 
-            if app.input_mode {
-                // Split main area into output + input bar (dynamic height)
-                let content_len = 3 + app.input_buffer.len() + 1; // " > " + buffer + cursor
-                let input_height =
-                    wrapped_input_height(content_len, chunks[1].width, MAX_INPUT_WRAP_LINES);
-                let detail_chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(0), Constraint::Length(input_height)])
-                    .split(chunks[1]);
-                draw_detail_main(frame, app, detail_chunks[0]);
-                draw_input_bar(frame, app, detail_chunks[1]);
-            } else {
-                draw_detail_main(frame, app, chunks[1]);
-            }
+            // Split main area into output + input bar (dynamic height)
+            let content_len = 3 + app.input_buffer.len() + 1; // " > " + buffer + cursor
+            let input_height =
+                wrapped_input_height(content_len, chunks[1].width, MAX_INPUT_WRAP_LINES);
+            let detail_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(input_height)])
+                .split(chunks[1]);
+            draw_detail_main(frame, app, detail_chunks[0]);
+            draw_input_bar(frame, app, detail_chunks[1]);
 
             draw_detail_status(frame, app, chunks[2]);
         }
@@ -474,6 +470,27 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
         ),
     ]);
 
+    if let Some(runtime) = app.detail_runtime.as_ref() {
+        let auth_style = if runtime.auth_ready {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+        let auth_label = if runtime.auth_ready {
+            "ready"
+        } else {
+            "missing"
+        };
+        header_spans.push(Span::styled(
+            "  auth:",
+            Style::default().fg(Color::DarkGray),
+        ));
+        header_spans.push(Span::styled(
+            format!("{} ({})", runtime.auth_mode, auth_label),
+            auth_style.add_modifier(Modifier::BOLD),
+        ));
+    }
+
     if restart_count > 0 {
         header_spans.push(Span::styled(
             format!("  restarts:{restart_count}"),
@@ -591,9 +608,9 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
     let lines = app.visible_output(inner_height);
 
     let title = if app.detail_scroll > 0 {
-        format!(" Output (scroll +{}) ", app.detail_scroll)
+        format!(" Chat (scroll +{}) ", app.detail_scroll)
     } else {
-        " Output ".to_string()
+        " Chat ".to_string()
     };
 
     let block = Block::default()
@@ -625,6 +642,10 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
                 Style::default().fg(Color::Yellow)
             } else if line.contains("[NUDGE") {
                 Style::default().fg(Color::Magenta)
+            } else if line.starts_with("You:") {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else if line.starts_with("> Bash:") {
                 Style::default().fg(Color::Rgb(253, 93, 177)) // hot pink (CC bash border)
             } else if line.starts_with("> Read:")
@@ -740,26 +761,56 @@ fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
         (" ", "")
     };
 
+    let cursor_style = if app.input_mode {
+        Style::default().fg(Color::Black).bg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let prefix_style = if app.input_mode {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let text_style = if app.input_mode {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let placeholder = if app.input_mode || !app.input_buffer.is_empty() {
+        None
+    } else {
+        Some("Press i to chat".to_string())
+    };
+
     let line = Line::from(vec![
-        Span::styled(
-            " > ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(before, Style::default().fg(Color::White)),
-        Span::styled(
-            cursor_char,
-            Style::default().fg(Color::Black).bg(Color::White),
-        ),
-        Span::styled(after, Style::default().fg(Color::White)),
+        Span::styled(" > ", prefix_style),
+        Span::styled(before, text_style),
+        Span::styled(cursor_char, cursor_style),
+        Span::styled(after, text_style),
+        placeholder
+            .as_deref()
+            .map(|p| Span::styled(p, Style::default().fg(Color::DarkGray)))
+            .unwrap_or_else(|| Span::styled("", Style::default())),
     ]);
 
+    let title = if app.input_mode {
+        " Orchestrator Chat "
+    } else {
+        " Orchestrator Chat (inactive) "
+    };
+    let border_color = if app.input_mode {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let bar = Paragraph::new(line).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Send Input ")
-            .border_style(Style::default().fg(Color::Cyan)),
+            .title(title)
+            .border_style(Style::default().fg(border_color)),
     );
     frame.render_widget(bar, area);
 }
@@ -767,10 +818,14 @@ fn draw_input_bar(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect
 /// Render the detail status bar.
 fn draw_detail_status(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
     let mut spans = vec![
+        Span::styled(" Enter", Style::default().fg(Color::Cyan)),
+        Span::styled(": send  ", Style::default().fg(Color::DarkGray)),
         Span::styled(" Esc", Style::default().fg(Color::Yellow)),
-        Span::styled(": back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(": nav  ", Style::default().fg(Color::DarkGray)),
         Span::styled("i", Style::default().fg(Color::Cyan)),
-        Span::styled(": input  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(": chat  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(":", Style::default().fg(Color::Yellow)),
+        Span::styled(": cmd  ", Style::default().fg(Color::DarkGray)),
     ];
 
     if !app.detail_pending.is_empty() {

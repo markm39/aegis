@@ -17,8 +17,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{
     AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
-    PendingPromptSummary, RuntimeCapabilities, SpawnSubagentRequest, ToolActionOutcome,
-    ToolBatchOutcome,
+    PendingPromptSummary, RuntimeCapabilities, SessionHistory, SessionInfo, SpawnSubagentRequest,
+    ToolActionOutcome, ToolBatchOutcome,
 };
 use aegis_toolkit::contract::ToolAction;
 use aegis_types::AgentStatus;
@@ -344,6 +344,9 @@ impl FleetApp {
         self.focus_pending = focus_pending;
         self.detail_attention = false;
         self.detail_runtime = None;
+        self.input_mode = true;
+        self.input_buffer.clear();
+        self.input_cursor = 0;
         self.view = FleetView::AgentDetail;
         self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
     }
@@ -826,6 +829,9 @@ impl FleetApp {
                 self.input_buffer.clear();
                 self.input_cursor = 0;
             }
+            KeyCode::Char(':') if self.input_buffer.is_empty() => {
+                self.enter_command_mode();
+            }
             KeyCode::Enter => {
                 if !self.input_buffer.is_empty() {
                     let cmd = DaemonCommand::SendToAgent {
@@ -834,7 +840,7 @@ impl FleetApp {
                     };
                     self.send_named_command(cmd);
                 }
-                self.input_mode = false;
+                // Enter submits the draft and keeps chat input mode active.
                 self.input_buffer.clear();
                 self.input_cursor = 0;
             }
@@ -1290,6 +1296,92 @@ impl FleetApp {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
                     self.send_and_show_result(DaemonCommand::SendToAgent { name: agent, text });
+                }
+            }
+            FleetCommand::SessionList => {
+                if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::SessionList) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<Vec<SessionInfo>>(data) {
+                                    Ok(list) => {
+                                        if list.is_empty() {
+                                            self.set_result("No sessions available");
+                                        } else {
+                                            let mut labels: Vec<String> = list
+                                                .iter()
+                                                .map(|s| s.session_key.clone())
+                                                .collect();
+                                            labels.sort();
+                                            let shown: Vec<String> =
+                                                labels.iter().take(3).cloned().collect();
+                                            let suffix = if labels.len() > 3 {
+                                                format!(" (+{})", labels.len() - 3)
+                                            } else {
+                                                String::new()
+                                            };
+                                            self.set_result(format!(
+                                                "Sessions: {}{}",
+                                                shown.join(", "),
+                                                suffix
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => self
+                                        .set_result(format!("failed to parse session list: {e}")),
+                                }
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to list sessions: {e}")),
+                    }
+                }
+            }
+            FleetCommand::SessionHistory { session_key, lines } => {
+                if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::SessionHistory {
+                        session_key: session_key.clone(),
+                        lines,
+                    }) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<SessionHistory>(data) {
+                                    Ok(history) => {
+                                        if let Some(agent) =
+                                            Self::session_agent_name(&history.session_key)
+                                        {
+                                            self.open_agent_detail(agent, false);
+                                            self.detail_output.clear();
+                                            for line in history.lines {
+                                                self.detail_output.push_back(line);
+                                            }
+                                            self.detail_scroll = 0;
+                                        }
+                                        self.set_result(format!(
+                                            "Loaded session history for {}",
+                                            history.session_key
+                                        ));
+                                    }
+                                    Err(e) => self.set_result(format!(
+                                        "failed to parse session history: {e}"
+                                    )),
+                                }
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to fetch history: {e}")),
+                    }
+                }
+            }
+            FleetCommand::SessionSend { session_key, text } => {
+                if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else {
+                    self.send_and_show_result(DaemonCommand::SessionSend { session_key, text });
                 }
             }
             FleetCommand::Approve { agent } => {
@@ -1967,6 +2059,20 @@ impl FleetApp {
         !self.connected || self.agents.iter().any(|a| a.name == name)
     }
 
+    fn session_agent_name(session_key: &str) -> Option<String> {
+        let parts: Vec<&str> = session_key.trim().split(':').collect();
+        if parts.len() == 3 && parts[0] == "agent" && parts[2] == "main" {
+            let name = parts[1].trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        } else {
+            None
+        }
+    }
+
     /// Jump selection to the next agent that needs attention (has pending prompts).
     /// Wraps around if needed. Shows a message if no agents need attention.
     fn jump_to_next_attention(&mut self) {
@@ -2582,8 +2688,8 @@ mod tests {
         app.handle_key(press(KeyCode::Char('x')));
         app.handle_key(press(KeyCode::Enter));
 
-        // Enter exits input mode and clears buffer
-        assert!(!app.input_mode);
+        // Enter sends and clears buffer, input mode remains active for chat
+        assert!(app.input_mode);
         assert!(app.input_buffer.is_empty());
         assert_eq!(app.input_cursor, 0);
     }

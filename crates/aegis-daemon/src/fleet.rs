@@ -330,6 +330,11 @@ impl Fleet {
             .as_ref()
             .ok_or_else(|| format!("agent '{name}' has no command channel (not running?)"))?;
 
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            slot.push_output_line(format!("You: {trimmed}"));
+        }
+
         tx.send(SupervisorCommand::SendInput {
             text: text.to_string(),
         })
@@ -690,6 +695,11 @@ impl Fleet {
             .values()
             .filter(|s| matches!(s.status, AgentStatus::Running { .. }))
             .count()
+    }
+
+    /// Total number of pending prompts across all agents.
+    pub fn pending_total(&self) -> usize {
+        self.slots.values().map(|s| s.pending_prompts.len()).sum()
     }
 
     /// Get agent names sorted alphabetically (for stable display order).

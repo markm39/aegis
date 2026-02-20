@@ -23,6 +23,15 @@ pub enum FleetCommand {
     Restart { agent: String },
     /// Send text to an agent's stdin.
     Send { agent: String, text: String },
+    /// List active session keys.
+    SessionList,
+    /// Fetch recent output for a session key.
+    SessionHistory {
+        session_key: String,
+        lines: Option<usize>,
+    },
+    /// Send text to a session key.
+    SessionSend { session_key: String, text: String },
     /// Approve the first pending prompt for an agent.
     Approve { agent: String },
     /// Deny the first pending prompt for an agent.
@@ -204,6 +213,7 @@ const COMMAND_NAMES: &[&str] = &[
     "restart",
     "run",
     "send",
+    "session",
     "sessions",
     "setup",
     "start",
@@ -393,6 +403,46 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }))
             }
         }
+        "session" => match arg1 {
+            "" | "list" => Ok(Some(FleetCommand::SessionList)),
+            "history" => {
+                if arg2.is_empty() {
+                    return Err("usage: session history <session_key> [lines]".into());
+                }
+                let mut parts = arg2.splitn(2, ' ');
+                let session_key = parts.next().unwrap_or("").trim();
+                let lines = parts
+                    .next()
+                    .and_then(|v| v.trim().parse::<usize>().ok());
+                if session_key.is_empty() {
+                    Err("usage: session history <session_key> [lines]".into())
+                } else {
+                    Ok(Some(FleetCommand::SessionHistory {
+                        session_key: session_key.to_string(),
+                        lines,
+                    }))
+                }
+            }
+            "send" => {
+                if arg2.is_empty() {
+                    return Err("usage: session send <session_key> <text>".into());
+                }
+                let mut parts = arg2.splitn(2, ' ');
+                let session_key = parts.next().unwrap_or("").trim();
+                let text = parts.next().unwrap_or("").trim();
+                if session_key.is_empty() || text.is_empty() {
+                    Err("usage: session send <session_key> <text>".into())
+                } else {
+                    Ok(Some(FleetCommand::SessionSend {
+                        session_key: session_key.to_string(),
+                        text: text.to_string(),
+                    }))
+                }
+            }
+            other => Err(format!(
+                "unknown session subcommand: {other}. Use: list, history, send"
+            )),
+        },
         "approve" => {
             if arg1.is_empty() {
                 Err("usage: approve <agent>".into())
@@ -708,6 +758,7 @@ const DAEMON_SUBCOMMANDS: &[&str] = &[
 const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
 /// Subcommands for `:auth`.
 const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
+const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -842,6 +893,13 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "session" {
+            return SESSION_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
 
         // Third token: context field completion
         if cmd == "context" && parts.len() == 3 {
@@ -947,6 +1005,9 @@ pub fn help_text() -> &'static str {
      :restart <agent>         Restart agent\n\
      :run <cmd...>            Run sandboxed in terminal\n\
      :send <agent> <text>     Send text to agent stdin\n\
+     :session list            List active session keys\n\
+     :session history <k> [n] Show recent session output\n\
+     :session send <k> <txt>  Send text to a session key\n\
      :sessions                List recent audit sessions\n\
      :setup                   Verify system requirements\n\
      :start <agent>           Start agent\n\
@@ -1631,6 +1692,15 @@ mod tests {
     }
 
     #[test]
+    fn completions_session_subcommands() {
+        let agents = vec![];
+        let c = completions("session ", &agents);
+        assert!(c.contains(&"list".to_string()));
+        assert!(c.contains(&"history".to_string()));
+        assert!(c.contains(&"send".to_string()));
+    }
+
+    #[test]
     fn parse_enable() {
         assert_eq!(
             parse("enable claude-1").unwrap(),
@@ -1782,6 +1852,25 @@ mod tests {
     #[test]
     fn parse_sessions() {
         assert_eq!(parse("sessions").unwrap(), Some(FleetCommand::Sessions));
+    }
+
+    #[test]
+    fn parse_session_commands() {
+        assert_eq!(parse("session").unwrap(), Some(FleetCommand::SessionList));
+        assert_eq!(
+            parse("session history agent:orchestrator:main 25").unwrap(),
+            Some(FleetCommand::SessionHistory {
+                session_key: "agent:orchestrator:main".into(),
+                lines: Some(25),
+            })
+        );
+        assert_eq!(
+            parse("session send agent:orchestrator:main hello world").unwrap(),
+            Some(FleetCommand::SessionSend {
+                session_key: "agent:orchestrator:main".into(),
+                text: "hello world".into(),
+            })
+        );
     }
 
     #[test]

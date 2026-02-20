@@ -13,10 +13,10 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use aegis_control::daemon::ModelFallbackState;
 use aegis_pilot::session::StreamKind;
 use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig};
-use aegis_control::daemon::ModelFallbackState;
 
 use crate::lifecycle::SlotResult;
 
@@ -201,6 +201,18 @@ impl AgentSlot {
             }
         }
         count
+    }
+
+    /// Append a synthetic output line (e.g., user chat input) to the buffer.
+    pub fn push_output_line(&self, line: String) {
+        let mut buf = match self.recent_output.lock() {
+            Ok(buf) => buf,
+            Err(_) => return,
+        };
+        if buf.len() >= self.output_capacity {
+            buf.pop_front();
+        }
+        buf.push_back(line);
     }
 
     fn is_openclaw(&self) -> bool {
@@ -674,7 +686,8 @@ mod tests {
 
     #[test]
     fn parse_fallback_active_line() {
-        let line = "↪️ Model Fallback: openai/gpt-4.1 (selected openai/gpt-4.1-mini; context overflow)";
+        let line =
+            "↪️ Model Fallback: openai/gpt-4.1 (selected openai/gpt-4.1-mini; context overflow)";
         let state = parse_fallback_line(line).expect("expected parsed fallback");
         assert!(state.active);
         assert_eq!(state.selected_model.as_deref(), Some("openai/gpt-4.1-mini"));
