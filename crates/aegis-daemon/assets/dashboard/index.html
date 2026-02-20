@@ -123,6 +123,8 @@
             <pre id="tool-actions"></pre>
             <div class="muted" style="margin-top: 12px;">Pending Approvals</div>
             <pre id="pending"></pre>
+            <div class="muted" style="margin-top: 12px;">Model Fallback</div>
+            <pre id="fallback"></pre>
           </div>
         </div>
         <div style="margin-top: 12px;">
@@ -223,6 +225,20 @@
         return lines.map(formatLogLine).join("");
       }
 
+      function formatFallback(fallback) {
+        if (!fallback) return "(none)";
+        if (fallback.active) {
+          const active = fallback.active_model || "unknown";
+          const selected = fallback.selected_model || "unknown";
+          const reason = fallback.reason ? `; ${fallback.reason}` : "";
+          return `active ${active} (selected ${selected}${reason})`;
+        }
+        if (fallback.selected_model) {
+          return `cleared (${fallback.selected_model})`;
+        }
+        return "cleared";
+      }
+
       async function renderDetail() {
         if (!snapshot || !selected) return;
         const agent = snapshot.agents.find(a => a.name === selected);
@@ -235,6 +251,7 @@
         document.getElementById("pending").textContent =
           agent.pending_prompts.length ? agent.pending_prompts.map(p => `${p.raw_prompt}`).join("\n") : "(none)";
         document.getElementById("logs").innerHTML = formatLogs(agent.last_output);
+        document.getElementById("fallback").textContent = formatFallback(agent.fallback);
 
         const res = await fetch(`/api/frame/${encodeURIComponent(agent.name)}?token=${encodeURIComponent(token)}`);
         if (res.ok) {

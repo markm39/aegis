@@ -13,9 +13,10 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
-use aegis_types::daemon::{AgentSlotConfig, AgentStatus};
 use aegis_pilot::session::StreamKind;
+use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
+use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig};
+use aegis_control::daemon::ModelFallbackState;
 
 use crate::lifecycle::SlotResult;
 
@@ -36,7 +37,10 @@ pub struct PendingPromptInfo {
 #[derive(Debug)]
 pub enum NotableEvent {
     /// A permission prompt needs human approval.
-    PendingPrompt { request_id: Uuid, raw_prompt: String },
+    PendingPrompt {
+        request_id: Uuid,
+        raw_prompt: String,
+    },
     /// Agent is stalled and needs human attention (max nudges exceeded).
     AttentionNeeded { nudge_count: u32 },
     /// A stall nudge was sent.
@@ -101,6 +105,8 @@ pub struct AgentSlot {
     pub stream_kind: StreamKind,
     /// Session ID for JSON streams that support resume.
     pub tool_session_id: Option<String>,
+    /// Latest model fallback lifecycle status (OpenClaw parity).
+    pub fallback_state: Arc<Mutex<Option<ModelFallbackState>>>,
 }
 
 impl AgentSlot {
@@ -135,6 +141,7 @@ impl AgentSlot {
             attach_command: None,
             stream_kind: StreamKind::Plain,
             tool_session_id: None,
+            fallback_state: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -173,6 +180,9 @@ impl AgentSlot {
             if stream_kind != StreamKind::Plain {
                 let formatted = crate::stream_fmt::format_stream_line(&stream_kind, &line);
                 for fline in formatted {
+                    if self.is_openclaw() {
+                        self.update_fallback_state_from_line(&fline);
+                    }
                     if buf.len() >= self.output_capacity {
                         buf.pop_front();
                     }
@@ -180,6 +190,9 @@ impl AgentSlot {
                     count += 1;
                 }
             } else {
+                if self.is_openclaw() {
+                    self.update_fallback_state_from_line(&line);
+                }
                 if buf.len() >= self.output_capacity {
                     buf.pop_front();
                 }
@@ -188,6 +201,19 @@ impl AgentSlot {
             }
         }
         count
+    }
+
+    fn is_openclaw(&self) -> bool {
+        matches!(self.config.tool, AgentToolConfig::OpenClaw { .. })
+    }
+
+    fn update_fallback_state_from_line(&self, line: &str) {
+        let Some(next) = parse_fallback_line(line) else {
+            return;
+        };
+        if let Ok(mut guard) = self.fallback_state.lock() {
+            *guard = Some(next);
+        }
     }
 
     /// Drain rich updates from the supervisor's update channel.
@@ -211,13 +237,19 @@ impl AgentSlot {
         let mut notable = Vec::new();
         while let Ok(update) = rx.try_recv() {
             match update {
-                PilotUpdate::PendingPrompt { request_id, raw_prompt } => {
+                PilotUpdate::PendingPrompt {
+                    request_id,
+                    raw_prompt,
+                } => {
                     self.pending_prompts.push(PendingPromptInfo {
                         request_id,
                         raw_prompt: raw_prompt.clone(),
                         received_at: Instant::now(),
                     });
-                    notable.push(NotableEvent::PendingPrompt { request_id, raw_prompt });
+                    notable.push(NotableEvent::PendingPrompt {
+                        request_id,
+                        raw_prompt,
+                    });
                 }
                 PilotUpdate::PendingResolved { request_id, .. } => {
                     self.pending_prompts.retain(|p| p.request_id != request_id);
@@ -276,6 +308,45 @@ impl AgentSlot {
     pub fn uptime_secs(&self) -> Option<u64> {
         self.started_at.map(|t| t.elapsed().as_secs())
     }
+}
+
+fn parse_fallback_line(line: &str) -> Option<ModelFallbackState> {
+    const ACTIVE_PREFIX: &str = "↪️ Model Fallback: ";
+    const CLEARED_PREFIX: &str = "↪️ Model Fallback cleared: ";
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    if let Some(rest) = line.strip_prefix(ACTIVE_PREFIX) {
+        let (active, tail) = rest.split_once(" (selected ")?;
+        let (selected, reason_tail) = tail.split_once("; ")?;
+        let reason = reason_tail.strip_suffix(')')?;
+        return Some(ModelFallbackState {
+            active: true,
+            selected_model: Some(selected.trim().to_string()),
+            active_model: Some(active.trim().to_string()),
+            reason: Some(reason.trim().to_string()),
+            updated_at_ms: now_ms,
+        });
+    }
+
+    if let Some(rest) = line.strip_prefix(CLEARED_PREFIX) {
+        let (selected, _) = match rest.split_once(" (was ") {
+            Some((sel, prev_tail)) => (sel, prev_tail.strip_suffix(')')),
+            None => (rest, None),
+        };
+        return Some(ModelFallbackState {
+            active: false,
+            selected_model: Some(selected.trim().trim_end_matches(')').to_string()),
+            active_model: None,
+            reason: None,
+            updated_at_ms: now_ms,
+        });
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -380,7 +451,8 @@ mod tests {
         tx.send(PilotUpdate::PendingPrompt {
             request_id: id,
             raw_prompt: "Allow Bash(rm -rf)?".into(),
-        }).unwrap();
+        })
+        .unwrap();
 
         let events = slot.drain_updates();
         assert_eq!(events.len(), 1);
@@ -400,11 +472,13 @@ mod tests {
         tx.send(PilotUpdate::PendingPrompt {
             request_id: id,
             raw_prompt: "Allow write?".into(),
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(PilotUpdate::PendingResolved {
             request_id: id,
             approved: true,
-        }).unwrap();
+        })
+        .unwrap();
 
         slot.drain_updates();
         assert!(slot.pending_prompts.is_empty());
@@ -417,12 +491,16 @@ mod tests {
         slot.update_rx = Some(rx);
 
         assert!(!slot.attention_needed);
-        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 })
+            .unwrap();
 
         let events = slot.drain_updates();
         assert!(slot.attention_needed);
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], NotableEvent::AttentionNeeded { nudge_count: 3 }));
+        assert!(matches!(
+            &events[0],
+            NotableEvent::AttentionNeeded { nudge_count: 3 }
+        ));
     }
 
     #[test]
@@ -464,7 +542,10 @@ mod tests {
 
         let events = slot.drain_updates();
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], NotableEvent::ChildExited { exit_code: 0 }));
+        assert!(matches!(
+            &events[0],
+            NotableEvent::ChildExited { exit_code: 0 }
+        ));
     }
 
     #[test]
@@ -477,7 +558,10 @@ mod tests {
 
         let events = slot.drain_updates();
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], NotableEvent::StallNudge { nudge_count: 2 }));
+        assert!(matches!(
+            &events[0],
+            NotableEvent::StallNudge { nudge_count: 2 }
+        ));
     }
 
     #[test]
@@ -491,14 +575,16 @@ mod tests {
         tx.send(PilotUpdate::PendingPrompt {
             request_id: id,
             raw_prompt: "prompt".into(),
-        }).unwrap();
+        })
+        .unwrap();
         slot.drain_updates();
         slot.attention_needed = true; // set by pending
 
         tx.send(PilotUpdate::PendingResolved {
             request_id: id,
             approved: true,
-        }).unwrap();
+        })
+        .unwrap();
         slot.drain_updates();
         assert!(!slot.attention_needed);
         assert!(slot.pending_prompts.is_empty());
@@ -514,8 +600,10 @@ mod tests {
         tx.send(PilotUpdate::PendingPrompt {
             request_id: id,
             raw_prompt: "prompt".into(),
-        }).unwrap();
-        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        })
+        .unwrap();
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 })
+            .unwrap();
         slot.drain_updates();
         assert!(slot.attention_needed);
         assert!(slot.stall_attention);
@@ -524,9 +612,13 @@ mod tests {
         tx.send(PilotUpdate::PendingResolved {
             request_id: id,
             approved: true,
-        }).unwrap();
+        })
+        .unwrap();
         slot.drain_updates();
-        assert!(slot.attention_needed, "stall-based attention should persist");
+        assert!(
+            slot.attention_needed,
+            "stall-based attention should persist"
+        );
         assert!(slot.pending_prompts.is_empty());
     }
 
@@ -537,7 +629,8 @@ mod tests {
         slot.update_rx = Some(rx);
 
         // Stall sets attention
-        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 })
+            .unwrap();
         slot.drain_updates();
         assert!(slot.attention_needed);
         assert!(slot.stall_attention);
@@ -560,8 +653,10 @@ mod tests {
         tx.send(PilotUpdate::PendingPrompt {
             request_id: id,
             raw_prompt: "Allow write?".into(),
-        }).unwrap();
-        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 }).unwrap();
+        })
+        .unwrap();
+        tx.send(PilotUpdate::AttentionNeeded { nudge_count: 3 })
+            .unwrap();
         slot.drain_updates();
         assert!(slot.attention_needed);
         assert!(slot.stall_attention);
@@ -571,6 +666,29 @@ mod tests {
         tx.send(PilotUpdate::StallResolved).unwrap();
         slot.drain_updates();
         assert!(!slot.stall_attention);
-        assert!(slot.attention_needed, "pending prompt still needs attention");
+        assert!(
+            slot.attention_needed,
+            "pending prompt still needs attention"
+        );
+    }
+
+    #[test]
+    fn parse_fallback_active_line() {
+        let line = "↪️ Model Fallback: openai/gpt-4.1 (selected openai/gpt-4.1-mini; context overflow)";
+        let state = parse_fallback_line(line).expect("expected parsed fallback");
+        assert!(state.active);
+        assert_eq!(state.selected_model.as_deref(), Some("openai/gpt-4.1-mini"));
+        assert_eq!(state.active_model.as_deref(), Some("openai/gpt-4.1"));
+        assert_eq!(state.reason.as_deref(), Some("context overflow"));
+    }
+
+    #[test]
+    fn parse_fallback_cleared_line() {
+        let line = "↪️ Model Fallback cleared: openai/gpt-4.1 (was openai/gpt-4.1-mini)";
+        let state = parse_fallback_line(line).expect("expected parsed fallback");
+        assert!(!state.active);
+        assert_eq!(state.selected_model.as_deref(), Some("openai/gpt-4.1"));
+        assert!(state.active_model.is_none());
+        assert!(state.reason.is_none());
     }
 }
