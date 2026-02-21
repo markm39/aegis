@@ -79,6 +79,22 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "AcpConnect" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "AcpSend" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "ImageProcess" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "OAuthExchange" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -152,6 +168,9 @@ mod tests {
             "SessionList",
             "SessionHistory",
             "SubagentSpawn",
+            "AcpConnect",
+            "AcpSend",
+            "OAuthExchange",
         ];
 
         let schema_text = AEGIS_SCHEMA;

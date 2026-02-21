@@ -132,6 +132,22 @@ impl PolicyEngine {
                     category: String::new(),
                     key: String::new(),
                 },
+                "AcpConnect" => ActionKind::AcpConnect {
+                    endpoint: "https://__probe__".into(),
+                },
+                "AcpSend" => ActionKind::AcpSend {
+                    endpoint: "https://__probe__".into(),
+                    payload_size: 0,
+                },
+                "ImageProcess" => ActionKind::ImageProcess {
+                    content_hash: "__probe__".into(),
+                    format: "unknown".into(),
+                    size_bytes: 0,
+                },
+                "OAuthExchange" => ActionKind::OAuthExchange {
+                    provider: "__probe__".into(),
+                    grant_type: "authorization_code".into(),
+                },
                 _ => return false,
             },
         );
@@ -295,6 +311,10 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::ApiUsage { provider, .. } => Ok(("ApiUsage", provider.as_str())),
         ActionKind::SkillScan { path, .. } => Ok(("SkillScan", require_utf8(path)?)),
         ActionKind::MemoryCapture { agent_id, .. } => Ok(("MemoryCapture", agent_id.as_str())),
+        ActionKind::AcpConnect { endpoint, .. } => Ok(("AcpConnect", endpoint.as_str())),
+        ActionKind::AcpSend { endpoint, .. } => Ok(("AcpSend", endpoint.as_str())),
+        ActionKind::ImageProcess { content_hash, .. } => Ok(("ImageProcess", content_hash.as_str())),
+        ActionKind::OAuthExchange { provider, .. } => Ok(("OAuthExchange", provider.as_str())),
     }
 }
 

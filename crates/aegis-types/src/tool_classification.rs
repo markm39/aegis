@@ -101,6 +101,10 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         ActionKind::ApiUsage { .. } => ActionRisk::Low,
         ActionKind::SkillScan { .. } => ActionRisk::Informational,
         ActionKind::MemoryCapture { .. } => ActionRisk::Medium,
+        ActionKind::AcpConnect { .. } => ActionRisk::Medium,
+        ActionKind::AcpSend { .. } => ActionRisk::High,
+        ActionKind::ImageProcess { .. } => ActionRisk::Medium,
+        ActionKind::OAuthExchange { .. } => ActionRisk::High,
     }
 }
 

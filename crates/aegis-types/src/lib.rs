@@ -8,6 +8,7 @@ pub mod config;
 pub mod config_loader;
 pub mod daemon;
 pub mod error;
+pub mod oauth;
 pub mod tool_classification;
 pub mod verdict;
 

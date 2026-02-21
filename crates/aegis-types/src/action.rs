@@ -111,6 +111,34 @@ pub enum ActionKind {
         /// The memory key being stored.
         key: String,
     },
+    /// Establish a connection to an ACP (Agent Communication Protocol) server.
+    AcpConnect {
+        /// The endpoint URL being connected to (must be HTTPS).
+        endpoint: String,
+    },
+    /// Send a message over an ACP connection.
+    AcpSend {
+        /// The endpoint URL the message is being sent to.
+        endpoint: String,
+        /// Size of the message payload in bytes.
+        payload_size: usize,
+    },
+    /// Process an image received through a messaging channel.
+    ImageProcess {
+        /// SHA-256 hex digest of the raw image data (for audit trail).
+        content_hash: String,
+        /// Detected image format (e.g., "png", "jpeg").
+        format: String,
+        /// Size of the raw image data in bytes.
+        size_bytes: u64,
+    },
+    /// OAuth2 token exchange (authorization code or refresh grant).
+    OAuthExchange {
+        /// Provider name (e.g., "google", "github").
+        provider: String,
+        /// OAuth2 grant type (e.g., "authorization_code", "refresh_token").
+        grant_type: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -202,6 +230,28 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "MemoryCapture {agent_id}/{category}:{key}")
             }
+            ActionKind::AcpConnect { endpoint } => {
+                write!(f, "AcpConnect {endpoint}")
+            }
+            ActionKind::AcpSend {
+                endpoint,
+                payload_size,
+            } => {
+                write!(f, "AcpSend {endpoint} ({payload_size} bytes)")
+            }
+            ActionKind::ImageProcess {
+                content_hash,
+                format,
+                size_bytes,
+            } => {
+                write!(f, "ImageProcess {format} ({size_bytes} bytes, hash={content_hash})")
+            }
+            ActionKind::OAuthExchange {
+                provider,
+                grant_type,
+            } => {
+                write!(f, "OAuthExchange {provider} ({grant_type})")
+            }
         }
     }
 }
@@ -281,6 +331,22 @@ mod tests {
                 agent_id: "agent-1".into(),
                 category: "preference".into(),
                 key: "editor".into(),
+            },
+            ActionKind::AcpConnect {
+                endpoint: "https://acp.example.com".into(),
+            },
+            ActionKind::AcpSend {
+                endpoint: "https://acp.example.com".into(),
+                payload_size: 1024,
+            },
+            ActionKind::ImageProcess {
+                content_hash: "abc123".into(),
+                format: "png".into(),
+                size_bytes: 2048,
+            },
+            ActionKind::OAuthExchange {
+                provider: "google".into(),
+                grant_type: "authorization_code".into(),
             },
         ];
         for v in variants {
@@ -422,6 +488,21 @@ mod tests {
             }
             .to_string(),
             "MemoryCapture agent-1/preference:editor"
+        );
+        assert_eq!(
+            ActionKind::AcpConnect {
+                endpoint: "https://acp.example.com".into(),
+            }
+            .to_string(),
+            "AcpConnect https://acp.example.com"
+        );
+        assert_eq!(
+            ActionKind::AcpSend {
+                endpoint: "https://acp.example.com".into(),
+                payload_size: 512,
+            }
+            .to_string(),
+            "AcpSend https://acp.example.com (512 bytes)"
         );
     }
 }

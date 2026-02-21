@@ -107,10 +107,12 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "toml",
  "tower-http",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -349,9 +351,12 @@ dependencies = [
 name = "aegis-types"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
