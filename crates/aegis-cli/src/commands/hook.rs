@@ -171,6 +171,102 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Parsed PostToolUse input from Claude Code.
+///
+/// Contains the tool name, input, and the tool's output after execution.
+/// PostToolUse is purely observational -- it never blocks execution.
+#[allow(dead_code)]
+struct PostToolUseInput {
+    tool_name: String,
+    tool_input: serde_json::Value,
+    #[allow(dead_code)]
+    tool_output: serde_json::Value,
+}
+
+/// Parse a PostToolUse payload from stdin.
+#[allow(dead_code)]
+fn parse_post_tool_use_input(payload: &serde_json::Value) -> PostToolUseInput {
+    let tool_name = payload
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let tool_input = payload
+        .get("tool_input")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+    let tool_output = payload
+        .get("tool_output")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    PostToolUseInput {
+        tool_name,
+        tool_input,
+        tool_output,
+    }
+}
+
+/// Format the PostToolUse response JSON.
+///
+/// PostToolUse hooks are observational -- the response simply acknowledges receipt.
+#[allow(dead_code)]
+fn format_post_tool_use_response() -> serde_json::Value {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse"
+        }
+    })
+}
+
+/// Handle a post-tool-use hook invocation from Claude Code.
+///
+/// Reads the hook payload from stdin, records the tool result for
+/// observability, and outputs an acknowledgement. PostToolUse is purely
+/// observational -- it never blocks execution and always exits successfully.
+#[allow(dead_code)]
+pub fn post_tool_use() -> anyhow::Result<()> {
+    // Read the hook payload from stdin (capped at 10 MB)
+    let mut input = String::new();
+    io::stdin()
+        .take(10 * 1024 * 1024)
+        .read_to_string(&mut input)?;
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&input).unwrap_or_else(|_| serde_json::Value::Null);
+
+    let hook_input = parse_post_tool_use_input(&payload);
+
+    let agent_name = std::env::var("AEGIS_AGENT_NAME").unwrap_or_else(|_| "unknown".to_string());
+
+    // Try to record the tool result with the daemon (best-effort).
+    // Uses EvaluateToolUse for now; the lead will swap to RecordToolResult.
+    let client = match std::env::var("AEGIS_SOCKET_PATH") {
+        Ok(path) => DaemonClient::new(path.into()),
+        Err(_) => DaemonClient::default_path(),
+    };
+    match client.send(&DaemonCommand::EvaluateToolUse {
+        agent: agent_name,
+        tool_name: hook_input.tool_name.clone(),
+        tool_input: hook_input.tool_input,
+    }) {
+        Ok(_) => {
+            eprintln!("aegis: recorded tool result: {}", hook_input.tool_name);
+        }
+        Err(e) => {
+            // Best-effort: log but do not fail
+            eprintln!(
+                "aegis: could not record tool result for {}: {e}",
+                hook_input.tool_name
+            );
+        }
+    }
+
+    // Always output success and exit 0
+    let output = format_post_tool_use_response();
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
 /// Generate the Claude Code settings JSON fragment that registers the aegis hook.
 ///
 /// Delegates to `aegis_control::hooks::generate_hook_settings()` -- the single
@@ -267,21 +363,38 @@ mod tests {
     fn generate_hook_settings_structure() {
         let settings = generate_hook_settings();
         let hooks = settings.get("hooks").expect("should have hooks key");
+
+        // PreToolUse
         let pre = hooks.get("PreToolUse").expect("should have PreToolUse");
-        let arr = pre.as_array().expect("PreToolUse should be array");
-        assert_eq!(arr.len(), 1);
-        // Nested: matcher group -> hooks array -> handler
-        let group = &arr[0];
-        let inner = group
+        let pre_arr = pre.as_array().expect("PreToolUse should be array");
+        assert_eq!(pre_arr.len(), 1);
+        let pre_group = &pre_arr[0];
+        let pre_inner = pre_group
             .get("hooks")
             .expect("matcher group should have hooks array");
-        let handlers = inner.as_array().expect("should be array");
-        assert_eq!(handlers.len(), 1);
-        assert_eq!(handlers[0]["type"].as_str().unwrap(), "command");
-        assert!(handlers[0]["command"]
+        let pre_handlers = pre_inner.as_array().expect("should be array");
+        assert_eq!(pre_handlers.len(), 1);
+        assert_eq!(pre_handlers[0]["type"].as_str().unwrap(), "command");
+        assert!(pre_handlers[0]["command"]
             .as_str()
             .unwrap()
-            .contains("aegis hook"));
+            .contains("aegis hook pre-tool-use"));
+
+        // PostToolUse
+        let post = hooks.get("PostToolUse").expect("should have PostToolUse");
+        let post_arr = post.as_array().expect("PostToolUse should be array");
+        assert_eq!(post_arr.len(), 1);
+        let post_group = &post_arr[0];
+        let post_inner = post_group
+            .get("hooks")
+            .expect("matcher group should have hooks array");
+        let post_handlers = post_inner.as_array().expect("should be array");
+        assert_eq!(post_handlers.len(), 1);
+        assert_eq!(post_handlers[0]["type"].as_str().unwrap(), "command");
+        assert!(post_handlers[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("aegis hook post-tool-use"));
     }
 
     #[test]
@@ -318,7 +431,7 @@ mod tests {
         let claude_dir = tmpdir.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
 
-        // Write existing settings with some other config
+        // Write existing settings with some other config and a non-aegis PostToolUse hook
         let existing = serde_json::json!({
             "model": "claude-sonnet-4-5-20250929",
             "hooks": {
@@ -343,12 +456,47 @@ mod tests {
             settings["model"].as_str().unwrap(),
             "claude-sonnet-4-5-20250929"
         );
-        // PostToolUse hook should be preserved
+        // PostToolUse should have existing non-aegis entry plus aegis entry
         assert_eq!(
             settings["hooks"]["PostToolUse"].as_array().unwrap().len(),
-            1
+            2,
+            "should have both existing and aegis PostToolUse entries"
         );
         // PreToolUse hook should be added
         assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parse_post_tool_use_payload() {
+        let payload = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la"},
+            "tool_output": "file1.txt\nfile2.txt"
+        });
+        let input = parse_post_tool_use_input(&payload);
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_input["command"], "ls -la");
+        assert_eq!(input.tool_output, "file1.txt\nfile2.txt");
+    }
+
+    #[test]
+    fn parse_post_tool_use_missing_fields() {
+        let payload = serde_json::json!({
+            "hook_event_name": "PostToolUse"
+        });
+        let input = parse_post_tool_use_input(&payload);
+        assert_eq!(input.tool_name, "unknown");
+        assert_eq!(input.tool_input, serde_json::json!({}));
+        assert!(input.tool_output.is_null());
+    }
+
+    #[test]
+    fn format_post_tool_use_response_structure() {
+        let output = format_post_tool_use_response();
+        let hso = &output["hookSpecificOutput"];
+        assert_eq!(hso["hookEventName"], "PostToolUse");
+        // Should not contain permissionDecision (PostToolUse is observational)
+        assert!(hso.get("permissionDecision").is_none());
     }
 }

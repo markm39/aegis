@@ -1,9 +1,12 @@
 //! Shared hook settings for Claude Code integration.
 //!
-//! Claude Code's `PreToolUse` hooks let Aegis intercept every tool call and
-//! evaluate it against Cedar policy before execution. These functions generate
-//! and install the hook configuration that registers `aegis hook pre-tool-use`
-//! as the policy enforcement point.
+//! Claude Code's `PreToolUse` and `PostToolUse` hooks let Aegis intercept tool
+//! calls at two lifecycle points:
+//! - **PreToolUse**: evaluates each tool call against Cedar policy before execution
+//! - **PostToolUse**: observes tool results after execution for audit/telemetry
+//!
+//! These functions generate and install the hook configuration that registers
+//! `aegis hook pre-tool-use` and `aegis hook post-tool-use` as hook handlers.
 //!
 //! Two install targets:
 //! - `.claude/settings.json` -- project-level, committed to VCS (manual install via CLI)
@@ -11,22 +14,22 @@
 
 use std::path::{Path, PathBuf};
 
-/// Generate the Claude Code settings JSON fragment that registers the aegis hook.
+/// Generate the Claude Code settings JSON fragment that registers aegis hooks.
 ///
 /// Returns a JSON object suitable for merging into `.claude/settings.json` or
-/// `.claude/settings.local.json`. The `PreToolUse` array contains matcher groups,
-/// each with an inner `hooks` array of handlers -- this is the three-level
-/// nesting that Claude Code requires (event -> matcher group -> handler).
+/// `.claude/settings.local.json`. Both `PreToolUse` and `PostToolUse` arrays
+/// contain matcher groups, each with an inner `hooks` array of handlers --
+/// this is the three-level nesting that Claude Code requires
+/// (event -> matcher group -> handler).
 ///
 /// ```json
 /// {
 ///   "hooks": {
 ///     "PreToolUse": [
-///       {
-///         "hooks": [
-///           { "type": "command", "command": "aegis hook pre-tool-use" }
-///         ]
-///       }
+///       { "hooks": [{ "type": "command", "command": "aegis hook pre-tool-use" }] }
+///     ],
+///     "PostToolUse": [
+///       { "hooks": [{ "type": "command", "command": "aegis hook post-tool-use" }] }
 ///     ]
 ///   }
 /// }
@@ -35,7 +38,10 @@ pub fn generate_hook_settings() -> serde_json::Value {
     serde_json::json!({
         "hooks": {
             "PreToolUse": [
-                matcher_group()
+                pre_tool_use_matcher_group()
+            ],
+            "PostToolUse": [
+                post_tool_use_matcher_group()
             ]
         }
     })
@@ -45,12 +51,27 @@ pub fn generate_hook_settings() -> serde_json::Value {
 ///
 /// No `matcher` field means "match all tools." The inner `hooks` array
 /// contains one handler that calls `aegis hook pre-tool-use`.
-fn matcher_group() -> serde_json::Value {
+fn pre_tool_use_matcher_group() -> serde_json::Value {
     serde_json::json!({
         "hooks": [
             {
                 "type": "command",
                 "command": "aegis hook pre-tool-use"
+            }
+        ]
+    })
+}
+
+/// A matcher group entry for the PostToolUse array.
+///
+/// No `matcher` field means "match all tools." The inner `hooks` array
+/// contains one handler that calls `aegis hook post-tool-use`.
+pub fn post_tool_use_matcher_group() -> serde_json::Value {
+    serde_json::json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": "aegis hook post-tool-use"
             }
         ]
     })
@@ -108,27 +129,46 @@ pub fn install_daemon_hooks(working_dir: &Path) -> Result<(), String> {
         .as_object_mut()
         .ok_or_else(|| "settings.local.json is not a JSON object".to_string())?;
 
-    // Navigate to hooks.PreToolUse, creating intermediate keys as needed
+    // Navigate to hooks object, creating intermediate keys as needed
     let hooks = obj.entry("hooks").or_insert(serde_json::json!({}));
 
     let hooks_obj = hooks
         .as_object_mut()
         .ok_or_else(|| "hooks is not a JSON object".to_string())?;
 
-    let pre_tool_use = hooks_obj
-        .entry("PreToolUse")
-        .or_insert(serde_json::json!([]));
+    let mut changed = false;
 
-    let hooks_array = pre_tool_use
-        .as_array_mut()
-        .ok_or_else(|| "PreToolUse is not an array".to_string())?;
-
-    // Skip if already installed
-    if is_aegis_hook_installed(hooks_array) {
-        return Ok(());
+    // Install PreToolUse hook
+    {
+        let pre_tool_use = hooks_obj
+            .entry("PreToolUse")
+            .or_insert(serde_json::json!([]));
+        let pre_array = pre_tool_use
+            .as_array_mut()
+            .ok_or_else(|| "PreToolUse is not an array".to_string())?;
+        if !is_aegis_hook_installed(pre_array) {
+            pre_array.push(pre_tool_use_matcher_group());
+            changed = true;
+        }
     }
 
-    hooks_array.push(matcher_group());
+    // Install PostToolUse hook
+    {
+        let post_tool_use = hooks_obj
+            .entry("PostToolUse")
+            .or_insert(serde_json::json!([]));
+        let post_array = post_tool_use
+            .as_array_mut()
+            .ok_or_else(|| "PostToolUse is not an array".to_string())?;
+        if !is_aegis_hook_installed(post_array) {
+            post_array.push(post_tool_use_matcher_group());
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return Ok(());
+    }
 
     // Write back
     let output = serde_json::to_string_pretty(&settings)
@@ -172,19 +212,39 @@ pub fn install_project_hooks(project_dir: &Path) -> Result<(), String> {
         .as_object_mut()
         .ok_or_else(|| "hooks is not a JSON object".to_string())?;
 
-    let pre_tool_use = hooks_obj
-        .entry("PreToolUse")
-        .or_insert(serde_json::json!([]));
+    let mut changed = false;
 
-    let hooks_array = pre_tool_use
-        .as_array_mut()
-        .ok_or_else(|| "PreToolUse is not an array".to_string())?;
-
-    if is_aegis_hook_installed(hooks_array) {
-        return Ok(());
+    // Install PreToolUse hook
+    {
+        let pre_tool_use = hooks_obj
+            .entry("PreToolUse")
+            .or_insert(serde_json::json!([]));
+        let pre_array = pre_tool_use
+            .as_array_mut()
+            .ok_or_else(|| "PreToolUse is not an array".to_string())?;
+        if !is_aegis_hook_installed(pre_array) {
+            pre_array.push(pre_tool_use_matcher_group());
+            changed = true;
+        }
     }
 
-    hooks_array.push(matcher_group());
+    // Install PostToolUse hook
+    {
+        let post_tool_use = hooks_obj
+            .entry("PostToolUse")
+            .or_insert(serde_json::json!([]));
+        let post_array = post_tool_use
+            .as_array_mut()
+            .ok_or_else(|| "PostToolUse is not an array".to_string())?;
+        if !is_aegis_hook_installed(post_array) {
+            post_array.push(post_tool_use_matcher_group());
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return Ok(());
+    }
 
     let output = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("failed to serialize settings: {e}"))?;
@@ -359,26 +419,48 @@ mod tests {
     fn generate_hook_settings_structure() {
         let settings = generate_hook_settings();
         let hooks = settings.get("hooks").expect("should have hooks key");
+
+        // Verify PreToolUse
         let pre = hooks.get("PreToolUse").expect("should have PreToolUse");
-        let arr = pre.as_array().expect("PreToolUse should be array");
-        assert_eq!(arr.len(), 1);
-        // Each entry is a matcher group with inner "hooks" array
-        let group = &arr[0];
-        let inner = group
+        let pre_arr = pre.as_array().expect("PreToolUse should be array");
+        assert_eq!(pre_arr.len(), 1);
+        let pre_group = &pre_arr[0];
+        let pre_inner = pre_group
             .get("hooks")
             .expect("matcher group should have hooks array");
-        let handlers = inner.as_array().expect("hooks should be array");
-        assert_eq!(handlers.len(), 1);
+        let pre_handlers = pre_inner.as_array().expect("hooks should be array");
+        assert_eq!(pre_handlers.len(), 1);
         assert_eq!(
-            handlers[0].get("type").unwrap().as_str().unwrap(),
+            pre_handlers[0].get("type").unwrap().as_str().unwrap(),
             "command"
         );
-        assert!(handlers[0]
+        assert!(pre_handlers[0]
             .get("command")
             .unwrap()
             .as_str()
             .unwrap()
-            .contains("aegis hook"));
+            .contains("aegis hook pre-tool-use"));
+
+        // Verify PostToolUse
+        let post = hooks.get("PostToolUse").expect("should have PostToolUse");
+        let post_arr = post.as_array().expect("PostToolUse should be array");
+        assert_eq!(post_arr.len(), 1);
+        let post_group = &post_arr[0];
+        let post_inner = post_group
+            .get("hooks")
+            .expect("matcher group should have hooks array");
+        let post_handlers = post_inner.as_array().expect("hooks should be array");
+        assert_eq!(post_handlers.len(), 1);
+        assert_eq!(
+            post_handlers[0].get("type").unwrap().as_str().unwrap(),
+            "command"
+        );
+        assert!(post_handlers[0]
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("aegis hook post-tool-use"));
     }
 
     #[test]
@@ -391,15 +473,26 @@ mod tests {
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // PreToolUse installed
         let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 1);
-        // Nested: matcher group -> hooks array -> handler
-        let handlers = pre[0]["hooks"].as_array().unwrap();
-        assert_eq!(handlers.len(), 1);
-        assert!(handlers[0]["command"]
+        let pre_handlers = pre[0]["hooks"].as_array().unwrap();
+        assert_eq!(pre_handlers.len(), 1);
+        assert!(pre_handlers[0]["command"]
             .as_str()
             .unwrap()
-            .contains("aegis hook"));
+            .contains("aegis hook pre-tool-use"));
+
+        // PostToolUse installed
+        let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 1);
+        let post_handlers = post[0]["hooks"].as_array().unwrap();
+        assert_eq!(post_handlers.len(), 1);
+        assert!(post_handlers[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("aegis hook post-tool-use"));
     }
 
     #[test]
@@ -413,7 +506,9 @@ mod tests {
                 .unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
         let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre.len(), 1, "should not duplicate hook entry");
+        assert_eq!(pre.len(), 1, "should not duplicate PreToolUse hook entry");
+        let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 1, "should not duplicate PostToolUse hook entry");
     }
 
     #[test]
@@ -422,7 +517,7 @@ mod tests {
         let claude_dir = tmpdir.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
 
-        // Write existing settings with other config
+        // Write existing settings with other config and a non-aegis PostToolUse hook
         let existing = serde_json::json!({
             "model": "claude-sonnet-4-5-20250929",
             "hooks": {
@@ -447,10 +542,11 @@ mod tests {
             settings["model"].as_str().unwrap(),
             "claude-sonnet-4-5-20250929"
         );
-        // PostToolUse hook should be preserved
+        // PostToolUse should have the existing non-aegis entry plus the new aegis entry
         assert_eq!(
             settings["hooks"]["PostToolUse"].as_array().unwrap().len(),
-            1
+            2,
+            "should have both existing and aegis PostToolUse entries"
         );
         // PreToolUse hook should be added
         assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
@@ -468,6 +564,8 @@ mod tests {
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
         let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 1);
+        let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 1);
     }
 
     #[test]
@@ -480,7 +578,9 @@ mod tests {
             std::fs::read_to_string(tmpdir.path().join(".claude").join("settings.json")).unwrap();
         let settings: serde_json::Value = serde_json::from_str(&content).unwrap();
         let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre.len(), 1, "should not duplicate hook entry");
+        assert_eq!(pre.len(), 1, "should not duplicate PreToolUse hook entry");
+        let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 1, "should not duplicate PostToolUse hook entry");
     }
 
     #[test]
