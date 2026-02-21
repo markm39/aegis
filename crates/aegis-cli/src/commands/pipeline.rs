@@ -64,6 +64,8 @@ pub fn execute(
             rules: config.alerts.clone(),
             config_name: config.name.clone(),
             db_path: config.ledger_path.to_string_lossy().into_owned(),
+            push_db_path: None,
+            vapid_config: None,
         };
         let handle = std::thread::Builder::new()
             .name("aegis-alert-dispatcher".into())

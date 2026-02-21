@@ -1362,6 +1362,9 @@ pub fn help_text() -> &'static str {
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
      :pop <agent>             Open agent in new terminal\n\
+     :push list               List push subscriptions\n\
+     :push remove <id>        Remove push subscription\n\
+     :push test <id>          Test push notification delivery\n\
      :quit / :q               Quit TUI\n\
      :remove <agent>          Remove agent from config\n\
      :report                  Compliance report\n\

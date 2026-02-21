@@ -18,6 +18,9 @@ use uuid::Uuid;
 use crate::log as alert_log;
 use crate::matcher;
 use crate::payload;
+use crate::push::{
+    self, PushNotification, PushRateLimiter, PushSubscriptionStore, VapidConfig,
+};
 use crate::AlertEvent;
 
 /// Configuration for the alert dispatcher.
@@ -28,6 +31,13 @@ pub struct DispatcherConfig {
     pub config_name: String,
     /// Path to the SQLite database for the alert_log table.
     pub db_path: String,
+    /// Optional path to a SQLite database for push subscriptions.
+    ///
+    /// When set, the dispatcher will also attempt push notification
+    /// delivery for matching alert events.
+    pub push_db_path: Option<String>,
+    /// Optional VAPID configuration for Web Push authentication.
+    pub vapid_config: Option<VapidConfig>,
 }
 
 /// Run the alert dispatcher loop on the current thread.
@@ -71,6 +81,22 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
         error!("failed to initialize alert_log table: {e}");
         return;
     }
+
+    // Open push subscription store if configured.
+    let push_store = config.push_db_path.as_ref().and_then(|path| {
+        match PushSubscriptionStore::open(path) {
+            Ok(store) => {
+                info!("push subscription store opened at {path}");
+                Some(store)
+            }
+            Err(e) => {
+                error!("failed to open push subscription store at {path}: {e}");
+                None
+            }
+        }
+    });
+
+    let push_rate_limiter = PushRateLimiter::new(60);
 
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -188,10 +214,88 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
                     }
                 }
             }
+
+            // Also deliver via Web Push to all active subscriptions.
+            dispatch_push_notifications(
+                &push_store,
+                &config.vapid_config,
+                &push_rate_limiter,
+                &rule.name,
+                &event,
+            );
         }
     }
 
     info!("alert dispatcher shutting down (channel closed)");
+}
+
+/// Attempt push notification delivery to all active subscriptions.
+///
+/// This is a best-effort operation -- failures are logged but do not
+/// affect webhook dispatch.
+fn dispatch_push_notifications(
+    push_store: &Option<PushSubscriptionStore>,
+    vapid_config: &Option<VapidConfig>,
+    rate_limiter: &PushRateLimiter,
+    rule_name: &str,
+    event: &AlertEvent,
+) {
+    let store = match push_store {
+        Some(s) => s,
+        None => return,
+    };
+
+    let vapid = match vapid_config {
+        Some(v) => v,
+        None => {
+            debug!("push delivery skipped: no VAPID config");
+            return;
+        }
+    };
+
+    // Clean up expired subscriptions opportunistically.
+    if let Err(e) = store.cleanup_expired() {
+        warn!("failed to cleanup expired push subscriptions: {e}");
+    }
+
+    let subscriptions = match store.list_subscriptions() {
+        Ok(subs) => subs,
+        Err(e) => {
+            error!("failed to list push subscriptions for delivery: {e}");
+            return;
+        }
+    };
+
+    if subscriptions.is_empty() {
+        return;
+    }
+
+    let notification = PushNotification {
+        title: format!("Aegis Alert: {rule_name}"),
+        body: format!(
+            "{} {} ({})",
+            event.action_kind, event.decision, event.principal
+        ),
+        icon: None,
+        url: None,
+        tag: Some(rule_name.to_string()),
+    };
+
+    for sub in &subscriptions {
+        match push::deliver_push_notification(sub, &notification, vapid, rate_limiter) {
+            Ok(()) => {
+                if let Err(e) = store.update_last_used(&sub.id) {
+                    warn!("failed to update push subscription last_used: {e}");
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "push delivery to subscription {} failed: {e}",
+                    sub.id
+                );
+            }
+        }
+    }
 }
 
 /// Send a test webhook to verify connectivity for a specific rule.
@@ -271,6 +375,8 @@ mod tests {
             rules: vec![],
             config_name: "test".into(),
             db_path: ":memory:".into(),
+            push_db_path: None,
+            vapid_config: None,
         };
 
         let handle = std::thread::spawn(move || {

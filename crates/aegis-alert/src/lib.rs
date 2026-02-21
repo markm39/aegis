@@ -13,6 +13,7 @@ pub mod dispatcher;
 pub mod log;
 pub mod matcher;
 pub mod payload;
+pub mod push;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
