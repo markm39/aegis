@@ -1612,12 +1612,12 @@ impl FleetApp {
                                         report.high_risk_blockers
                                     )),
                                     Err(e) => self
-                                        .set_result(format!("failed to parse parity status: {e}")),
+                                        .set_result(format!("failed to parse compat status: {e}")),
                                 }
                             }
                         }
                         Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
-                        Err(e) => self.set_result(format!("failed to query parity status: {e}")),
+                        Err(e) => self.set_result(format!("failed to query compat status: {e}")),
                     }
                 }
             }
@@ -1635,13 +1635,14 @@ impl FleetApp {
                                         report.upstream_sha,
                                         report.impacted_feature_ids.len()
                                     )),
-                                    Err(e) => self
-                                        .set_result(format!("failed to parse parity diff: {e}")),
+                                    Err(e) => {
+                                        self.set_result(format!("failed to parse compat diff: {e}"))
+                                    }
                                 }
                             }
                         }
                         Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
-                        Err(e) => self.set_result(format!("failed to query parity diff: {e}")),
+                        Err(e) => self.set_result(format!("failed to query compat diff: {e}")),
                     }
                 }
             }
@@ -1667,12 +1668,12 @@ impl FleetApp {
                                         }
                                     }
                                     Err(e) => self
-                                        .set_result(format!("failed to parse parity verify: {e}")),
+                                        .set_result(format!("failed to parse compat verify: {e}")),
                                 }
                             }
                         }
                         Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
-                        Err(e) => self.set_result(format!("failed to verify parity: {e}")),
+                        Err(e) => self.set_result(format!("failed to verify compat: {e}")),
                     }
                 }
             }

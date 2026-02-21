@@ -892,7 +892,7 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Show secure-runtime parity status from internal matrix.
+/// Show secure-runtime compatibility status from internal matrix.
 pub fn parity_status() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
     if !client.is_running() {
@@ -974,7 +974,10 @@ pub fn parity_verify() -> anyhow::Result<()> {
         let report: ParityVerifyReport = serde_json::from_value(data)
             .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime verification: {e}"))?;
         println!("Secure-runtime verification:");
-        println!("  Result:            {}", if report.ok { "pass" } else { "fail" });
+        println!(
+            "  Result:            {}",
+            if report.ok { "pass" } else { "fail" }
+        );
         println!("  Checked features:  {}", report.checked_features);
         if report.violations.is_empty() {
             println!("  Violations:        none");

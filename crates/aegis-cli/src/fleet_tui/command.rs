@@ -208,7 +208,7 @@ const COMMAND_NAMES: &[&str] = &[
     "dashboard",
     "nudge",
     "orch",
-    "parity",
+    "compat",
     "pending",
     "pilot",
     "policy",
@@ -547,14 +547,25 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "unknown auth subcommand: {other}. Use: list, add, login, test"
             )),
         },
+        "compat" => match arg1 {
+            "" | "status" => Ok(Some(FleetCommand::ParityStatus)),
+            "diff" => Ok(Some(FleetCommand::ParityDiff)),
+            "verify" => Ok(Some(FleetCommand::ParityVerify)),
+            other => Err(format!(
+                "unknown compat subcommand: {other}. Use: status, diff, verify"
+            )),
+        },
         "parity" => match arg1 {
             "" | "status" => Ok(Some(FleetCommand::ParityStatus)),
             "diff" => Ok(Some(FleetCommand::ParityDiff)),
             "verify" => Ok(Some(FleetCommand::ParityVerify)),
             other => Err(format!(
-                "unknown parity subcommand: {other}. Use: status, diff, verify"
+                "unknown compat subcommand: {other}. Use: status, diff, verify"
             )),
         },
+        "compat-status" => Ok(Some(FleetCommand::ParityStatus)),
+        "compat-diff" => Ok(Some(FleetCommand::ParityDiff)),
+        "compat-verify" => Ok(Some(FleetCommand::ParityVerify)),
         "parity-status" => Ok(Some(FleetCommand::ParityStatus)),
         "parity-diff" => Ok(Some(FleetCommand::ParityDiff)),
         "parity-verify" => Ok(Some(FleetCommand::ParityVerify)),
@@ -777,7 +788,7 @@ const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
 /// Subcommands for `:auth`.
 const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
 const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
-const PARITY_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
+const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -912,8 +923,8 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
-        if cmd == "parity" {
-            return PARITY_SUBCOMMANDS
+        if cmd == "compat" {
+            return COMPAT_SUBCOMMANDS
                 .iter()
                 .filter(|s| s.starts_with(sub))
                 .map(|s| s.to_string())
@@ -1016,9 +1027,9 @@ pub fn help_text() -> &'static str {
      :nudge <agent> [msg]     Nudge stalled agent\n\
      :orch                    Orchestrator fleet overview\n\
      :pending <agent>         Show pending prompts\n\
-     :parity status           Secure-runtime status summary\n\
-     :parity diff             Latest secure-runtime delta impact\n\
-     :parity verify           Verify secure-runtime controls\n\
+     :compat status           Secure-runtime status summary\n\
+     :compat diff             Latest secure-runtime delta impact\n\
+     :compat verify           Verify secure-runtime controls\n\
      :capabilities <agent>    Runtime capability/mediation profile\n\
      :tool <agent> <json>     Execute computer-use ToolAction JSON\n\
      :tool-batch <a> <json> [n] Execute computer-use ToolAction batch\n\
@@ -1211,21 +1222,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_parity_commands() {
+    fn parse_compat_commands() {
+        assert_eq!(parse("compat").unwrap(), Some(FleetCommand::ParityStatus));
         assert_eq!(
-            parse("parity").unwrap(),
+            parse("compat status").unwrap(),
             Some(FleetCommand::ParityStatus)
         );
+        assert_eq!(
+            parse("compat diff").unwrap(),
+            Some(FleetCommand::ParityDiff)
+        );
+        assert_eq!(
+            parse("compat verify").unwrap(),
+            Some(FleetCommand::ParityVerify)
+        );
+        assert!(parse("compat nope").is_err());
+    }
+
+    #[test]
+    fn parse_parity_alias_commands() {
+        assert_eq!(parse("parity").unwrap(), Some(FleetCommand::ParityStatus));
         assert_eq!(
             parse("parity status").unwrap(),
             Some(FleetCommand::ParityStatus)
         );
-        assert_eq!(parse("parity diff").unwrap(), Some(FleetCommand::ParityDiff));
+        assert_eq!(
+            parse("parity diff").unwrap(),
+            Some(FleetCommand::ParityDiff)
+        );
         assert_eq!(
             parse("parity verify").unwrap(),
             Some(FleetCommand::ParityVerify)
         );
-        assert!(parse("parity nope").is_err());
     }
 
     #[test]
@@ -1318,6 +1346,15 @@ mod tests {
         let agents = vec![];
         let c = completions("", &agents);
         assert_eq!(c.len(), COMMAND_NAMES.len());
+        assert!(c.contains(&"compat".to_string()));
+        assert!(!c.contains(&"parity".to_string()));
+    }
+
+    #[test]
+    fn completions_compat_subcommands() {
+        let agents = vec![];
+        let c = completions("compat st", &agents);
+        assert!(c.contains(&"status".to_string()));
     }
 
     #[test]
