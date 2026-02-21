@@ -71,6 +71,7 @@ pub fn run() -> anyhow::Result<()> {
         cron: Default::default(),
         plugins: Default::default(),
         aliases: Default::default(),
+        lanes: vec![],
     };
 
     let config_path = daemon_config_path();
@@ -259,6 +260,7 @@ mod tests {
                 security_preset: None,
                 policy_dir: None,
                 isolation: None,
+                lane: None,
             }],
             channel: None,
             toolkit: Default::default(),
@@ -266,6 +268,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -303,6 +306,7 @@ mod tests {
                 security_preset: None,
                 policy_dir: None,
                 isolation: None,
+                lane: None,
             }],
             channel: Some(ChannelConfig::Telegram(TelegramConfig {
                 bot_token: "123:ABC".into(),
@@ -316,6 +320,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         };
 
         let toml_str = config.to_toml().unwrap();

@@ -418,6 +418,7 @@ mod tests {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         }
     }
 

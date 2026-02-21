@@ -67,6 +67,26 @@ pub struct DaemonConfig {
     /// Command aliases for the TUI command bar.
     #[serde(default)]
     pub aliases: std::collections::HashMap<String, AliasConfig>,
+    /// Named execution lanes with configurable concurrency limits.
+    #[serde(default)]
+    pub lanes: Vec<LaneConfig>,
+}
+
+/// Configuration for a named execution lane in daemon.toml.
+///
+/// Lanes partition concurrent agent execution. Each lane has a name and an
+/// optional concurrency cap. Agents assigned to a lane must acquire a slot
+/// before running; if the lane is full they are queued in priority order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LaneConfig {
+    /// Unique lane name (alphanumeric + dash/underscore, max 64 chars).
+    pub name: String,
+    /// Maximum concurrent agents in this lane (0 = unlimited).
+    #[serde(default)]
+    pub max_concurrent: usize,
+    /// Priority (higher = more important, 0-255).
+    #[serde(default)]
+    pub priority: u8,
 }
 
 /// Serializable alias configuration for persistence in daemon.toml.
@@ -337,6 +357,9 @@ pub struct AgentSlotConfig {
     /// OS-level isolation override for this agent. If not set, derived from security_preset.
     #[serde(default)]
     pub isolation: Option<IsolationConfig>,
+    /// Execution lane this agent belongs to. If not set, uses the "default" lane.
+    #[serde(default)]
+    pub lane: Option<String>,
 }
 
 /// Configuration for an agent acting as the fleet orchestrator.
@@ -588,6 +611,37 @@ impl std::fmt::Display for AgentStatus {
     }
 }
 
+/// Maximum number of execution lanes allowed.
+pub const MAX_LANES: usize = 100;
+
+/// Maximum length of a lane name.
+const MAX_LANE_NAME_LEN: usize = 64;
+
+/// Validate a lane name: alphanumeric + dash/underscore, max 64 chars, no
+/// path traversal. Returns an error message string on failure.
+pub fn validate_lane_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("lane name cannot be empty".into());
+    }
+    if name.len() > MAX_LANE_NAME_LEN {
+        return Err(format!(
+            "lane name exceeds {MAX_LANE_NAME_LEN} characters"
+        ));
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err("lane name must not contain path traversal sequences".into());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(
+            "lane name may only contain letters, digits, hyphens, and underscores".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Default daemon directory path.
 pub fn daemon_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
@@ -627,6 +681,30 @@ impl DaemonConfig {
             crate::validate_config_name(&agent.name).map_err(|e| {
                 crate::AegisError::DaemonError(format!("invalid agent name {:?}: {e}", agent.name))
             })?;
+            if let Some(ref lane) = agent.lane {
+                validate_lane_name(lane).map_err(|e| {
+                    crate::AegisError::DaemonError(format!(
+                        "invalid lane name {:?} on agent {:?}: {e}",
+                        lane, agent.name
+                    ))
+                })?;
+            }
+        }
+
+        if config.lanes.len() > MAX_LANES {
+            return Err(crate::AegisError::DaemonError(format!(
+                "too many lanes: {} (max {})",
+                config.lanes.len(),
+                MAX_LANES
+            )));
+        }
+        for lane in &config.lanes {
+            validate_lane_name(&lane.name).map_err(|e| {
+                crate::AegisError::DaemonError(format!(
+                    "invalid lane name {:?}: {e}",
+                    lane.name
+                ))
+            })?;
         }
 
         Ok(config)
@@ -657,6 +735,7 @@ mod tests {
             cron: CronConfig::default(),
             plugins: PluginConfig::default(),
             aliases: Default::default(),
+            lanes: vec![],
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {
@@ -677,6 +756,7 @@ mod tests {
                 security_preset: None,
                 policy_dir: None,
                 isolation: None,
+                lane: None,
             }],
         };
 

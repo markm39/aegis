@@ -75,6 +75,7 @@ pub fn init() -> anyhow::Result<()> {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         }],
         channel: None,
         toolkit: Default::default(),
@@ -82,6 +83,7 @@ pub fn init() -> anyhow::Result<()> {
         cron: Default::default(),
         plugins: Default::default(),
         aliases: Default::default(),
+        lanes: vec![],
     };
 
     let toml_str = example.to_toml()?;
@@ -140,6 +142,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         }],
         channel: None,
         toolkit: Default::default(),
@@ -147,6 +150,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         cron: Default::default(),
         plugins: Default::default(),
         aliases: Default::default(),
+        lanes: vec![],
     };
 
     let toml_str = example.to_toml()?;

@@ -652,6 +652,7 @@ impl OnboardApp {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         };
         self.completed_agents.push(config);
     }

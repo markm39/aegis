@@ -17,6 +17,7 @@ pub mod command_queue;
 pub mod commands;
 pub mod control;
 pub mod cron;
+pub mod execution_lanes;
 pub mod dashboard;
 pub mod embeddings;
 pub mod fleet;

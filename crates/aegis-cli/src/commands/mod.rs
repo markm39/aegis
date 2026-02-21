@@ -37,6 +37,7 @@ pub(crate) fn build_agent_slot(
         security_preset: None,
         policy_dir: None,
         isolation: None,
+        lane: None,
     }
 }
 

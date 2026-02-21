@@ -805,6 +805,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         }
     }
 
@@ -829,6 +830,7 @@ mod tests {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         }
     }
 
