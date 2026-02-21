@@ -19,6 +19,7 @@ pub mod cron;
 pub mod dashboard;
 pub mod embeddings;
 pub mod fleet;
+pub mod jobs;
 pub mod lifecycle;
 pub mod memory;
 pub mod memory_guard;
@@ -824,6 +825,8 @@ pub struct DaemonRuntime {
     scheduled_reply_mgr: crate::scheduled_reply::ScheduledReplyManager,
     /// Message router for inter-agent and cross-channel communication.
     message_router: crate::message_routing::MessageRouter,
+    /// Job tracker for agent long-running task lifecycle.
+    job_tracker: crate::jobs::JobTracker,
 }
 
 impl DaemonRuntime {
@@ -896,6 +899,7 @@ impl DaemonRuntime {
             command_router,
             scheduled_reply_mgr: crate::scheduled_reply::ScheduledReplyManager::new(),
             message_router: crate::message_routing::MessageRouter::new(),
+            job_tracker: crate::jobs::JobTracker::new(),
         }
     }
 
@@ -3618,6 +3622,133 @@ impl DaemonRuntime {
             // -- Configuration introspection (stub) --
             DaemonCommand::GetEffectiveConfig => {
                 DaemonResponse::error("effective config introspection not yet implemented")
+            }
+
+            // -- Agent job tracking commands --
+
+            DaemonCommand::CreateJob { agent, description } => {
+                // Validate agent exists in fleet
+                if self.fleet.slot(&agent).is_none() {
+                    return DaemonResponse::error(format!("unknown agent: {agent}"));
+                }
+
+                match self.job_tracker.create_job(&agent, &description) {
+                    Ok(job) => {
+                        info!(
+                            agent = %agent,
+                            job_id = %job.id,
+                            description = %job.description,
+                            "job created"
+                        );
+                        // Audit log the creation
+                        let action = Action::new(
+                            agent.clone(),
+                            ActionKind::ToolCall {
+                                tool: "daemon:create_job".to_string(),
+                                args: serde_json::json!({
+                                    "agent": agent,
+                                    "job_id": job.id.to_string(),
+                                    "description": job.description,
+                                }),
+                            },
+                        );
+                        let verdict = Verdict::allow(
+                            action.id,
+                            format!("job {} created for agent {}", job.id, agent),
+                            None,
+                        );
+                        self.append_audit_entry(&action, &verdict);
+                        match serde_json::to_value(&job) {
+                            Ok(data) => DaemonResponse::ok_with_data(
+                                format!("job {} created", job.id),
+                                data,
+                            ),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::ListJobs { agent } => {
+                let jobs: Vec<_> = match &agent {
+                    Some(name) => self.job_tracker.list_jobs(name).into_iter().cloned().collect(),
+                    None => self.job_tracker.list_all_jobs().into_iter().cloned().collect(),
+                };
+                match serde_json::to_value(&jobs) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} job(s)", jobs.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::JobStatus { job_id } => {
+                match self.job_tracker.get_job(job_id) {
+                    Some(job) => match serde_json::to_value(job) {
+                        Ok(data) => DaemonResponse::ok_with_data(
+                            format!("job {job_id}: {}", job.status),
+                            data,
+                        ),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    None => DaemonResponse::error(format!("job {job_id} not found")),
+                }
+            }
+
+            DaemonCommand::CancelJob { job_id } => {
+                match self.job_tracker.cancel_job(job_id) {
+                    Ok(job) => {
+                        let job = job.clone();
+                        info!(job_id = %job_id, agent = %job.agent, "job cancelled");
+                        let action = Action::new(
+                            job.agent.clone(),
+                            ActionKind::ToolCall {
+                                tool: "daemon:cancel_job".to_string(),
+                                args: serde_json::json!({
+                                    "agent": job.agent,
+                                    "job_id": job_id.to_string(),
+                                }),
+                            },
+                        );
+                        let verdict = Verdict::allow(
+                            action.id,
+                            format!("job {job_id} cancelled"),
+                            None,
+                        );
+                        self.append_audit_entry(&action, &verdict);
+                        match serde_json::to_value(&job) {
+                            Ok(data) => DaemonResponse::ok_with_data(
+                                format!("job {job_id} cancelled"),
+                                data,
+                            ),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            DaemonCommand::UpdateJobProgress { job_id, progress_pct } => {
+                match self.job_tracker.update_progress(job_id, progress_pct) {
+                    Ok(job) => match serde_json::to_value(job) {
+                        Ok(data) => DaemonResponse::ok_with_data(
+                            format!("job {job_id} progress: {progress_pct}%"),
+                            data,
+                        ),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+
+            // -- Push notification commands (stubs, added by another agent) --
+            DaemonCommand::RegisterPush { .. }
+            | DaemonCommand::RemovePush { .. }
+            | DaemonCommand::ListPush
+            | DaemonCommand::TestPush { .. } => {
+                DaemonResponse::error("push notification commands not yet wired to daemon")
             }
         }
     }

@@ -208,6 +208,20 @@ pub enum FleetCommand {
     ScheduleList,
     /// Manually trigger a scheduled auto-reply.
     ScheduleTrigger { name: String },
+    /// List jobs, optionally filtered by agent.
+    Jobs { agent: Option<String> },
+    /// Create a job for an agent.
+    JobCreate { agent: String, description: String },
+    /// Cancel a job by ID.
+    JobCancel { id: String },
+    /// Get the status of a job by ID.
+    JobStatusCmd { id: String },
+    /// List all registered push subscriptions.
+    PushList,
+    /// Remove a push subscription by ID.
+    PushRemove { id: String },
+    /// Send a test push notification to a subscription.
+    PushTest { id: String },
 }
 
 /// All known command names for completion.
@@ -236,6 +250,8 @@ const COMMAND_NAMES: &[&str] = &[
     "help",
     "hook",
     "init",
+    "job",
+    "jobs",
     "list",
     "log",
     "logs",
@@ -249,6 +265,7 @@ const COMMAND_NAMES: &[&str] = &[
     "pilot",
     "policy",
     "pop",
+    "push",
     "q",
     "quit",
     "remove",
@@ -886,6 +903,76 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }
             }
         }
+        "jobs" => {
+            let agent = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
+            Ok(Some(FleetCommand::Jobs { agent }))
+        }
+        "job" => match arg1 {
+            "create" => {
+                if arg2.is_empty() {
+                    return Err("usage: job create <agent> <description>".into());
+                }
+                match arg2.split_once(' ') {
+                    Some((agent, desc)) if !agent.is_empty() && !desc.is_empty() => {
+                        Ok(Some(FleetCommand::JobCreate {
+                            agent: agent.to_string(),
+                            description: desc.to_string(),
+                        }))
+                    }
+                    _ => Err("usage: job create <agent> <description>".into()),
+                }
+            }
+            "cancel" => {
+                if arg2.is_empty() {
+                    return Err("usage: job cancel <id>".into());
+                }
+                let id = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if id.is_empty() {
+                    return Err("usage: job cancel <id>".into());
+                }
+                Ok(Some(FleetCommand::JobCancel { id }))
+            }
+            "status" => {
+                if arg2.is_empty() {
+                    return Err("usage: job status <id>".into());
+                }
+                let id = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if id.is_empty() {
+                    return Err("usage: job status <id>".into());
+                }
+                Ok(Some(FleetCommand::JobStatusCmd { id }))
+            }
+            "" => Err("usage: job create|cancel|status".into()),
+            other => Err(format!(
+                "unknown job subcommand: {other}. Use: create, cancel, status"
+            )),
+        },
+        "push" => match arg1 {
+            "" | "list" => Ok(Some(FleetCommand::PushList)),
+            "remove" => {
+                if arg2.is_empty() {
+                    return Err("usage: push remove <id>".into());
+                }
+                let id = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if id.is_empty() {
+                    return Err("usage: push remove <id>".into());
+                }
+                Ok(Some(FleetCommand::PushRemove { id }))
+            }
+            "test" => {
+                if arg2.is_empty() {
+                    return Err("usage: push test <id>".into());
+                }
+                let id = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if id.is_empty() {
+                    return Err("usage: push test <id>".into());
+                }
+                Ok(Some(FleetCommand::PushTest { id }))
+            }
+            other => Err(format!(
+                "unknown push subcommand: {other}. Use: list, remove, test"
+            )),
+        },
         "schedule" => match arg1 {
             "" | "list" => Ok(Some(FleetCommand::ScheduleList)),
             "add" => {
@@ -966,6 +1053,10 @@ const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 const MATRIX_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 /// Subcommands for `:alias`.
 const ALIAS_SUBCOMMANDS: &[&str] = &["add", "list", "remove"];
+/// Subcommands for `:job`.
+const JOB_SUBCOMMANDS: &[&str] = &["cancel", "create", "status"];
+/// Subcommands for `:push`.
+const PUSH_SUBCOMMANDS: &[&str] = &["list", "remove", "test"];
 /// Subcommands for `:schedule`.
 const SCHEDULE_SUBCOMMANDS: &[&str] = &["add", "list", "remove", "trigger"];
 
@@ -1130,6 +1221,28 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "job" {
+            return JOB_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
+        if cmd == "jobs" {
+            // :jobs [agent] -- complete agent names
+            return agent_names
+                .iter()
+                .filter(|name| name.starts_with(sub))
+                .cloned()
+                .collect();
+        }
+        if cmd == "push" {
+            return PUSH_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
         if cmd == "schedule" {
             return SCHEDULE_SUBCOMMANDS
                 .iter()
@@ -1222,6 +1335,10 @@ pub fn help_text() -> &'static str {
      :help                    Show this help\n\
      :hook                    Install aegis hooks (CWD)\n\
      :init                    Create project aegis config\n\
+     :job create <a> <desc>   Create a job for agent\n\
+     :job cancel <id>         Cancel a job by ID\n\
+     :job status <id>         Get job status by ID\n\
+     :jobs [agent]            List jobs (optionally by agent)\n\
      :list                    List all aegis configs\n\
      :log                     Recent audit entries\n\
      :matrix status           Feature parity matrix summary\n\

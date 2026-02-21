@@ -2237,6 +2237,41 @@ impl FleetApp {
             FleetCommand::ScheduleTrigger { name } => {
                 self.send_and_show_result(DaemonCommand::ScheduleReplyTrigger { name });
             }
+            FleetCommand::Jobs { agent } => {
+                self.send_and_show_result(DaemonCommand::ListJobs { agent });
+            }
+            FleetCommand::JobCreate { agent, description } => {
+                self.send_and_show_result(DaemonCommand::CreateJob { agent, description });
+            }
+            FleetCommand::JobCancel { id } => {
+                match uuid::Uuid::parse_str(&id) {
+                    Ok(job_id) => {
+                        self.send_and_show_result(DaemonCommand::CancelJob { job_id });
+                    }
+                    Err(_) => {
+                        self.set_result(format!("invalid job ID: {id}"));
+                    }
+                }
+            }
+            FleetCommand::JobStatusCmd { id } => {
+                match uuid::Uuid::parse_str(&id) {
+                    Ok(job_id) => {
+                        self.send_and_show_result(DaemonCommand::JobStatus { job_id });
+                    }
+                    Err(_) => {
+                        self.set_result(format!("invalid job ID: {id}"));
+                    }
+                }
+            }
+            FleetCommand::PushList => {
+                self.send_and_show_result(DaemonCommand::ListPush);
+            }
+            FleetCommand::PushRemove { id } => {
+                self.send_and_show_result(DaemonCommand::RemovePush { id });
+            }
+            FleetCommand::PushTest { id } => {
+                self.send_and_show_result(DaemonCommand::TestPush { id });
+            }
         }
     }
 
