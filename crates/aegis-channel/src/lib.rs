@@ -17,6 +17,7 @@
 pub mod active_hours;
 pub mod auto_reply;
 pub mod channel;
+pub mod polls;
 pub mod discord;
 pub mod feishu;
 pub mod format;

@@ -222,6 +222,23 @@ pub enum FleetCommand {
     PushRemove { id: String },
     /// Send a test push notification to a subscription.
     PushTest { id: String },
+    /// Create a new poll.
+    PollCreate {
+        question: String,
+        options: Vec<String>,
+    },
+    /// Close a poll by ID.
+    PollClose { id: String },
+    /// Get results for a poll by ID.
+    PollResultsCmd { id: String },
+    /// List all active polls.
+    PollList,
+    /// Show command queue metrics (depth, active, completed, failed, DLQ).
+    QueueStatusCmd,
+    /// Flush all pending commands from the command queue.
+    QueueFlush,
+    /// Inspect dead letter queue contents.
+    QueueInspect,
 }
 
 /// All known command names for completion.
@@ -264,9 +281,12 @@ const COMMAND_NAMES: &[&str] = &[
     "pending",
     "pilot",
     "policy",
+    "poll",
+    "polls",
     "pop",
     "push",
     "q",
+    "queue",
     "quit",
     "remove",
     "report",
@@ -973,6 +993,93 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "unknown push subcommand: {other}. Use: list, remove, test"
             )),
         },
+        "queue" => match arg1 {
+            "" | "status" => Ok(Some(FleetCommand::QueueStatusCmd)),
+            "flush" => Ok(Some(FleetCommand::QueueFlush)),
+            "inspect" => Ok(Some(FleetCommand::QueueInspect)),
+            other => Err(format!(
+                "unknown queue subcommand: {other}. Use: status, flush, inspect"
+            )),
+        },
+        "polls" => Ok(Some(FleetCommand::PollList)),
+        "poll" => match arg1 {
+            "" => Err("usage: poll create|close|results".into()),
+            "create" => {
+                if arg2.is_empty() {
+                    return Err(
+                        "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
+                    );
+                }
+                // arg2 = "\"Question?\" opt1,opt2,opt3" or "Question? opt1,opt2,opt3"
+                // Try to extract a quoted question first, then fall back to splitting on last space-before-comma-list
+                let (question, opts_str) = if let Some(stripped) = arg2.strip_prefix('"') {
+                    // Find closing quote
+                    match stripped.find('"') {
+                        Some(end) => {
+                            let q = stripped[..end].to_string();
+                            let rest = stripped[end + 1..].trim();
+                            (q, rest.to_string())
+                        }
+                        None => {
+                            return Err(
+                                "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
+                            );
+                        }
+                    }
+                } else {
+                    // No quotes: split on last space before a comma-separated list
+                    // Heuristic: everything before last whitespace-delimited token containing a comma
+                    match arg2.rsplit_once(' ') {
+                        Some((q, opts)) if opts.contains(',') => {
+                            (q.to_string(), opts.to_string())
+                        }
+                        _ => {
+                            return Err(
+                                "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
+                            );
+                        }
+                    }
+                };
+                if question.is_empty() || opts_str.is_empty() {
+                    return Err(
+                        "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
+                    );
+                }
+                let options: Vec<String> = opts_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if options.len() < 2 {
+                    return Err("poll must have at least 2 comma-separated options".into());
+                }
+                Ok(Some(FleetCommand::PollCreate { question, options }))
+            }
+            "close" => {
+                if arg2.is_empty() {
+                    return Err("usage: poll close <id>".into());
+                }
+                let id = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if id.is_empty() {
+                    return Err("usage: poll close <id>".into());
+                }
+                Ok(Some(FleetCommand::PollClose { id }))
+            }
+            "results" => {
+                if arg2.is_empty() {
+                    return Err("usage: poll results <id>".into());
+                }
+                let id = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if id.is_empty() {
+                    return Err("usage: poll results <id>".into());
+                }
+                Ok(Some(FleetCommand::PollResultsCmd { id }))
+            }
+            "list" => Ok(Some(FleetCommand::PollList)),
+            other => Err(format!(
+                "unknown poll subcommand: {other}. Use: create, close, results"
+            )),
+        },
         "schedule" => match arg1 {
             "" | "list" => Ok(Some(FleetCommand::ScheduleList)),
             "add" => {
@@ -1057,6 +1164,10 @@ const ALIAS_SUBCOMMANDS: &[&str] = &["add", "list", "remove"];
 const JOB_SUBCOMMANDS: &[&str] = &["cancel", "create", "status"];
 /// Subcommands for `:push`.
 const PUSH_SUBCOMMANDS: &[&str] = &["list", "remove", "test"];
+/// Subcommands for `:queue`.
+const QUEUE_SUBCOMMANDS: &[&str] = &["flush", "inspect", "status"];
+/// Subcommands for `:poll`.
+const POLL_SUBCOMMANDS: &[&str] = &["close", "create", "results"];
 /// Subcommands for `:schedule`.
 const SCHEDULE_SUBCOMMANDS: &[&str] = &["add", "list", "remove", "trigger"];
 
@@ -1236,6 +1347,20 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .cloned()
                 .collect();
         }
+        if cmd == "queue" {
+            return QUEUE_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
+        if cmd == "poll" {
+            return POLL_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
         if cmd == "push" {
             return PUSH_SUBCOMMANDS
                 .iter()
@@ -1361,7 +1486,14 @@ pub fn help_text() -> &'static str {
      :browser-profile-stop <a> <sid> Stop managed browser profile\n\
      :pilot <cmd...>          Supervised agent in terminal\n\
      :policy                  Show policy info\n\
+     :poll create \"Q\" a,b,c  Create a poll with options\n\
+     :poll close <id>         Close a poll by ID\n\
+     :poll results <id>       Get poll results by ID\n\
+     :polls                   List active polls\n\
      :pop <agent>             Open agent in new terminal\n\
+     :queue status             Show command queue metrics\n\
+     :queue flush              Flush pending queue commands\n\
+     :queue inspect            Inspect dead letter queue\n\
      :push list               List push subscriptions\n\
      :push remove <id>        Remove push subscription\n\
      :push test <id>          Test push notification delivery\n\

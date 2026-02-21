@@ -2272,6 +2272,46 @@ impl FleetApp {
             FleetCommand::PushTest { id } => {
                 self.send_and_show_result(DaemonCommand::TestPush { id });
             }
+            FleetCommand::PollCreate { question, options } => {
+                self.send_and_show_result(DaemonCommand::CreatePoll {
+                    question,
+                    options,
+                    channel: "tui".into(),
+                    duration_secs: None,
+                });
+            }
+            FleetCommand::PollClose { id } => {
+                match uuid::Uuid::parse_str(&id) {
+                    Ok(poll_id) => {
+                        self.send_and_show_result(DaemonCommand::ClosePoll { poll_id });
+                    }
+                    Err(_) => {
+                        self.set_result(format!("invalid poll ID: {id}"));
+                    }
+                }
+            }
+            FleetCommand::PollResultsCmd { id } => {
+                match uuid::Uuid::parse_str(&id) {
+                    Ok(poll_id) => {
+                        self.send_and_show_result(DaemonCommand::PollResults { poll_id });
+                    }
+                    Err(_) => {
+                        self.set_result(format!("invalid poll ID: {id}"));
+                    }
+                }
+            }
+            FleetCommand::PollList => {
+                self.send_and_show_result(DaemonCommand::ListPolls);
+            }
+            FleetCommand::QueueStatusCmd => {
+                self.send_and_show_result(DaemonCommand::QueueStatus);
+            }
+            FleetCommand::QueueFlush => {
+                self.send_and_show_result(DaemonCommand::QueueFlush);
+            }
+            FleetCommand::QueueInspect => {
+                self.send_and_show_result(DaemonCommand::QueueInspect);
+            }
         }
     }
 
