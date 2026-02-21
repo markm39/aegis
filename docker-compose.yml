@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Aegis -- docker-compose deployment
+# ---------------------------------------------------------------------------
+# Usage:
+#   docker compose up -d          Start in background
+#   docker compose logs -f aegis  Follow logs
+#   docker compose down           Stop and remove
+#
+# Environment variables (set in .env or shell):
+#   AEGIS_HTTP_LISTEN   HTTP control server address   (default: 0.0.0.0:8080)
+#   AEGIS_API_KEY       Bearer token for HTTP auth    (default: empty/no auth)
+#   AEGIS_LOG_LEVEL     Tracing filter                (default: info)
+#
+# All config values can be overridden with AEGIS_* env vars.
+# Never put secrets directly in this file -- use .env or runtime injection.
+# ---------------------------------------------------------------------------
+
+services:
+  aegis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aegis
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"   # HTTP control API
+      - "9090:9090"   # Dashboard gateway
+
+    volumes:
+      # Persist config and state across container restarts.
+      # Mount host ~/.aegis or a named volume.
+      - ${AEGIS_DATA_DIR:-~/.aegis}:/home/aegis/.aegis
+
+    environment:
+      # Pass through all AEGIS_* variables from host environment / .env file.
+      - AEGIS_HTTP_LISTEN=${AEGIS_HTTP_LISTEN:-0.0.0.0:8080}
+      - AEGIS_API_KEY=${AEGIS_API_KEY:-}
+      - AEGIS_LOG_LEVEL=${AEGIS_LOG_LEVEL:-info}
+      # Add additional AEGIS_* overrides as needed, e.g.:
+      # - AEGIS_DASHBOARD_LISTEN=0.0.0.0:9090
+      # - AEGIS_TELEGRAM_BOT_TOKEN=<token>
+
+    # Security: container already runs as non-root (uid 1000).
+    # Optionally drop all capabilities and add back only what is needed.
+    security_opt:
+      - no-new-privileges:true

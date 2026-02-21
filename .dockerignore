@@ -1,0 +1,25 @@
+# Build artifacts
+target/
+
+# Git history (not needed in build context)
+.git/
+.gitignore
+
+# Local Aegis config and data (never bake into image)
+.aegis/
+
+# Documentation (except README)
+*.md
+!README.md
+
+# CI / editor artifacts
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Other tooling config
+.codex/
+.claude/
