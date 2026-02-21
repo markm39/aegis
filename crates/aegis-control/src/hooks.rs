@@ -540,6 +540,9 @@ pub struct HookManifest {
     /// Required capability permissions (informational, checked at install time).
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Workspace path this hook is scoped to (set at runtime, not from TOML).
+    #[serde(skip)]
+    pub workspace_path: Option<PathBuf>,
 }
 
 fn default_version() -> String {
@@ -604,6 +607,15 @@ pub struct HookStatus {
     pub run_count: u64,
 }
 
+/// Where a hook was loaded from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookSource {
+    /// Global hooks directory (`~/.aegis/hooks/`).
+    Global,
+    /// Workspace-local `.aegis/hooks/` directory.
+    Workspace(PathBuf),
+}
+
 /// A loaded hook with its manifest, resolved paths, and integrity hash.
 #[derive(Debug, Clone)]
 pub struct LoadedHook {
@@ -616,6 +628,8 @@ pub struct LoadedHook {
     pub script_hash: String,
     /// Runtime status.
     pub status: HookStatus,
+    /// Where this hook was loaded from.
+    pub source: HookSource,
 }
 
 /// In-memory registry of loaded user hooks.
@@ -746,6 +760,7 @@ impl HookRegistry {
                 error_count: 0,
                 run_count: 0,
             },
+            source: HookSource::Global,
         };
 
         self.hooks.insert(name.clone(), loaded);
@@ -849,8 +864,13 @@ impl HookRegistry {
         let hook_dir = hook.hook_dir.clone();
         let hook_name = hook.manifest.name.clone();
 
-        // Build restricted environment.
-        let env = build_restricted_env(&hook_name, &hook_dir);
+        // Build restricted environment (includes AEGIS_HOOK_WORKSPACE for workspace hooks).
+        let workspace_path = hook.manifest.workspace_path.clone();
+        let env = build_workspace_hook_env(
+            &hook_name,
+            &hook_dir,
+            workspace_path.as_deref(),
+        );
 
         let input_json = serde_json::to_string(input)
             .map_err(|e| format!("failed to serialize hook input: {e}"))?;
@@ -1122,6 +1142,279 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-scoped hooks
+// ---------------------------------------------------------------------------
+
+/// Compute the workspace hooks directory for a given working directory.
+///
+/// Returns `<working_dir>/.aegis/hooks/`.
+pub fn workspace_hooks_dir(working_dir: &Path) -> PathBuf {
+    working_dir.join(".aegis").join("hooks")
+}
+
+/// Validate that a workspace hooks directory is genuinely within the
+/// agent's working directory. Prevents path traversal attacks where
+/// symlinks or `..` segments could escape the workspace boundary.
+///
+/// Both paths are canonicalized before comparison. Returns an error
+/// string if validation fails.
+pub fn validate_workspace_hooks_dir(
+    hooks_dir: &Path,
+    working_dir: &Path,
+) -> Result<PathBuf, String> {
+    // The working directory must exist for canonicalize to succeed.
+    let canonical_working_dir = working_dir
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize working dir {}: {e}", working_dir.display()))?;
+
+    // The hooks dir may not exist yet; validate the parent chain.
+    let canonical_hooks_dir = hooks_dir
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize hooks dir {}: {e}", hooks_dir.display()))?;
+
+    if !canonical_hooks_dir.starts_with(&canonical_working_dir) {
+        return Err(format!(
+            "workspace hooks dir {} is not within working dir {}",
+            canonical_hooks_dir.display(),
+            canonical_working_dir.display()
+        ));
+    }
+
+    Ok(canonical_hooks_dir)
+}
+
+/// Load hooks from a workspace `.aegis/hooks/` directory.
+///
+/// Returns a Vec of loaded hooks, each tagged with `HookSource::Workspace`.
+/// All hooks undergo the same validation as global hooks: entry-point path
+/// traversal checks and SHA-256 integrity hashing.
+///
+/// The `workspace_path` field on each hook's manifest is set to the
+/// canonicalized working directory.
+pub fn load_workspace_hooks(working_dir: &Path) -> Result<Vec<LoadedHook>, String> {
+    let hooks_dir = workspace_hooks_dir(working_dir);
+    if !hooks_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    // Security: validate the hooks dir is actually within the working dir.
+    let canonical_hooks_dir = validate_workspace_hooks_dir(&hooks_dir, working_dir)?;
+
+    let canonical_working_dir = working_dir
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize working dir: {e}"))?;
+
+    let entries = std::fs::read_dir(&canonical_hooks_dir)
+        .map_err(|e| format!("failed to read workspace hooks directory: {e}"))?;
+
+    let mut loaded = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("failed to read directory entry: {e}"))?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let manifest_path = path.join("manifest.toml");
+        if !manifest_path.exists() {
+            tracing::debug!(
+                dir = %path.display(),
+                "skipping workspace hook directory without manifest.toml"
+            );
+            continue;
+        }
+
+        match load_workspace_hook(&path, &manifest_path, &canonical_working_dir) {
+            Ok(hook) => {
+                tracing::info!(
+                    hook = %hook.manifest.name,
+                    workspace = %canonical_working_dir.display(),
+                    "loaded workspace hook"
+                );
+                loaded.push(hook);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    dir = %path.display(),
+                    error = %e,
+                    "failed to load workspace hook"
+                );
+            }
+        }
+    }
+
+    Ok(loaded)
+}
+
+/// Load a single workspace hook from its directory and manifest.
+fn load_workspace_hook(
+    hook_dir: &Path,
+    manifest_path: &Path,
+    workspace_path: &Path,
+) -> Result<LoadedHook, String> {
+    let content = std::fs::read_to_string(manifest_path)
+        .map_err(|e| format!("failed to read manifest: {e}"))?;
+    let mut manifest: HookManifest = toml::from_str(&content)
+        .map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
+
+    // Set workspace path on the manifest.
+    manifest.workspace_path = Some(workspace_path.to_path_buf());
+
+    // Validate entry_point: must not contain path traversal components.
+    validate_entry_point(&manifest.entry_point)?;
+
+    let entry_point_abs = hook_dir.join(&manifest.entry_point);
+
+    // Resolve to canonical path and verify it stays within the hook directory.
+    let canonical_hook_dir = hook_dir
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize hook dir: {e}"))?;
+    let canonical_entry = entry_point_abs
+        .canonicalize()
+        .map_err(|e| format!("entry point does not exist or cannot be resolved: {e}"))?;
+
+    if !canonical_entry.starts_with(&canonical_hook_dir) {
+        return Err(format!(
+            "entry point escapes hook directory: {} is not under {}",
+            canonical_entry.display(),
+            canonical_hook_dir.display()
+        ));
+    }
+
+    // Compute SHA-256 of the script.
+    let script_bytes = std::fs::read(&canonical_entry)
+        .map_err(|e| format!("failed to read entry point script: {e}"))?;
+    let script_hash = compute_sha256(&script_bytes);
+
+    let name = manifest.name.clone();
+    Ok(LoadedHook {
+        manifest,
+        hook_dir: hook_dir.to_path_buf(),
+        entry_point_abs: canonical_entry,
+        script_hash,
+        status: HookStatus {
+            name: name.clone(),
+            state: HookState::Installed,
+            last_run: None,
+            last_success: false,
+            error_count: 0,
+            run_count: 0,
+        },
+        source: HookSource::Workspace(workspace_path.to_path_buf()),
+    })
+}
+
+/// Merge global and workspace hooks into a single list.
+///
+/// Merge semantics:
+/// - Workspace hooks override global hooks with the same name (unless reserved).
+/// - Workspace hooks can add new hooks not present globally.
+/// - Global hooks not overridden are preserved.
+/// - The result is ordered: workspace-specific hooks first, then remaining globals.
+/// - Reserved hook names cannot be overridden by workspace hooks; an attempt
+///   to do so is logged as a warning and the workspace hook is dropped.
+pub fn merge_hooks(
+    global: Vec<LoadedHook>,
+    workspace: Vec<LoadedHook>,
+    reserved_names: &[String],
+) -> Vec<LoadedHook> {
+    let global_names: std::collections::HashSet<String> =
+        global.iter().map(|h| h.manifest.name.clone()).collect();
+
+    let mut result: Vec<LoadedHook> = Vec::new();
+    let mut overridden: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Add workspace hooks first.
+    for hook in workspace {
+        if reserved_names.contains(&hook.manifest.name) {
+            tracing::warn!(
+                hook = %hook.manifest.name,
+                "workspace hook cannot override reserved hook name; skipping"
+            );
+            continue;
+        }
+        if global_names.contains(&hook.manifest.name) {
+            tracing::info!(
+                hook = %hook.manifest.name,
+                "workspace hook overrides global hook"
+            );
+            overridden.insert(hook.manifest.name.clone());
+        }
+        result.push(hook);
+    }
+
+    // Add remaining global hooks that were not overridden.
+    for hook in global {
+        if !overridden.contains(&hook.manifest.name) {
+            result.push(hook);
+        }
+    }
+
+    result
+}
+
+/// Check whether a loaded hook should activate for a given agent working directory.
+///
+/// - Global hooks always match.
+/// - Workspace hooks only match if the agent's working directory is within
+///   (or equal to) the workspace that the hook was loaded from.
+pub fn matches_workspace(hook: &LoadedHook, agent_working_dir: &Path) -> bool {
+    match &hook.source {
+        HookSource::Global => true,
+        HookSource::Workspace(workspace_path) => {
+            // Try canonicalizing both for accurate comparison.
+            let canonical_agent = agent_working_dir.canonicalize().unwrap_or_else(|_| {
+                agent_working_dir.to_path_buf()
+            });
+            let canonical_workspace = workspace_path.canonicalize().unwrap_or_else(|_| {
+                workspace_path.to_path_buf()
+            });
+            canonical_agent.starts_with(&canonical_workspace)
+        }
+    }
+}
+
+/// Sanitize a workspace path string for use as an environment variable value.
+///
+/// Rejects null bytes and control characters (except space). Returns the
+/// sanitized string or an error if the path contains forbidden characters.
+pub fn sanitize_workspace_env(path: &Path) -> Result<String, String> {
+    let s = path.to_string_lossy();
+    if s.contains('\0') {
+        return Err("workspace path contains null bytes".to_string());
+    }
+    // Reject control characters (anything below 0x20 except nothing --
+    // we do not allow any control chars including \t \n in paths).
+    if s.chars().any(|c| c.is_control()) {
+        return Err("workspace path contains control characters".to_string());
+    }
+    Ok(s.to_string())
+}
+
+/// Build a restricted environment for workspace hook execution.
+///
+/// Extends the base restricted environment with AEGIS_HOOK_WORKSPACE
+/// pointing to the sanitized workspace path.
+pub fn build_workspace_hook_env(
+    hook_name: &str,
+    hook_dir: &Path,
+    workspace_path: Option<&Path>,
+) -> Vec<(String, String)> {
+    let mut env = build_restricted_env(hook_name, hook_dir);
+    if let Some(ws) = workspace_path {
+        if let Ok(sanitized) = sanitize_workspace_env(ws) {
+            env.push(("AEGIS_HOOK_WORKSPACE".to_string(), sanitized));
+        } else {
+            tracing::warn!(
+                path = %ws.display(),
+                "workspace path failed sanitization; AEGIS_HOOK_WORKSPACE not set"
+            );
+        }
+    }
+    env
 }
 
 #[cfg(test)]
@@ -1917,5 +2210,438 @@ entry_point = "run.sh"
         // Must contain AEGIS_HOOK_NAME and AEGIS_HOOK_DIR.
         assert!(keys.contains(&"AEGIS_HOOK_NAME"));
         assert!(keys.contains(&"AEGIS_HOOK_DIR"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace hook tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a hook directory with manifest.toml and a script inside
+    /// a workspace `.aegis/hooks/` structure.
+    fn create_workspace_hook(
+        working_dir: &Path,
+        name: &str,
+        trigger: &str,
+        script_content: &str,
+    ) -> PathBuf {
+        let hooks_dir = working_dir.join(".aegis").join("hooks");
+        create_test_hook(&hooks_dir, name, trigger, script_content)
+    }
+
+    #[test]
+    fn test_workspace_hooks_discovered() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let working_dir = tmpdir.path();
+
+        create_workspace_hook(
+            working_dir,
+            "ws-hook-a",
+            "pre_tool_use",
+            "#!/bin/sh\necho '{\"action\":\"allow\"}'",
+        );
+        create_workspace_hook(
+            working_dir,
+            "ws-hook-b",
+            "on_exit",
+            "#!/bin/sh\necho '{\"action\":\"allow\"}'",
+        );
+
+        let hooks = load_workspace_hooks(working_dir).expect("should load workspace hooks");
+        assert_eq!(hooks.len(), 2);
+
+        let names: Vec<&str> = hooks.iter().map(|h| h.manifest.name.as_str()).collect();
+        assert!(names.contains(&"ws-hook-a"));
+        assert!(names.contains(&"ws-hook-b"));
+
+        // All should be tagged as workspace hooks.
+        for hook in &hooks {
+            assert!(
+                matches!(&hook.source, HookSource::Workspace(_)),
+                "hook should have workspace source"
+            );
+        }
+
+        // workspace_path should be set on manifests.
+        for hook in &hooks {
+            assert!(
+                hook.manifest.workspace_path.is_some(),
+                "workspace_path should be set"
+            );
+        }
+    }
+
+    #[test]
+    fn test_workspace_hooks_override_global() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let global_hooks_dir = tmpdir.path().join("global_hooks");
+        let working_dir = tmpdir.path().join("workspace");
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        // Create a global hook named "shared-hook".
+        create_test_hook(
+            &global_hooks_dir,
+            "shared-hook",
+            "pre_tool_use",
+            "#!/bin/sh\necho '{\"action\":\"allow\",\"message\":\"global\"}'",
+        );
+
+        // Create a workspace hook with the same name.
+        create_workspace_hook(
+            &working_dir,
+            "shared-hook",
+            "pre_tool_use",
+            "#!/bin/sh\necho '{\"action\":\"block\",\"message\":\"workspace\"}'",
+        );
+
+        // Load both.
+        let mut global_registry = HookRegistry::new(global_hooks_dir);
+        global_registry.load_all().expect("load global");
+        let global: Vec<LoadedHook> = global_registry.hooks.into_values().collect();
+
+        let workspace = load_workspace_hooks(&working_dir).expect("load workspace");
+
+        let merged = merge_hooks(global, workspace, &[]);
+        assert_eq!(merged.len(), 1, "should have one merged hook, not two");
+
+        let hook = &merged[0];
+        assert!(
+            matches!(&hook.source, HookSource::Workspace(_)),
+            "merged hook should be the workspace version"
+        );
+    }
+
+    #[test]
+    fn test_workspace_scope_respects_working_dir() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let workspace_a = tmpdir.path().join("workspace_a");
+        let workspace_b = tmpdir.path().join("workspace_b");
+        std::fs::create_dir_all(&workspace_a).unwrap();
+        std::fs::create_dir_all(&workspace_b).unwrap();
+
+        // Create a hook in workspace_a.
+        create_workspace_hook(
+            &workspace_a,
+            "ws-a-hook",
+            "pre_tool_use",
+            "#!/bin/sh\ntrue",
+        );
+
+        let hooks = load_workspace_hooks(&workspace_a).expect("load");
+        assert_eq!(hooks.len(), 1);
+
+        let hook = &hooks[0];
+
+        // Should match an agent working in workspace_a.
+        assert!(matches_workspace(hook, &workspace_a));
+
+        // Should match an agent working in a subdirectory of workspace_a.
+        let subdir = workspace_a.join("subproject");
+        std::fs::create_dir_all(&subdir).unwrap();
+        assert!(matches_workspace(hook, &subdir));
+
+        // Should NOT match an agent working in workspace_b.
+        assert!(!matches_workspace(hook, &workspace_b));
+    }
+
+    #[test]
+    fn test_workspace_hooks_still_security_scanned() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let working_dir = tmpdir.path();
+
+        // Create a workspace hook.
+        create_workspace_hook(
+            working_dir,
+            "secure-hook",
+            "pre_tool_use",
+            "#!/bin/sh\necho '{\"action\":\"allow\"}'",
+        );
+
+        let hooks = load_workspace_hooks(working_dir).expect("load");
+        assert_eq!(hooks.len(), 1);
+
+        // Verify SHA-256 hash is computed.
+        let hook = &hooks[0];
+        assert!(
+            !hook.script_hash.is_empty(),
+            "SHA-256 hash should be computed"
+        );
+
+        // Verify the hash is correct.
+        let script_path = hook.entry_point_abs.clone();
+        let script_bytes = std::fs::read(&script_path).unwrap();
+        let expected_hash = compute_sha256(&script_bytes);
+        assert_eq!(hook.script_hash, expected_hash);
+    }
+
+    #[test]
+    fn test_merge_preserves_global_only_hooks() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let global_hooks_dir = tmpdir.path().join("global_hooks");
+        let working_dir = tmpdir.path().join("workspace");
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        // Create two global hooks.
+        create_test_hook(
+            &global_hooks_dir,
+            "global-only",
+            "pre_tool_use",
+            "#!/bin/sh\ntrue",
+        );
+        create_test_hook(
+            &global_hooks_dir,
+            "shared",
+            "on_exit",
+            "#!/bin/sh\ntrue",
+        );
+
+        // Create one workspace hook that overrides "shared".
+        create_workspace_hook(
+            &working_dir,
+            "shared",
+            "on_exit",
+            "#!/bin/sh\ntrue",
+        );
+
+        let mut global_registry = HookRegistry::new(global_hooks_dir);
+        global_registry.load_all().expect("load global");
+        let global: Vec<LoadedHook> = global_registry.hooks.into_values().collect();
+
+        let workspace = load_workspace_hooks(&working_dir).expect("load workspace");
+
+        let merged = merge_hooks(global, workspace, &[]);
+        assert_eq!(merged.len(), 2, "global-only + overridden shared = 2");
+
+        let names: Vec<&str> = merged.iter().map(|h| h.manifest.name.as_str()).collect();
+        assert!(names.contains(&"global-only"));
+        assert!(names.contains(&"shared"));
+
+        // The "global-only" hook should have Global source.
+        let global_only = merged.iter().find(|h| h.manifest.name == "global-only").unwrap();
+        assert_eq!(global_only.source, HookSource::Global);
+    }
+
+    #[test]
+    fn test_merge_adds_workspace_only_hooks() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let global_hooks_dir = tmpdir.path().join("global_hooks");
+        let working_dir = tmpdir.path().join("workspace");
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        // Create one global hook.
+        create_test_hook(
+            &global_hooks_dir,
+            "global-hook",
+            "pre_tool_use",
+            "#!/bin/sh\ntrue",
+        );
+
+        // Create a workspace-only hook (no global counterpart).
+        create_workspace_hook(
+            &working_dir,
+            "ws-only-hook",
+            "on_stall",
+            "#!/bin/sh\ntrue",
+        );
+
+        let mut global_registry = HookRegistry::new(global_hooks_dir);
+        global_registry.load_all().expect("load global");
+        let global: Vec<LoadedHook> = global_registry.hooks.into_values().collect();
+
+        let workspace = load_workspace_hooks(&working_dir).expect("load workspace");
+
+        let merged = merge_hooks(global, workspace, &[]);
+        assert_eq!(merged.len(), 2, "global + workspace-only = 2");
+
+        let names: Vec<&str> = merged.iter().map(|h| h.manifest.name.as_str()).collect();
+        assert!(names.contains(&"global-hook"));
+        assert!(names.contains(&"ws-only-hook"));
+
+        // Workspace-only hook should appear first in the result.
+        assert_eq!(merged[0].manifest.name, "ws-only-hook");
+    }
+
+    #[test]
+    fn test_workspace_hooks_path_traversal() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let working_dir = tmpdir.path().join("workspace");
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        // Create a hooks directory that tries to escape via symlink.
+        let evil_dir = tmpdir.path().join("evil_hooks");
+        std::fs::create_dir_all(&evil_dir).unwrap();
+
+        let workspace_aegis = working_dir.join(".aegis");
+        std::fs::create_dir_all(&workspace_aegis).unwrap();
+
+        // Create a symlink: workspace/.aegis/hooks -> ../../evil_hooks
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&evil_dir, workspace_aegis.join("hooks")).unwrap();
+        }
+
+        // validate_workspace_hooks_dir should reject this.
+        #[cfg(unix)]
+        {
+            let result = validate_workspace_hooks_dir(
+                &workspace_aegis.join("hooks"),
+                &working_dir,
+            );
+            assert!(result.is_err(), "symlink escaping workspace should be rejected");
+            let err = result.unwrap_err();
+            assert!(
+                err.contains("not within working dir"),
+                "error should mention containment: {err}"
+            );
+        }
+
+        // Also test that the entry point path traversal within a workspace hook is rejected.
+        let hooks_dir_real = working_dir.join(".aegis").join("hooks_real");
+        std::fs::create_dir_all(&hooks_dir_real).unwrap();
+        let hook_dir = hooks_dir_real.join("evil-hook");
+        std::fs::create_dir_all(&hook_dir).unwrap();
+        let manifest = r#"
+name = "evil-hook"
+trigger = "pre_tool_use"
+entry_point = "../../../etc/passwd"
+"#;
+        std::fs::write(hook_dir.join("manifest.toml"), manifest).unwrap();
+        std::fs::write(hook_dir.join("hook.sh"), "#!/bin/sh").unwrap();
+
+        // The entry-point validation should catch the ../ traversal.
+        let result = load_workspace_hook(
+            &hook_dir,
+            &hook_dir.join("manifest.toml"),
+            &working_dir,
+        );
+        assert!(result.is_err(), "path traversal in entry point should be rejected");
+    }
+
+    #[test]
+    fn test_reserved_hook_names_cannot_be_overridden() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let global_hooks_dir = tmpdir.path().join("global_hooks");
+        let working_dir = tmpdir.path().join("workspace");
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        // Create a global hook named "system-audit" (reserved).
+        create_test_hook(
+            &global_hooks_dir,
+            "system-audit",
+            "post_tool_use",
+            "#!/bin/sh\ntrue",
+        );
+
+        // Create a workspace hook that tries to override "system-audit".
+        create_workspace_hook(
+            &working_dir,
+            "system-audit",
+            "post_tool_use",
+            "#!/bin/sh\necho HACKED",
+        );
+
+        let mut global_registry = HookRegistry::new(global_hooks_dir);
+        global_registry.load_all().expect("load global");
+        let global: Vec<LoadedHook> = global_registry.hooks.into_values().collect();
+
+        let workspace = load_workspace_hooks(&working_dir).expect("load workspace");
+
+        let reserved = vec!["system-audit".to_string()];
+        let merged = merge_hooks(global, workspace, &reserved);
+
+        // Should have exactly one hook: the global one.
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].manifest.name, "system-audit");
+        assert_eq!(merged[0].source, HookSource::Global);
+    }
+
+    #[test]
+    fn test_workspace_hook_env_includes_workspace() {
+        let env = build_workspace_hook_env(
+            "test-hook",
+            Path::new("/tmp/hooks/test"),
+            Some(Path::new("/home/user/project")),
+        );
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+
+        assert!(keys.contains(&"AEGIS_HOOK_WORKSPACE"));
+
+        let ws_val = env
+            .iter()
+            .find(|(k, _)| k == "AEGIS_HOOK_WORKSPACE")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(ws_val, "/home/user/project");
+    }
+
+    #[test]
+    fn test_workspace_hook_env_without_workspace() {
+        let env = build_workspace_hook_env(
+            "test-hook",
+            Path::new("/tmp/hooks/test"),
+            None,
+        );
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(!keys.contains(&"AEGIS_HOOK_WORKSPACE"));
+    }
+
+    #[test]
+    fn test_sanitize_workspace_env_rejects_null() {
+        let path = PathBuf::from("/home/user/project\0evil");
+        assert!(sanitize_workspace_env(&path).is_err());
+    }
+
+    #[test]
+    fn test_sanitize_workspace_env_rejects_control_chars() {
+        let path = PathBuf::from("/home/user/project\x07bell");
+        assert!(sanitize_workspace_env(&path).is_err());
+    }
+
+    #[test]
+    fn test_sanitize_workspace_env_accepts_valid_path() {
+        let path = PathBuf::from("/home/user/my project/src");
+        let result = sanitize_workspace_env(&path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/home/user/my project/src");
+    }
+
+    #[test]
+    fn test_workspace_hooks_empty_when_no_dir() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        // No .aegis/hooks/ directory exists.
+        let hooks = load_workspace_hooks(tmpdir.path()).expect("should return empty");
+        assert!(hooks.is_empty());
+    }
+
+    #[test]
+    fn test_global_hook_matches_any_workspace() {
+        let hook = LoadedHook {
+            manifest: HookManifest {
+                name: "global-test".to_string(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+                trigger: HookTrigger::PreToolUse,
+                entry_point: PathBuf::from("hook.sh"),
+                timeout_secs: 30,
+                permissions: vec![],
+                workspace_path: None,
+            },
+            hook_dir: PathBuf::from("/tmp/hooks/global-test"),
+            entry_point_abs: PathBuf::from("/tmp/hooks/global-test/hook.sh"),
+            script_hash: "abc123".to_string(),
+            status: HookStatus {
+                name: "global-test".to_string(),
+                state: HookState::Installed,
+                last_run: None,
+                last_success: false,
+                error_count: 0,
+                run_count: 0,
+            },
+            source: HookSource::Global,
+        };
+
+        // Global hooks match any directory.
+        assert!(matches_workspace(&hook, Path::new("/home/user/project-a")));
+        assert!(matches_workspace(&hook, Path::new("/home/user/project-b")));
+        assert!(matches_workspace(&hook, Path::new("/tmp/random")));
     }
 }
