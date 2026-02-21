@@ -15,7 +15,7 @@ pub mod manifest;
 pub mod registry;
 pub mod scanner;
 
-pub use discovery::discover_skills;
+pub use discovery::{bundled_skill_names, discover_bundled_skills, discover_skills};
 pub use lifecycle::{SkillInstance, SkillState};
 pub use manifest::{parse_manifest, parse_manifest_file, validate_manifest, SkillManifest};
 pub use registry::SkillRegistry;

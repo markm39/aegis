@@ -1,0 +1,8 @@
+name = "code-review"
+version = "0.1.0"
+description = "Code review and quality analysis with linting, complexity checks, and best-practice suggestions"
+author = "Aegis Team"
+permissions = ["action::read", "action::process"]
+entry_point = "review.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

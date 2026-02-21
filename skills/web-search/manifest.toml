@@ -1,0 +1,8 @@
+name = "web-search"
+version = "0.1.0"
+description = "Web search via DuckDuckGo and Google, returning structured results with titles, URLs, and snippets"
+author = "Aegis Team"
+permissions = ["action::network"]
+entry_point = "search.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

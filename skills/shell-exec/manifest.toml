@@ -1,0 +1,8 @@
+name = "shell-exec"
+version = "0.1.0"
+description = "Shell command execution with safety checks, timeout enforcement, and sandboxed environments"
+author = "Aegis Team"
+permissions = ["action::process", "action::read", "action::write"]
+entry_point = "shell-exec.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

@@ -1,0 +1,8 @@
+name = "calculator"
+version = "0.1.0"
+description = "Mathematical expression evaluation and unit conversions with support for common scientific functions"
+author = "Aegis Team"
+permissions = []
+entry_point = "calculator.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

@@ -1,0 +1,8 @@
+name = "system-info"
+version = "0.1.0"
+description = "System information including OS details, CPU usage, memory statistics, disk usage, and process listing"
+author = "Aegis Team"
+permissions = ["action::read", "action::process"]
+entry_point = "system-info.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

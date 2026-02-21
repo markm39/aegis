@@ -1,0 +1,8 @@
+name = "file-manager"
+version = "0.1.0"
+description = "File operations including read, write, copy, move, and delete with safety checks and permission enforcement"
+author = "Aegis Team"
+permissions = ["action::read", "action::write", "action::filesystem"]
+entry_point = "file-manager.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

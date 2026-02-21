@@ -1,0 +1,8 @@
+name = "git-operations"
+version = "0.1.0"
+description = "Git commands including status, commit, push, pull, diff, log, and branch management"
+author = "Aegis Team"
+permissions = ["action::read", "action::write", "action::process"]
+entry_point = "git-ops.sh"
+dependencies = []
+min_aegis_version = "0.1.0"

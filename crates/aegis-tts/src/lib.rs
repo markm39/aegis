@@ -18,7 +18,9 @@
 //! - Rate limiting prevents abuse and runaway costs.
 //! - Every TTS request is logged with a text hash (not raw text) for auditability.
 
+pub mod auto;
 pub mod catalog;
+pub mod edge;
 pub mod elevenlabs;
 pub mod manager;
 pub mod openai;

@@ -118,6 +118,79 @@ fn validate_symlink_target(link: &Path, skills_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Names of the core bundled skills shipped with Aegis.
+const BUNDLED_SKILL_NAMES: &[&str] = &[
+    "calculator",
+    "code-review",
+    "file-manager",
+    "git-operations",
+    "http-client",
+    "json-tools",
+    "shell-exec",
+    "system-info",
+    "text-transform",
+    "web-search",
+];
+
+/// Discover skills bundled with the Aegis installation.
+///
+/// Looks for a `skills/` directory relative to the running binary, then
+/// falls back to common install locations. Returns all valid bundled skill
+/// manifests found, skipping any that fail to parse or validate.
+///
+/// Search order:
+/// 1. `<binary_dir>/../skills/` (standard install layout)
+/// 2. `<binary_dir>/skills/` (dev/local builds)
+/// 3. Current working directory `./skills/`
+pub fn discover_bundled_skills() -> Result<Vec<SkillInstance>> {
+    let candidates = bundled_skills_candidates();
+
+    for candidate in &candidates {
+        if candidate.is_dir() {
+            let instances = discover_skills(candidate)?;
+            if !instances.is_empty() {
+                return Ok(instances);
+            }
+        }
+    }
+
+    bail!(
+        "no bundled skills directory found; searched: {}",
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Return the list of expected bundled skill names.
+pub fn bundled_skill_names() -> &'static [&'static str] {
+    BUNDLED_SKILL_NAMES
+}
+
+/// Build the list of candidate directories to search for bundled skills.
+fn bundled_skills_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+
+    // Relative to the binary location.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // Standard install: <prefix>/bin/aegis -> <prefix>/skills/
+            candidates.push(exe_dir.join("../skills"));
+            // Dev build: target/debug/aegis -> skills/ next to binary
+            candidates.push(exe_dir.join("skills"));
+        }
+    }
+
+    // Relative to the current working directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("skills"));
+    }
+
+    candidates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +270,80 @@ entry_point = "run.sh"
         let skills = discover_skills(tmp.path()).unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].manifest.name, "has-manifest");
+    }
+
+    #[test]
+    fn test_bundled_skill_names_list() {
+        let names = bundled_skill_names();
+        assert_eq!(names.len(), 10);
+        assert!(names.contains(&"calculator"));
+        assert!(names.contains(&"web-search"));
+        assert!(names.contains(&"file-manager"));
+        assert!(names.contains(&"git-operations"));
+        assert!(names.contains(&"code-review"));
+        assert!(names.contains(&"shell-exec"));
+        assert!(names.contains(&"http-client"));
+        assert!(names.contains(&"json-tools"));
+        assert!(names.contains(&"text-transform"));
+        assert!(names.contains(&"system-info"));
+    }
+
+    #[test]
+    fn test_discover_bundled_skills_from_dir() {
+        // Build a temporary skills directory matching bundled layout.
+        let tmp = TempDir::new().unwrap();
+        for name in bundled_skill_names() {
+            write_manifest(tmp.path(), name);
+        }
+
+        let skills = discover_skills(tmp.path()).unwrap();
+        assert_eq!(skills.len(), 10, "should discover all 10 bundled skills");
+
+        let mut names: Vec<&str> = skills.iter().map(|s| s.manifest.name.as_str()).collect();
+        names.sort();
+        let mut expected: Vec<&str> = bundled_skill_names().to_vec();
+        expected.sort();
+        assert_eq!(names, expected);
+    }
+
+    /// Parse every bundled manifest.toml shipped in the project's skills/ directory.
+    /// This test verifies that the actual files on disk are valid.
+    #[test]
+    fn test_bundled_manifests_parse_and_validate() {
+        // Walk up from the test binary to find the project root skills/ dir.
+        let project_skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()  // crates/
+            .and_then(|p| p.parent())  // project root
+            .map(|p| p.join("skills"));
+
+        let skills_dir = match project_skills_dir {
+            Some(ref p) if p.is_dir() => p.as_path(),
+            _ => {
+                eprintln!("skipping test: project skills/ directory not found");
+                return;
+            }
+        };
+
+        let skills = discover_skills(skills_dir).unwrap();
+        assert_eq!(
+            skills.len(),
+            10,
+            "expected 10 bundled skills in {}, found {}",
+            skills_dir.display(),
+            skills.len()
+        );
+
+        // Verify each manifest validates.
+        for skill in &skills {
+            crate::manifest::validate_manifest(&skill.manifest)
+                .unwrap_or_else(|e| panic!("manifest for '{}' failed validation: {e}", skill.manifest.name));
+        }
+    }
+
+    /// Verify that discover_bundled_skills candidates list is non-empty.
+    #[test]
+    fn test_bundled_skills_candidates_not_empty() {
+        let candidates = super::bundled_skills_candidates();
+        assert!(!candidates.is_empty(), "should have at least one candidate path");
     }
 }

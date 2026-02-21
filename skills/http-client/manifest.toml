@@ -1,0 +1,8 @@
+name = "http-client"
+version = "0.1.0"
+description = "HTTP requests supporting GET, POST, PUT, and DELETE methods with header and body configuration"
+author = "Aegis Team"
+permissions = ["action::network"]
+entry_point = "http-client.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
