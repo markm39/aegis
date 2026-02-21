@@ -14,6 +14,7 @@ pub mod macos_helper;
 pub mod navigation_guard;
 pub mod page_snapshot;
 pub mod policy;
+pub mod storage_manager;
 pub mod tab_manager;
 pub mod tui;
 pub mod vision;
