@@ -103,18 +103,16 @@ impl AuditStore {
     /// do not exist, and reads the latest entry hash (or uses "genesis").
     pub fn open(path: &Path) -> Result<Self, AegisError> {
         let conn = Connection::open(path).map_err(|e| {
-            AegisError::LedgerError(format!(
-                "failed to open database '{}': {e}",
-                path.display()
-            ))
+            AegisError::LedgerError(format!("failed to open database '{}': {e}", path.display()))
         })?;
 
-        conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| {
-            AegisError::LedgerError(format!(
-                "failed to set WAL mode on '{}': {e}",
-                path.display()
-            ))
-        })?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| {
+                AegisError::LedgerError(format!(
+                    "failed to set WAL mode on '{}': {e}",
+                    path.display()
+                ))
+            })?;
 
         conn.execute_batch(SCHEMA_SQL).map_err(|e| {
             AegisError::LedgerError(format!(
@@ -167,11 +165,7 @@ impl AuditStore {
     ///
     /// The new entry's `prev_hash` is set to the current chain tip. After
     /// insertion, `self.latest_hash` is updated to the new entry's hash.
-    pub fn append(
-        &mut self,
-        action: &Action,
-        verdict: &Verdict,
-    ) -> Result<AuditEntry, AegisError> {
+    pub fn append(&mut self, action: &Action, verdict: &Verdict) -> Result<AuditEntry, AegisError> {
         self.insert_entry(action, verdict, None)
     }
 
@@ -185,9 +179,10 @@ impl AuditStore {
     pub fn verify_integrity(&self) -> Result<IntegrityReport, AegisError> {
         let mut stmt = self
             .conn
-            .prepare(
-                &format!("SELECT {} FROM audit_log ORDER BY id ASC", crate::query::ENTRY_COLUMNS),
-            )
+            .prepare(&format!(
+                "SELECT {} FROM audit_log ORDER BY id ASC",
+                crate::query::ENTRY_COLUMNS
+            ))
             .map_err(|e| AegisError::LedgerError(format!("failed to prepare query: {e}")))?;
 
         let rows = stmt
@@ -334,10 +329,7 @@ impl AuditStore {
     ///
     /// This is a destructive operation -- the old hash chain is intentionally
     /// broken and rebuilt.
-    pub fn purge_before(
-        &mut self,
-        before: DateTime<chrono::Utc>,
-    ) -> Result<usize, AegisError> {
+    pub fn purge_before(&mut self, before: DateTime<chrono::Utc>) -> Result<usize, AegisError> {
         let before_str = before.to_rfc3339();
 
         // Count entries to delete
@@ -348,7 +340,9 @@ impl AuditStore {
                 params![before_str],
                 |row| row.get(0),
             )
-            .map_err(|e| AegisError::LedgerError(format!("purge count failed (before {before_str}): {e}")))?;
+            .map_err(|e| {
+                AegisError::LedgerError(format!("purge count failed (before {before_str}): {e}"))
+            })?;
 
         if count == 0 {
             return Ok(0);
@@ -366,7 +360,11 @@ impl AuditStore {
                     "DELETE FROM audit_log WHERE timestamp < ?1",
                     params![before_str],
                 )
-                .map_err(|e| AegisError::LedgerError(format!("purge delete failed (before {before_str}): {e}")))?;
+                .map_err(|e| {
+                    AegisError::LedgerError(format!(
+                        "purge delete failed (before {before_str}): {e}"
+                    ))
+                })?;
 
             self.rebuild_hash_chain()?;
             Ok::<(), AegisError>(())
@@ -376,7 +374,9 @@ impl AuditStore {
             Ok(()) => {
                 self.conn
                     .execute_batch("RELEASE purge_entries")
-                    .map_err(|e| AegisError::LedgerError(format!("release purge savepoint: {e}")))?;
+                    .map_err(|e| {
+                        AegisError::LedgerError(format!("release purge savepoint: {e}"))
+                    })?;
                 Ok(count as usize)
             }
             Err(e) => {
@@ -443,13 +443,15 @@ impl AuditStore {
 
         let result = (|| {
             for row in &rows {
-                let entry_id: Uuid = row.entry_id
+                let entry_id: Uuid = row
+                    .entry_id
                     .parse()
                     .map_err(|e| AegisError::LedgerError(format!("invalid entry_id: {e}")))?;
                 let timestamp: DateTime<chrono::Utc> = DateTime::parse_from_rfc3339(&row.timestamp)
                     .map_err(|e| AegisError::LedgerError(format!("invalid timestamp: {e}")))?
                     .into();
-                let action_id: Uuid = row.action_id
+                let action_id: Uuid = row
+                    .action_id
                     .parse()
                     .map_err(|e| AegisError::LedgerError(format!("invalid action_id: {e}")))?;
 
@@ -480,7 +482,9 @@ impl AuditStore {
             Ok(()) => {
                 self.conn
                     .execute_batch("RELEASE rebuild_chain")
-                    .map_err(|e| AegisError::LedgerError(format!("release rebuild savepoint: {e}")))?;
+                    .map_err(|e| {
+                        AegisError::LedgerError(format!("release rebuild savepoint: {e}"))
+                    })?;
                 self.latest_hash = prev_hash;
                 Ok(())
             }
@@ -741,7 +745,11 @@ mod tests {
 
         // Remaining entries should have a valid rebuilt chain
         let report = store.verify_integrity().unwrap();
-        assert!(report.valid, "chain should be valid after partial purge: {}", report.message);
+        assert!(
+            report.valid,
+            "chain should be valid after partial purge: {}",
+            report.message
+        );
         assert_eq!(report.total_entries, 2);
     }
 
@@ -768,7 +776,11 @@ mod tests {
 
             // Full chain should be valid
             let report = store.verify_integrity().unwrap();
-            assert!(report.valid, "chain broken after reopen: {}", report.message);
+            assert!(
+                report.valid,
+                "chain broken after reopen: {}",
+                report.message
+            );
             assert_eq!(report.total_entries, 4);
         }
     }
@@ -823,7 +835,9 @@ mod tests {
 
         let action = sample_action("agent");
         let verdict = Verdict::allow(action.id, "ok", None);
-        store.append_with_session(&action, &verdict, &session_id).unwrap();
+        store
+            .append_with_session(&action, &verdict, &session_id)
+            .unwrap();
 
         let event = rx.try_recv().expect("should receive an alert event");
         assert_eq!(event.session_id, Some(session_id));

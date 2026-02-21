@@ -28,10 +28,7 @@ pub fn create_adapter(config: &AdapterConfig, command: &str) -> Box<dyn AgentAda
 /// Auto-detect the appropriate adapter based on the command name.
 fn auto_detect(command: &str) -> Box<dyn AgentAdapter> {
     // Extract the base command name (strip path, handle common wrappers)
-    let base = command
-        .rsplit('/')
-        .next()
-        .unwrap_or(command);
+    let base = command.rsplit('/').next().unwrap_or(command);
 
     if base == "claude" || base.starts_with("claude-") || base.contains("claude") {
         tracing::info!("auto-detected Claude Code adapter for command: {command}");

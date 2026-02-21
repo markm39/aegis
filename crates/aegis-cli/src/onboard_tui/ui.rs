@@ -28,7 +28,7 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title
-            Constraint::Min(5),   // Content
+            Constraint::Min(5),    // Content
             Constraint::Length(3), // Help
         ])
         .split(area);
@@ -44,10 +44,7 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(
-            progress,
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(progress, Style::default().fg(Color::DarkGray)),
     ]))
     .block(
         Block::default()
@@ -95,7 +92,9 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
         OnboardStep::OrchestratorInterval => "Enter: confirm  Esc: back",
         OnboardStep::AddMore => "j/k: navigate  Enter: select  Esc: done",
         OnboardStep::SecurityPreset => "j/k: navigate  Enter: select  Esc: back",
-        OnboardStep::SecurityDetail => "j/k: navigate  Space: toggle  Enter/Tab: continue  Esc: back",
+        OnboardStep::SecurityDetail => {
+            "j/k: navigate  Space: toggle  Enter/Tab: continue  Esc: back"
+        }
         OnboardStep::MonitoringInfo => "Enter: continue  Esc: back",
         OnboardStep::TelegramOffer => "j/k: navigate  Enter: select  Esc: back",
         OnboardStep::TelegramToken => "Enter: validate  Esc: back",
@@ -177,7 +176,7 @@ fn draw_workflow(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -230,7 +229,7 @@ fn draw_fleet_goal(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .constraints([
             Constraint::Length(3),                // Description
             Constraint::Min(3),                   // Input (grows for wrapped text)
-            Constraint::Length(indicator_height),  // Paste indicator
+            Constraint::Length(indicator_height), // Paste indicator
         ])
         .split(area);
 
@@ -266,7 +265,7 @@ fn draw_backlog(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Min(3),                   // Input (grows for wrapped text)
+            Constraint::Min(3), // Input (grows for wrapped text)
             Constraint::Length(indicator_height),
         ])
         .split(area);
@@ -331,16 +330,15 @@ fn draw_interval(f: &mut Frame, app: &OnboardApp, area: Rect) {
 }
 
 fn draw_add_more(f: &mut Frame, app: &OnboardApp, area: Rect) {
-    let worker_count = app.completed_agents.iter()
+    let worker_count = app
+        .completed_agents
+        .iter()
         .filter(|a| a.orchestrator.is_none())
         .count();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(5),
-        ])
+        .constraints([Constraint::Length(2), Constraint::Min(5)])
         .split(area);
 
     let desc = Paragraph::new(Span::styled(
@@ -381,7 +379,7 @@ fn draw_tool(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -434,7 +432,7 @@ fn draw_custom_command(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .constraints([
             Constraint::Length(2),                // Description
             Constraint::Min(3),                   // Input (grows for wrapped text)
-            Constraint::Length(indicator_height),  // Paste indicator
+            Constraint::Length(indicator_height), // Paste indicator
         ])
         .split(area);
 
@@ -557,7 +555,7 @@ fn draw_task(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .constraints([
             Constraint::Length(2),                // Description
             Constraint::Min(5),                   // Input (expands to fill)
-            Constraint::Length(indicator_height),  // Paste indicator
+            Constraint::Length(indicator_height), // Paste indicator
         ])
         .split(area);
 
@@ -582,14 +580,12 @@ fn draw_task(f: &mut Frame, app: &OnboardApp, area: Rect) {
     };
 
     let lines = build_multiline_input(&app.task, app.task_cursor);
-    let input = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(title),
-        );
+    let input = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(title),
+    );
     f.render_widget(input, chunks[1]);
 
     draw_paste_indicator(f, app, chunks[2]);
@@ -600,7 +596,7 @@ fn draw_restart(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -646,7 +642,7 @@ fn draw_security_preset(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -697,7 +693,7 @@ fn draw_security_detail(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // Action list
+            Constraint::Min(5),    // Action list
             Constraint::Length(2), // Note
         ])
         .split(area);
@@ -742,10 +738,7 @@ fn draw_security_detail(f: &mut Frame, app: &OnboardApp, area: Rect) {
                     Style::default().fg(perm_color),
                 ),
                 Span::styled(format!("{:<22}", entry.meta.label), label_style),
-                Span::styled(
-                    entry.meta.description,
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(entry.meta.description, Style::default().fg(Color::DarkGray)),
             ]);
             ListItem::new(line)
         })
@@ -833,14 +826,12 @@ fn draw_monitoring_info(f: &mut Frame, app: &OnboardApp, area: Rect) {
         )),
     ];
 
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title("Monitoring"),
-        );
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title("Monitoring"),
+    );
     f.render_widget(p, area);
 }
 
@@ -849,7 +840,7 @@ fn draw_telegram_offer(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -899,7 +890,7 @@ fn draw_telegram_token(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5), // Instructions
-            Constraint::Min(3),   // Input (grows for wrapped text)
+            Constraint::Min(3),    // Input (grows for wrapped text)
         ])
         .split(area);
 
@@ -978,10 +969,7 @@ fn draw_telegram_progress(f: &mut Frame, app: &OnboardApp, area: Rect) {
                     "  Open Telegram, find your bot, and send any message.",
                     Style::default().fg(Color::DarkGray),
                 )),
-                Line::from(Span::styled(
-                    timer,
-                    Style::default().fg(Color::DarkGray),
-                )),
+                Line::from(Span::styled(timer, Style::default().fg(Color::DarkGray))),
             ]
         }
         TelegramStatus::SendingConfirmation => vec![
@@ -1012,10 +1000,7 @@ fn draw_telegram_progress(f: &mut Frame, app: &OnboardApp, area: Rect) {
             ]),
             Line::from(vec![
                 Span::styled("  Chat ID: ", Style::default().fg(Color::White)),
-                Span::styled(
-                    chat_id.to_string(),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled(chat_id.to_string(), Style::default().fg(Color::Yellow)),
             ]),
             Line::from(""),
             Line::from(Span::styled(
@@ -1027,9 +1012,7 @@ fn draw_telegram_progress(f: &mut Frame, app: &OnboardApp, area: Rect) {
             Line::from(""),
             Line::from(Span::styled(
                 "  Telegram setup failed:",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 format!("  {err}"),
@@ -1097,10 +1080,18 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
             lines.push(Line::from(Span::styled(
                 name_line,
                 Style::default()
-                    .fg(if is_orch { Color::Magenta } else { Color::Yellow })
+                    .fg(if is_orch {
+                        Color::Magenta
+                    } else {
+                        Color::Yellow
+                    })
                     .add_modifier(Modifier::BOLD),
             )));
-            lines.push(labeled_line("    Dir:", &agent.working_dir.display().to_string(), Color::White));
+            lines.push(labeled_line(
+                "    Dir:",
+                &agent.working_dir.display().to_string(),
+                Color::White,
+            ));
             if let Some(task) = &agent.task {
                 let task_short = if task.len() > 50 {
                     format!("{}...", &task[..47])
@@ -1112,10 +1103,12 @@ fn draw_summary(f: &mut Frame, app: &OnboardApp, area: Rect) {
         }
     } else {
         // Solo: show single agent from current fields
-        let tool_label = ToolChoice::ALL.get(app.tool_selected)
+        let tool_label = ToolChoice::ALL
+            .get(app.tool_selected)
             .map(|t| t.label())
             .unwrap_or("Unknown");
-        let restart_label = RestartChoice::ALL.get(app.restart_selected)
+        let restart_label = RestartChoice::ALL
+            .get(app.restart_selected)
             .map(|r| r.label())
             .unwrap_or("Unknown");
         let task_display = if app.task.trim().is_empty() {
@@ -1188,10 +1181,7 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
             ));
         }
     } else {
-        spans.push(Span::styled(
-            " ",
-            Style::default().bg(Color::Yellow),
-        ));
+        spans.push(Span::styled(" ", Style::default().bg(Color::Yellow)));
     }
     spans
 }
@@ -1235,15 +1225,9 @@ fn build_multiline_input(text: &str, cursor_pos: usize) -> Vec<Line<'static>> {
             if local < segment.len() {
                 let ch = segment[local..].chars().next().unwrap();
                 let end = local + ch.len_utf8();
-                spans.push(Span::styled(
-                    segment[local..end].to_string(),
-                    cursor_style,
-                ));
+                spans.push(Span::styled(segment[local..end].to_string(), cursor_style));
                 if end < segment.len() {
-                    spans.push(Span::styled(
-                        segment[end..].to_string(),
-                        text_style,
-                    ));
+                    spans.push(Span::styled(segment[end..].to_string(), text_style));
                 }
             } else {
                 // Cursor at end of this segment
@@ -1252,10 +1236,7 @@ fn build_multiline_input(text: &str, cursor_pos: usize) -> Vec<Line<'static>> {
 
             result.push(Line::from(spans));
         } else {
-            result.push(Line::from(Span::styled(
-                segment.to_string(),
-                text_style,
-            )));
+            result.push(Line::from(Span::styled(segment.to_string(), text_style)));
         }
 
         // +1 for the '\n' separator
@@ -1304,10 +1285,7 @@ fn mask_token(token: &str) -> String {
 /// Build a styled label-value line for the summary.
 fn labeled_line<'a>(label: &str, value: &str, color: Color) -> Line<'a> {
     Line::from(vec![
-        Span::styled(
-            format!("  {label:<14} "),
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(format!("  {label:<14} "), Style::default().fg(Color::White)),
         Span::styled(value.to_string(), Style::default().fg(color)),
     ])
 }

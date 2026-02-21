@@ -29,17 +29,15 @@ impl GenericAdapter {
     pub fn new(configs: &[PromptPatternConfig]) -> Self {
         let patterns = configs
             .iter()
-            .filter_map(|c| {
-                match Regex::new(&c.regex) {
-                    Ok(regex) => Some(CompiledPattern {
-                        regex,
-                        approve: c.approve.clone(),
-                        deny: c.deny.clone(),
-                    }),
-                    Err(e) => {
-                        tracing::warn!("skipping invalid prompt pattern {:?}: {e}", c.regex);
-                        None
-                    }
+            .filter_map(|c| match Regex::new(&c.regex) {
+                Ok(regex) => Some(CompiledPattern {
+                    regex,
+                    approve: c.approve.clone(),
+                    deny: c.deny.clone(),
+                }),
+                Err(e) => {
+                    tracing::warn!("skipping invalid prompt pattern {:?}: {e}", c.regex);
+                    None
                 }
             })
             .collect();
@@ -50,12 +48,14 @@ impl GenericAdapter {
     fn try_match(&self, line: &str) -> Option<PromptDetection> {
         for pattern in &self.patterns {
             if let Some(caps) = pattern.regex.captures(line) {
-                let tool = caps.name("tool")
+                let tool = caps
+                    .name("tool")
                     .map(|m| m.as_str())
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "unknown".into());
-                let args = caps.name("args")
+                let args = caps
+                    .name("args")
                     .map(|m| m.as_str().to_string())
                     .unwrap_or_default();
 
@@ -105,13 +105,11 @@ mod tests {
     use super::*;
 
     fn sample_patterns() -> Vec<PromptPatternConfig> {
-        vec![
-            PromptPatternConfig {
-                regex: r"Execute (?P<tool>\w+)\((?P<args>.*)\)\?".into(),
-                approve: "yes".into(),
-                deny: "no".into(),
-            },
-        ]
+        vec![PromptPatternConfig {
+            regex: r"Execute (?P<tool>\w+)\((?P<args>.*)\)\?".into(),
+            approve: "yes".into(),
+            deny: "no".into(),
+        }]
     }
 
     #[test]
@@ -178,14 +176,15 @@ mod tests {
         let mut adapter = GenericAdapter::new(&patterns);
 
         match adapter.scan_line("Run ?") {
-            ScanResult::Prompt(det) => {
-                match &det.action {
-                    aegis_types::ActionKind::ToolCall { tool, .. } => {
-                        assert_eq!(tool, "unknown", "empty tool capture should default to 'unknown'");
-                    }
-                    other => panic!("expected ToolCall, got {other:?}"),
+            ScanResult::Prompt(det) => match &det.action {
+                aegis_types::ActionKind::ToolCall { tool, .. } => {
+                    assert_eq!(
+                        tool, "unknown",
+                        "empty tool capture should default to 'unknown'"
+                    );
                 }
-            }
+                other => panic!("expected ToolCall, got {other:?}"),
+            },
             other => panic!("expected Prompt, got {other:?}"),
         }
     }

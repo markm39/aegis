@@ -180,11 +180,8 @@ pub fn harvest_seatbelt_violations(
             },
         );
 
-        let verdict = aegis_types::Verdict::deny(
-            action.id,
-            format!("seatbelt violation: {message}"),
-            None,
-        );
+        let verdict =
+            aegis_types::Verdict::deny(action.id, format!("seatbelt violation: {message}"), None);
 
         if let Err(e) = store_guard.append(&action, &verdict) {
             tracing::warn!(error = %e, "failed to log seatbelt violation");
@@ -214,22 +211,36 @@ mod tests {
     /// dropping `NamedTempFile` removes the path from the filesystem.
     fn make_test_deps(
         policy_str: &str,
-    ) -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>, NamedTempFile) {
+    ) -> (
+        Arc<Mutex<AuditStore>>,
+        Arc<Mutex<PolicyEngine>>,
+        NamedTempFile,
+    ) {
         let engine =
             PolicyEngine::from_policies(policy_str, None).expect("should create policy engine");
         let db_file = NamedTempFile::new().expect("should create temp file");
         let store = AuditStore::open(db_file.path()).expect("should open audit store");
 
-        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)), db_file)
+        (
+            Arc::new(Mutex::new(store)),
+            Arc::new(Mutex::new(engine)),
+            db_file,
+        )
     }
 
     #[test]
     fn log_process_spawn_creates_audit_entry() {
-        let (store, engine, _db) =
-            make_test_deps(r#"permit(principal, action, resource);"#);
+        let (store, engine, _db) = make_test_deps(r#"permit(principal, action, resource);"#);
 
-        log_process_spawn(&store, &engine, "test-agent", "echo", &["hello".into()], None)
-            .expect("should log spawn");
+        log_process_spawn(
+            &store,
+            &engine,
+            "test-agent",
+            "echo",
+            &["hello".into()],
+            None,
+        )
+        .expect("should log spawn");
 
         let guard = store.lock().unwrap();
         let entries = guard.query_last(1).unwrap();
@@ -242,11 +253,9 @@ mod tests {
 
     #[test]
     fn log_process_exit_creates_audit_entry() {
-        let (store, engine, _db) =
-            make_test_deps(r#"permit(principal, action, resource);"#);
+        let (store, engine, _db) = make_test_deps(r#"permit(principal, action, resource);"#);
 
-        log_process_exit(&store, &engine, "test-agent", "echo", 0, None)
-            .expect("should log exit");
+        log_process_exit(&store, &engine, "test-agent", "echo", 0, None).expect("should log exit");
 
         let guard = store.lock().unwrap();
         let entries = guard.query_last(1).unwrap();
@@ -259,13 +268,18 @@ mod tests {
 
     #[test]
     fn spawn_and_exit_creates_two_entries() {
-        let (store, engine, _db) =
-            make_test_deps(r#"permit(principal, action, resource);"#);
+        let (store, engine, _db) = make_test_deps(r#"permit(principal, action, resource);"#);
 
-        log_process_spawn(&store, &engine, "test-agent", "cat", &["/tmp/f".into()], None)
-            .expect("should log spawn");
-        log_process_exit(&store, &engine, "test-agent", "cat", 1, None)
-            .expect("should log exit");
+        log_process_spawn(
+            &store,
+            &engine,
+            "test-agent",
+            "cat",
+            &["/tmp/f".into()],
+            None,
+        )
+        .expect("should log spawn");
+        log_process_exit(&store, &engine, "test-agent", "cat", 1, None).expect("should log exit");
 
         let count = store.lock().unwrap().count().unwrap();
         assert_eq!(count, 2, "should have 2 audit entries");
@@ -273,16 +287,25 @@ mod tests {
 
     #[test]
     fn denied_spawn_still_logs() {
-        let (store, engine, _db) =
-            make_test_deps(r#"forbid(principal, action, resource);"#);
+        let (store, engine, _db) = make_test_deps(r#"forbid(principal, action, resource);"#);
 
-        log_process_spawn(&store, &engine, "test-agent", "rm", &["-rf".into(), "/".into()], None)
-            .expect("should log even when denied");
+        log_process_spawn(
+            &store,
+            &engine,
+            "test-agent",
+            "rm",
+            &["-rf".into(), "/".into()],
+            None,
+        )
+        .expect("should log even when denied");
 
         let guard = store.lock().unwrap();
         let entries = guard.query_last(1).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].decision, "Deny", "forbid-all should produce Deny");
+        assert_eq!(
+            entries[0].decision, "Deny",
+            "forbid-all should produce Deny"
+        );
         assert_eq!(entries[0].principal, "test-agent");
         assert!(entries[0].action_kind.contains("ProcessSpawn"));
         assert!(entries[0].action_kind.contains("rm"));
@@ -290,8 +313,7 @@ mod tests {
 
     #[test]
     fn log_spawn_with_session_id() {
-        let (store, engine, _db) =
-            make_test_deps(r#"permit(principal, action, resource);"#);
+        let (store, engine, _db) = make_test_deps(r#"permit(principal, action, resource);"#);
 
         let session_id = {
             let mut s = store.lock().unwrap();
@@ -314,23 +336,15 @@ mod tests {
 
     #[test]
     fn log_exit_with_session_id() {
-        let (store, engine, _db) =
-            make_test_deps(r#"permit(principal, action, resource);"#);
+        let (store, engine, _db) = make_test_deps(r#"permit(principal, action, resource);"#);
 
         let session_id = {
             let mut s = store.lock().unwrap();
             s.begin_session("test-config", "echo", &[], None).unwrap()
         };
 
-        log_process_exit(
-            &store,
-            &engine,
-            "test-agent",
-            "echo",
-            0,
-            Some(&session_id),
-        )
-        .expect("should log exit with session");
+        log_process_exit(&store, &engine, "test-agent", "echo", 0, Some(&session_id))
+            .expect("should log exit with session");
 
         let count = store.lock().unwrap().count().unwrap();
         assert_eq!(count, 1);
@@ -339,8 +353,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn harvest_violations_returns_zero_for_nonexistent_pid() {
-        let (store, _engine, _db) =
-            make_test_deps(r#"permit(principal, action, resource);"#);
+        let (store, _engine, _db) = make_test_deps(r#"permit(principal, action, resource);"#);
 
         let now = chrono::Utc::now();
         let start = now - chrono::Duration::seconds(1);

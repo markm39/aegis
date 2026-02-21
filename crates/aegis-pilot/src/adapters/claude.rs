@@ -27,10 +27,7 @@ enum State {
     /// Waiting for a "wants to use" trigger line.
     Idle,
     /// Accumulating tool details after seeing the trigger.
-    Accumulating {
-        tool: String,
-        lines: Vec<String>,
-    },
+    Accumulating { tool: String, lines: Vec<String> },
 }
 
 /// Adapter for Claude Code's permission prompt format.
@@ -53,16 +50,11 @@ impl ClaudeCodeAdapter {
     pub fn new() -> Self {
         Self {
             state: State::Idle,
-            re_wants_to_use: Regex::new(r"(?i)wants?\s+to\s+use\s+(\w+)")
-                .expect("hardcoded regex"),
-            re_command: Regex::new(r"(?i)^\s*Command:\s*(.+)$")
-                .expect("hardcoded regex"),
-            re_file: Regex::new(r"(?i)^\s*(?:File|Path):\s*(.+)$")
-                .expect("hardcoded regex"),
-            re_url: Regex::new(r"(?i)^\s*URL:\s*(.+)$")
-                .expect("hardcoded regex"),
-            re_allow: Regex::new(r"(?i)Allow\?")
-                .expect("hardcoded regex"),
+            re_wants_to_use: Regex::new(r"(?i)wants?\s+to\s+use\s+(\w+)").expect("hardcoded regex"),
+            re_command: Regex::new(r"(?i)^\s*Command:\s*(.+)$").expect("hardcoded regex"),
+            re_file: Regex::new(r"(?i)^\s*(?:File|Path):\s*(.+)$").expect("hardcoded regex"),
+            re_url: Regex::new(r"(?i)^\s*URL:\s*(.+)$").expect("hardcoded regex"),
+            re_allow: Regex::new(r"(?i)Allow\?").expect("hardcoded regex"),
         }
     }
 
@@ -70,29 +62,35 @@ impl ClaudeCodeAdapter {
     fn extract_action(&self, tool: &str, lines: &[String]) -> ActionKind {
         match tool.to_lowercase().as_str() {
             "bash" => {
-                let command = self.extract_field(&self.re_command, lines)
+                let command = self
+                    .extract_field(&self.re_command, lines)
                     .unwrap_or_default();
                 // Parse the command into program + args
                 let parts: Vec<&str> = command.splitn(2, char::is_whitespace).collect();
                 let program = parts.first().unwrap_or(&"").to_string();
-                let args = parts.get(1)
+                let args = parts
+                    .get(1)
                     .map(|a| vec![a.to_string()])
                     .unwrap_or_default();
-                ActionKind::ProcessSpawn { command: program, args }
+                ActionKind::ProcessSpawn {
+                    command: program,
+                    args,
+                }
             }
             "read" => {
-                let path = self.extract_field(&self.re_file, lines)
-                    .unwrap_or_default();
-                ActionKind::FileRead { path: PathBuf::from(path) }
+                let path = self.extract_field(&self.re_file, lines).unwrap_or_default();
+                ActionKind::FileRead {
+                    path: PathBuf::from(path),
+                }
             }
             "write" | "edit" | "notebookedit" => {
-                let path = self.extract_field(&self.re_file, lines)
-                    .unwrap_or_default();
-                ActionKind::FileWrite { path: PathBuf::from(path) }
+                let path = self.extract_field(&self.re_file, lines).unwrap_or_default();
+                ActionKind::FileWrite {
+                    path: PathBuf::from(path),
+                }
             }
             "webfetch" => {
-                let url = self.extract_field(&self.re_url, lines)
-                    .unwrap_or_default();
+                let url = self.extract_field(&self.re_url, lines).unwrap_or_default();
                 ActionKind::NetRequest {
                     method: "GET".into(),
                     url,
@@ -150,7 +148,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
     fn scan_line(&mut self, line: &str) -> ScanResult {
         // Pre-compute regex matches to avoid borrow conflicts with &mut self.state
         let has_allow = self.re_allow.is_match(line);
-        let tool_capture = self.re_wants_to_use.captures(line).map(|c| c[1].to_string());
+        let tool_capture = self
+            .re_wants_to_use
+            .captures(line)
+            .map(|c| c[1].to_string());
 
         match &mut self.state {
             State::Idle => {
@@ -218,8 +219,14 @@ mod tests {
     fn detects_bash_prompt() {
         let mut adapter = ClaudeCodeAdapter::new();
 
-        assert_eq!(adapter.scan_line("Claude wants to use Bash"), ScanResult::Partial);
-        assert_eq!(adapter.scan_line("  Command: ls -la /tmp"), ScanResult::Partial);
+        assert_eq!(
+            adapter.scan_line("Claude wants to use Bash"),
+            ScanResult::Partial
+        );
+        assert_eq!(
+            adapter.scan_line("  Command: ls -la /tmp"),
+            ScanResult::Partial
+        );
 
         match adapter.scan_line("Allow? (y/n)") {
             ScanResult::Prompt(det) => {
@@ -245,14 +252,12 @@ mod tests {
         adapter.scan_line("  File: /etc/passwd");
 
         match adapter.scan_line("Allow? (y/n)") {
-            ScanResult::Prompt(det) => {
-                match &det.action {
-                    ActionKind::FileRead { path } => {
-                        assert_eq!(path, &PathBuf::from("/etc/passwd"));
-                    }
-                    other => panic!("expected FileRead, got {other:?}"),
+            ScanResult::Prompt(det) => match &det.action {
+                ActionKind::FileRead { path } => {
+                    assert_eq!(path, &PathBuf::from("/etc/passwd"));
                 }
-            }
+                other => panic!("expected FileRead, got {other:?}"),
+            },
             other => panic!("expected Prompt, got {other:?}"),
         }
     }
@@ -265,14 +270,12 @@ mod tests {
         adapter.scan_line("  File: /tmp/output.txt");
 
         match adapter.scan_line("Allow? (y/n)") {
-            ScanResult::Prompt(det) => {
-                match &det.action {
-                    ActionKind::FileWrite { path } => {
-                        assert_eq!(path, &PathBuf::from("/tmp/output.txt"));
-                    }
-                    other => panic!("expected FileWrite, got {other:?}"),
+            ScanResult::Prompt(det) => match &det.action {
+                ActionKind::FileWrite { path } => {
+                    assert_eq!(path, &PathBuf::from("/tmp/output.txt"));
                 }
-            }
+                other => panic!("expected FileWrite, got {other:?}"),
+            },
             other => panic!("expected Prompt, got {other:?}"),
         }
     }
@@ -300,15 +303,13 @@ mod tests {
         adapter.scan_line("  URL: https://example.com/api");
 
         match adapter.scan_line("Allow? (y/n)") {
-            ScanResult::Prompt(det) => {
-                match &det.action {
-                    ActionKind::NetRequest { method, url } => {
-                        assert_eq!(method, "GET");
-                        assert_eq!(url, "https://example.com/api");
-                    }
-                    other => panic!("expected NetRequest, got {other:?}"),
+            ScanResult::Prompt(det) => match &det.action {
+                ActionKind::NetRequest { method, url } => {
+                    assert_eq!(method, "GET");
+                    assert_eq!(url, "https://example.com/api");
                 }
-            }
+                other => panic!("expected NetRequest, got {other:?}"),
+            },
             other => panic!("expected Prompt, got {other:?}"),
         }
     }
@@ -320,14 +321,12 @@ mod tests {
         adapter.scan_line("Claude wants to use Glob");
 
         match adapter.scan_line("Allow? (y/n)") {
-            ScanResult::Prompt(det) => {
-                match &det.action {
-                    ActionKind::ToolCall { tool, .. } => {
-                        assert_eq!(tool, "Glob");
-                    }
-                    other => panic!("expected ToolCall, got {other:?}"),
+            ScanResult::Prompt(det) => match &det.action {
+                ActionKind::ToolCall { tool, .. } => {
+                    assert_eq!(tool, "Glob");
                 }
-            }
+                other => panic!("expected ToolCall, got {other:?}"),
+            },
             other => panic!("expected Prompt, got {other:?}"),
         }
     }
@@ -335,8 +334,14 @@ mod tests {
     #[test]
     fn ignores_normal_output() {
         let mut adapter = ClaudeCodeAdapter::new();
-        assert_eq!(adapter.scan_line("Compiling aegis-pilot v0.1.0"), ScanResult::None);
-        assert_eq!(adapter.scan_line("test result: ok. 5 passed"), ScanResult::None);
+        assert_eq!(
+            adapter.scan_line("Compiling aegis-pilot v0.1.0"),
+            ScanResult::None
+        );
+        assert_eq!(
+            adapter.scan_line("test result: ok. 5 passed"),
+            ScanResult::None
+        );
         assert_eq!(adapter.scan_line(""), ScanResult::None);
     }
 
@@ -364,7 +369,10 @@ mod tests {
         adapter.reset();
 
         // After reset, should not detect a prompt
-        assert_eq!(adapter.scan_line("Allow? (y/n)"), ScanResult::Uncertain("Allow? (y/n)".into()));
+        assert_eq!(
+            adapter.scan_line("Allow? (y/n)"),
+            ScanResult::Uncertain("Allow? (y/n)".into())
+        );
     }
 
     #[test]
@@ -380,6 +388,9 @@ mod tests {
     fn case_insensitive_trigger() {
         let mut adapter = ClaudeCodeAdapter::new();
         // Should still detect even with different casing
-        assert_eq!(adapter.scan_line("claude Wants To Use bash"), ScanResult::Partial);
+        assert_eq!(
+            adapter.scan_line("claude Wants To Use bash"),
+            ScanResult::Partial
+        );
     }
 }

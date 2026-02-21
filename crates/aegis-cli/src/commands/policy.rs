@@ -38,11 +38,14 @@ pub fn validate(path: &Path) -> Result<()> {
 
     // Load the default schema and validate
     let schema = default_schema().context("failed to load Aegis schema")?;
-    let validation_result =
-        cedar_policy::Validator::new(schema).validate(&policy_set, cedar_policy::ValidationMode::Strict);
+    let validation_result = cedar_policy::Validator::new(schema)
+        .validate(&policy_set, cedar_policy::ValidationMode::Strict);
 
     if validation_result.validation_passed() {
-        println!("VALID: {} policies parsed and validated successfully", policy_count);
+        println!(
+            "VALID: {} policies parsed and validated successfully",
+            policy_count
+        );
     } else {
         println!("INVALID: policy parsed but has validation errors:");
         for error in validation_result.validation_errors() {
@@ -149,8 +152,8 @@ pub fn import_policy(config_name: &str, path: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid policy: {e}"))?;
 
     let schema = default_schema().context("failed to load Aegis schema")?;
-    let validation =
-        cedar_policy::Validator::new(schema).validate(&policy_set, cedar_policy::ValidationMode::Strict);
+    let validation = cedar_policy::Validator::new(schema)
+        .validate(&policy_set, cedar_policy::ValidationMode::Strict);
 
     if !validation.validation_passed() {
         println!("Policy validation failed:");
@@ -161,9 +164,7 @@ pub fn import_policy(config_name: &str, path: &Path) -> Result<()> {
     }
 
     // Copy to the policy directory
-    let filename = path
-        .file_name()
-        .context("policy file has no filename")?;
+    let filename = path.file_name().context("policy file has no filename")?;
     let dest = policy_dir.join(filename);
 
     if dest.exists() {
@@ -210,13 +211,8 @@ pub fn test_policy(config_name: &str, action_name: &str, resource: &str) -> Resu
     };
 
     println!("Policy evaluation:");
-    println!(
-        "  Principal:  Aegis::Agent::\"{}\"",
-        config.name
-    );
-    println!(
-        "  Action:     Aegis::Action::\"{action_name}\""
-    );
+    println!("  Principal:  Aegis::Agent::\"{}\"", config.name);
+    println!("  Action:     Aegis::Action::\"{action_name}\"");
     println!("  Resource:   Aegis::Resource::\"{resource}\"");
     println!("  Decision:   {decision_str}");
     println!("  Reason:     {}", verdict.reason);

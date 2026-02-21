@@ -132,11 +132,7 @@ fn load_entry(dir: &std::path::Path, name: &str, config_type: &'static str) -> O
     let (sessions, last_used) = match AuditStore::open(&config.ledger_path) {
         Ok(store) => {
             let count = store.count_all_sessions().unwrap_or(0);
-            let last = store
-                .latest_session()
-                .ok()
-                .flatten()
-                .map(|s| s.start_time);
+            let last = store.latest_session().ok().flatten().map(|s| s.start_time);
             (count, last)
         }
         Err(_) => (0, None),
@@ -279,7 +275,13 @@ mod tests {
         // ci-runner is an alias for allow-read-write (identical content), so it
         // will be identified as allow-read-write since that appears first in the
         // list. We test the non-aliased builtins individually.
-        for name in ["default-deny", "allow-read-only", "allow-read-write", "data-science", "permit-all"] {
+        for name in [
+            "default-deny",
+            "allow-read-only",
+            "allow-read-write",
+            "data-science",
+            "permit-all",
+        ] {
             let text = aegis_policy::builtin::get_builtin_policy(name).unwrap();
             assert_eq!(
                 identify_policy(text),

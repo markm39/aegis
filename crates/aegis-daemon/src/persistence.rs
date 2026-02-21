@@ -13,13 +13,11 @@ use aegis_types::daemon::{daemon_dir, daemon_pid_path};
 pub fn write_pid_file() -> Result<PathBuf, String> {
     let path = daemon_pid_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create daemon dir: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create daemon dir: {e}"))?;
     }
 
     let pid = std::process::id();
-    std::fs::write(&path, pid.to_string())
-        .map_err(|e| format!("failed to write PID file: {e}"))?;
+    std::fs::write(&path, pid.to_string()).map_err(|e| format!("failed to write PID file: {e}"))?;
 
     tracing::info!(pid, path = %path.display(), "daemon PID file written");
     Ok(path)
@@ -127,8 +125,7 @@ pub fn install_launchd(aegis_binary: &str) -> Result<(), String> {
     }
 
     let content = generate_launchd_plist(aegis_binary);
-    std::fs::write(&plist, content)
-        .map_err(|e| format!("failed to write plist: {e}"))?;
+    std::fs::write(&plist, content).map_err(|e| format!("failed to write plist: {e}"))?;
 
     tracing::info!(path = %plist.display(), "launchd plist installed");
     Ok(())
@@ -138,8 +135,7 @@ pub fn install_launchd(aegis_binary: &str) -> Result<(), String> {
 pub fn uninstall_launchd() -> Result<(), String> {
     let plist = plist_path();
     if plist.exists() {
-        std::fs::remove_file(&plist)
-            .map_err(|e| format!("failed to remove plist: {e}"))?;
+        std::fs::remove_file(&plist).map_err(|e| format!("failed to remove plist: {e}"))?;
         tracing::info!(path = %plist.display(), "launchd plist removed");
     }
     Ok(())
@@ -159,7 +155,11 @@ pub fn start_caffeinate() -> Result<std::process::Child, String> {
         .spawn()
         .map_err(|e| format!("failed to spawn caffeinate: {e}"))?;
 
-    tracing::info!(caffeinate_pid = child.id(), daemon_pid, "caffeinate started");
+    tracing::info!(
+        caffeinate_pid = child.id(),
+        daemon_pid,
+        "caffeinate started"
+    );
     Ok(child)
 }
 

@@ -7,8 +7,12 @@ use aegis_pilot::session::{StreamKind, ToolKind};
 pub fn format_stream_line(kind: &StreamKind, raw: &str) -> Vec<String> {
     match kind {
         StreamKind::Plain => vec![raw.to_string()],
-        StreamKind::Json { tool: ToolKind::ClaudeCode } => crate::ndjson_fmt::format_ndjson_line(raw),
-        StreamKind::Json { tool: ToolKind::Codex } => format_json_line(ToolKind::Codex, raw),
+        StreamKind::Json {
+            tool: ToolKind::ClaudeCode,
+        } => crate::ndjson_fmt::format_ndjson_line(raw),
+        StreamKind::Json {
+            tool: ToolKind::Codex,
+        } => format_json_line(ToolKind::Codex, raw),
     }
 }
 
@@ -19,14 +23,24 @@ mod tests {
     #[test]
     fn codex_thread_started() {
         let line = r#"{"type":"thread.started","thread_id":"abc"}"#;
-        let out = format_stream_line(&StreamKind::Json { tool: ToolKind::Codex }, line);
+        let out = format_stream_line(
+            &StreamKind::Json {
+                tool: ToolKind::Codex,
+            },
+            line,
+        );
         assert_eq!(out, vec!["Session started (thread_id: abc)".to_string()]);
     }
 
     #[test]
     fn codex_error() {
         let line = r#"{"type":"error","message":"boom"}"#;
-        let out = format_stream_line(&StreamKind::Json { tool: ToolKind::Codex }, line);
+        let out = format_stream_line(
+            &StreamKind::Json {
+                tool: ToolKind::Codex,
+            },
+            line,
+        );
         assert_eq!(out, vec!["Error: boom".to_string()]);
     }
 }

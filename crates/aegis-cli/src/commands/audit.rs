@@ -101,7 +101,8 @@ pub fn query(config_name: &str, opts: QueryOptions) -> Result<()> {
     // Fast path: --last with no other filters
     if let Some(n) = opts.last {
         if !opts.has_filters() {
-            let entries = store.query_last(n)
+            let entries = store
+                .query_last(n)
                 .with_context(|| format!("failed to query last {n} audit entries"))?;
             if entries.is_empty() {
                 println!("No audit entries found.");
@@ -186,7 +187,11 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
     println!("{separator}");
 
     for s in &sessions {
-        let status = if s.end_time.is_some() { "ended" } else { "active" };
+        let status = if s.end_time.is_some() {
+            "ended"
+        } else {
+            "active"
+        };
         let start = s.start_time.format(DATETIME_FULL_FMT);
         let cmd_display = if s.args.is_empty() {
             s.command.clone()
@@ -197,7 +202,13 @@ pub fn list_sessions(config_name: &str, last: usize) -> Result<()> {
 
         println!(
             "{:<36}  {:<8}  {:<20}  {:<6}  {:<6}  {:<16}  {}",
-            s.session_id, status, start, s.total_actions, s.denied_actions, tag_display, cmd_display
+            s.session_id,
+            status,
+            start,
+            s.total_actions,
+            s.denied_actions,
+            tag_display,
+            cmd_display
         );
     }
 
@@ -224,8 +235,15 @@ pub fn show_session(config_name: &str, session_id_str: &str) -> Result<()> {
     if let Some(tag) = &session.tag {
         println!("Tag:           {tag}");
     }
-    println!("Command:       {} {}", session.command, session.args.join(" "));
-    println!("Start time:    {}", session.start_time.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "Command:       {} {}",
+        session.command,
+        session.args.join(" ")
+    );
+    println!(
+        "Start time:    {}",
+        session.start_time.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     if let Some(end) = session.end_time {
         println!("End time:      {}", end.format("%Y-%m-%d %H:%M:%S UTC"));
     } else {
@@ -376,7 +394,9 @@ fn parse_duration(s: &str) -> Result<Duration> {
 
     // Split at the last ASCII character (the unit). Using char_indices avoids
     // panicking on multi-byte UTF-8 input (split_at on a non-char boundary panics).
-    let (idx, unit_char) = s.char_indices().next_back()
+    let (idx, unit_char) = s
+        .char_indices()
+        .next_back()
         .ok_or_else(|| anyhow::anyhow!("duration string is empty"))?;
     let num_str = &s[..idx];
     let unit = unit_char;
@@ -395,9 +415,7 @@ fn parse_duration(s: &str) -> Result<Duration> {
         'd' => Ok(Duration::days(num)),
         'h' => Ok(Duration::hours(num)),
         'm' => Ok(Duration::minutes(num)),
-        _ => bail!(
-            "unknown duration unit '{unit}'; valid units: d (days), h (hours), m (minutes)"
-        ),
+        _ => bail!("unknown duration unit '{unit}'; valid units: d (days), h (hours), m (minutes)"),
     }
 }
 
@@ -412,7 +430,10 @@ pub fn watch(config_name: &str, decision_filter: Option<&str>) -> Result<()> {
     let initial = store.query_after_id(0).context("failed to query entries")?;
     let mut last_id: i64 = initial.last().map(|(id, _)| *id).unwrap_or(0);
 
-    println!("Watching audit events for '{}' (Ctrl+C to stop)...", config_name);
+    println!(
+        "Watching audit events for '{}' (Ctrl+C to stop)...",
+        config_name
+    );
     println!();
 
     loop {
@@ -534,8 +555,7 @@ fn print_table(entries: &[AuditEntry]) {
 
     for entry in entries {
         let timestamp = entry.timestamp.format(DATETIME_FULL_FMT);
-        let action_display =
-            aegis_types::ActionKind::display_from_json(&entry.action_kind);
+        let action_display = aegis_types::ActionKind::display_from_json(&entry.action_kind);
 
         println!(
             "{:<36}  {:<8}  {:<15}  {:<20}  {}",
@@ -546,8 +566,7 @@ fn print_table(entries: &[AuditEntry]) {
 
 /// Export entries as a JSON array.
 fn export_json(entries: &[AuditEntry]) -> Result<()> {
-    let output =
-        serde_json::to_string_pretty(entries).context("failed to serialize entries")?;
+    let output = serde_json::to_string_pretty(entries).context("failed to serialize entries")?;
     println!("{output}");
     Ok(())
 }
@@ -573,7 +592,9 @@ fn export_jsonl(entries: &[AuditEntry]) {
 fn print_jsonl_entry(e: &AuditEntry) {
     match serde_json::to_string(e) {
         Ok(json) => println!("{json}"),
-        Err(err) => tracing::warn!(entry_id = %e.entry_id, error = %err, "failed to serialize audit entry"),
+        Err(err) => {
+            tracing::warn!(entry_id = %e.entry_id, error = %err, "failed to serialize audit entry")
+        }
     }
 }
 

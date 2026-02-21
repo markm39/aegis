@@ -55,9 +55,7 @@ fn test_append_and_query_back_fields_match() {
     assert_eq!(entry.action_id, action.id);
 
     // Query it back
-    let results = store
-        .query_last(1)
-        .expect("should query last entry");
+    let results = store.query_last(1).expect("should query last entry");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].entry_id, entry.entry_id);
     assert_eq!(results[0].principal, "agent-alpha");
@@ -108,9 +106,7 @@ fn test_fifty_mixed_entries_integrity_passes() {
             .expect("should append entry");
     }
 
-    let report = store
-        .verify_integrity()
-        .expect("should verify integrity");
+    let report = store.verify_integrity().expect("should verify integrity");
     assert!(
         report.valid,
         "integrity check should pass for 50 entries: {}",
@@ -238,7 +234,10 @@ fn test_tamper_detection_catches_modified_entry() {
     let report_before = store
         .verify_integrity()
         .expect("should verify integrity before tamper");
-    assert!(report_before.valid, "integrity should pass before tampering");
+    assert!(
+        report_before.valid,
+        "integrity should pass before tampering"
+    );
 
     // Tamper with the 3rd entry's action_kind via a separate raw SQLite connection
     {

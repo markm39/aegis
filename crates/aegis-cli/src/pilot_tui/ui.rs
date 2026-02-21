@@ -31,9 +31,9 @@ pub fn draw(frame: &mut Frame, app: &PilotApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(0),     // Main content
-            Constraint::Length(3),  // Status bar
+            Constraint::Length(3), // Header
+            Constraint::Min(0),    // Main content
+            Constraint::Length(3), // Status bar
         ])
         .split(frame.area());
 
@@ -45,7 +45,11 @@ pub fn draw(frame: &mut Frame, app: &PilotApp) {
 /// Render the header bar with session info.
 fn draw_header(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
     let status_text = if app.child_alive { "RUNNING" } else { "EXITED" };
-    let status_color = if app.child_alive { Color::Green } else { Color::Yellow };
+    let status_color = if app.child_alive {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
 
     let short_session = if app.session_id.len() > 8 {
         format!("{}...", &app.session_id[..8])
@@ -57,12 +61,16 @@ fn draw_header(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
         Span::styled(" Pilot: ", Style::default().fg(Color::White)),
         Span::styled(
             &app.command,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  [", Style::default().fg(Color::DarkGray)),
         Span::styled(
             status_text,
-            Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("]  ", Style::default().fg(Color::DarkGray)),
         Span::styled("Session: ", Style::default().fg(Color::DarkGray)),
@@ -72,12 +80,17 @@ fn draw_header(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
     ];
 
     if !app.socket_path.is_empty() {
-        header_spans.push(Span::styled("  Ctrl: ", Style::default().fg(Color::DarkGray)));
-        header_spans.push(Span::styled(&app.socket_path, Style::default().fg(Color::Magenta)));
+        header_spans.push(Span::styled(
+            "  Ctrl: ",
+            Style::default().fg(Color::DarkGray),
+        ));
+        header_spans.push(Span::styled(
+            &app.socket_path,
+            Style::default().fg(Color::Magenta),
+        ));
     }
 
-    let header = Paragraph::new(Line::from(header_spans))
-    .block(
+    let header = Paragraph::new(Line::from(header_spans)).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan)),
@@ -126,18 +139,18 @@ fn draw_output(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
         .iter()
         .map(|line| {
             let ts = line.timestamp.format("%H:%M:%S");
-            let mut spans = vec![
-                Span::styled(
-                    format!("[{ts}] "),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                format!("[{ts}] "),
+                Style::default().fg(Color::DarkGray),
+            )];
 
             match &line.annotation {
                 Some(LineAnnotation::Approved { .. }) => {
                     spans.push(Span::styled(
                         &line.text,
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
                 Some(LineAnnotation::Denied { .. }) => {
@@ -147,10 +160,7 @@ fn draw_output(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
                     ));
                 }
                 Some(LineAnnotation::Nudge) => {
-                    spans.push(Span::styled(
-                        &line.text,
-                        Style::default().fg(Color::Yellow),
-                    ));
+                    spans.push(Span::styled(&line.text, Style::default().fg(Color::Yellow)));
                 }
                 Some(LineAnnotation::Attention) => {
                     spans.push(Span::styled(
@@ -159,10 +169,7 @@ fn draw_output(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
                     ));
                 }
                 None => {
-                    spans.push(Span::styled(
-                        &line.text,
-                        Style::default().fg(Color::White),
-                    ));
+                    spans.push(Span::styled(&line.text, Style::default().fg(Color::White)));
                 }
             }
 
@@ -198,15 +205,34 @@ fn draw_stats(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) {
         .border_style(Style::default().fg(Color::Magenta));
 
     let text = vec![
-        labeled_line("Approved:", app.stats.approved.to_string(), Color::Green, true),
+        labeled_line(
+            "Approved:",
+            app.stats.approved.to_string(),
+            Color::Green,
+            true,
+        ),
         labeled_line("Denied:", app.stats.denied.to_string(), Color::Red, true),
-        labeled_line("Uncertain:", app.stats.uncertain.to_string(), Color::Yellow, false),
+        labeled_line(
+            "Uncertain:",
+            app.stats.uncertain.to_string(),
+            Color::Yellow,
+            false,
+        ),
         labeled_line("Nudges:", app.stats.nudges.to_string(), Color::Cyan, false),
-        labeled_line("Lines:", app.stats.lines_processed.to_string(), Color::White, false),
+        labeled_line(
+            "Lines:",
+            app.stats.lines_processed.to_string(),
+            Color::White,
+            false,
+        ),
         labeled_line(
             "Pending:",
             app.pending.len().to_string(),
-            if app.pending.is_empty() { Color::DarkGray } else { Color::Yellow },
+            if app.pending.is_empty() {
+                Color::DarkGray
+            } else {
+                Color::Yellow
+            },
             !app.pending.is_empty(),
         ),
     ];
@@ -237,14 +263,8 @@ fn draw_pending(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rect) 
             let truncated = truncate_str(&info.raw_prompt, 40);
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("[{ts}] "),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    truncated,
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(format!("[{ts}] "), Style::default().fg(Color::DarkGray)),
+                Span::styled(truncated, Style::default().fg(Color::White)),
             ]);
 
             let style = if i == app.pending_selected && app.focus_pending {
@@ -268,24 +288,62 @@ fn draw_status_bar(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rec
     let content = match app.mode {
         PilotMode::Normal => {
             let mut hints = vec![
-                Span::styled(" q", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " q",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(":quit ", Style::default().fg(Color::DarkGray)),
-                Span::styled("j/k", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "j/k",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(":scroll ", Style::default().fg(Color::DarkGray)),
-                Span::styled("G", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "G",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(":bottom ", Style::default().fg(Color::DarkGray)),
-                Span::styled("i", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "i",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(":input ", Style::default().fg(Color::DarkGray)),
-                Span::styled("n", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "n",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(":nudge ", Style::default().fg(Color::DarkGray)),
             ];
             if !app.pending.is_empty() {
                 hints.extend_from_slice(&[
-                    Span::styled("Tab", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Tab",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(":focus ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("a", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "a",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(":approve ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("d", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "d",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(":deny ", Style::default().fg(Color::DarkGray)),
                 ]);
             }
@@ -294,9 +352,12 @@ fn draw_status_bar(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rec
         PilotMode::InputMode => {
             let cursor_style = Style::default().fg(Color::Black).bg(Color::Yellow);
             let text_style = Style::default().fg(Color::White);
-            let mut spans = vec![
-                Span::styled(" INPUT> ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            ];
+            let mut spans = vec![Span::styled(
+                " INPUT> ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )];
             let buf = &app.input_buffer;
             let pos = app.input_cursor;
             if pos < buf.len() {
@@ -310,7 +371,10 @@ fn draw_status_bar(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rec
                 }
                 let ch = buf[safe_pos..].chars().next().unwrap_or(' ');
                 let ch_end = safe_pos + ch.len_utf8();
-                spans.push(Span::styled(buf[safe_pos..ch_end].to_string(), cursor_style));
+                spans.push(Span::styled(
+                    buf[safe_pos..ch_end].to_string(),
+                    cursor_style,
+                ));
                 if ch_end < buf.len() {
                     spans.push(Span::styled(&buf[ch_end..], text_style));
                 }
@@ -329,13 +393,11 @@ fn draw_status_bar(frame: &mut Frame, app: &PilotApp, area: ratatui::layout::Rec
         }
     };
 
-    let paragraph = Paragraph::new(content)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(paragraph, area);
 }
 

@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 

@@ -59,7 +59,10 @@ fn has_configs(aegis_dir: &std::path::Path) -> bool {
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().unwrap_or_default();
-                if name != "wraps" && name != "current" && path.join(aegis_types::CONFIG_FILENAME).exists() {
+                if name != "wraps"
+                    && name != "current"
+                    && path.join(aegis_types::CONFIG_FILENAME).exists()
+                {
                     return true;
                 }
             }

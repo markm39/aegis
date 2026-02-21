@@ -9,11 +9,7 @@ use uuid::Uuid;
 /// Parse a UUID string from a SQLite column, returning a `rusqlite::Error` on failure.
 pub(crate) fn parse_uuid(s: &str, col: usize) -> rusqlite::Result<Uuid> {
     Uuid::parse_str(s).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            col,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        )
+        rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
     })
 }
 
@@ -22,11 +18,7 @@ pub(crate) fn parse_datetime(s: &str, col: usize) -> rusqlite::Result<DateTime<U
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.into())
         .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                col,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
         })
 }
 

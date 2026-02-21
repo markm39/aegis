@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use aegis_types::AegisError;
 
-use crate::session::{StreamKind, ToolKind};
 use crate::session::AgentSession;
+use crate::session::{StreamKind, ToolKind};
 
 /// Protocol behavior for JSONL-based tool sessions.
 pub trait JsonlProtocol: Send + Sync + 'static {
@@ -23,7 +23,12 @@ pub trait JsonlProtocol: Send + Sync + 'static {
     fn spawn_args(&self, base_args: &[String], prompt: &str) -> Vec<String>;
     fn resume_args(&self, base_args: &[String], session_id: &str, prompt: &str) -> Vec<String>;
     fn parse_session_id(&self, json: &Value) -> Option<String>;
-    fn attach_command(&self, working_dir: &Path, session_id: &str, base_args: &[String]) -> Vec<String>;
+    fn attach_command(
+        &self,
+        working_dir: &Path,
+        session_id: &str,
+        base_args: &[String],
+    ) -> Vec<String>;
 }
 
 struct SessionInner {
@@ -94,13 +99,14 @@ impl<P: JsonlProtocol> JsonlSession<P> {
             cmd.env(key, value);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            AegisError::PilotError(format!("failed to spawn {command}: {e}"))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AegisError::PilotError(format!("failed to spawn {command}: {e}")))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            AegisError::PilotError("child stdout not captured".into())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AegisError::PilotError("child stdout not captured".into()))?;
 
         let raw_fd = stdout.as_raw_fd();
         let flags = fcntl(raw_fd, FcntlArg::F_GETFL)
@@ -129,7 +135,11 @@ impl<P: JsonlProtocol> JsonlSession<P> {
         buf.push_str(text);
 
         let mut parts: Vec<&str> = buf.split('\n').collect();
-        let trailing = if !buf.ends_with('\n') { parts.pop().unwrap_or("") } else { "" };
+        let trailing = if !buf.ends_with('\n') {
+            parts.pop().unwrap_or("")
+        } else {
+            ""
+        };
 
         for line in parts {
             let trimmed = line.trim();
@@ -153,12 +163,12 @@ impl<P: JsonlProtocol> JsonlSession<P> {
     fn send_via_stdin(inner: &mut SessionInner, text: &str) -> Result<(), AegisError> {
         if let Some(stdin) = inner.stdin.as_mut() {
             use std::io::Write;
-            stdin.write_all(text.as_bytes()).map_err(|e| {
-                AegisError::PilotError(format!("stdin write failed: {e}"))
-            })?;
-            stdin.write_all(b"\n").map_err(|e| {
-                AegisError::PilotError(format!("stdin write failed: {e}"))
-            })?;
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|e| AegisError::PilotError(format!("stdin write failed: {e}")))?;
+            stdin
+                .write_all(b"\n")
+                .map_err(|e| AegisError::PilotError(format!("stdin write failed: {e}")))?;
             Ok(())
         } else {
             Err(AegisError::PilotError("stdin not available".into()))
@@ -170,17 +180,16 @@ impl<P: JsonlProtocol> JsonlSession<P> {
             AegisError::PilotError("cannot resume: session_id not yet available".into())
         })?;
 
-        let resume_args = self.protocol.resume_args(&self.base_args, &session_id, text);
-        let new_inner = Self::spawn_process(
-            &self.command,
-            &resume_args,
-            &self.working_dir,
-            &self.env,
-        )?;
+        let resume_args = self
+            .protocol
+            .resume_args(&self.base_args, &session_id, text);
+        let new_inner =
+            Self::spawn_process(&self.command, &resume_args, &self.working_dir, &self.env)?;
 
-        let mut guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
         *guard = new_inner;
         Ok(())
     }
@@ -188,9 +197,10 @@ impl<P: JsonlProtocol> JsonlSession<P> {
 
 impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
     fn read(&self, buf: &mut [u8]) -> Result<usize, AegisError> {
-        let guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         let fd = guard.stdout_fd.as_raw_fd();
         match nix::unistd::read(fd, buf) {
@@ -209,16 +219,18 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
 
     fn write_all(&self, data: &[u8]) -> Result<(), AegisError> {
         let text = String::from_utf8_lossy(data);
-        let mut guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
         Self::send_via_stdin(&mut guard, &text)
     }
 
     fn send_line(&self, text: &str) -> Result<(), AegisError> {
-        let mut guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         match guard.child.try_wait() {
             Ok(Some(_)) => {
@@ -235,9 +247,10 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
     }
 
     fn poll_readable(&self, timeout_ms: i32) -> Result<bool, AegisError> {
-        let guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         let borrowed = guard.stdout_fd.as_fd();
         let mut poll_fd = [PollFd::new(borrowed, PollFlags::POLLIN)];
@@ -251,8 +264,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
             Ok(0) => Ok(false),
             Ok(_) => {
                 let revents = poll_fd[0].revents().unwrap_or(PollFlags::empty());
-                Ok(revents.contains(PollFlags::POLLIN)
-                    || revents.contains(PollFlags::POLLHUP))
+                Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false),
             Err(e) => Err(AegisError::PilotError(format!("poll stdout: {e}"))),
@@ -283,21 +295,24 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
     }
 
     fn wait(&self) -> Result<i32, AegisError> {
-        let mut guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
-        let status = guard.child.wait().map_err(|e| {
-            AegisError::PilotError(format!("wait failed: {e}"))
-        })?;
+        let status = guard
+            .child
+            .wait()
+            .map_err(|e| AegisError::PilotError(format!("wait failed: {e}")))?;
 
         Ok(status.code().unwrap_or(-1))
     }
 
     fn terminate(&self) -> Result<(), AegisError> {
-        let guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         signal::kill(Pid::from_raw(guard.child.id() as i32), Signal::SIGTERM)
             .map_err(|e| AegisError::PilotError(format!("kill SIGTERM: {e}")))
@@ -317,7 +332,10 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
 
     fn attach_command(&self) -> Option<Vec<String>> {
         let id = self.session_id()?;
-        Some(self.protocol.attach_command(&self.working_dir, &id, &self.base_args))
+        Some(
+            self.protocol
+                .attach_command(&self.working_dir, &id, &self.base_args),
+        )
     }
 
     fn session_id(&self) -> Option<String> {
@@ -342,7 +360,9 @@ impl JsonlProtocol for CodexJsonProtocol {
     }
 
     fn stream_kind(&self) -> StreamKind {
-        StreamKind::Json { tool: ToolKind::Codex }
+        StreamKind::Json {
+            tool: ToolKind::Codex,
+        }
     }
 
     fn spawn_args(&self, base_args: &[String], prompt: &str) -> Vec<String> {
@@ -375,12 +395,22 @@ impl JsonlProtocol for CodexJsonProtocol {
     fn parse_session_id(&self, json: &Value) -> Option<String> {
         let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if event_type == "thread.started" {
-            return json.get("thread_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+            return json
+                .get("thread_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
         }
-        json.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string())
+        json.get("session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    fn attach_command(&self, working_dir: &Path, session_id: &str, _base_args: &[String]) -> Vec<String> {
+    fn attach_command(
+        &self,
+        working_dir: &Path,
+        session_id: &str,
+        _base_args: &[String],
+    ) -> Vec<String> {
         vec![
             "codex".to_string(),
             "resume".to_string(),

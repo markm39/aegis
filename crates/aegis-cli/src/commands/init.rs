@@ -56,7 +56,6 @@ fn platform_isolation() -> IsolationConfig {
     }
 }
 
-
 /// Interactive TUI setup wizard for `aegis init` with no arguments.
 ///
 /// Launches a ratatui-based wizard that matches the visual style of the
@@ -96,7 +95,6 @@ fn run_wizard() -> Result<()> {
     Ok(())
 }
 
-
 /// Run a policy demo showing what actions would be allowed or denied.
 ///
 /// Creates a temporary PolicyEngine from the policy text and tests
@@ -123,12 +121,39 @@ fn run_policy_demo(agent_name: &str, policy_text: &str, project_dir: &Path) -> R
     let sample_file = project_dir.join("README.md");
 
     let test_actions: Vec<(&str, ActionKind)> = vec![
-        ("FileRead", ActionKind::FileRead { path: sample_file.clone() }),
-        ("FileWrite", ActionKind::FileWrite { path: sample_file.clone() }),
+        (
+            "FileRead",
+            ActionKind::FileRead {
+                path: sample_file.clone(),
+            },
+        ),
+        (
+            "FileWrite",
+            ActionKind::FileWrite {
+                path: sample_file.clone(),
+            },
+        ),
         ("FileDelete", ActionKind::FileDelete { path: sample_file }),
-        ("DirCreate", ActionKind::DirCreate { path: project_dir.join("new-dir") }),
-        ("NetConnect", ActionKind::NetConnect { host: "api.openai.com".to_string(), port: 443 }),
-        ("ProcessSpawn", ActionKind::ProcessSpawn { command: "/usr/bin/python3".to_string(), args: vec![] }),
+        (
+            "DirCreate",
+            ActionKind::DirCreate {
+                path: project_dir.join("new-dir"),
+            },
+        ),
+        (
+            "NetConnect",
+            ActionKind::NetConnect {
+                host: "api.openai.com".to_string(),
+                port: 443,
+            },
+        ),
+        (
+            "ProcessSpawn",
+            ActionKind::ProcessSpawn {
+                command: "/usr/bin/python3".to_string(),
+                args: vec![],
+            },
+        ),
     ];
 
     println!("\nPolicy demo:");
@@ -152,7 +177,14 @@ fn run_policy_demo(agent_name: &str, policy_text: &str, project_dir: &Path) -> R
         };
 
         let display_resource = if resource.len() > MAX_RESOURCE_DISPLAY_LEN {
-            let tail: String = resource.chars().rev().take(MAX_RESOURCE_DISPLAY_LEN - 3).collect::<Vec<_>>().into_iter().rev().collect();
+            let tail: String = resource
+                .chars()
+                .rev()
+                .take(MAX_RESOURCE_DISPLAY_LEN - 3)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             format!("...{tail}")
         } else {
             resource
@@ -174,7 +206,13 @@ pub fn run_in_dir(
     base_dir: &Path,
     project_dir: Option<&Path>,
 ) -> Result<()> {
-    run_in_dir_with_isolation(name, policy_template, base_dir, project_dir, platform_isolation())
+    run_in_dir_with_isolation(
+        name,
+        policy_template,
+        base_dir,
+        project_dir,
+        platform_isolation(),
+    )
 }
 
 /// Inner init logic with explicit isolation config.
@@ -189,7 +227,8 @@ pub fn run_in_dir_with_isolation(
 ) -> Result<()> {
     let policy_text = get_builtin_policy(policy_template).with_context(|| {
         format!(
-            "unknown policy template '{policy_template}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
+            "unknown policy template '{policy_template}'; valid options: {}",
+            aegis_policy::builtin::list_builtin_policies().join(", ")
         )
     })?;
 
@@ -331,15 +370,20 @@ pub fn load_config_from_dir(base_dir: &Path) -> Result<AegisConfig> {
         format!(
             "configuration '{}' not found at {}\n  \
              Hint: run 'aegis init {}' to create it, or 'aegis list' to see existing configs",
-            base_dir.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+            base_dir
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default(),
             config_path.display(),
-            base_dir.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+            base_dir
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default(),
         )
     })?;
 
-    AegisConfig::from_toml(&content).with_context(|| {
-        format!("failed to parse {}", config_path.display())
-    })
+    AegisConfig::from_toml(&content)
+        .with_context(|| format!("failed to parse {}", config_path.display()))
 }
 
 #[cfg(test)]
@@ -356,7 +400,10 @@ mod tests {
         // Config file should exist
         assert!(base_dir.join(CONFIG_FILENAME).exists());
         // Policy file should exist
-        assert!(base_dir.join("policies").join(DEFAULT_POLICY_FILENAME).exists());
+        assert!(base_dir
+            .join("policies")
+            .join(DEFAULT_POLICY_FILENAME)
+            .exists());
         // Sandbox dir should exist
         assert!(base_dir.join("sandbox").is_dir());
     }
@@ -410,5 +457,4 @@ mod tests {
         let config = load_config_from_dir(&base_dir).unwrap();
         assert_eq!(config.name, "roundtrip");
     }
-
 }

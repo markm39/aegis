@@ -60,25 +60,30 @@ impl PendingRequests {
         deny_response: String,
     ) -> Uuid {
         let id = Uuid::new_v4();
-        self.requests.insert(id, PendingRequest {
+        self.requests.insert(
             id,
-            raw_prompt,
-            created_at: Instant::now(),
-            approve_response,
-            deny_response,
-        });
+            PendingRequest {
+                id,
+                raw_prompt,
+                created_at: Instant::now(),
+                approve_response,
+                deny_response,
+            },
+        );
         id
     }
 
     /// Approve a pending request and return the response string to send.
     pub fn approve(&mut self, id: Uuid) -> Option<PendingDecision> {
-        self.requests.remove(&id)
+        self.requests
+            .remove(&id)
             .map(|r| PendingDecision::Approve(r.approve_response))
     }
 
     /// Deny a pending request and return the response string to send.
     pub fn deny(&mut self, id: Uuid) -> Option<PendingDecision> {
-        self.requests.remove(&id)
+        self.requests
+            .remove(&id)
             .map(|r| PendingDecision::Deny(r.deny_response))
     }
 

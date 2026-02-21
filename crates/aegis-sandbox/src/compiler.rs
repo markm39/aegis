@@ -26,7 +26,10 @@ use crate::{escape_sbpl_path, write_sbpl_base};
 ///
 /// Returns an error if the sandbox directory path contains characters
 /// that cannot be safely embedded in the SBPL profile.
-pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Result<String, AegisError> {
+pub fn compile_cedar_to_sbpl(
+    config: &AegisConfig,
+    engine: &PolicyEngine,
+) -> Result<String, AegisError> {
     let mut profile = String::new();
 
     // Common base: version, deny default, system reads, process exec, system primitives
@@ -36,9 +39,7 @@ pub fn compile_cedar_to_sbpl(config: &AegisConfig, engine: &PolicyEngine) -> Res
 
     // File read access: scoped to sandbox dir, only if Cedar permits FileRead or DirList
     if engine.permits_action("FileRead") || engine.permits_action("DirList") {
-        profile.push_str(&format!(
-            "(allow file-read* (subpath \"{sandbox_dir}\"))\n"
-        ));
+        profile.push_str(&format!("(allow file-read* (subpath \"{sandbox_dir}\"))\n"));
     }
 
     // File write access: scoped to sandbox dir, only if Cedar permits FileWrite or DirCreate
@@ -74,17 +75,16 @@ mod tests {
     fn test_config() -> AegisConfig {
         crate::test_helpers::test_config(
             PathBuf::from("/tmp/aegis-test-sandbox"),
-            IsolationConfig::Seatbelt { profile_overrides: None },
+            IsolationConfig::Seatbelt {
+                profile_overrides: None,
+            },
         )
     }
 
     #[test]
     fn default_deny_produces_restrictive_profile() {
-        let engine = PolicyEngine::from_policies(
-            r#"forbid(principal, action, resource);"#,
-            None,
-        )
-        .expect("engine");
+        let engine = PolicyEngine::from_policies(r#"forbid(principal, action, resource);"#, None)
+            .expect("engine");
         let config = test_config();
         let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
@@ -105,11 +105,8 @@ mod tests {
 
     #[test]
     fn permit_all_produces_permissive_profile() {
-        let engine = PolicyEngine::from_policies(
-            r#"permit(principal, action, resource);"#,
-            None,
-        )
-        .expect("engine");
+        let engine = PolicyEngine::from_policies(r#"permit(principal, action, resource);"#, None)
+            .expect("engine");
         let config = test_config();
         let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 
@@ -180,11 +177,8 @@ mod tests {
 
     #[test]
     fn profile_always_has_system_paths() {
-        let engine = PolicyEngine::from_policies(
-            r#"forbid(principal, action, resource);"#,
-            None,
-        )
-        .expect("engine");
+        let engine = PolicyEngine::from_policies(r#"forbid(principal, action, resource);"#, None)
+            .expect("engine");
         let config = test_config();
         let profile = compile_cedar_to_sbpl(&config, &engine).unwrap();
 

@@ -278,8 +278,12 @@ impl App {
                 start_time: row.get(3)?,
                 end_time: row.get(4)?,
                 exit_code: row.get(5)?,
-                total_actions: row.get::<_, i64>(6).map(|v| usize::try_from(v).unwrap_or(0))?,
-                denied_actions: row.get::<_, i64>(7).map(|v| usize::try_from(v).unwrap_or(0))?,
+                total_actions: row
+                    .get::<_, i64>(6)
+                    .map(|v| usize::try_from(v).unwrap_or(0))?,
+                denied_actions: row
+                    .get::<_, i64>(7)
+                    .map(|v| usize::try_from(v).unwrap_or(0))?,
             })
         }) {
             Ok(r) => r,
@@ -351,9 +355,7 @@ impl App {
             };
 
             let total: usize = conn
-                .query_row("SELECT COUNT(*) FROM audit_log", [], |r| {
-                    r.get::<_, i64>(0)
-                })
+                .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get::<_, i64>(0))
                 .unwrap_or(0) as usize;
 
             let last: Option<String> = conn
@@ -385,7 +387,8 @@ impl App {
         }
 
         // Sort merged entries by timestamp (most recent first)
-        self.home_recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        self.home_recent
+            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         self.home_recent.truncate(HOME_RECENT_TOTAL);
     }
 
@@ -542,10 +545,18 @@ impl App {
                 KeyCode::Esc => self.mode = AppMode::SessionList,
                 KeyCode::Char('a') => self.mode = AppMode::AuditFeed,
                 KeyCode::Up | KeyCode::Char('k') => {
-                    navigate(&mut self.session_detail_selected, self.session_entries.len(), true);
+                    navigate(
+                        &mut self.session_detail_selected,
+                        self.session_entries.len(),
+                        true,
+                    );
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    navigate(&mut self.session_detail_selected, self.session_entries.len(), false);
+                    navigate(
+                        &mut self.session_detail_selected,
+                        self.session_entries.len(),
+                        false,
+                    );
                 }
                 _ => {}
             },
@@ -557,8 +568,7 @@ impl App {
         // Open a read-only connection to load session entries
         let conn = match Connection::open_with_flags(
             &self.ledger_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ) {
             Ok(c) => c,
             Err(e) => {

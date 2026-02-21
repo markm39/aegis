@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use super::app::{WizardApp, WizardStep};
-use super::model::{ActionPermission, SecurityPreset, ScopeRule};
+use super::model::{ActionPermission, ScopeRule, SecurityPreset};
 
 /// Main draw function -- dispatches to the appropriate step renderer.
 pub fn draw(f: &mut Frame, app: &WizardApp) {
@@ -21,7 +21,7 @@ pub fn draw(f: &mut Frame, app: &WizardApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Title
+            Constraint::Length(3), // Title
             Constraint::Min(5),    // Content
             Constraint::Length(3), // Help
         ])
@@ -103,7 +103,7 @@ fn draw_config_name(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect)
         .constraints([
             Constraint::Length(2), // Description
             Constraint::Length(3), // Input
-            Constraint::Min(0),   // Spacer
+            Constraint::Min(0),    // Spacer
         ])
         .split(area);
 
@@ -136,7 +136,7 @@ fn draw_security_preset(f: &mut Frame, app: &WizardApp, area: ratatui::layout::R
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -187,7 +187,7 @@ fn draw_action_config(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rec
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List
+            Constraint::Min(5),    // List
         ])
         .split(area);
 
@@ -265,7 +265,7 @@ fn draw_scope_editor(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Description
-            Constraint::Min(5),   // Rules list
+            Constraint::Min(5),    // Rules list
             Constraint::Length(3), // Input (if editing)
         ])
         .split(area);
@@ -377,7 +377,7 @@ fn draw_project_dir(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect)
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // Description
-            Constraint::Min(5),   // List or input
+            Constraint::Min(5),    // List or input
         ])
         .split(area);
 
@@ -485,9 +485,7 @@ fn draw_summary(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect) {
             Span::styled("  ", Style::default()),
             Span::styled(
                 format!("[{status}]"),
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("  {:<18}", entry.meta.action),
@@ -529,7 +527,14 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     if path.chars().count() <= max_len {
         return path.to_string();
     }
-    let tail: String = path.chars().rev().take(max_len - 3).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = path
+        .chars()
+        .rev()
+        .take(max_len - 3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("...{tail}")
 }
 
@@ -563,10 +568,7 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
             ));
         }
     } else {
-        spans.push(Span::styled(
-            " ",
-            Style::default().bg(Color::Yellow),
-        ));
+        spans.push(Span::styled(" ", Style::default().bg(Color::Yellow)));
     }
     spans
 }
@@ -579,10 +581,7 @@ fn labeled_line<'a>(label: &str, value: &str, color: Color, bold: bool) -> Line<
         Style::default().fg(color)
     };
     Line::from(vec![
-        Span::styled(
-            format!("  {label:<12} "),
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(format!("  {label:<12} "), Style::default().fg(Color::White)),
         Span::styled(value.to_string(), style),
     ])
 }

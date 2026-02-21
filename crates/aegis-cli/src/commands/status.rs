@@ -47,11 +47,7 @@ pub fn run(config_name: &str) -> Result<()> {
                 .map(|entries| {
                     entries
                         .filter_map(|e| e.ok())
-                        .filter(|e| {
-                            e.path()
-                                .extension()
-                                .is_some_and(|ext| ext == "cedar")
-                        })
+                        .filter(|e| e.path().extension().is_some_and(|ext| ext == "cedar"))
                         .count()
                 })
                 .unwrap_or(0);

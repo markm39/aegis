@@ -51,8 +51,7 @@ impl PtySession {
                 let err = (|| -> Result<(), String> {
                     drop(pty.master);
 
-                    unistd::setsid()
-                        .map_err(|e| format!("setsid failed: {e}"))?;
+                    unistd::setsid().map_err(|e| format!("setsid failed: {e}"))?;
 
                     // Set controlling terminal via ioctl TIOCSCTTY
                     unsafe {
@@ -71,8 +70,7 @@ impl PtySession {
 
                     drop(pty.slave);
 
-                    unistd::chdir(working_dir)
-                        .map_err(|e| format!("chdir: {e}"))?;
+                    unistd::chdir(working_dir).map_err(|e| format!("chdir: {e}"))?;
 
                     // Unset CLAUDECODE so nested Claude Code sessions don't
                     // refuse to start with "cannot be launched inside another
@@ -88,13 +86,11 @@ impl PtySession {
                     let mut c_args: Vec<CString> = vec![c_command.clone()];
                     for arg in args {
                         c_args.push(
-                            CString::new(arg.as_str())
-                                .map_err(|e| format!("invalid arg: {e}"))?
+                            CString::new(arg.as_str()).map_err(|e| format!("invalid arg: {e}"))?,
                         );
                     }
 
-                    unistd::execvp(&c_command, &c_args)
-                        .map_err(|e| format!("exec failed: {e}"))?;
+                    unistd::execvp(&c_command, &c_args).map_err(|e| format!("exec failed: {e}"))?;
 
                     Ok(()) // unreachable: execvp replaces the process
                 })();
@@ -273,8 +269,7 @@ impl PtySession {
         let timeout = if timeout_ms < 0 {
             PollTimeout::NONE
         } else {
-            PollTimeout::try_from(timeout_ms as u32)
-                .unwrap_or(PollTimeout::MAX)
+            PollTimeout::try_from(timeout_ms as u32).unwrap_or(PollTimeout::MAX)
         };
 
         match nix::poll::poll(&mut poll_fd, timeout) {
@@ -282,8 +277,7 @@ impl PtySession {
             Ok(_) => {
                 let revents = poll_fd[0].revents().unwrap_or(PollFlags::empty());
                 // POLLIN means data available; POLLHUP means child closed
-                Ok(revents.contains(PollFlags::POLLIN)
-                    || revents.contains(PollFlags::POLLHUP))
+                Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false), // Interrupted, treat as timeout
             Err(e) => Err(AegisError::PilotError(format!("poll: {e}"))),
@@ -417,13 +411,8 @@ mod tests {
     #[test]
     fn spawn_and_write_to_stdin() {
         // Use cat to echo back what we write
-        let session = PtySession::spawn(
-            "/bin/cat",
-            &[],
-            &PathBuf::from("/tmp"),
-            &[],
-        )
-        .expect("spawn failed");
+        let session =
+            PtySession::spawn("/bin/cat", &[], &PathBuf::from("/tmp"), &[]).expect("spawn failed");
 
         std::thread::sleep(std::time::Duration::from_millis(50));
         session.send_line("test input").expect("write failed");

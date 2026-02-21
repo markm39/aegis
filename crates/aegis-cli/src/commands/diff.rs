@@ -132,9 +132,7 @@ fn print_section(header: &str, items: &[String]) {
 ///
 /// The action_kind is a JSON string like `{"FileRead":{"path":"/tmp/file.txt"}}`.
 /// We extract the variant name and resource for display.
-fn build_resource_map(
-    entries: &[aegis_ledger::AuditEntry],
-) -> BTreeMap<String, usize> {
+fn build_resource_map(entries: &[aegis_ledger::AuditEntry]) -> BTreeMap<String, usize> {
     let mut map = BTreeMap::new();
     for entry in entries {
         // Try to extract a human-readable key from the action_kind JSON

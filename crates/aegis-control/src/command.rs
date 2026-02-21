@@ -104,9 +104,16 @@ mod tests {
     #[test]
     fn command_json_roundtrip() {
         let commands = vec![
-            Command::SendInput { text: "hello".into() },
-            Command::Approve { request_id: Uuid::new_v4() },
-            Command::Deny { request_id: Uuid::new_v4(), reason: Some("too risky".into()) },
+            Command::SendInput {
+                text: "hello".into(),
+            },
+            Command::Approve {
+                request_id: Uuid::new_v4(),
+            },
+            Command::Deny {
+                request_id: Uuid::new_v4(),
+                reason: Some("too risky".into()),
+            },
             Command::Nudge { message: None },
             Command::Status,
             Command::GetOutput { lines: Some(50) },

@@ -196,8 +196,12 @@ mod tests {
         };
         let actions = event.to_actions();
         assert_eq!(actions.len(), 2);
-        assert!(matches!(&actions[0], ActionKind::FileDelete { path } if path == &PathBuf::from("/sandbox/old_name.txt")));
-        assert!(matches!(&actions[1], ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/new_name.txt")));
+        assert!(
+            matches!(&actions[0], ActionKind::FileDelete { path } if path == &PathBuf::from("/sandbox/old_name.txt"))
+        );
+        assert!(
+            matches!(&actions[1], ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/new_name.txt"))
+        );
     }
 
     #[test]
@@ -223,8 +227,12 @@ mod tests {
         };
         let actions = event.into_actions();
         assert_eq!(actions.len(), 2);
-        assert!(matches!(&actions[0], ActionKind::FileDelete { path } if path == &PathBuf::from("/sandbox/old.txt")));
-        assert!(matches!(&actions[1], ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/new.txt")));
+        assert!(
+            matches!(&actions[0], ActionKind::FileDelete { path } if path == &PathBuf::from("/sandbox/old.txt"))
+        );
+        assert!(
+            matches!(&actions[1], ActionKind::FileWrite { path } if path == &PathBuf::from("/sandbox/new.txt"))
+        );
     }
 
     #[test]

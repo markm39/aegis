@@ -11,8 +11,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use aegis_types::IsolationConfig;
 
 use super::model::{
-    apply_preset, default_action_entries, ActionEntry, ActionPermission, ScopeRule,
-    SecurityPreset, WizardResult,
+    apply_preset, default_action_entries, ActionEntry, ActionPermission, ScopeRule, SecurityPreset,
+    WizardResult,
 };
 use super::policy_gen;
 
@@ -100,8 +100,9 @@ impl WizardApp {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "my-project".to_string());
 
-        let home_dir =
-            std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"));
+        let home_dir = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/"));
 
         let dir_choices = vec![
             (format!("Current directory: {}", cwd.display()), cwd),
@@ -312,8 +313,7 @@ impl WizardApp {
             KeyCode::Enter => {
                 // Open scope editor for selected action (if allowed)
                 let entry = &self.actions[self.action_selected];
-                if !entry.meta.infrastructure
-                    && !matches!(entry.permission, ActionPermission::Deny)
+                if !entry.meta.infrastructure && !matches!(entry.permission, ActionPermission::Deny)
                 {
                     self.scope_action_index = self.action_selected;
                     self.scope_selected = 0;
@@ -593,9 +593,10 @@ impl WizardApp {
                 ActionPermission::Scoped(rules) if rules.len() == 1 => {
                     if let ScopeRule::PathPattern(p) = &rules[0] {
                         if p.ends_with("/**") {
-                            entry.permission = ActionPermission::Scoped(vec![
-                                ScopeRule::PathPattern(new_pattern.clone()),
-                            ]);
+                            entry.permission =
+                                ActionPermission::Scoped(vec![ScopeRule::PathPattern(
+                                    new_pattern.clone(),
+                                )]);
                         }
                     }
                 }
@@ -839,10 +840,7 @@ mod tests {
         match &app.actions[0].permission {
             ActionPermission::Scoped(rules) => {
                 assert_eq!(rules.len(), 1);
-                assert_eq!(
-                    rules[0],
-                    ScopeRule::PathPattern("/tmp/test/*".to_string())
-                );
+                assert_eq!(rules[0], ScopeRule::PathPattern("/tmp/test/*".to_string()));
             }
             other => panic!("expected Scoped, got {other:?}"),
         }
@@ -1005,7 +1003,10 @@ mod tests {
                         other => panic!("expected PathPattern, got {other:?}"),
                     }
                 }
-                other => panic!("{} expected Scoped, got {other:?}", app.actions[idx].meta.action),
+                other => panic!(
+                    "{} expected Scoped, got {other:?}",
+                    app.actions[idx].meta.action
+                ),
             }
         }
 

@@ -27,7 +27,10 @@ mod tests {
     #[test]
     fn always_returns_none() {
         let mut adapter = PassthroughAdapter;
-        assert_eq!(adapter.scan_line("Claude wants to use Bash"), ScanResult::None);
+        assert_eq!(
+            adapter.scan_line("Claude wants to use Bash"),
+            ScanResult::None
+        );
         assert_eq!(adapter.scan_line("Allow? (y/n)"), ScanResult::None);
         assert_eq!(adapter.scan_line(""), ScanResult::None);
     }

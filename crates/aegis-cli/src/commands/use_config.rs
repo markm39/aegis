@@ -86,15 +86,13 @@ pub fn run(name: Option<&str>) -> Result<()> {
             set_current(n)?;
             println!("Active configuration: {n}");
         }
-        None => {
-            match get_current() {
-                Ok(name) => println!("Active configuration: {name}"),
-                Err(_) => {
-                    let picked = pick_current()?;
-                    println!("Active configuration: {picked}");
-                }
+        None => match get_current() {
+            Ok(name) => println!("Active configuration: {name}"),
+            Err(_) => {
+                let picked = pick_current()?;
+                println!("Active configuration: {picked}");
             }
-        }
+        },
     }
     Ok(())
 }
@@ -153,7 +151,10 @@ mod tests {
         // Verify the list is actually sorted (the core invariant)
         let mut sorted = names.clone();
         sorted.sort();
-        assert_eq!(names, sorted, "config names should be returned in sorted order");
+        assert_eq!(
+            names, sorted,
+            "config names should be returned in sorted order"
+        );
         // Verify no empty names snuck in
         assert!(
             names.iter().all(|n| !n.is_empty()),
@@ -189,7 +190,10 @@ mod tests {
         // The get_current() function checks `!name.is_empty()` after trim.
         let content = std::fs::read_to_string(&current_path).expect("read");
         let name = content.trim().to_string();
-        assert!(name.is_empty(), "empty file should produce empty string after trim");
+        assert!(
+            name.is_empty(),
+            "empty file should produce empty string after trim"
+        );
     }
 
     #[test]

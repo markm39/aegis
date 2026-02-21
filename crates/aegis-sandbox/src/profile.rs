@@ -65,7 +65,9 @@ mod tests {
     fn base_config() -> AegisConfig {
         crate::test_helpers::test_config(
             PathBuf::from("/tmp/aegis-test-sandbox"),
-            IsolationConfig::Seatbelt { profile_overrides: None },
+            IsolationConfig::Seatbelt {
+                profile_overrides: None,
+            },
         )
     }
 
@@ -126,8 +128,11 @@ mod tests {
     fn profile_includes_overrides_from_file() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let overrides_path = dir.path().join("overrides.sb");
-        std::fs::write(&overrides_path, "(allow file-read* (literal \"/custom/path\"))\n")
-            .expect("failed to write overrides");
+        std::fs::write(
+            &overrides_path,
+            "(allow file-read* (literal \"/custom/path\"))\n",
+        )
+        .expect("failed to write overrides");
 
         let mut config = base_config();
         config.isolation = IsolationConfig::Seatbelt {

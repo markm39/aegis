@@ -59,8 +59,7 @@ impl DaemonState {
             .map_err(|e| format!("failed to serialize state: {e}"))?;
 
         let tmp_path = path.with_extension("json.tmp");
-        std::fs::write(&tmp_path, &json)
-            .map_err(|e| format!("failed to write state tmp: {e}"))?;
+        std::fs::write(&tmp_path, &json).map_err(|e| format!("failed to write state tmp: {e}"))?;
         std::fs::rename(&tmp_path, &path)
             .map_err(|e| format!("failed to rename state file: {e}"))?;
 

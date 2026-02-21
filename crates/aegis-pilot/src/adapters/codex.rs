@@ -66,12 +66,9 @@ impl CodexAdapter {
             state: State::Idle,
             re_shell_command: Regex::new(r"(?i)^\s*shell\s+command:?\s*$")
                 .expect("hardcoded regex"),
-            re_file_edit: Regex::new(r"(?i)^\s*file\s+edit:?\s*$")
-                .expect("hardcoded regex"),
-            re_dollar_command: Regex::new(r"^\s*\$\s*(.+)$")
-                .expect("hardcoded regex"),
-            re_file_path: Regex::new(r"^\s{2,}(\S+\.\w+)")
-                .expect("hardcoded regex"),
+            re_file_edit: Regex::new(r"(?i)^\s*file\s+edit:?\s*$").expect("hardcoded regex"),
+            re_dollar_command: Regex::new(r"^\s*\$\s*(.+)$").expect("hardcoded regex"),
+            re_file_path: Regex::new(r"^\s{2,}(\S+\.\w+)").expect("hardcoded regex"),
             re_proceed: Regex::new(r"(?i)(?:proceed|approve|accept)\?\s*\[y")
                 .expect("hardcoded regex"),
         }
@@ -106,12 +103,16 @@ impl CodexAdapter {
         let command = self.extract_shell_command(lines);
         let parts: Vec<&str> = command.splitn(2, char::is_whitespace).collect();
         let program = parts.first().unwrap_or(&"").to_string();
-        let args = parts.get(1)
+        let args = parts
+            .get(1)
             .map(|a| vec![a.to_string()])
             .unwrap_or_default();
 
         PromptDetection {
-            action: ActionKind::ProcessSpawn { command: program, args },
+            action: ActionKind::ProcessSpawn {
+                command: program,
+                args,
+            },
             raw_prompt: lines.join("\n"),
             approve_response: "y".into(),
             deny_response: "n".into(),
@@ -122,7 +123,9 @@ impl CodexAdapter {
     fn build_file_edit_detection(&self, lines: &[String]) -> PromptDetection {
         let path = self.extract_file_path(lines);
         PromptDetection {
-            action: ActionKind::FileWrite { path: PathBuf::from(path) },
+            action: ActionKind::FileWrite {
+                path: PathBuf::from(path),
+            },
             raw_prompt: lines.join("\n"),
             approve_response: "y".into(),
             deny_response: "n".into(),
@@ -226,7 +229,10 @@ mod tests {
         let mut adapter = CodexAdapter::new();
 
         assert_eq!(adapter.scan_line("Shell command:"), ScanResult::Partial);
-        assert_eq!(adapter.scan_line("  $ npm install express"), ScanResult::Partial);
+        assert_eq!(
+            adapter.scan_line("  $ npm install express"),
+            ScanResult::Partial
+        );
         assert_eq!(adapter.scan_line(""), ScanResult::Partial);
 
         match adapter.scan_line("Do you want to proceed? [y/n]") {
@@ -254,14 +260,12 @@ mod tests {
         assert_eq!(adapter.scan_line("  + fn hello() {}"), ScanResult::Partial);
 
         match adapter.scan_line("Do you want to proceed? [y/n]") {
-            ScanResult::Prompt(det) => {
-                match &det.action {
-                    ActionKind::FileWrite { path } => {
-                        assert_eq!(path, &PathBuf::from("src/main.rs"));
-                    }
-                    other => panic!("expected FileWrite, got {other:?}"),
+            ScanResult::Prompt(det) => match &det.action {
+                ActionKind::FileWrite { path } => {
+                    assert_eq!(path, &PathBuf::from("src/main.rs"));
                 }
-            }
+                other => panic!("expected FileWrite, got {other:?}"),
+            },
             other => panic!("expected Prompt, got {other:?}"),
         }
     }

@@ -18,7 +18,9 @@ const MIN_MACOS_VERSION: u32 = 12;
 /// 3. Creates the ~/.aegis/ base directory
 /// 4. Runs a self-test to confirm sandboxing works
 pub fn run() -> Result<()> {
-    eprintln!("Note: `aegis setup` is deprecated. Use `aegis` to launch the onboarding wizard instead.");
+    eprintln!(
+        "Note: `aegis setup` is deprecated. Use `aegis` to launch the onboarding wizard instead."
+    );
     eprintln!();
 
     println!("Aegis Setup");
@@ -84,7 +86,9 @@ fn check_macos_version() -> Result<()> {
         .split('.')
         .next()
         .and_then(|s| s.parse().ok())
-        .with_context(|| format!("could not parse macOS version from sw_vers output: '{version_str}'"))?;
+        .with_context(|| {
+            format!("could not parse macOS version from sw_vers output: '{version_str}'")
+        })?;
 
     if major < MIN_MACOS_VERSION {
         bail!(
@@ -117,9 +121,8 @@ fn create_aegis_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME environment variable not set")?;
     let aegis_dir = PathBuf::from(home).join(".aegis");
 
-    std::fs::create_dir_all(&aegis_dir).with_context(|| {
-        format!("failed to create directory: {}", aegis_dir.display())
-    })?;
+    std::fs::create_dir_all(&aegis_dir)
+        .with_context(|| format!("failed to create directory: {}", aegis_dir.display()))?;
 
     println!("OK");
     Ok(aegis_dir)

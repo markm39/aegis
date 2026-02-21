@@ -98,14 +98,8 @@ pub fn format_pilot_event(event: &PilotWebhookEvent) -> OutboundMessage {
                 escape_md(&request_id.to_string()),
             );
             let buttons = vec![
-                (
-                    "Approve".to_string(),
-                    format!("approve:{request_id}"),
-                ),
-                (
-                    "Deny".to_string(),
-                    format!("deny:{request_id}"),
-                ),
+                ("Approve".to_string(), format!("approve:{request_id}")),
+                ("Deny".to_string(), format!("deny:{request_id}")),
             ];
             OutboundMessage::with_buttons(text, buttons)
         }
@@ -121,7 +115,11 @@ pub fn format_pilot_event(event: &PilotWebhookEvent) -> OutboundMessage {
             OutboundMessage::text(text)
         }
         PilotEventKind::AgentExited { exit_code } => {
-            let status = if *exit_code == 0 { "success" } else { "failure" };
+            let status = if *exit_code == 0 {
+                "success"
+            } else {
+                "failure"
+            };
             let text = format!(
                 "*Agent Exited*\n\n\
                  `{}` \\(PID {}\\) exited with code {} \\({}\\)\\.\n\
@@ -380,7 +378,9 @@ pub fn parse_fleet_command(text: &str) -> Option<DaemonCommand> {
             if rest.is_empty() {
                 Some(DaemonCommand::FleetGoal { goal: None })
             } else {
-                Some(DaemonCommand::FleetGoal { goal: Some(rest.to_string()) })
+                Some(DaemonCommand::FleetGoal {
+                    goal: Some(rest.to_string()),
+                })
             }
         }
 
@@ -393,7 +393,9 @@ pub fn parse_fleet_command(text: &str) -> Option<DaemonCommand> {
             match parts.next() {
                 None => {
                     // View mode: /context <agent>
-                    Some(DaemonCommand::GetAgentContext { name: agent.to_string() })
+                    Some(DaemonCommand::GetAgentContext {
+                        name: agent.to_string(),
+                    })
                 }
                 Some(field) => {
                     let value = parts.next().unwrap_or("").trim().to_string();

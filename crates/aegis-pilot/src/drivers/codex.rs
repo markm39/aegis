@@ -52,7 +52,10 @@ impl AgentDriver for CodexDriver {
             command: "codex".to_string(),
             args,
             env,
-            kind: ProcessKind::Json { tool: ToolKind::Codex, global_args },
+            kind: ProcessKind::Json {
+                tool: ToolKind::Codex,
+                global_args,
+            },
         }
     }
 

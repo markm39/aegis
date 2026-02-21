@@ -18,10 +18,7 @@ pub fn show(config_name: &str) -> Result<()> {
     let config_dir = resolve_config_dir(config_name)?;
 
     // Determine config type
-    let config_type = if config_dir
-        .to_string_lossy()
-        .contains(".aegis/wraps/")
-    {
+    let config_type = if config_dir.to_string_lossy().contains(".aegis/wraps/") {
         "wrap"
     } else {
         "init"
@@ -70,7 +67,10 @@ pub fn show(config_name: &str) -> Result<()> {
         println!("  Schema:     {}", schema.display());
     }
 
-    println!("  Config at:  {}", config_dir.join(CONFIG_FILENAME).display());
+    println!(
+        "  Config at:  {}",
+        config_dir.join(CONFIG_FILENAME).display()
+    );
 
     Ok(())
 }
@@ -200,15 +200,13 @@ mod tests {
     #[test]
     fn describe_observer_variants() {
         assert_eq!(aegis_types::ObserverConfig::None.to_string(), "None");
-        assert!(
-            aegis_types::ObserverConfig::FsEvents { enable_snapshots: false }
-                .to_string()
-                .contains("disabled")
-        );
-        assert!(
-            aegis_types::ObserverConfig::EndpointSecurity
-                .to_string()
-                .contains("Endpoint")
-        );
+        assert!(aegis_types::ObserverConfig::FsEvents {
+            enable_snapshots: false
+        }
+        .to_string()
+        .contains("disabled"));
+        assert!(aegis_types::ObserverConfig::EndpointSecurity
+            .to_string()
+            .contains("Endpoint"));
     }
 }

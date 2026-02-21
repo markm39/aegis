@@ -29,8 +29,7 @@ pub async fn serve(
 ) -> Result<(), String> {
     // Ensure the parent directory exists
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create socket dir: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create socket dir: {e}"))?;
     }
 
     // Remove stale socket file (ignore NotFound to avoid TOCTOU race)
@@ -40,8 +39,12 @@ pub async fn serve(
         Err(e) => return Err(format!("failed to remove stale socket: {e}")),
     }
 
-    let listener = UnixListener::bind(socket_path)
-        .map_err(|e| format!("failed to bind unix socket at {}: {e}", socket_path.display()))?;
+    let listener = UnixListener::bind(socket_path).map_err(|e| {
+        format!(
+            "failed to bind unix socket at {}: {e}",
+            socket_path.display()
+        )
+    })?;
 
     info!(path = %socket_path.display(), "started Unix socket control server");
 

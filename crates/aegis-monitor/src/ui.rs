@@ -65,10 +65,7 @@ fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
     };
 
     let line = Line::from(vec![
-        Span::styled(
-            format!("[{ts}] "),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!("[{ts}] "), Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("[{}] ", entry.decision),
             Style::default()
@@ -83,10 +80,7 @@ fn entry_list_item(entry: &AuditEntry, selected: bool) -> ListItem<'static> {
             format!("{} ", entry.action_kind),
             Style::default().fg(Color::White),
         ),
-        Span::styled(
-            reason,
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(reason, Style::default().fg(Color::DarkGray)),
     ]);
 
     let style = if selected {
@@ -229,8 +223,18 @@ fn draw_stats(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         labeled_line("Total:", app.total_count.to_string(), Color::Cyan, true),
         labeled_line("Allowed:", app.allow_count.to_string(), Color::Green, false),
         labeled_line("Denied:", app.deny_count.to_string(), Color::Red, false),
-        labeled_line("Deny rate:", format!("{deny_rate:.1}%"), deny_rate_color, true),
-        labeled_line("Sessions:", app.sessions.len().to_string(), Color::Cyan, false),
+        labeled_line(
+            "Deny rate:",
+            format!("{deny_rate:.1}%"),
+            deny_rate_color,
+            true,
+        ),
+        labeled_line(
+            "Sessions:",
+            app.sessions.len().to_string(),
+            Color::Cyan,
+            false,
+        ),
     ];
 
     // Action distribution bar chart
@@ -287,12 +291,12 @@ fn draw_info(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if matches!(app.mode, AppMode::FilterMode) {
         lines.push(Line::from(""));
         // Build cursor-aware spans: text before cursor, cursor char, text after cursor
-        let mut filter_spans = vec![
-            Span::styled("Filter: ", Style::default().fg(Color::Yellow)),
-        ];
+        let mut filter_spans = vec![Span::styled("Filter: ", Style::default().fg(Color::Yellow))];
         let cursor = app.filter_cursor;
         let text = &app.filter_text;
-        let text_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let text_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
         let cursor_style = Style::default().fg(Color::Black).bg(Color::Cyan);
         if text.is_empty() {
             // Show block cursor on empty input
@@ -352,11 +356,7 @@ fn draw_home_view(frame: &mut Frame, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, config)| {
-            let (total, last) = app
-                .home_stats
-                .get(i)
-                .cloned()
-                .unwrap_or((0, None));
+            let (total, last) = app.home_stats.get(i).cloned().unwrap_or((0, None));
 
             let last_str = last.unwrap_or_else(|| "(never)".to_string());
             // Extract the time portion (HH:MM:SS) from an RFC 3339 timestamp
@@ -479,7 +479,10 @@ fn draw_session_list_view(frame: &mut Frame, app: &App) {
             };
 
             // Extract the time portion (HH:MM:SS) from an RFC 3339 timestamp
-            let time_display = session.start_time.get(11..19).unwrap_or(&session.start_time);
+            let time_display = session
+                .start_time
+                .get(11..19)
+                .unwrap_or(&session.start_time);
 
             let deny_rate = if session.total_actions > 0 {
                 session.denied_actions as f64 / session.total_actions as f64 * 100.0
@@ -488,10 +491,7 @@ fn draw_session_list_view(frame: &mut Frame, app: &App) {
             };
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{short_id} "),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("{short_id} "), Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("[{time_display}] "),
                     Style::default().fg(Color::White),
@@ -582,15 +582,27 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
             labeled_line("Status:", status_text, status_color, false),
             labeled_line(
                 "Actions:",
-                format!("{} total, {} denied", session.total_actions, session.denied_actions),
+                format!(
+                    "{} total, {} denied",
+                    session.total_actions, session.denied_actions
+                ),
                 Color::White,
                 false,
             ),
             labeled_line("Config:", session.config_name.clone(), Color::Cyan, false),
-            labeled_line("Started:", session.start_time.clone(), Color::DarkGray, false),
+            labeled_line(
+                "Started:",
+                session.start_time.clone(),
+                Color::DarkGray,
+                false,
+            ),
             labeled_line(
                 "Ended:",
-                session.end_time.as_deref().unwrap_or("(running)").to_string(),
+                session
+                    .end_time
+                    .as_deref()
+                    .unwrap_or("(running)")
+                    .to_string(),
                 Color::DarkGray,
                 false,
             ),
@@ -607,10 +619,7 @@ fn draw_session_detail_view(frame: &mut Frame, app: &App) {
 
     // Session entries list
     let entries_block = Block::default()
-        .title(format!(
-            " Entries ({}) ",
-            app.session_entries.len()
-        ))
+        .title(format!(" Entries ({}) ", app.session_entries.len()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Magenta));
 
@@ -827,10 +836,7 @@ mod tests {
                 ledger_path: PathBuf::from("/tmp/b.db"),
             },
         ]);
-        app.home_stats = vec![
-            (12, Some("2026-01-01T10:32:15Z".into())),
-            (0, None),
-        ];
+        app.home_stats = vec![(12, Some("2026-01-01T10:32:15Z".into())), (0, None)];
         app.home_recent = vec![
             sample_entry("claude", "Allow", "FileRead"),
             sample_entry("claude", "Deny", "NetConnect"),

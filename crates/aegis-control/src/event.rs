@@ -34,33 +34,20 @@ pub struct PilotWebhookEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PilotEventKind {
     /// A permission prompt was auto-approved.
-    PermissionApproved {
-        action: String,
-        reason: String,
-    },
+    PermissionApproved { action: String, reason: String },
     /// A permission prompt was auto-denied.
-    PermissionDenied {
-        action: String,
-        reason: String,
-    },
+    PermissionDenied { action: String, reason: String },
     /// Agent stall detected; nudge sent.
-    StallDetected {
-        nudge_count: u32,
-        idle_secs: u64,
-    },
+    StallDetected { nudge_count: u32, idle_secs: u64 },
     /// Agent needs human attention (max nudges exceeded).
-    AttentionNeeded {
-        nudge_count: u32,
-    },
+    AttentionNeeded { nudge_count: u32 },
     /// An uncertain prompt requires human decision.
     PendingApproval {
         request_id: Uuid,
         raw_prompt: String,
     },
     /// The supervised agent has exited.
-    AgentExited {
-        exit_code: i32,
-    },
+    AgentExited { exit_code: i32 },
 }
 
 /// Summary statistics included in webhook events.
@@ -131,7 +118,10 @@ mod tests {
                 action: "FileRead /tmp/a".into(),
                 reason: "permit-all".into(),
             },
-            PilotEventKind::StallDetected { nudge_count: 1, idle_secs: 120 },
+            PilotEventKind::StallDetected {
+                nudge_count: 1,
+                idle_secs: 120,
+            },
             PilotEventKind::AttentionNeeded { nudge_count: 5 },
             PilotEventKind::PendingApproval {
                 request_id: Uuid::new_v4(),

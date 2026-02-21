@@ -146,38 +146,51 @@ impl PilotApp {
                 self.sync_shared(|s| s.push_output(text.clone()));
                 self.push_output(text.clone(), None);
             }
-            PilotUpdate::PromptDecided { action, decision, reason } => {
+            PilotUpdate::PromptDecided {
+                action,
+                decision,
+                reason,
+            } => {
                 let (label, annotation) = match decision {
-                    Decision::Allow => ("APPROVED", LineAnnotation::Approved {
-                        action: action.clone(),
-                        reason: reason.clone(),
-                    }),
-                    Decision::Deny => ("DENIED", LineAnnotation::Denied {
-                        action: action.clone(),
-                        reason: reason.clone(),
-                    }),
+                    Decision::Allow => (
+                        "APPROVED",
+                        LineAnnotation::Approved {
+                            action: action.clone(),
+                            reason: reason.clone(),
+                        },
+                    ),
+                    Decision::Deny => (
+                        "DENIED",
+                        LineAnnotation::Denied {
+                            action: action.clone(),
+                            reason: reason.clone(),
+                        },
+                    ),
                 };
                 let text = format!("[{label}] {action} -- {reason}");
                 self.sync_shared(|s| s.push_output(text.clone()));
                 self.push_output(text, Some(annotation));
             }
-            PilotUpdate::PendingPrompt { request_id, raw_prompt } => {
+            PilotUpdate::PendingPrompt {
+                request_id,
+                raw_prompt,
+            } => {
                 self.sync_shared(|s| s.add_pending(request_id, raw_prompt.clone()));
                 self.pending.push(PendingInfo {
                     request_id,
                     raw_prompt: raw_prompt.clone(),
                     received_at: Local::now(),
                 });
-                self.push_output(
-                    format!("[PENDING] {raw_prompt}"),
-                    None,
-                );
+                self.push_output(format!("[PENDING] {raw_prompt}"), None);
                 // Auto-focus pending panel when first request arrives
                 if self.pending.len() == 1 {
                     self.focus_pending = true;
                 }
             }
-            PilotUpdate::PendingResolved { request_id, approved } => {
+            PilotUpdate::PendingResolved {
+                request_id,
+                approved,
+            } => {
                 self.sync_shared(|s| s.remove_pending(request_id));
                 self.pending.retain(|p| p.request_id != request_id);
                 if self.pending_selected >= self.pending.len() && !self.pending.is_empty() {
@@ -186,7 +199,11 @@ impl PilotApp {
                 if self.pending.is_empty() {
                     self.focus_pending = false;
                 }
-                let tag = if approved { "RESOLVED:APPROVED" } else { "RESOLVED:DENIED" };
+                let tag = if approved {
+                    "RESOLVED:APPROVED"
+                } else {
+                    "RESOLVED:DENIED"
+                };
                 self.push_output(format!("[{tag}] request {request_id}"), None);
             }
             PilotUpdate::StallNudge { nudge_count } => {
@@ -242,9 +259,7 @@ impl PilotApp {
         }
 
         // Ctrl+C always exits (raw mode captures the signal).
-        if key.code == KeyCode::Char('c')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.running = false;
             return;
         }
@@ -317,7 +332,9 @@ impl PilotApp {
             }
             KeyCode::Char('n') => {
                 // Send nudge
-                let _ = self.command_tx.send(SupervisorCommand::Nudge { message: None });
+                let _ = self
+                    .command_tx
+                    .send(SupervisorCommand::Nudge { message: None });
             }
             KeyCode::Home => {
                 self.scroll_offset = self.output_lines.len().saturating_sub(1);
@@ -326,9 +343,8 @@ impl PilotApp {
                 self.scroll_offset = 0;
             }
             KeyCode::PageUp => {
-                self.scroll_offset = (self.scroll_offset + 20).min(
-                    self.output_lines.len().saturating_sub(1),
-                );
+                self.scroll_offset =
+                    (self.scroll_offset + 20).min(self.output_lines.len().saturating_sub(1));
             }
             KeyCode::PageDown => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(20);
@@ -348,31 +364,30 @@ impl PilotApp {
                 if !self.input_buffer.is_empty() {
                     let text = std::mem::take(&mut self.input_buffer);
                     self.input_cursor = 0;
-                    let _ = self.command_tx.send(SupervisorCommand::SendInput {
-                        text: text.clone(),
-                    });
+                    let _ = self
+                        .command_tx
+                        .send(SupervisorCommand::SendInput { text: text.clone() });
                     self.push_output(format!("[INPUT] > {text}"), None);
                 }
                 self.mode = PilotMode::Normal;
             }
-            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match c {
-                    'a' => self.input_cursor = 0,
-                    'e' => self.input_cursor = self.input_buffer.len(),
-                    'u' => {
-                        self.input_buffer.drain(..self.input_cursor);
-                        self.input_cursor = 0;
-                    }
-                    'w' => {
-                        if self.input_cursor > 0 {
-                            let new_pos = delete_word_backward_pos(&self.input_buffer, self.input_cursor);
-                            self.input_buffer.drain(new_pos..self.input_cursor);
-                            self.input_cursor = new_pos;
-                        }
-                    }
-                    _ => {}
+            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+                'a' => self.input_cursor = 0,
+                'e' => self.input_cursor = self.input_buffer.len(),
+                'u' => {
+                    self.input_buffer.drain(..self.input_cursor);
+                    self.input_cursor = 0;
                 }
-            }
+                'w' => {
+                    if self.input_cursor > 0 {
+                        let new_pos =
+                            delete_word_backward_pos(&self.input_buffer, self.input_cursor);
+                        self.input_buffer.drain(new_pos..self.input_cursor);
+                        self.input_cursor = new_pos;
+                    }
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 self.input_buffer.insert(self.input_cursor, c);
                 self.input_cursor += c.len_utf8();

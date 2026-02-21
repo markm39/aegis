@@ -106,10 +106,7 @@ impl AuditStore {
     }
 
     /// Count entries grouped by principal for entries matching the filter.
-    fn count_by_principal(
-        &self,
-        filter: &AuditFilter,
-    ) -> Result<Vec<(String, usize)>, AegisError> {
+    fn count_by_principal(&self, filter: &AuditFilter) -> Result<Vec<(String, usize)>, AegisError> {
         self.count_grouped_by("principal", filter)
     }
 
@@ -171,11 +168,42 @@ mod tests {
 
     fn populate(store: &mut AuditStore) {
         let entries = vec![
-            ("alice", ActionKind::FileRead { path: PathBuf::from("/a") }, true),
-            ("alice", ActionKind::FileWrite { path: PathBuf::from("/b") }, false),
-            ("bob", ActionKind::FileRead { path: PathBuf::from("/c") }, true),
-            ("bob", ActionKind::NetConnect { host: "x.com".into(), port: 443 }, false),
-            ("alice", ActionKind::DirList { path: PathBuf::from("/d") }, true),
+            (
+                "alice",
+                ActionKind::FileRead {
+                    path: PathBuf::from("/a"),
+                },
+                true,
+            ),
+            (
+                "alice",
+                ActionKind::FileWrite {
+                    path: PathBuf::from("/b"),
+                },
+                false,
+            ),
+            (
+                "bob",
+                ActionKind::FileRead {
+                    path: PathBuf::from("/c"),
+                },
+                true,
+            ),
+            (
+                "bob",
+                ActionKind::NetConnect {
+                    host: "x.com".into(),
+                    port: 443,
+                },
+                false,
+            ),
+            (
+                "alice",
+                ActionKind::DirList {
+                    path: PathBuf::from("/d"),
+                },
+                true,
+            ),
         ];
         for (principal, kind, allow) in entries {
             let action = Action::new(principal, kind);

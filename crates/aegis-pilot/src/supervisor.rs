@@ -50,23 +50,13 @@ pub enum PilotEvent {
         reason: String,
     },
     /// A stall was detected and a nudge was sent.
-    StallNudge {
-        nudge_count: u32,
-        idle_secs: u64,
-    },
+    StallNudge { nudge_count: u32, idle_secs: u64 },
     /// Max nudges exceeded; agent needs human attention.
-    AttentionNeeded {
-        nudge_count: u32,
-    },
+    AttentionNeeded { nudge_count: u32 },
     /// An uncertain prompt was encountered.
-    UncertainPrompt {
-        text: String,
-        action_taken: String,
-    },
+    UncertainPrompt { text: String, action_taken: String },
     /// The child process exited.
-    ChildExited {
-        exit_code: i32,
-    },
+    ChildExited { exit_code: i32 },
 }
 
 /// Richer event type for the TUI, including output lines and pending prompts.
@@ -89,24 +79,15 @@ pub enum PilotUpdate {
         raw_prompt: String,
     },
     /// A pending prompt was resolved (approved or denied).
-    PendingResolved {
-        request_id: Uuid,
-        approved: bool,
-    },
+    PendingResolved { request_id: Uuid, approved: bool },
     /// A stall nudge was sent.
-    StallNudge {
-        nudge_count: u32,
-    },
+    StallNudge { nudge_count: u32 },
     /// Max nudges exceeded; agent needs human attention.
-    AttentionNeeded {
-        nudge_count: u32,
-    },
+    AttentionNeeded { nudge_count: u32 },
     /// Agent resumed output after being stalled; attention no longer needed.
     StallResolved,
     /// The child process exited.
-    ChildExited {
-        exit_code: i32,
-    },
+    ChildExited { exit_code: i32 },
     /// Periodic stats snapshot.
     Stats(PilotStats),
     /// The session supports external attach (e.g., tmux, or `claude --resume`).
@@ -321,28 +302,43 @@ pub fn run(
         match stall.check() {
             StallAction::Active => {}
             StallAction::Nudge(msg) => {
-                info!(nudge_count = stall.nudge_count(), "stall detected, sending nudge");
+                info!(
+                    nudge_count = stall.nudge_count(),
+                    "stall detected, sending nudge"
+                );
                 pty.send_line(&msg)?;
                 stats.nudges += 1;
-                emit(event_tx, PilotEvent::StallNudge {
-                    nudge_count: stall.nudge_count(),
-                    idle_secs: stall.timeout().as_secs(),
-                });
-                send_update(update_tx, PilotUpdate::StallNudge {
-                    nudge_count: stall.nudge_count(),
-                });
+                emit(
+                    event_tx,
+                    PilotEvent::StallNudge {
+                        nudge_count: stall.nudge_count(),
+                        idle_secs: stall.timeout().as_secs(),
+                    },
+                );
+                send_update(
+                    update_tx,
+                    PilotUpdate::StallNudge {
+                        nudge_count: stall.nudge_count(),
+                    },
+                );
             }
             StallAction::MaxNudgesExceeded => {
                 warn!(
                     nudge_count = stall.nudge_count(),
                     "max nudges exceeded, agent needs attention"
                 );
-                emit(event_tx, PilotEvent::AttentionNeeded {
-                    nudge_count: stall.nudge_count(),
-                });
-                send_update(update_tx, PilotUpdate::AttentionNeeded {
-                    nudge_count: stall.nudge_count(),
-                });
+                emit(
+                    event_tx,
+                    PilotEvent::AttentionNeeded {
+                        nudge_count: stall.nudge_count(),
+                    },
+                );
+                send_update(
+                    update_tx,
+                    PilotUpdate::AttentionNeeded {
+                        nudge_count: stall.nudge_count(),
+                    },
+                );
             }
         }
 
@@ -437,16 +433,22 @@ fn handle_scan_result(
 
             adapter.reset();
 
-            emit(event_tx, PilotEvent::PromptDecided {
-                action: format!("{}", detection.action),
-                decision: verdict.decision.clone(),
-                reason: verdict.reason.clone(),
-            });
-            send_update(update_tx, PilotUpdate::PromptDecided {
-                action: format!("{}", detection.action),
-                decision: verdict.decision,
-                reason: verdict.reason,
-            });
+            emit(
+                event_tx,
+                PilotEvent::PromptDecided {
+                    action: format!("{}", detection.action),
+                    decision: verdict.decision.clone(),
+                    reason: verdict.reason.clone(),
+                },
+            );
+            send_update(
+                update_tx,
+                PilotUpdate::PromptDecided {
+                    action: format!("{}", detection.action),
+                    decision: verdict.decision,
+                    reason: verdict.reason,
+                },
+            );
         }
         ScanResult::Uncertain(text) => {
             let action_taken = match config.pilot_config.uncertain_action {
@@ -466,26 +468,39 @@ fn handle_scan_result(
                 UncertainAction::Alert => {
                     // Create a pending request for human decision
                     let request_id = Uuid::new_v4();
-                    pending.insert(request_id, PendingInfo {
-                        approve_response: "y".to_string(),
-                        deny_response: "n".to_string(),
-                    });
-                    send_update(update_tx, PilotUpdate::PendingPrompt {
+                    pending.insert(
                         request_id,
-                        raw_prompt: text.clone(),
-                    });
+                        PendingInfo {
+                            approve_response: "y".to_string(),
+                            deny_response: "n".to_string(),
+                        },
+                    );
+                    send_update(
+                        update_tx,
+                        PilotUpdate::PendingPrompt {
+                            request_id,
+                            raw_prompt: text.clone(),
+                        },
+                    );
                     "alerted"
                 }
             };
 
-            warn!(text = text, action = action_taken, "uncertain prompt detected");
+            warn!(
+                text = text,
+                action = action_taken,
+                "uncertain prompt detected"
+            );
             stats.uncertain += 1;
             adapter.reset();
 
-            emit(event_tx, PilotEvent::UncertainPrompt {
-                text,
-                action_taken: action_taken.into(),
-            });
+            emit(
+                event_tx,
+                PilotEvent::UncertainPrompt {
+                    text,
+                    action_taken: action_taken.into(),
+                },
+            );
         }
     }
     Ok(())
@@ -510,10 +525,13 @@ fn handle_command(
                     send_update(update_tx, PilotUpdate::StallResolved);
                 }
                 stats.approved += 1;
-                send_update(update_tx, PilotUpdate::PendingResolved {
-                    request_id,
-                    approved: true,
-                });
+                send_update(
+                    update_tx,
+                    PilotUpdate::PendingResolved {
+                        request_id,
+                        approved: true,
+                    },
+                );
                 info!(%request_id, "pending request approved via command");
             } else {
                 warn!(%request_id, "approve for unknown request");
@@ -532,10 +550,13 @@ fn handle_command(
                 std::thread::sleep(Duration::from_millis(500));
                 pty.send_line("[aegis] Action denied by operator. Continue working on the task.")?;
 
-                send_update(update_tx, PilotUpdate::PendingResolved {
-                    request_id,
-                    approved: false,
-                });
+                send_update(
+                    update_tx,
+                    PilotUpdate::PendingResolved {
+                        request_id,
+                        approved: false,
+                    },
+                );
                 info!(%request_id, "pending request denied via command");
             } else {
                 warn!(%request_id, "deny for unknown request");
@@ -592,9 +613,13 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let id = Uuid::new_v4();
 
-        tx.send(SupervisorCommand::Approve { request_id: id }).unwrap();
+        tx.send(SupervisorCommand::Approve { request_id: id })
+            .unwrap();
         tx.send(SupervisorCommand::Deny { request_id: id }).unwrap();
-        tx.send(SupervisorCommand::SendInput { text: "hello".into() }).unwrap();
+        tx.send(SupervisorCommand::SendInput {
+            text: "hello".into(),
+        })
+        .unwrap();
         tx.send(SupervisorCommand::Nudge { message: None }).unwrap();
 
         let mut count = 0;
@@ -636,14 +661,20 @@ mod tests {
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
 
-        pending.insert(id1, PendingInfo {
-            approve_response: "y".into(),
-            deny_response: "n".into(),
-        });
-        pending.insert(id2, PendingInfo {
-            approve_response: "yes".into(),
-            deny_response: "no".into(),
-        });
+        pending.insert(
+            id1,
+            PendingInfo {
+                approve_response: "y".into(),
+                deny_response: "n".into(),
+            },
+        );
+        pending.insert(
+            id2,
+            PendingInfo {
+                approve_response: "yes".into(),
+                deny_response: "no".into(),
+            },
+        );
 
         assert_eq!(pending.len(), 2);
 

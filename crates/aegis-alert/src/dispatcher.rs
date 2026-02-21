@@ -59,7 +59,10 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
     let log_conn = match Connection::open(&config.db_path) {
         Ok(conn) => conn,
         Err(e) => {
-            error!("failed to open alert log database at {}: {e}", config.db_path);
+            error!(
+                "failed to open alert log database at {}: {e}",
+                config.db_path
+            );
             return;
         }
     };
@@ -114,8 +117,7 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
             }
 
             // Build and dispatch the webhook.
-            let payload =
-                payload::build_payload(&rule.name, &config.config_name, &event, false);
+            let payload = payload::build_payload(&rule.name, &config.config_name, &event, false);
             let alert_id = payload.alert.id.clone();
 
             let result = client
@@ -195,10 +197,7 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
 /// Send a test webhook to verify connectivity for a specific rule.
 ///
 /// Returns `Ok(status_code)` on HTTP success, or an error string.
-pub async fn send_test_webhook(
-    rule: &AlertRule,
-    config_name: &str,
-) -> Result<u16, String> {
+pub async fn send_test_webhook(rule: &AlertRule, config_name: &str) -> Result<u16, String> {
     let test_event = AlertEvent {
         entry_id: Uuid::new_v4(),
         timestamp: Utc::now(),
@@ -259,10 +258,7 @@ mod tests {
         assert!(last_fire.elapsed() < cooldown_dur);
 
         // After cooldown expires (simulated by back-dating the entry).
-        cooldowns.insert(
-            rule_name.clone(),
-            Instant::now() - Duration::from_secs(31),
-        );
+        cooldowns.insert(rule_name.clone(), Instant::now() - Duration::from_secs(31));
         let last_fire = cooldowns.get(&rule_name).unwrap();
         assert!(last_fire.elapsed() >= cooldown_dur);
     }
@@ -285,6 +281,8 @@ mod tests {
         drop(tx);
 
         // The dispatcher thread should exit promptly.
-        handle.join().expect("dispatcher thread should exit cleanly");
+        handle
+            .join()
+            .expect("dispatcher thread should exit cleanly");
     }
 }

@@ -73,30 +73,21 @@ fn smoke_test_full_lifecycle() {
         .args(["run", "--config", "smoke-test", "--", "cat", &hello_path])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("hello aegis")
-                .and(predicate::str::contains("Session:")),
-        );
+        .stdout(predicate::str::contains("hello aegis").and(predicate::str::contains("Session:")));
 
     // 5. aegis audit query smoke-test --last 20
     aegis_cmd(home)
         .args(["audit", "query", "smoke-test", "--last", "20"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("ENTRY ID")
-                .and(predicate::str::contains("Allow")),
-        );
+        .stdout(predicate::str::contains("ENTRY ID").and(predicate::str::contains("Allow")));
 
     // 6. aegis audit sessions smoke-test
     aegis_cmd(home)
         .args(["audit", "sessions", "smoke-test"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("SESSION ID")
-                .and(predicate::str::contains("cat")),
-        );
+        .stdout(predicate::str::contains("SESSION ID").and(predicate::str::contains("cat")));
 
     // 7. aegis audit export smoke-test --format jsonl
     let export_output = aegis_cmd(home)
@@ -105,17 +96,12 @@ fn smoke_test_full_lifecycle() {
         .success();
 
     // Each non-empty line should be valid JSON
-    let export_stdout = String::from_utf8_lossy(
-        &export_output.get_output().stdout,
-    );
+    let export_stdout = String::from_utf8_lossy(&export_output.get_output().stdout);
     for line in export_stdout.lines() {
         let trimmed = line.trim();
         if !trimmed.is_empty() {
             let parsed: Result<serde_json::Value, _> = serde_json::from_str(trimmed);
-            assert!(
-                parsed.is_ok(),
-                "JSONL line should be valid JSON: {trimmed}"
-            );
+            assert!(parsed.is_ok(), "JSONL line should be valid JSON: {trimmed}");
         }
     }
 
@@ -132,9 +118,7 @@ fn smoke_test_full_lifecycle() {
         .assert()
         .success();
 
-    let report_stdout = String::from_utf8_lossy(
-        &report_output.get_output().stdout,
-    );
+    let report_stdout = String::from_utf8_lossy(&report_output.get_output().stdout);
     let report_json: serde_json::Value =
         serde_json::from_str(&report_stdout).expect("report JSON should be valid");
     assert!(
@@ -211,10 +195,7 @@ fn smoke_test_init_with_dir() {
     let home = tmpdir.path();
 
     // Setup first
-    aegis_cmd(home)
-        .args(["setup"])
-        .assert()
-        .success();
+    aegis_cmd(home).args(["setup"]).assert().success();
 
     // Create a project directory
     let project_dir = home.join("my-project");
@@ -261,8 +242,7 @@ fn smoke_test_run_auto_init() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("auto-init-works")
-                .and(predicate::str::contains("Session:")),
+            predicate::str::contains("auto-init-works").and(predicate::str::contains("Session:")),
         )
         .stderr(predicate::str::contains("deprecated"));
 
@@ -380,11 +360,7 @@ fn smoke_test_policy_validate_invalid_file() {
     fs::write(&bad_policy, "this is not valid cedar syntax !!!").expect("write bad policy");
 
     aegis_cmd(home)
-        .args([
-            "policy",
-            "validate",
-            &bad_policy.display().to_string(),
-        ])
+        .args(["policy", "validate", &bad_policy.display().to_string()])
         .assert()
         .success()
         .stdout(predicate::str::contains("INVALID"));

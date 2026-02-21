@@ -131,8 +131,7 @@ fn run_watch(
     info!(policy_dir = %policy_dir.display(), "policy engine loaded");
 
     // Initialize audit store
-    let mut store =
-        AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let mut store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
     info!(ledger_path = %config.ledger_path.display(), "audit store opened");
 
     // Begin session
@@ -314,7 +313,10 @@ fn install_sigterm_handler(shutdown: &Arc<AtomicBool>) {
 
     unsafe {
         SHUTDOWN_PTR.store(shutdown_ptr as *mut (), Ordering::SeqCst);
-        libc::signal(libc::SIGTERM, sigterm_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            sigterm_handler as *const () as libc::sighandler_t,
+        );
     }
 }
 
@@ -388,10 +390,7 @@ pub fn find_active_watches() -> Vec<(String, WatchPidFile)> {
         if pid_path.exists() {
             if let Ok(pid_info) = read_pid_file(&pid_path) {
                 if is_process_alive(pid_info.pid) {
-                    let name = entry
-                        .file_name()
-                        .to_string_lossy()
-                        .into_owned();
+                    let name = entry.file_name().to_string_lossy().into_owned();
                     active.push((name, pid_info));
                 } else {
                     // Clean up stale PID file
@@ -414,10 +413,7 @@ mod tests {
             derive_watch_name(Path::new("/Users/mark/myproject")),
             "myproject"
         );
-        assert_eq!(
-            derive_watch_name(Path::new("/tmp/test-dir")),
-            "test-dir"
-        );
+        assert_eq!(derive_watch_name(Path::new("/tmp/test-dir")), "test-dir");
     }
 
     #[test]

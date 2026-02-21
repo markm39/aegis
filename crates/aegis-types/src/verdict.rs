@@ -89,7 +89,11 @@ mod tests {
 
     #[test]
     fn verdict_serialization_roundtrip() {
-        let v = Verdict::allow(Uuid::new_v4(), "matched permit rule", Some("policy-1".into()));
+        let v = Verdict::allow(
+            Uuid::new_v4(),
+            "matched permit rule",
+            Some("policy-1".into()),
+        );
         let json = serde_json::to_string(&v).unwrap();
         let back: Verdict = serde_json::from_str(&json).unwrap();
         assert_eq!(back.decision, Decision::Allow);
@@ -105,7 +109,11 @@ mod tests {
 
     #[test]
     fn verdict_deny_serialization_roundtrip() {
-        let v = Verdict::deny(Uuid::new_v4(), "blocked by forbid rule", Some("policy-2".into()));
+        let v = Verdict::deny(
+            Uuid::new_v4(),
+            "blocked by forbid rule",
+            Some("policy-2".into()),
+        );
         let json = serde_json::to_string(&v).unwrap();
         let back: Verdict = serde_json::from_str(&json).unwrap();
         assert_eq!(back.decision, Decision::Deny);

@@ -42,8 +42,9 @@ impl AuditEntry {
     pub fn new(action: &Action, verdict: &Verdict, prev_hash: String) -> Result<Self, AegisError> {
         let entry_id = Uuid::new_v4();
         let timestamp = Utc::now();
-        let action_kind = serde_json::to_string(&action.kind)
-            .map_err(|e| AegisError::LedgerError(format!("failed to serialize action kind: {e}")))?;
+        let action_kind = serde_json::to_string(&action.kind).map_err(|e| {
+            AegisError::LedgerError(format!("failed to serialize action kind: {e}"))
+        })?;
         let decision = verdict.decision.to_string();
 
         let entry_hash = compute_hash(
@@ -162,24 +163,10 @@ mod tests {
         let prev_hash = "genesis";
 
         let h1 = compute_hash(
-            &entry_id,
-            &timestamp,
-            &action_id,
-            "kind-a",
-            "agent",
-            "Allow",
-            "reason",
-            prev_hash,
+            &entry_id, &timestamp, &action_id, "kind-a", "agent", "Allow", "reason", prev_hash,
         );
         let h2 = compute_hash(
-            &entry_id,
-            &timestamp,
-            &action_id,
-            "kind-b",
-            "agent",
-            "Allow",
-            "reason",
-            prev_hash,
+            &entry_id, &timestamp, &action_id, "kind-b", "agent", "Allow", "reason", prev_hash,
         );
         assert_ne!(h1, h2);
     }

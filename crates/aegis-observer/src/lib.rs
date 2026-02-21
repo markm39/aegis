@@ -148,10 +148,9 @@ pub fn stop_observer(mut session: ObserverSession) -> Result<ObserverSummary, Ae
                         .map_err(|e| AegisError::PolicyError(format!("policy lock poisoned: {e}")))?
                         .evaluate(&action);
 
-                    let mut store_guard = session
-                        .store
-                        .lock()
-                        .map_err(|e| AegisError::LedgerError(format!("audit lock poisoned: {e}")))?;
+                    let mut store_guard = session.store.lock().map_err(|e| {
+                        AegisError::LedgerError(format!("audit lock poisoned: {e}"))
+                    })?;
 
                     match session.session_id {
                         Some(sid) => store_guard.append_with_session(&action, &verdict, &sid)?,
@@ -190,12 +189,20 @@ mod tests {
 
     /// Returns (store, engine, _db_handle). The caller must keep `_db_handle`
     /// alive for the duration of the test so the temp file is not deleted.
-    fn test_deps() -> (Arc<Mutex<AuditStore>>, Arc<Mutex<PolicyEngine>>, NamedTempFile) {
+    fn test_deps() -> (
+        Arc<Mutex<AuditStore>>,
+        Arc<Mutex<PolicyEngine>>,
+        NamedTempFile,
+    ) {
         let db = NamedTempFile::new().unwrap();
         let store = AuditStore::open(db.path()).unwrap();
         let engine =
             PolicyEngine::from_policies(r#"permit(principal, action, resource);"#, None).unwrap();
-        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(engine)), db)
+        (
+            Arc::new(Mutex::new(store)),
+            Arc::new(Mutex::new(engine)),
+            db,
+        )
     }
 
     #[test]
@@ -203,15 +210,8 @@ mod tests {
         let sandbox = tempfile::tempdir().unwrap();
         let (store, engine, _db) = test_deps();
 
-        let session = start_observer(
-            sandbox.path(),
-            store,
-            engine,
-            "test-agent",
-            None,
-            true,
-        )
-        .unwrap();
+        let session =
+            start_observer(sandbox.path(), store, engine, "test-agent", None, true).unwrap();
 
         let summary = stop_observer(session).unwrap();
         assert_eq!(summary.fsevents_count, 0);
@@ -244,7 +244,10 @@ mod tests {
         fs::write(sandbox.path().join("existing.txt"), "modified").unwrap();
 
         let summary = stop_observer(session).unwrap();
-        assert_eq!(summary.snapshot_read_count, 0, "snapshot diffing should be skipped");
+        assert_eq!(
+            summary.snapshot_read_count, 0,
+            "snapshot diffing should be skipped"
+        );
     }
 
     #[test]

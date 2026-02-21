@@ -83,8 +83,8 @@ pub fn run(
     info!(policy_dir = %policy_dir.display(), "policy engine loaded");
 
     // Initialize audit store
-    let mut store =
-        aegis_ledger::AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let mut store = aegis_ledger::AuditStore::open(&config.ledger_path)
+        .context("failed to open audit store")?;
 
     // Set up alert dispatcher
     let _alert_thread = if !config.alerts.is_empty() {
@@ -134,50 +134,46 @@ pub fn run(
     let policy_arc = Arc::new(Mutex::new(policy_engine));
 
     // Start filesystem observer
-    let observer_session =
-        pipeline::start_observer(&config, &store_arc, &policy_arc, session_id);
+    let observer_session = pipeline::start_observer(&config, &store_arc, &policy_arc, session_id);
 
     // Start usage proxy if configured
-    let usage_proxy_handle = if let Some(proxy_config) = config
-        .usage_proxy
-        .as_ref()
-        .filter(|p| p.enabled)
-    {
-        let proxy = aegis_proxy::UsageProxy::new(
-            Arc::clone(&store_arc),
-            config.name.clone(),
-            Some(session_id),
-            proxy_config.port,
-        );
+    let usage_proxy_handle =
+        if let Some(proxy_config) = config.usage_proxy.as_ref().filter(|p| p.enabled) {
+            let proxy = aegis_proxy::UsageProxy::new(
+                Arc::clone(&store_arc),
+                config.name.clone(),
+                Some(session_id),
+                proxy_config.port,
+            );
 
-        let rt = tokio::runtime::Runtime::new()
-            .context("failed to create tokio runtime for usage proxy")?;
+            let rt = tokio::runtime::Runtime::new()
+                .context("failed to create tokio runtime for usage proxy")?;
 
-        let handle = rt
-            .block_on(proxy.start())
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("failed to start usage proxy")?;
+            let handle = rt
+                .block_on(proxy.start())
+                .map_err(|e| anyhow::anyhow!(e))
+                .context("failed to start usage proxy")?;
 
-        let port = handle.port;
-        info!(port, "usage proxy started");
+            let port = handle.port;
+            info!(port, "usage proxy started");
 
-        // Subscribe to the proxy's shutdown signal so the runtime thread
-        // exits cleanly when the proxy is shut down.
-        let mut shutdown_sub = handle.shutdown_tx.subscribe();
+            // Subscribe to the proxy's shutdown signal so the runtime thread
+            // exits cleanly when the proxy is shut down.
+            let mut shutdown_sub = handle.shutdown_tx.subscribe();
 
-        std::thread::Builder::new()
-            .name("usage-proxy-rt".into())
-            .spawn(move || {
-                rt.block_on(async move {
-                    let _ = shutdown_sub.wait_for(|&v| v).await;
-                });
-            })
-            .context("failed to spawn usage proxy runtime thread")?;
+            std::thread::Builder::new()
+                .name("usage-proxy-rt".into())
+                .spawn(move || {
+                    rt.block_on(async move {
+                        let _ = shutdown_sub.wait_for(|&v| v).await;
+                    });
+                })
+                .context("failed to spawn usage proxy runtime thread")?;
 
-        Some(handle)
-    } else {
-        None
-    };
+            Some(handle)
+        } else {
+            None
+        };
 
     // Collect environment for the child process
     let mut env: Vec<(String, String)> = std::env::vars().collect();
@@ -185,8 +181,14 @@ pub fn run(
     // Inject usage proxy URLs if active
     if let Some(ref handle) = usage_proxy_handle {
         let port = handle.port;
-        env.push(("ANTHROPIC_BASE_URL".into(), format!("http://127.0.0.1:{port}/anthropic/v1")));
-        env.push(("OPENAI_BASE_URL".into(), format!("http://127.0.0.1:{port}/openai/v1")));
+        env.push((
+            "ANTHROPIC_BASE_URL".into(),
+            format!("http://127.0.0.1:{port}/anthropic/v1"),
+        ));
+        env.push((
+            "OPENAI_BASE_URL".into(),
+            format!("http://127.0.0.1:{port}/openai/v1"),
+        ));
         info!(port, "injected API base URLs for usage tracking");
     }
 
@@ -258,7 +260,10 @@ pub fn run(
     };
 
     // Create a separate policy engine for the supervisor thread
-    let policy_dir_for_eval = config.policy_paths.first().cloned()
+    let policy_dir_for_eval = config
+        .policy_paths
+        .first()
+        .cloned()
         .context("no policy paths configured -- add a policy directory to the config")?;
     let eval_engine = PolicyEngine::new(&policy_dir_for_eval, None)
         .context("failed to create evaluation policy engine")?;
@@ -414,7 +419,11 @@ fn log_pilot_event(
     session_id: &uuid::Uuid,
 ) {
     match event {
-        PilotEvent::PromptDecided { action, decision, reason } => {
+        PilotEvent::PromptDecided {
+            action,
+            decision,
+            reason,
+        } => {
             info!(action, ?decision, reason, "pilot: prompt decided");
 
             // Write to audit store
@@ -435,11 +444,17 @@ fn log_pilot_event(
                 }
             }
         }
-        PilotEvent::StallNudge { nudge_count, idle_secs } => {
+        PilotEvent::StallNudge {
+            nudge_count,
+            idle_secs,
+        } => {
             info!(nudge_count, idle_secs, "pilot: stall nudge sent");
         }
         PilotEvent::AttentionNeeded { nudge_count } => {
-            tracing::warn!(nudge_count, "pilot: agent needs attention (max nudges exceeded)");
+            tracing::warn!(
+                nudge_count,
+                "pilot: agent needs attention (max nudges exceeded)"
+            );
         }
         PilotEvent::UncertainPrompt { text, action_taken } => {
             tracing::warn!(text, action_taken, "pilot: uncertain prompt");
@@ -460,50 +475,41 @@ fn forward_to_channel(
     use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 
     let kind = match event {
-        PilotEvent::PromptDecided { action, decision, reason } => {
-            match decision {
-                aegis_types::Decision::Allow => PilotEventKind::PermissionApproved {
-                    action: action.clone(),
-                    reason: reason.clone(),
-                },
-                aegis_types::Decision::Deny => PilotEventKind::PermissionDenied {
-                    action: action.clone(),
-                    reason: reason.clone(),
-                },
-            }
-        }
-        PilotEvent::StallNudge { nudge_count, idle_secs } => {
-            PilotEventKind::StallDetected {
-                nudge_count: *nudge_count,
-                idle_secs: *idle_secs,
-            }
-        }
-        PilotEvent::AttentionNeeded { nudge_count } => {
-            PilotEventKind::AttentionNeeded {
-                nudge_count: *nudge_count,
-            }
-        }
-        PilotEvent::UncertainPrompt { text, .. } => {
-            PilotEventKind::PendingApproval {
-                request_id: uuid::Uuid::new_v4(),
-                raw_prompt: text.clone(),
-            }
-        }
-        PilotEvent::ChildExited { exit_code } => {
-            PilotEventKind::AgentExited {
-                exit_code: *exit_code,
-            }
-        }
+        PilotEvent::PromptDecided {
+            action,
+            decision,
+            reason,
+        } => match decision {
+            aegis_types::Decision::Allow => PilotEventKind::PermissionApproved {
+                action: action.clone(),
+                reason: reason.clone(),
+            },
+            aegis_types::Decision::Deny => PilotEventKind::PermissionDenied {
+                action: action.clone(),
+                reason: reason.clone(),
+            },
+        },
+        PilotEvent::StallNudge {
+            nudge_count,
+            idle_secs,
+        } => PilotEventKind::StallDetected {
+            nudge_count: *nudge_count,
+            idle_secs: *idle_secs,
+        },
+        PilotEvent::AttentionNeeded { nudge_count } => PilotEventKind::AttentionNeeded {
+            nudge_count: *nudge_count,
+        },
+        PilotEvent::UncertainPrompt { text, .. } => PilotEventKind::PendingApproval {
+            request_id: uuid::Uuid::new_v4(),
+            raw_prompt: text.clone(),
+        },
+        PilotEvent::ChildExited { exit_code } => PilotEventKind::AgentExited {
+            exit_code: *exit_code,
+        },
     };
 
-    let webhook_event = PilotWebhookEvent::new(
-        kind,
-        command,
-        pid,
-        vec![],
-        None,
-        EventStats::default(),
-    );
+    let webhook_event =
+        PilotWebhookEvent::new(kind, command, pid, vec![], None, EventStats::default());
 
     let _ = tx.try_send(aegis_channel::ChannelInput::PilotEvent(webhook_event));
 }

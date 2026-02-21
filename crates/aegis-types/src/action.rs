@@ -150,8 +150,17 @@ impl std::fmt::Display for ActionKind {
             ActionKind::ProcessExit { command, exit_code } => {
                 write!(f, "ProcessExit {command} (code {exit_code})")
             }
-            ActionKind::ApiUsage { provider, model, input_tokens, output_tokens, .. } => {
-                write!(f, "ApiUsage {provider}/{model} in={input_tokens} out={output_tokens}")
+            ActionKind::ApiUsage {
+                provider,
+                model,
+                input_tokens,
+                output_tokens,
+                ..
+            } => {
+                write!(
+                    f,
+                    "ApiUsage {provider}/{model} in={input_tokens} out={output_tokens}"
+                )
             }
         }
     }
@@ -233,10 +242,16 @@ mod tests {
     #[test]
     fn display_from_json_valid() {
         let json = r#"{"FileRead":{"path":"/tmp/test.txt"}}"#;
-        assert_eq!(ActionKind::display_from_json(json), "FileRead /tmp/test.txt");
+        assert_eq!(
+            ActionKind::display_from_json(json),
+            "FileRead /tmp/test.txt"
+        );
 
         let json = r#"{"NetConnect":{"host":"example.com","port":443}}"#;
-        assert_eq!(ActionKind::display_from_json(json), "NetConnect example.com:443");
+        assert_eq!(
+            ActionKind::display_from_json(json),
+            "NetConnect example.com:443"
+        );
     }
 
     #[test]
@@ -251,43 +266,78 @@ mod tests {
     #[test]
     fn action_kind_display() {
         assert_eq!(
-            ActionKind::FileRead { path: PathBuf::from("/tmp/f.txt") }.to_string(),
+            ActionKind::FileRead {
+                path: PathBuf::from("/tmp/f.txt")
+            }
+            .to_string(),
             "FileRead /tmp/f.txt"
         );
         assert_eq!(
-            ActionKind::FileWrite { path: PathBuf::from("/a/b") }.to_string(),
+            ActionKind::FileWrite {
+                path: PathBuf::from("/a/b")
+            }
+            .to_string(),
             "FileWrite /a/b"
         );
         assert_eq!(
-            ActionKind::FileDelete { path: PathBuf::from("/x") }.to_string(),
+            ActionKind::FileDelete {
+                path: PathBuf::from("/x")
+            }
+            .to_string(),
             "FileDelete /x"
         );
         assert_eq!(
-            ActionKind::DirCreate { path: PathBuf::from("/d") }.to_string(),
+            ActionKind::DirCreate {
+                path: PathBuf::from("/d")
+            }
+            .to_string(),
             "DirCreate /d"
         );
         assert_eq!(
-            ActionKind::DirList { path: PathBuf::from("/e") }.to_string(),
+            ActionKind::DirList {
+                path: PathBuf::from("/e")
+            }
+            .to_string(),
             "DirList /e"
         );
         assert_eq!(
-            ActionKind::NetConnect { host: "h".into(), port: 80 }.to_string(),
+            ActionKind::NetConnect {
+                host: "h".into(),
+                port: 80
+            }
+            .to_string(),
             "NetConnect h:80"
         );
         assert_eq!(
-            ActionKind::NetRequest { method: "POST".into(), url: "https://x".into() }.to_string(),
+            ActionKind::NetRequest {
+                method: "POST".into(),
+                url: "https://x".into()
+            }
+            .to_string(),
             "NetRequest POST https://x"
         );
         assert_eq!(
-            ActionKind::ToolCall { tool: "sh".into(), args: serde_json::json!({}) }.to_string(),
+            ActionKind::ToolCall {
+                tool: "sh".into(),
+                args: serde_json::json!({})
+            }
+            .to_string(),
             "ToolCall sh"
         );
         assert_eq!(
-            ActionKind::ProcessSpawn { command: "ls".into(), args: vec!["-l".into()] }.to_string(),
+            ActionKind::ProcessSpawn {
+                command: "ls".into(),
+                args: vec!["-l".into()]
+            }
+            .to_string(),
             "ProcessSpawn ls"
         );
         assert_eq!(
-            ActionKind::ProcessExit { command: "ls".into(), exit_code: 1 }.to_string(),
+            ActionKind::ProcessExit {
+                command: "ls".into(),
+                exit_code: 1
+            }
+            .to_string(),
             "ProcessExit ls (code 1)"
         );
         assert_eq!(
@@ -299,7 +349,8 @@ mod tests {
                 output_tokens: 50,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 0,
-            }.to_string(),
+            }
+            .to_string(),
             "ApiUsage anthropic/claude-sonnet-4-5-20250929 in=100 out=50"
         );
     }

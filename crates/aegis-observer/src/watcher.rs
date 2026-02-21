@@ -70,9 +70,7 @@ impl FsWatcher {
             },
             Config::default(),
         )
-        .map_err(|e| {
-            AegisError::FsError(format!("failed to create watcher: {e}"))
-        })?;
+        .map_err(|e| AegisError::FsError(format!("failed to create watcher: {e}")))?;
 
         watcher
             .watch(&sandbox_dir, RecursiveMode::Recursive)
@@ -130,11 +128,7 @@ impl FsWatcher {
                 let msg = panic_payload
                     .downcast_ref::<&str>()
                     .copied()
-                    .or_else(|| {
-                        panic_payload
-                            .downcast_ref::<String>()
-                            .map(|s| s.as_str())
-                    })
+                    .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.as_str()))
                     .unwrap_or("(unknown)");
                 tracing::error!(message = msg, "observer consumer thread panicked");
             }
@@ -261,7 +255,9 @@ fn map_notify_event(event: &notify::Event, sandbox_dir: &Path) -> Vec<FsEvent> {
                     notify::event::RenameMode::Both => {
                         // Both paths available: paths[0] = from, paths[1] = to
                         if event.paths.len() >= 2 {
-                            let from = event.paths[0].strip_prefix(sandbox_dir).ok()
+                            let from = event.paths[0]
+                                .strip_prefix(sandbox_dir)
+                                .ok()
                                 .map(|p| p.to_path_buf());
                             return vec![FsEvent {
                                 timestamp: now,
@@ -395,10 +391,7 @@ mod tests {
 
         let fs_events = map_notify_event(&event, &sandbox);
         assert_eq!(fs_events.len(), 1);
-        assert_eq!(
-            fs_events[0].kind,
-            FsEventKind::FileRename { from: None }
-        );
+        assert_eq!(fs_events[0].kind, FsEventKind::FileRename { from: None });
     }
 
     #[test]

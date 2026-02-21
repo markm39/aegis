@@ -83,12 +83,7 @@ impl JsonStreamSession {
         // Preserve base_args for resume (everything except -p, --session-id, prompt)
         let base_args: Vec<String> = args.to_vec();
 
-        let inner = Self::spawn_process(
-            command,
-            &full_args,
-            working_dir,
-            env,
-        )?;
+        let inner = Self::spawn_process(command, &full_args, working_dir, env)?;
 
         tracing::info!(
             agent = name,
@@ -127,14 +122,15 @@ impl JsonStreamSession {
             cmd.env(key, value);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            AegisError::PilotError(format!("failed to spawn {command}: {e}"))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AegisError::PilotError(format!("failed to spawn {command}: {e}")))?;
 
         // Take ownership of stdout and set it non-blocking for poll-based reading.
-        let stdout = child.stdout.take().ok_or_else(|| {
-            AegisError::PilotError("child stdout not captured".into())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AegisError::PilotError("child stdout not captured".into()))?;
 
         let raw_fd = stdout.as_raw_fd();
 
@@ -168,9 +164,10 @@ impl JsonStreamSession {
     /// This replaces the current child with a new one that continues the
     /// conversation. The old child must have already exited.
     pub fn send_message(&self, text: &str) -> Result<(), AegisError> {
-        let mut guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         // Check if the current child has exited
         match guard.child.try_wait() {
@@ -197,12 +194,8 @@ impl JsonStreamSession {
             text.to_string(),
         ]);
 
-        let new_inner = Self::spawn_process(
-            &self.command,
-            &resume_args,
-            &self.working_dir,
-            &self.env,
-        )?;
+        let new_inner =
+            Self::spawn_process(&self.command, &resume_args, &self.working_dir, &self.env)?;
 
         tracing::info!(
             session_id = self.session_id,
@@ -217,9 +210,10 @@ impl JsonStreamSession {
 
 impl AgentSession for JsonStreamSession {
     fn read(&self, buf: &mut [u8]) -> Result<usize, AegisError> {
-        let guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         let fd = guard.stdout_fd.as_raw_fd();
         match nix::unistd::read(fd, buf) {
@@ -246,9 +240,10 @@ impl AgentSession for JsonStreamSession {
     }
 
     fn poll_readable(&self, timeout_ms: i32) -> Result<bool, AegisError> {
-        let guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         let borrowed = guard.stdout_fd.as_fd();
         let mut poll_fd = [PollFd::new(borrowed, PollFlags::POLLIN)];
@@ -262,8 +257,7 @@ impl AgentSession for JsonStreamSession {
             Ok(0) => Ok(false),
             Ok(_) => {
                 let revents = poll_fd[0].revents().unwrap_or(PollFlags::empty());
-                Ok(revents.contains(PollFlags::POLLIN)
-                    || revents.contains(PollFlags::POLLHUP))
+                Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false),
             Err(e) => Err(AegisError::PilotError(format!("poll stdout: {e}"))),
@@ -294,21 +288,24 @@ impl AgentSession for JsonStreamSession {
     }
 
     fn wait(&self) -> Result<i32, AegisError> {
-        let mut guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
-        let status = guard.child.wait().map_err(|e| {
-            AegisError::PilotError(format!("wait failed: {e}"))
-        })?;
+        let status = guard
+            .child
+            .wait()
+            .map_err(|e| AegisError::PilotError(format!("wait failed: {e}")))?;
 
         Ok(status.code().unwrap_or(-1))
     }
 
     fn terminate(&self) -> Result<(), AegisError> {
-        let guard = self.inner.lock().map_err(|e| {
-            AegisError::PilotError(format!("session lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
 
         signal::kill(Pid::from_raw(guard.child.id() as i32), Signal::SIGTERM)
             .map_err(|e| AegisError::PilotError(format!("kill SIGTERM: {e}")))
@@ -335,7 +332,9 @@ impl AgentSession for JsonStreamSession {
     }
 
     fn stream_kind(&self) -> StreamKind {
-        StreamKind::Json { tool: ToolKind::ClaudeCode }
+        StreamKind::Json {
+            tool: ToolKind::ClaudeCode,
+        }
     }
 
     fn session_id(&self) -> Option<String> {

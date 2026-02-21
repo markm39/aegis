@@ -195,7 +195,11 @@ fn test_full_lifecycle_orchestrator_computer_use_policy() {
     let all_entries = store.query_last(10).expect("should query all entries");
     assert_eq!(all_entries.len(), 2);
     let report = store.verify_integrity().expect("should verify integrity");
-    assert!(report.valid, "hash chain should be valid: {}", report.message);
+    assert!(
+        report.valid,
+        "hash chain should be valid: {}",
+        report.message
+    );
 }
 
 #[test]

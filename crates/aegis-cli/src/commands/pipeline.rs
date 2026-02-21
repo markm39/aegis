@@ -53,8 +53,7 @@ pub fn execute(
     info!(policy_dir = %policy_dir.display(), "policy engine loaded");
 
     // Initialize the audit store
-    let mut store =
-        AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
+    let mut store = AuditStore::open(&config.ledger_path).context("failed to open audit store")?;
     info!(ledger_path = %config.ledger_path.display(), "audit store opened");
 
     // Set up the alert dispatcher if alert rules are configured.
@@ -152,7 +151,13 @@ pub fn execute(
     };
 
     // Print summary
-    print_summary(&store_arc, &session_id, exit_code, &observer_summary, violation_count);
+    print_summary(
+        &store_arc,
+        &session_id,
+        exit_code,
+        &observer_summary,
+        violation_count,
+    );
 
     // Shut down the alert dispatcher by dropping the store (which drops the
     // alert sender), then join the thread.
@@ -269,11 +274,17 @@ fn harvest_violations(
     #[cfg(target_os = "macos")]
     {
         if pid > 0 {
-            aegis_proxy::harvest_seatbelt_violations(store_arc, config_name, pid, start_time, end_time)
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "failed to harvest seatbelt violations");
-                    0
-                })
+            aegis_proxy::harvest_seatbelt_violations(
+                store_arc,
+                config_name,
+                pid,
+                start_time,
+                end_time,
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to harvest seatbelt violations");
+                0
+            })
         } else {
             0
         }

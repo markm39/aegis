@@ -61,7 +61,9 @@ pub fn test(config_name: &str, rule_name: Option<&str>) -> Result<()> {
                 .alerts
                 .iter()
                 .find(|r| r.name == name)
-                .ok_or_else(|| anyhow::anyhow!("no alert rule named {:?} in {config_name}", name))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no alert rule named {:?} in {config_name}", name)
+                })?;
             vec![rule]
         }
         None => config.alerts.iter().collect(),
@@ -97,11 +99,10 @@ pub fn history(config_name: &str, last: u32) -> Result<()> {
         .context("failed to open ledger database for alert history")?;
 
     // Initialize the alert_log table if it doesn't exist yet.
-    aegis_alert::log::init_table(&conn)
-        .context("failed to initialize alert_log table")?;
+    aegis_alert::log::init_table(&conn).context("failed to initialize alert_log table")?;
 
-    let entries = aegis_alert::log::recent_entries(&conn, last)
-        .context("failed to query alert history")?;
+    let entries =
+        aegis_alert::log::recent_entries(&conn, last).context("failed to query alert history")?;
 
     if entries.is_empty() {
         println!("No alert dispatch history for {config_name}.");
@@ -115,10 +116,7 @@ pub fn history(config_name: &str, last: u32) -> Result<()> {
     println!("{}", "-".repeat(90));
 
     for entry in &entries {
-        let fired = entry
-            .fired_at
-            .format(DATETIME_FULL_FMT)
-            .to_string();
+        let fired = entry.fired_at.format(DATETIME_FULL_FMT).to_string();
         let status = entry
             .status_code
             .map(|c| c.to_string())

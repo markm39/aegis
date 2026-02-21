@@ -187,7 +187,10 @@ fn stats_across_sessions() {
     // Top resources should include paths from the actions
     assert!(!stats.top_resources.is_empty());
     let total_resources: usize = stats.top_resources.iter().map(|(_, c)| c).sum();
-    assert_eq!(total_resources, 4, "top resources should cover all 4 entries");
+    assert_eq!(
+        total_resources, 4,
+        "top resources should cover all 4 entries"
+    );
 }
 
 #[test]
@@ -214,5 +217,9 @@ fn purge_preserves_recent_sessions() {
 
     // Chain should still be valid
     let report = store.verify_integrity().unwrap();
-    assert!(report.valid, "chain should be valid after no-op purge: {}", report.message);
+    assert!(
+        report.valid,
+        "chain should be valid after no-op purge: {}",
+        report.message
+    );
 }

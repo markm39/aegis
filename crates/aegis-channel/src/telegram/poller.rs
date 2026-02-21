@@ -82,7 +82,13 @@ pub async fn poll_loop(
                                         )
                                     };
                                     let _ = api
-                                        .send_message(chat_id, &help, Some("MarkdownV2"), None, false)
+                                        .send_message(
+                                            chat_id,
+                                            &help,
+                                            Some("MarkdownV2"),
+                                            None,
+                                            false,
+                                        )
                                         .await;
                                 }
                                 InboundAction::Command(_) => {
@@ -116,15 +122,12 @@ pub async fn poll_loop(
                                 } else {
                                     "OK"
                                 };
-                                let _ = api
-                                    .answer_callback_query(&cb.id, Some(ack_text))
-                                    .await;
+                                let _ = api.answer_callback_query(&cb.id, Some(ack_text)).await;
 
                                 // Remove buttons to prevent double-tap
                                 if let Some(msg) = &cb.message {
-                                    let _ = api
-                                        .remove_reply_markup(msg.chat.id, msg.message_id)
-                                        .await;
+                                    let _ =
+                                        api.remove_reply_markup(msg.chat.id, msg.message_id).await;
                                 }
 
                                 if action_tx.send(action).await.is_err() {

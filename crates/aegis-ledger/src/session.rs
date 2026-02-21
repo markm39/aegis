@@ -60,8 +60,9 @@ impl AuditStore {
     ) -> Result<Uuid, AegisError> {
         let session_id = Uuid::new_v4();
         let start_time = Utc::now();
-        let args_json = serde_json::to_string(args)
-            .map_err(|e| AegisError::LedgerError(format!("failed to serialize session args: {e}")))?;
+        let args_json = serde_json::to_string(args).map_err(|e| {
+            AegisError::LedgerError(format!("failed to serialize session args: {e}"))
+        })?;
 
         self.connection()
             .execute(
@@ -91,21 +92,13 @@ impl AuditStore {
     /// End a session, recording the end time and exit code.
     ///
     /// Also updates the final action counts from the sessions counter.
-    pub fn end_session(
-        &mut self,
-        session_id: &Uuid,
-        exit_code: i32,
-    ) -> Result<(), AegisError> {
+    pub fn end_session(&mut self, session_id: &Uuid, exit_code: i32) -> Result<(), AegisError> {
         let end_time = Utc::now();
 
         self.connection()
             .execute(
                 "UPDATE sessions SET end_time = ?1, exit_code = ?2 WHERE session_id = ?3",
-                params![
-                    end_time.to_rfc3339(),
-                    exit_code,
-                    session_id.to_string(),
-                ],
+                params![end_time.to_rfc3339(), exit_code, session_id.to_string(),],
             )
             .map_err(|e| AegisError::LedgerError(format!("failed to end session: {e}")))?;
 
@@ -119,16 +112,12 @@ impl AuditStore {
     }
 
     /// List sessions ordered by start_time DESC.
-    pub fn list_sessions(
-        &self,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<Session>, AegisError> {
+    pub fn list_sessions(&self, limit: usize, offset: usize) -> Result<Vec<Session>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {SESSION_COLUMNS} FROM sessions ORDER BY id DESC LIMIT ?1 OFFSET ?2"),
-            )
+            .prepare(&format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions ORDER BY id DESC LIMIT ?1 OFFSET ?2"
+            ))
             .map_err(|e| AegisError::LedgerError(format!("list_sessions prepare: {e}")))?;
 
         let rows = stmt
@@ -153,9 +142,9 @@ impl AuditStore {
     pub fn latest_session(&self) -> Result<Option<Session>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {SESSION_COLUMNS} FROM sessions ORDER BY id DESC LIMIT 1"),
-            )
+            .prepare(&format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions ORDER BY id DESC LIMIT 1"
+            ))
             .map_err(|e| AegisError::LedgerError(format!("latest_session prepare: {e}")))?;
 
         let result = stmt
@@ -167,15 +156,12 @@ impl AuditStore {
     }
 
     /// Get a single session by its UUID.
-    pub fn get_session(
-        &self,
-        session_id: &Uuid,
-    ) -> Result<Option<Session>, AegisError> {
+    pub fn get_session(&self, session_id: &Uuid) -> Result<Option<Session>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE session_id = ?1"),
-            )
+            .prepare(&format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions WHERE session_id = ?1"
+            ))
             .map_err(|e| AegisError::LedgerError(format!("get_session prepare: {e}")))?;
 
         let result = stmt
@@ -187,11 +173,7 @@ impl AuditStore {
     }
 
     /// Update the tag for a session.
-    pub fn update_session_tag(
-        &self,
-        session_id: &Uuid,
-        tag: &str,
-    ) -> Result<(), AegisError> {
+    pub fn update_session_tag(&self, session_id: &Uuid, tag: &str) -> Result<(), AegisError> {
         let rows_affected = self
             .connection()
             .execute(
@@ -210,15 +192,13 @@ impl AuditStore {
     }
 
     /// Get all audit entries for a specific session, ordered by id ASC.
-    pub fn query_by_session(
-        &self,
-        session_id: &Uuid,
-    ) -> Result<Vec<AuditEntry>, AegisError> {
+    pub fn query_by_session(&self, session_id: &Uuid) -> Result<Vec<AuditEntry>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {} FROM audit_log WHERE session_id = ?1 ORDER BY id ASC", crate::query::ENTRY_COLUMNS),
-            )
+            .prepare(&format!(
+                "SELECT {} FROM audit_log WHERE session_id = ?1 ORDER BY id ASC",
+                crate::query::ENTRY_COLUMNS
+            ))
             .map_err(|e| AegisError::LedgerError(format!("query_by_session prepare: {e}")))?;
 
         let rows = stmt
@@ -234,11 +214,7 @@ impl AuditStore {
 fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     let args_json: String = row.get(3)?;
     let args: Vec<String> = serde_json::from_str(&args_json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        )
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
     })?;
 
     let end_time = row
@@ -285,7 +261,9 @@ mod tests {
         assert!(session.exit_code.is_none());
         assert!(session.tag.is_none());
 
-        store.end_session(&session_id, 0).expect("end_session should succeed");
+        store
+            .end_session(&session_id, 0)
+            .expect("end_session should succeed");
 
         let session = store.get_session(&session_id).unwrap().unwrap();
         assert!(session.end_time.is_some());
@@ -301,12 +279,22 @@ mod tests {
             .unwrap();
 
         // Append an Allow entry
-        let a1 = Action::new("agent", ActionKind::FileRead { path: PathBuf::from("/a") });
+        let a1 = Action::new(
+            "agent",
+            ActionKind::FileRead {
+                path: PathBuf::from("/a"),
+            },
+        );
         let v1 = Verdict::allow(a1.id, "ok", None);
         store.append_with_session(&a1, &v1, &session_id).unwrap();
 
         // Append a Deny entry
-        let a2 = Action::new("agent", ActionKind::FileWrite { path: PathBuf::from("/b") });
+        let a2 = Action::new(
+            "agent",
+            ActionKind::FileWrite {
+                path: PathBuf::from("/b"),
+            },
+        );
         let v2 = Verdict::deny(a2.id, "nope", None);
         store.append_with_session(&a2, &v2, &session_id).unwrap();
 
@@ -323,16 +311,31 @@ mod tests {
         let s2 = store.begin_session("test", "cmd2", &[], None).unwrap();
 
         // Append to session 1
-        let a1 = Action::new("agent", ActionKind::FileRead { path: PathBuf::from("/a") });
+        let a1 = Action::new(
+            "agent",
+            ActionKind::FileRead {
+                path: PathBuf::from("/a"),
+            },
+        );
         let v1 = Verdict::allow(a1.id, "ok", None);
         store.append_with_session(&a1, &v1, &s1).unwrap();
 
-        let a2 = Action::new("agent", ActionKind::FileRead { path: PathBuf::from("/b") });
+        let a2 = Action::new(
+            "agent",
+            ActionKind::FileRead {
+                path: PathBuf::from("/b"),
+            },
+        );
         let v2 = Verdict::allow(a2.id, "ok", None);
         store.append_with_session(&a2, &v2, &s1).unwrap();
 
         // Append to session 2
-        let a3 = Action::new("agent", ActionKind::FileRead { path: PathBuf::from("/c") });
+        let a3 = Action::new(
+            "agent",
+            ActionKind::FileRead {
+                path: PathBuf::from("/c"),
+            },
+        );
         let v3 = Verdict::allow(a3.id, "ok", None);
         store.append_with_session(&a3, &v3, &s2).unwrap();
 
@@ -364,7 +367,9 @@ mod tests {
         let (_tmp, mut store) = test_db();
 
         for i in 0..5 {
-            store.begin_session("test", &format!("cmd{i}"), &[], None).unwrap();
+            store
+                .begin_session("test", &format!("cmd{i}"), &[], None)
+                .unwrap();
         }
 
         let page1 = store.list_sessions(2, 0).unwrap();
@@ -393,9 +398,7 @@ mod tests {
     fn update_session_tag() {
         let (_tmp, mut store) = test_db();
 
-        let session_id = store
-            .begin_session("test", "cmd", &[], None)
-            .unwrap();
+        let session_id = store.begin_session("test", "cmd", &[], None).unwrap();
 
         // Initially no tag
         let session = store.get_session(&session_id).unwrap().unwrap();
@@ -443,7 +446,9 @@ mod tests {
 
         store.begin_session("test", "cmd1", &[], None).unwrap();
         store.begin_session("test", "cmd2", &[], None).unwrap();
-        store.begin_session("test", "cmd3", &[], Some("latest-tag")).unwrap();
+        store
+            .begin_session("test", "cmd3", &[], Some("latest-tag"))
+            .unwrap();
 
         let latest = store.latest_session().unwrap().unwrap();
         assert_eq!(latest.command, "cmd3");
@@ -460,15 +465,23 @@ mod tests {
         for i in 0..10 {
             let action = Action::new(
                 "agent",
-                ActionKind::FileRead { path: PathBuf::from(format!("/f{i}")) },
+                ActionKind::FileRead {
+                    path: PathBuf::from(format!("/f{i}")),
+                },
             );
             let verdict = Verdict::allow(action.id, format!("ok-{i}"), None);
-            store.append_with_session(&action, &verdict, &session_id).unwrap();
+            store
+                .append_with_session(&action, &verdict, &session_id)
+                .unwrap();
         }
 
         // Verify hash chain integrity -- session_id is NOT in the hash
         let report = store.verify_integrity().unwrap();
-        assert!(report.valid, "hash chain should be valid: {}", report.message);
+        assert!(
+            report.valid,
+            "hash chain should be valid: {}",
+            report.message
+        );
         assert_eq!(report.total_entries, 10);
     }
 }

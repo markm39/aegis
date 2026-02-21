@@ -55,6 +55,30 @@ impl OutboundMessage {
     }
 }
 
+/// An outbound photo message to send through the channel.
+#[derive(Debug, Clone)]
+pub struct OutboundPhoto {
+    /// Optional caption (MarkdownV2 for Telegram).
+    pub caption: Option<String>,
+    /// Filename for the uploaded photo.
+    pub filename: String,
+    /// Raw photo bytes.
+    pub bytes: Vec<u8>,
+    /// Whether to send silently (no notification sound).
+    pub silent: bool,
+}
+
+impl OutboundPhoto {
+    pub fn new(filename: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            caption: None,
+            filename: filename.into(),
+            bytes,
+            silent: false,
+        }
+    }
+}
+
 /// An inbound action received from the user through the channel.
 #[derive(Debug)]
 pub enum InboundAction {
@@ -81,4 +105,9 @@ pub trait Channel: Send + 'static {
 
     /// Human-readable name for this channel backend.
     fn name(&self) -> &str;
+
+    /// Send a photo message (optional capability).
+    async fn send_photo(&self, _photo: OutboundPhoto) -> Result<(), ChannelError> {
+        Err(ChannelError::Other("photo messages not supported".into()))
+    }
 }

@@ -109,7 +109,8 @@ fn format_tool_use(block: &Value) -> Option<String> {
             shorten_path(path)
         }
         "Write" | "NotebookEdit" => {
-            let path = input["file_path"].as_str()
+            let path = input["file_path"]
+                .as_str()
                 .or_else(|| input["notebook_path"].as_str())
                 .unwrap_or("");
             shorten_path(path)
@@ -353,7 +354,8 @@ mod tests {
 
     #[test]
     fn result_error() {
-        let json = r#"{"type":"result","subtype":"error_max_turns","errors":["exceeded maximum turns"]}"#;
+        let json =
+            r#"{"type":"result","subtype":"error_max_turns","errors":["exceeded maximum turns"]}"#;
         let result = format_ndjson_line(json);
         assert_eq!(result, vec!["Error: exceeded maximum turns"]);
     }

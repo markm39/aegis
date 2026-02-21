@@ -140,9 +140,8 @@ fn walk_dir(
     };
 
     for entry in read_dir {
-        let entry = entry.map_err(|e| {
-            AegisError::FsError(format!("failed to read dir entry: {e}"))
-        })?;
+        let entry =
+            entry.map_err(|e| AegisError::FsError(format!("failed to read dir entry: {e}")))?;
 
         let path = entry.path();
 
@@ -261,7 +260,11 @@ mod tests {
         fs::write(dir.path().join("mod.txt"), "original").unwrap();
         let pre = DirSnapshot::capture(dir.path()).unwrap();
 
-        fs::write(dir.path().join("mod.txt"), "modified content that is longer").unwrap();
+        fs::write(
+            dir.path().join("mod.txt"),
+            "modified content that is longer",
+        )
+        .unwrap();
         let post = DirSnapshot::capture(dir.path()).unwrap();
 
         let events = pre.diff(&post);
@@ -314,11 +317,8 @@ mod tests {
 
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(
-                dir.path().join("real.txt"),
-                dir.path().join("link.txt"),
-            )
-            .unwrap();
+            std::os::unix::fs::symlink(dir.path().join("real.txt"), dir.path().join("link.txt"))
+                .unwrap();
 
             let snap = DirSnapshot::capture(dir.path()).unwrap();
             // Only real.txt, not link.txt

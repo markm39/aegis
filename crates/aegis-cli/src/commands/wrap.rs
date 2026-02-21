@@ -96,11 +96,16 @@ fn create_backend(config: &AegisConfig) -> Result<(Box<dyn SandboxBackend>, bool
             let sbpl = aegis_sandbox::compile_cedar_to_sbpl(config, &policy_engine)
                 .context("failed to compile Cedar policies to SBPL")?;
             tracing::info!("compiled Cedar policies to SBPL profile");
-            Ok((Box::new(aegis_sandbox::SeatbeltBackend::with_profile(sbpl)), true))
+            Ok((
+                Box::new(aegis_sandbox::SeatbeltBackend::with_profile(sbpl)),
+                true,
+            ))
         }
         #[cfg(not(target_os = "macos"))]
         IsolationConfig::Seatbelt { .. } => {
-            eprintln!("Warning: Seatbelt is only available on macOS; falling back to Process isolation");
+            eprintln!(
+                "Warning: Seatbelt is only available on macOS; falling back to Process isolation"
+            );
             Ok((Box::new(aegis_sandbox::ProcessBackend), false))
         }
         IsolationConfig::Process | IsolationConfig::None => {
@@ -139,9 +144,8 @@ pub fn ensure_wrap_config(
     if wrap_dir.exists() {
         // Reuse existing config, update sandbox_dir
         let config_path = wrap_dir.join(CONFIG_FILENAME);
-        let content = fs::read_to_string(&config_path).with_context(|| {
-            format!("failed to read wrap config: {}", config_path.display())
-        })?;
+        let content = fs::read_to_string(&config_path)
+            .with_context(|| format!("failed to read wrap config: {}", config_path.display()))?;
         let mut config = AegisConfig::from_toml(&content).context("failed to parse wrap config")?;
         config.sandbox_dir = project_dir.to_path_buf();
         config.isolation = IsolationConfig::Process;
@@ -159,19 +163,22 @@ pub fn ensure_wrap_config(
         // Create new wrap config
         let policy_text = get_builtin_policy(policy_template).with_context(|| {
             format!(
-                "unknown policy template '{policy_template}'; valid options: {}", aegis_policy::builtin::list_builtin_policies().join(", ")
+                "unknown policy template '{policy_template}'; valid options: {}",
+                aegis_policy::builtin::list_builtin_policies().join(", ")
             )
         })?;
 
         let policies_dir = wrap_dir.join("policies");
         fs::create_dir_all(&policies_dir).with_context(|| {
-            format!("failed to create wrap policies dir: {}", policies_dir.display())
+            format!(
+                "failed to create wrap policies dir: {}",
+                policies_dir.display()
+            )
         })?;
 
         let policy_file = policies_dir.join(DEFAULT_POLICY_FILENAME);
-        fs::write(&policy_file, policy_text).with_context(|| {
-            format!("failed to write policy file: {}", policy_file.display())
-        })?;
+        fs::write(&policy_file, policy_text)
+            .with_context(|| format!("failed to write policy file: {}", policy_file.display()))?;
 
         let config = AegisConfig {
             name: name.to_string(),
@@ -240,7 +247,10 @@ mod tests {
         assert_eq!(config.sandbox_dir, project_dir);
         assert_eq!(config.isolation, IsolationConfig::Process);
         assert!(wrap_dir.join(CONFIG_FILENAME).exists());
-        assert!(wrap_dir.join("policies").join(DEFAULT_POLICY_FILENAME).exists());
+        assert!(wrap_dir
+            .join("policies")
+            .join(DEFAULT_POLICY_FILENAME)
+            .exists());
     }
 
     #[test]
@@ -273,11 +283,9 @@ mod tests {
 
         let result = ensure_wrap_config(&wrap_dir, "bad", "nonexistent-policy", &project_dir);
         assert!(result.is_err(), "unknown policy should fail");
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("unknown policy template"),
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown policy template"),);
     }
 }

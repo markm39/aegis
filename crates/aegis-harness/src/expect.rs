@@ -177,8 +177,8 @@ mod tests {
 
     #[test]
     fn wait_for_text_on_echo() {
-        let mut session =
-            TerminalSession::spawn("/bin/echo", &["hello world".to_string()]).expect("spawn failed");
+        let mut session = TerminalSession::spawn("/bin/echo", &["hello world".to_string()])
+            .expect("spawn failed");
 
         Expect::new(&mut session)
             .timeout(Duration::from_secs(3))
@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn assert_screen_contains_passes() {
-        let mut session =
-            TerminalSession::spawn("/bin/echo", &["assertion-test".to_string()]).expect("spawn failed");
+        let mut session = TerminalSession::spawn("/bin/echo", &["assertion-test".to_string()])
+            .expect("spawn failed");
 
         let mut expect = Expect::new(&mut session);
         expect
@@ -220,8 +220,8 @@ mod tests {
 
     #[test]
     fn wait_for_pattern_with_regex() {
-        let mut session =
-            TerminalSession::spawn("/bin/echo", &["version 1.2.3".to_string()]).expect("spawn failed");
+        let mut session = TerminalSession::spawn("/bin/echo", &["version 1.2.3".to_string()])
+            .expect("spawn failed");
 
         Expect::new(&mut session)
             .timeout(Duration::from_secs(3))
@@ -236,8 +236,7 @@ mod tests {
         let mut session =
             TerminalSession::spawn("/bin/echo", &["actual".to_string()]).expect("spawn failed");
 
-        let mut expect = Expect::new(&mut session)
-            .timeout(Duration::from_millis(200));
+        let mut expect = Expect::new(&mut session).timeout(Duration::from_millis(200));
         let result = expect.wait_for_text("nonexistent-text-xyz");
 
         match result {

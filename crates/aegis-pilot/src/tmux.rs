@@ -79,10 +79,14 @@ impl TmuxSession {
             .args([
                 "new-session",
                 "-d",
-                "-s", &session_name,
-                "-x", "200",
-                "-y", "50",
-                "-c", &working_dir.to_string_lossy(),
+                "-s",
+                &session_name,
+                "-x",
+                "200",
+                "-y",
+                "50",
+                "-c",
+                &working_dir.to_string_lossy(),
             ])
             .arg(shell_cmd)
             .stdout(std::process::Stdio::null())
@@ -98,11 +102,7 @@ impl TmuxSession {
 
         // Get the pane PID
         let pid_output = Command::new("tmux")
-            .args([
-                "list-panes",
-                "-t", &session_name,
-                "-F", "#{pane_pid}",
-            ])
+            .args(["list-panes", "-t", &session_name, "-F", "#{pane_pid}"])
             .output()
             .map_err(|e| AegisError::PilotError(format!("tmux list-panes failed: {e}")))?;
 
@@ -114,19 +114,15 @@ impl TmuxSession {
             .map_err(|e| AegisError::PilotError(format!("bad pane pid {pid_str:?}: {e}")))?;
 
         // Create a named pipe for output capture
-        let pipe_dir = std::env::var("TMPDIR")
-            .unwrap_or_else(|_| "/tmp".into());
+        let pipe_dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
         let pipe_path = PathBuf::from(pipe_dir).join(format!("aegis-tmux-{name}.pipe"));
 
         // Remove stale pipe
         let _ = std::fs::remove_file(&pipe_path);
 
         // Create the FIFO
-        nix::unistd::mkfifo(
-            &pipe_path,
-            nix::sys::stat::Mode::from_bits_truncate(0o600),
-        )
-        .map_err(|e| AegisError::PilotError(format!("mkfifo failed: {e}")))?;
+        nix::unistd::mkfifo(&pipe_path, nix::sys::stat::Mode::from_bits_truncate(0o600))
+            .map_err(|e| AegisError::PilotError(format!("mkfifo failed: {e}")))?;
 
         // Start pipe-pane to forward output to our FIFO.
         // The -o flag means output-only (don't capture input).
@@ -134,7 +130,8 @@ impl TmuxSession {
             .args([
                 "pipe-pane",
                 "-o",
-                "-t", &session_name,
+                "-t",
+                &session_name,
                 &format!("cat >> '{}'", pipe_path.display()),
             ])
             .stdout(std::process::Stdio::null())
@@ -257,7 +254,14 @@ impl AgentSession for TmuxSession {
         }
 
         let status = Command::new("tmux")
-            .args(["paste-buffer", "-b", "aegis-paste", "-t", &self.session_name, "-p"])
+            .args([
+                "paste-buffer",
+                "-b",
+                "aegis-paste",
+                "-t",
+                &self.session_name,
+                "-p",
+            ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -282,16 +286,14 @@ impl AgentSession for TmuxSession {
         let timeout = if timeout_ms < 0 {
             PollTimeout::NONE
         } else {
-            PollTimeout::try_from(timeout_ms as u32)
-                .unwrap_or(PollTimeout::MAX)
+            PollTimeout::try_from(timeout_ms as u32).unwrap_or(PollTimeout::MAX)
         };
 
         match nix::poll::poll(&mut poll_fd, timeout) {
             Ok(0) => Ok(false),
             Ok(_) => {
                 let revents = poll_fd[0].revents().unwrap_or(PollFlags::empty());
-                Ok(revents.contains(PollFlags::POLLIN)
-                    || revents.contains(PollFlags::POLLHUP))
+                Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false),
             Err(e) => Err(AegisError::PilotError(format!("poll pipe: {e}"))),

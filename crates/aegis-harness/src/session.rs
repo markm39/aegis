@@ -76,12 +76,7 @@ impl TerminalSession {
     /// Sets the PTY window size so the child application sees the correct
     /// terminal dimensions (important for TUI apps that query terminal size).
     pub fn spawn_with_options(opts: SessionOptions) -> Result<Self, HarnessError> {
-        let pty = PtySession::spawn(
-            &opts.command,
-            &opts.args,
-            &opts.working_dir,
-            &opts.env,
-        )?;
+        let pty = PtySession::spawn(&opts.command, &opts.args, &opts.working_dir, &opts.env)?;
 
         // Set the PTY window size so the child sees correct dimensions.
         let ws = libc::winsize {
@@ -322,8 +317,8 @@ mod tests {
 
     #[test]
     fn snapshot_captures_screen_state() {
-        let mut session =
-            TerminalSession::spawn("/bin/echo", &["snapshot-test".to_string()]).expect("spawn failed");
+        let mut session = TerminalSession::spawn("/bin/echo", &["snapshot-test".to_string()])
+            .expect("spawn failed");
         std::thread::sleep(Duration::from_millis(200));
         session.pump_until_idle(Duration::from_millis(100)).ok();
 

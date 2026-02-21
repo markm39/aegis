@@ -40,9 +40,7 @@ pub fn generate_policy(entries: &[ActionEntry]) -> String {
 fn write_permit(out: &mut String, action: &str, when_clause: Option<&str>) {
     out.push_str("permit(\n");
     out.push_str("    principal,\n");
-    out.push_str(&format!(
-        "    action == Aegis::Action::\"{action}\",\n"
-    ));
+    out.push_str(&format!("    action == Aegis::Action::\"{action}\",\n"));
     out.push_str("    resource\n");
     out.push(')');
 
@@ -84,7 +82,7 @@ pub fn needs_kernel_enforcement(entries: &[ActionEntry]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wizard::model::{default_action_entries, ActionMeta, SecurityPreset, apply_preset};
+    use crate::wizard::model::{apply_preset, default_action_entries, ActionMeta, SecurityPreset};
 
     #[test]
     fn observe_only_generates_permit_all_equivalent() {

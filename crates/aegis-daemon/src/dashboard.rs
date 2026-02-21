@@ -1,9 +1,10 @@
 //! Read-only web dashboard server for the daemon.
 
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
@@ -16,10 +17,53 @@ use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, warn};
 
 use aegis_control::daemon::{DaemonCommand, DaemonResponse, DashboardStatus};
+use aegis_toolkit::contract::ToolAction;
 
 use crate::control::DaemonCmdTx;
 
 const DASHBOARD_HTML: &str = include_str!("../assets/dashboard/index.html");
+
+/// Token-bucket rate limiter keyed by client IP address.
+///
+/// Each IP gets `burst` tokens initially. Tokens refill at `per_sec` per
+/// second. Each request costs 1 token. When tokens are exhausted the
+/// request is rejected with 429 Too Many Requests.
+#[derive(Clone)]
+struct RateLimiter {
+    buckets: Arc<std::sync::Mutex<HashMap<IpAddr, (f64, Instant)>>>,
+    burst: f64,
+    per_sec: f64,
+}
+
+impl RateLimiter {
+    fn new(burst: u32, per_sec: f64) -> Self {
+        Self {
+            buckets: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            burst: burst as f64,
+            per_sec,
+        }
+    }
+
+    /// Check whether a request from the given IP should be allowed.
+    ///
+    /// Returns `true` if the request is permitted, `false` if rate-limited.
+    fn check(&self, ip: IpAddr) -> bool {
+        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let (tokens, last) = buckets
+            .entry(ip)
+            .or_insert((self.burst, now));
+        let elapsed = now.duration_since(*last).as_secs_f64();
+        *tokens = (*tokens + elapsed * self.per_sec).min(self.burst);
+        *last = now;
+        if *tokens >= 1.0 {
+            *tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 #[derive(Clone)]
 struct DashboardState {
@@ -27,6 +71,7 @@ struct DashboardState {
     token: String,
     base_url: String,
     listen: String,
+    rate_limiter: RateLimiter,
 }
 
 pub fn spawn_dashboard_server(
@@ -34,13 +79,17 @@ pub fn spawn_dashboard_server(
     token: String,
     cmd_tx: DaemonCmdTx,
     shutdown: Arc<AtomicBool>,
+    rate_limit_burst: u32,
+    rate_limit_per_sec: f64,
 ) -> Result<std::thread::JoinHandle<()>, String> {
     let base_url = format!("http://{listen}");
+    let rate_limiter = RateLimiter::new(rate_limit_burst, rate_limit_per_sec);
     let state = DashboardState {
         cmd_tx,
         token,
         base_url,
         listen,
+        rate_limiter,
     };
 
     std::thread::Builder::new()
@@ -91,25 +140,86 @@ async fn shutdown_signal(shutdown: Arc<AtomicBool>) {
     }
 }
 
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Extract the remote IP address from request headers for audit logging.
+///
+/// Checks X-Forwarded-For first (first entry), then X-Real-Ip, then
+/// falls back to "unknown".
+fn extract_remote_ip(headers: &HeaderMap) -> String {
+    if let Some(xff) = headers.get("x-forwarded-for") {
+        if let Ok(text) = xff.to_str() {
+            if let Some(first) = text.split(',').next() {
+                let trimmed = first.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(text) = real_ip.to_str() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
 fn auth_ok(headers: &HeaderMap, token_query: Option<&str>, token: &str) -> bool {
     if let Some(value) = token_query {
-        if value == token {
+        if constant_time_eq(value.as_bytes(), token.as_bytes()) {
             return true;
         }
     }
     if let Some(auth) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(text) = auth.to_str() {
             if let Some(rest) = text.strip_prefix("Bearer ") {
-                return rest == token;
+                if constant_time_eq(rest.as_bytes(), token.as_bytes()) {
+                    return true;
+                }
             }
         }
     }
     if let Some(header) = headers.get("x-aegis-token") {
         if let Ok(text) = header.to_str() {
-            return text == token;
+            if constant_time_eq(text.as_bytes(), token.as_bytes()) {
+                return true;
+            }
         }
     }
+    let remote_ip = extract_remote_ip(headers);
+    warn!(
+        remote_ip = %remote_ip,
+        "dashboard auth failed: no valid token provided"
+    );
     false
+}
+
+/// Check rate limit for the request. Returns an error response if rate-limited.
+fn check_rate_limit(headers: &HeaderMap, limiter: &RateLimiter) -> Option<StatusCode> {
+    let ip_str = extract_remote_ip(headers);
+    let ip: IpAddr = ip_str
+        .parse()
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    if !limiter.check(ip) {
+        warn!(remote_ip = %ip_str, "dashboard rate limit exceeded");
+        Some(StatusCode::TOO_MANY_REQUESTS)
+    } else {
+        None
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -122,6 +232,9 @@ async fn index(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -133,6 +246,9 @@ async fn status(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -150,6 +266,9 @@ async fn snapshot(
     headers: HeaderMap,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -178,6 +297,9 @@ async fn logs(
     Path(agent): Path<String>,
     Query(q): Query<LogsQuery>,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -209,6 +331,9 @@ async fn frame(
     Path(agent): Path<String>,
     Query(q): Query<TokenQuery>,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -239,6 +364,9 @@ async fn ws(
     Query(q): Query<TokenQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -310,6 +438,26 @@ struct SessionSendParams {
     text: String,
 }
 
+/// Params for gateway methods that take just an agent name.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct NameParams {
+    name: String,
+}
+
+/// Params for approve/deny methods that take an agent name and request ID.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct NameRequestParams {
+    name: String,
+    request_id: String,
+}
+
+/// Params for tool.execute: agent name and action payload.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ToolExecuteParams {
+    name: String,
+    action: serde_json::Value,
+}
+
 #[derive(Debug, Clone)]
 struct FollowState {
     session_key: String,
@@ -324,6 +472,9 @@ async fn gateway_ws(
     Query(q): Query<TokenQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    if let Some(status) = check_rate_limit(&headers, &state.rate_limiter) {
+        return status.into_response();
+    }
     if !auth_ok(&headers, q.token.as_deref(), &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -576,6 +727,265 @@ async fn handle_gateway_request(
                 error: None,
             }
         }
+        "fleet.status" => {
+            match send_cmd(&state.cmd_tx, DaemonCommand::ListAgents).await {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "agent.approve" => {
+            let params: Result<NameRequestParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(p) => p,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::ApproveRequest {
+                    name: params.name,
+                    request_id: params.request_id,
+                },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "agent.deny" => {
+            let params: Result<NameRequestParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(p) => p,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::DenyRequest {
+                    name: params.name,
+                    request_id: params.request_id,
+                },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "agent.start" => {
+            let params: Result<NameParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(p) => p,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::StartAgent { name: params.name },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "agent.stop" => {
+            let params: Result<NameParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(p) => p,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::StopAgent { name: params.name },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "config.reload" => {
+            match send_cmd(&state.cmd_tx, DaemonCommand::ReloadConfig).await {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
+        "tool.execute" => {
+            let params: Result<ToolExecuteParams, _> = serde_json::from_value(req.params);
+            let params = match params {
+                Ok(p) => p,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid params: {err}")),
+                    };
+                }
+            };
+            let action: ToolAction = match serde_json::from_value(params.action) {
+                Ok(a) => a,
+                Err(err) => {
+                    return GatewayResponse {
+                        id,
+                        ok: false,
+                        result: None,
+                        error: Some(format!("invalid tool action: {err}")),
+                    };
+                }
+            };
+            match send_cmd(
+                &state.cmd_tx,
+                DaemonCommand::ExecuteToolAction {
+                    name: params.name,
+                    action,
+                },
+            )
+            .await
+            {
+                Ok(resp) if resp.ok => GatewayResponse {
+                    id,
+                    ok: true,
+                    result: resp.data,
+                    error: None,
+                },
+                Ok(resp) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(resp.message),
+                },
+                Err(e) => GatewayResponse {
+                    id,
+                    ok: false,
+                    result: None,
+                    error: Some(e),
+                },
+            }
+        }
         other => GatewayResponse {
             id,
             ok: false,
@@ -602,4 +1012,230 @@ async fn send_cmd(cmd_tx: &DaemonCmdTx, cmd: DaemonCommand) -> Result<DaemonResp
     resp_rx
         .await
         .map_err(|_| "daemon response channel closed".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- constant_time_eq tests --
+
+    #[test]
+    fn constant_time_eq_identical() {
+        assert!(constant_time_eq(b"secret-token", b"secret-token"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn constant_time_eq_different_content() {
+        assert!(!constant_time_eq(b"secret-token", b"secret-tokex"));
+        assert!(!constant_time_eq(b"abc", b"ABC"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"short", b"longer-value"));
+        assert!(!constant_time_eq(b"", b"x"));
+    }
+
+    // -- extract_remote_ip tests --
+
+    #[test]
+    fn extract_ip_from_x_forwarded_for() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.1, 10.0.0.2".parse().unwrap());
+        assert_eq!(extract_remote_ip(&headers), "10.0.0.1");
+    }
+
+    #[test]
+    fn extract_ip_from_x_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "192.168.1.1".parse().unwrap());
+        assert_eq!(extract_remote_ip(&headers), "192.168.1.1");
+    }
+
+    #[test]
+    fn extract_ip_fallback_to_unknown() {
+        let headers = HeaderMap::new();
+        assert_eq!(extract_remote_ip(&headers), "unknown");
+    }
+
+    #[test]
+    fn extract_ip_xff_takes_precedence_over_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
+        headers.insert("x-real-ip", "192.168.1.1".parse().unwrap());
+        assert_eq!(extract_remote_ip(&headers), "10.0.0.1");
+    }
+
+    // -- auth_ok tests --
+
+    #[test]
+    fn auth_ok_with_query_token() {
+        let headers = HeaderMap::new();
+        assert!(auth_ok(&headers, Some("my-token"), "my-token"));
+    }
+
+    #[test]
+    fn auth_ok_with_bearer_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer my-token".parse().unwrap(),
+        );
+        assert!(auth_ok(&headers, None, "my-token"));
+    }
+
+    #[test]
+    fn auth_ok_with_x_aegis_token_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-aegis-token", "my-token".parse().unwrap());
+        assert!(auth_ok(&headers, None, "my-token"));
+    }
+
+    #[test]
+    fn auth_ok_rejects_wrong_token() {
+        let headers = HeaderMap::new();
+        assert!(!auth_ok(&headers, Some("wrong"), "my-token"));
+    }
+
+    #[test]
+    fn auth_ok_rejects_no_credentials() {
+        let headers = HeaderMap::new();
+        assert!(!auth_ok(&headers, None, "my-token"));
+    }
+
+    // -- RateLimiter tests --
+
+    #[test]
+    fn rate_limiter_allows_burst() {
+        let limiter = RateLimiter::new(3, 1.0);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(limiter.check(ip));
+        assert!(limiter.check(ip));
+        assert!(limiter.check(ip));
+        // Fourth should be blocked (burst exhausted, no time elapsed)
+        assert!(!limiter.check(ip));
+    }
+
+    #[test]
+    fn rate_limiter_different_ips_independent() {
+        let limiter = RateLimiter::new(1, 0.0);
+        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        assert!(limiter.check(ip1));
+        assert!(limiter.check(ip2));
+        // Both exhausted independently
+        assert!(!limiter.check(ip1));
+        assert!(!limiter.check(ip2));
+    }
+
+    #[test]
+    fn rate_limiter_refills_over_time() {
+        let limiter = RateLimiter::new(1, 1000.0); // Very fast refill
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(limiter.check(ip));
+        assert!(!limiter.check(ip));
+        // Wait a tiny bit -- with 1000 tokens/sec, even 10ms refills ~10 tokens
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(limiter.check(ip));
+    }
+
+    // -- check_rate_limit tests --
+
+    #[test]
+    fn check_rate_limit_passes_when_under_limit() {
+        let limiter = RateLimiter::new(10, 1.0);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
+        assert!(check_rate_limit(&headers, &limiter).is_none());
+    }
+
+    #[test]
+    fn check_rate_limit_returns_429_when_exceeded() {
+        let limiter = RateLimiter::new(1, 0.0);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
+        assert!(check_rate_limit(&headers, &limiter).is_none());
+        assert_eq!(
+            check_rate_limit(&headers, &limiter),
+            Some(StatusCode::TOO_MANY_REQUESTS)
+        );
+    }
+
+    // -- Param struct deserialization tests --
+
+    #[test]
+    fn name_params_deserialize() {
+        let json = serde_json::json!({"name": "claude-1"});
+        let params: NameParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.name, "claude-1");
+    }
+
+    #[test]
+    fn name_request_params_deserialize() {
+        let json = serde_json::json!({"name": "claude-1", "request_id": "abc-123"});
+        let params: NameRequestParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.name, "claude-1");
+        assert_eq!(params.request_id, "abc-123");
+    }
+
+    #[test]
+    fn tool_execute_params_deserialize() {
+        let json = serde_json::json!({
+            "name": "claude-1",
+            "action": {"MouseMove": {"x": 100, "y": 200}}
+        });
+        let params: ToolExecuteParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.name, "claude-1");
+        assert!(params.action.is_object());
+    }
+
+    // -- GatewayRequest/GatewayResponse serialization tests --
+
+    #[test]
+    fn gateway_request_deserialize_minimal() {
+        let json = r#"{"method": "ping"}"#;
+        let req: GatewayRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.method, "ping");
+        assert!(req.id.is_none());
+    }
+
+    #[test]
+    fn gateway_request_deserialize_with_id_and_params() {
+        let json = r#"{"id": "1", "method": "agent.start", "params": {"name": "claude-1"}}"#;
+        let req: GatewayRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.id.as_deref(), Some("1"));
+        assert_eq!(req.method, "agent.start");
+    }
+
+    #[test]
+    fn gateway_response_serialization_ok() {
+        let resp = GatewayResponse {
+            id: Some("1".into()),
+            ok: true,
+            result: Some(serde_json::json!({"agents": []})),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"ok\":true"));
+        // error field should be skipped
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn gateway_response_serialization_error() {
+        let resp = GatewayResponse {
+            id: None,
+            ok: false,
+            result: None,
+            error: Some("not found".into()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"ok\":false"));
+        assert!(json.contains("not found"));
+        // id and result should be skipped
+        assert!(!json.contains("\"id\""));
+        assert!(!json.contains("\"result\""));
+    }
 }

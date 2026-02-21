@@ -209,6 +209,11 @@ pub fn status() -> anyhow::Result<()> {
             println!();
             println!("To set up Telegram: aegis telegram setup");
         }
+        Some(_) => {
+            println!("Telegram: not configured (other channel type active)");
+            println!();
+            println!("To set up Telegram: aegis telegram setup");
+        }
         None => {
             println!("Telegram: not configured");
             println!();

@@ -56,12 +56,10 @@ impl SeatbeltBackend {
         let mut tmp = tempfile::NamedTempFile::new().map_err(|e| {
             AegisError::SandboxError(format!("failed to create temp profile file: {e}"))
         })?;
-        tmp.write_all(profile.as_bytes()).map_err(|e| {
-            AegisError::SandboxError(format!("failed to write temp profile: {e}"))
-        })?;
-        tmp.flush().map_err(|e| {
-            AegisError::SandboxError(format!("failed to flush temp profile: {e}"))
-        })?;
+        tmp.write_all(profile.as_bytes())
+            .map_err(|e| AegisError::SandboxError(format!("failed to write temp profile: {e}")))?;
+        tmp.flush()
+            .map_err(|e| AegisError::SandboxError(format!("failed to flush temp profile: {e}")))?;
         Ok(tmp)
     }
 }
@@ -115,9 +113,7 @@ impl SandboxBackend for SeatbeltBackend {
             .args(args)
             .current_dir(&config.sandbox_dir)
             .status()
-            .map_err(|e| {
-                AegisError::SandboxError(format!("failed to run sandbox-exec: {e}"))
-            })?;
+            .map_err(|e| AegisError::SandboxError(format!("failed to run sandbox-exec: {e}")))?;
 
         Ok(status)
     }
@@ -138,16 +134,19 @@ impl SandboxBackend for SeatbeltBackend {
         );
 
         let mut cmd = std::process::Command::new("sandbox-exec");
-        cmd.arg("-f").arg(tmp.path()).arg(command).args(args)
+        cmd.arg("-f")
+            .arg(tmp.path())
+            .arg(command)
+            .args(args)
             .current_dir(&config.sandbox_dir);
 
         for (key, val) in env {
             cmd.env(key, val);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            AegisError::SandboxError(format!("failed to spawn sandbox-exec: {e}"))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AegisError::SandboxError(format!("failed to spawn sandbox-exec: {e}")))?;
 
         let pid = child.id();
 
@@ -169,7 +168,9 @@ mod tests {
     fn test_config(sandbox_dir: PathBuf) -> AegisConfig {
         crate::test_helpers::test_config(
             sandbox_dir,
-            IsolationConfig::Seatbelt { profile_overrides: None },
+            IsolationConfig::Seatbelt {
+                profile_overrides: None,
+            },
         )
     }
 
@@ -198,10 +199,7 @@ mod tests {
         let backend = SeatbeltBackend::new();
         backend.prepare(&config).expect("prepare failed");
 
-        let forbidden_path = format!(
-            "/tmp/aegis_test_forbidden_{}",
-            std::process::id()
-        );
+        let forbidden_path = format!("/tmp/aegis_test_forbidden_{}", std::process::id());
 
         let status = backend
             .exec(
@@ -267,12 +265,7 @@ mod tests {
         backend.prepare(&config).expect("prepare failed");
 
         let (_, status) = backend
-            .spawn_and_wait(
-                "/usr/bin/env",
-                &[],
-                &config,
-                &[("AEGIS_TEST_VAR", "hello")],
-            )
+            .spawn_and_wait("/usr/bin/env", &[], &config, &[("AEGIS_TEST_VAR", "hello")])
             .expect("spawn_and_wait failed");
 
         assert!(status.success());

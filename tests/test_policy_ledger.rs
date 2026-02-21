@@ -48,11 +48,7 @@ fn test_deny_engine_verdicts_stored_in_ledger() {
     let entries = store
         .query_by_decision("Deny")
         .expect("should query deny entries");
-    assert_eq!(
-        entries.len(),
-        3,
-        "all 3 entries should be Deny decisions"
-    );
+    assert_eq!(entries.len(), 3, "all 3 entries should be Deny decisions");
     for entry in &entries {
         assert_eq!(entry.decision, "Deny");
     }
@@ -94,11 +90,7 @@ fn test_permit_engine_verdicts_stored_in_ledger() {
     let entries = store
         .query_by_decision("Allow")
         .expect("should query allow entries");
-    assert_eq!(
-        entries.len(),
-        3,
-        "all 3 entries should be Allow decisions"
-    );
+    assert_eq!(entries.len(), 3, "all 3 entries should be Allow decisions");
     for entry in &entries {
         assert_eq!(entry.decision, "Allow");
     }
@@ -179,9 +171,7 @@ fn test_full_hash_chain_integrity_across_policy_switch() {
     }
 
     // Verify the entire hash chain is intact
-    let report = store
-        .verify_integrity()
-        .expect("should verify integrity");
+    let report = store.verify_integrity().expect("should verify integrity");
     assert!(
         report.valid,
         "hash chain should be valid across policy switch: {}",

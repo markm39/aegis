@@ -18,7 +18,9 @@ pub enum ToolKind {
 pub enum StreamKind {
     #[default]
     Plain,
-    Json { tool: ToolKind },
+    Json {
+        tool: ToolKind,
+    },
 }
 
 /// Trait for an agent process session (PTY, tmux, etc.).

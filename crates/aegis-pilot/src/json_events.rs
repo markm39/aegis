@@ -43,12 +43,20 @@ pub fn detect_json_prompt(tool: ToolKind, raw: &str) -> Option<PromptDetection> 
 }
 
 fn is_approval_event(value: &Value) -> bool {
-    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-    if event_type.contains("approval") || event_type.contains("permission") || event_type.contains("confirm") {
+    let event_type = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if event_type.contains("approval")
+        || event_type.contains("permission")
+        || event_type.contains("confirm")
+    {
         return true;
     }
 
-    let requires = value.get("requires_approval")
+    let requires = value
+        .get("requires_approval")
         .or_else(|| value.get("needs_approval"))
         .or_else(|| value.get("approval_required"))
         .and_then(|v| v.as_bool())
@@ -58,7 +66,8 @@ fn is_approval_event(value: &Value) -> bool {
     }
 
     if let Some(item) = value.get("item") {
-        let requires = item.get("requires_approval")
+        let requires = item
+            .get("requires_approval")
             .or_else(|| item.get("needs_approval"))
             .or_else(|| item.get("approval_required"))
             .and_then(|v| v.as_bool())
@@ -72,38 +81,78 @@ fn is_approval_event(value: &Value) -> bool {
 }
 
 fn build_action(value: &Value) -> ActionKind {
-    if let Some(cmd) = value.get("item")
+    if let Some(cmd) = value
+        .get("item")
         .and_then(|v| v.get("command"))
         .and_then(|v| v.as_str())
         .or_else(|| value.get("command").and_then(|v| v.as_str()))
     {
         let parts: Vec<&str> = cmd.splitn(2, char::is_whitespace).collect();
         let program = parts.first().unwrap_or(&"").to_string();
-        let args = parts.get(1).map(|s| vec![s.to_string()]).unwrap_or_default();
-        return ActionKind::ProcessSpawn { command: program, args };
+        let args = parts
+            .get(1)
+            .map(|s| vec![s.to_string()])
+            .unwrap_or_default();
+        return ActionKind::ProcessSpawn {
+            command: program,
+            args,
+        };
     }
 
-    if let Some(path) = value.get("file_path").and_then(|v| v.as_str())
+    if let Some(path) = value
+        .get("file_path")
+        .and_then(|v| v.as_str())
         .or_else(|| value.get("path").and_then(|v| v.as_str()))
-        .or_else(|| value.get("item").and_then(|v| v.get("file_path")).and_then(|v| v.as_str()))
-        .or_else(|| value.get("item").and_then(|v| v.get("path")).and_then(|v| v.as_str()))
+        .or_else(|| {
+            value
+                .get("item")
+                .and_then(|v| v.get("file_path"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            value
+                .get("item")
+                .and_then(|v| v.get("path"))
+                .and_then(|v| v.as_str())
+        })
     {
-        return ActionKind::FileWrite { path: PathBuf::from(path) };
+        return ActionKind::FileWrite {
+            path: PathBuf::from(path),
+        };
     }
 
-    if let Some(tool_name) = value.get("tool_name").and_then(|v| v.as_str())
+    if let Some(tool_name) = value
+        .get("tool_name")
+        .and_then(|v| v.as_str())
         .or_else(|| value.get("name").and_then(|v| v.as_str()))
-        .or_else(|| value.get("item").and_then(|v| v.get("tool_name")).and_then(|v| v.as_str()))
-        .or_else(|| value.get("item").and_then(|v| v.get("name")).and_then(|v| v.as_str()))
+        .or_else(|| {
+            value
+                .get("item")
+                .and_then(|v| v.get("tool_name"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            value
+                .get("item")
+                .and_then(|v| v.get("name"))
+                .and_then(|v| v.as_str())
+        })
     {
-        let args = value.get("input")
+        let args = value
+            .get("input")
             .or_else(|| value.get("arguments"))
             .cloned()
             .unwrap_or_else(|| Value::Null);
-        return ActionKind::ToolCall { tool: tool_name.to_string(), args };
+        return ActionKind::ToolCall {
+            tool: tool_name.to_string(),
+            args,
+        };
     }
 
-    ActionKind::ToolCall { tool: "codex".to_string(), args: value.clone() }
+    ActionKind::ToolCall {
+        tool: "codex".to_string(),
+        args: value.clone(),
+    }
 }
 
 fn format_codex_json_line(raw: &str) -> Vec<String> {
@@ -121,12 +170,23 @@ fn format_codex_json_line(raw: &str) -> Vec<String> {
 
     match event_type {
         "thread.started" => {
-            let id = obj.get("thread_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let id = obj
+                .get("thread_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             vec![format!("Session started (thread_id: {id})")]
         }
         "turn.completed" => {
-            let input = obj.get("usage").and_then(|u| u.get("input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
-            let output = obj.get("usage").and_then(|u| u.get("output_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+            let input = obj
+                .get("usage")
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let output = obj
+                .get("usage")
+                .and_then(|u| u.get("output_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             if input > 0 || output > 0 {
                 vec![format!("Done ({input}in/{output}out)")]
             } else {
@@ -134,7 +194,10 @@ fn format_codex_json_line(raw: &str) -> Vec<String> {
             }
         }
         "turn.failed" | "error" => {
-            let msg = obj.get("error").and_then(|v| v.get("message")).and_then(|v| v.as_str())
+            let msg = obj
+                .get("error")
+                .and_then(|v| v.get("message"))
+                .and_then(|v| v.as_str())
                 .or_else(|| obj.get("message").and_then(|v| v.as_str()))
                 .unwrap_or("unknown error");
             vec![format!("Error: {msg}")]

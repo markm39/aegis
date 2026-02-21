@@ -72,7 +72,10 @@ impl SharedPilotState {
 
     /// Register a new pending request.
     pub fn add_pending(&mut self, request_id: Uuid, raw_prompt: String) {
-        self.pending.push(SharedPendingInfo { request_id, raw_prompt });
+        self.pending.push(SharedPendingInfo {
+            request_id,
+            raw_prompt,
+        });
     }
 
     /// Remove a resolved pending request.
@@ -89,7 +92,13 @@ pub fn start_control_thread(
     config: &ControlServerConfig,
     supervisor_tx: std::sync::mpsc::Sender<SupervisorCommand>,
     shared_state: Arc<Mutex<SharedPilotState>>,
-) -> Result<(tokio::sync::watch::Sender<bool>, std::thread::JoinHandle<()>), anyhow::Error> {
+) -> Result<
+    (
+        tokio::sync::watch::Sender<bool>,
+        std::thread::JoinHandle<()>,
+    ),
+    anyhow::Error,
+> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let config = config.clone();
 
@@ -125,11 +134,7 @@ async fn run_control_servers(
     let (command_tx, command_rx) = server::command_channel(64);
 
     // Spawn the bridge task that processes commands
-    let bridge_handle = tokio::spawn(run_bridge(
-        command_rx,
-        supervisor_tx,
-        shared_state,
-    ));
+    let bridge_handle = tokio::spawn(run_bridge(command_rx, supervisor_tx, shared_state));
 
     // Spawn Unix socket server
     let unix_tx = command_tx.clone();
@@ -150,7 +155,7 @@ async fn run_control_servers(
         let listen = config.http_listen.clone();
         let api_key = config.api_key.clone();
         let handle = tokio::spawn(async move {
-            if let Err(e) = server::http::serve(&listen, http_tx, api_key, http_shutdown).await {
+            if let Err(e) = server::http::serve(&listen, http_tx, api_key, http_shutdown, None).await {
                 warn!("http control server error: {e}");
             }
         });
@@ -236,36 +241,52 @@ fn handle_control_command(
         }
 
         Command::Approve { request_id } => {
-            if supervisor_tx.send(SupervisorCommand::Approve { request_id: *request_id }).is_err() {
+            if supervisor_tx
+                .send(SupervisorCommand::Approve {
+                    request_id: *request_id,
+                })
+                .is_err()
+            {
                 return CommandResponse::error("supervisor disconnected");
             }
             CommandResponse::ok("approved")
         }
 
         Command::Deny { request_id, .. } => {
-            if supervisor_tx.send(SupervisorCommand::Deny { request_id: *request_id }).is_err() {
+            if supervisor_tx
+                .send(SupervisorCommand::Deny {
+                    request_id: *request_id,
+                })
+                .is_err()
+            {
                 return CommandResponse::error("supervisor disconnected");
             }
             CommandResponse::ok("denied")
         }
 
         Command::SendInput { text } => {
-            if supervisor_tx.send(SupervisorCommand::SendInput { text: text.clone() }).is_err() {
+            if supervisor_tx
+                .send(SupervisorCommand::SendInput { text: text.clone() })
+                .is_err()
+            {
                 return CommandResponse::error("supervisor disconnected");
             }
             CommandResponse::ok("input sent")
         }
 
         Command::Nudge { message } => {
-            if supervisor_tx.send(SupervisorCommand::Nudge { message: message.clone() }).is_err() {
+            if supervisor_tx
+                .send(SupervisorCommand::Nudge {
+                    message: message.clone(),
+                })
+                .is_err()
+            {
                 return CommandResponse::error("supervisor disconnected");
             }
             CommandResponse::ok("nudge sent")
         }
 
-        Command::UpdatePolicy => {
-            CommandResponse::error("policy hot-reload not yet supported")
-        }
+        Command::UpdatePolicy => CommandResponse::error("policy hot-reload not yet supported"),
 
         Command::Shutdown { .. } => {
             // The TUI handles shutdown via 'q' key; control clients can't force it yet.
@@ -319,7 +340,9 @@ mod tests {
     fn handle_status_command() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            42, "claude".into(), "ClaudeCode".into(),
+            42,
+            "claude".into(),
+            "ClaudeCode".into(),
         )));
 
         let resp = handle_control_command(&Command::Status, &tx, &state);
@@ -335,7 +358,9 @@ mod tests {
     fn handle_get_output_command() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
         {
             let mut s = state.lock().unwrap();
@@ -344,11 +369,7 @@ mod tests {
             }
         }
 
-        let resp = handle_control_command(
-            &Command::GetOutput { lines: Some(3) },
-            &tx,
-            &state,
-        );
+        let resp = handle_control_command(&Command::GetOutput { lines: Some(3) }, &tx, &state);
         assert!(resp.ok);
         let lines = resp.data.unwrap()["lines"].as_array().unwrap().clone();
         assert_eq!(lines.len(), 3);
@@ -360,15 +381,13 @@ mod tests {
     fn handle_approve_command() {
         let (tx, rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
         let id = Uuid::new_v4();
 
-        let resp = handle_control_command(
-            &Command::Approve { request_id: id },
-            &tx,
-            &state,
-        );
+        let resp = handle_control_command(&Command::Approve { request_id: id }, &tx, &state);
         assert!(resp.ok);
 
         let cmd = rx.try_recv().unwrap();
@@ -379,12 +398,17 @@ mod tests {
     fn handle_deny_command() {
         let (tx, rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
         let id = Uuid::new_v4();
 
         let resp = handle_control_command(
-            &Command::Deny { request_id: id, reason: Some("risky".into()) },
+            &Command::Deny {
+                request_id: id,
+                reason: Some("risky".into()),
+            },
             &tx,
             &state,
         );
@@ -398,11 +422,15 @@ mod tests {
     fn handle_send_input_command() {
         let (tx, rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
 
         let resp = handle_control_command(
-            &Command::SendInput { text: "hello".into() },
+            &Command::SendInput {
+                text: "hello".into(),
+            },
             &tx,
             &state,
         );
@@ -416,11 +444,15 @@ mod tests {
     fn handle_nudge_command() {
         let (tx, rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
 
         let resp = handle_control_command(
-            &Command::Nudge { message: Some("keep going".into()) },
+            &Command::Nudge {
+                message: Some("keep going".into()),
+            },
             &tx,
             &state,
         );
@@ -434,17 +466,15 @@ mod tests {
     fn handle_unsupported_commands() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
 
         let resp = handle_control_command(&Command::UpdatePolicy, &tx, &state);
         assert!(!resp.ok);
 
-        let resp = handle_control_command(
-            &Command::Shutdown { message: None },
-            &tx,
-            &state,
-        );
+        let resp = handle_control_command(&Command::Shutdown { message: None }, &tx, &state);
         assert!(!resp.ok);
     }
 
@@ -452,14 +482,18 @@ mod tests {
     fn handle_command_supervisor_disconnected() {
         let (tx, rx) = std::sync::mpsc::channel::<SupervisorCommand>();
         let state = Arc::new(Mutex::new(SharedPilotState::new(
-            1, "test".into(), "Auto".into(),
+            1,
+            "test".into(),
+            "Auto".into(),
         )));
 
         // Drop the receiver to simulate disconnection
         drop(rx);
 
         let resp = handle_control_command(
-            &Command::Approve { request_id: Uuid::new_v4() },
+            &Command::Approve {
+                request_id: Uuid::new_v4(),
+            },
             &tx,
             &state,
         );

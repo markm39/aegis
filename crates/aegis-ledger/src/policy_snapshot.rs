@@ -163,16 +163,12 @@ impl AuditStore {
                 "SELECT snapshot_id, timestamp, policy_hash, policy_files, session_id, config_name
                  FROM policy_snapshots WHERE config_name = ?1 ORDER BY id DESC LIMIT 1",
             )
-            .map_err(|e| {
-                AegisError::LedgerError(format!("latest_policy_snapshot prepare: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("latest_policy_snapshot prepare: {e}")))?;
 
         let result = stmt
             .query_row(params![config_name], row_to_policy_snapshot)
             .optional()
-            .map_err(|e| {
-                AegisError::LedgerError(format!("latest_policy_snapshot query: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("latest_policy_snapshot query: {e}")))?;
 
         Ok(result)
     }
@@ -186,9 +182,7 @@ impl AuditStore {
                 |row| row.get::<_, i64>(0),
             )
             .map(|c| c as usize)
-            .map_err(|e| {
-                AegisError::LedgerError(format!("count_policy_snapshots: {e}"))
-            })
+            .map_err(|e| AegisError::LedgerError(format!("count_policy_snapshots: {e}")))
     }
 
     /// List policy snapshots for a config, ordered by most recent first.
@@ -203,15 +197,11 @@ impl AuditStore {
                 "SELECT snapshot_id, timestamp, policy_hash, policy_files, session_id, config_name
                  FROM policy_snapshots WHERE config_name = ?1 ORDER BY id DESC LIMIT ?2",
             )
-            .map_err(|e| {
-                AegisError::LedgerError(format!("list_policy_snapshots prepare: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("list_policy_snapshots prepare: {e}")))?;
 
         let rows = stmt
             .query_map(params![config_name, limit as i64], row_to_policy_snapshot)
-            .map_err(|e| {
-                AegisError::LedgerError(format!("list_policy_snapshots query: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("list_policy_snapshots query: {e}")))?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| AegisError::LedgerError(format!("list_policy_snapshots read: {e}")))
@@ -221,13 +211,9 @@ impl AuditStore {
 /// Map a SQLite row to a PolicySnapshot.
 fn row_to_policy_snapshot(row: &rusqlite::Row<'_>) -> rusqlite::Result<PolicySnapshot> {
     let files_json: String = row.get(3)?;
-    let policy_files: BTreeMap<String, String> = serde_json::from_str(&files_json)
-        .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                3,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+    let policy_files: BTreeMap<String, String> =
+        serde_json::from_str(&files_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
     let session_id = row
@@ -270,9 +256,15 @@ mod tests {
     #[test]
     fn compute_policy_hash_changes_with_content() {
         let mut f1 = BTreeMap::new();
-        f1.insert("a.cedar".into(), "permit(principal, action, resource);".into());
+        f1.insert(
+            "a.cedar".into(),
+            "permit(principal, action, resource);".into(),
+        );
         let mut f2 = BTreeMap::new();
-        f2.insert("a.cedar".into(), "forbid(principal, action, resource);".into());
+        f2.insert(
+            "a.cedar".into(),
+            "forbid(principal, action, resource);".into(),
+        );
 
         assert_ne!(compute_policy_hash(&f1), compute_policy_hash(&f2));
     }
@@ -308,12 +300,22 @@ mod tests {
         let (_tmp, mut store) = test_db();
 
         let mut files_v1 = BTreeMap::new();
-        files_v1.insert("default.cedar".into(), "permit(principal, action, resource);".into());
-        store.record_policy_snapshot("test", &files_v1, None).unwrap();
+        files_v1.insert(
+            "default.cedar".into(),
+            "permit(principal, action, resource);".into(),
+        );
+        store
+            .record_policy_snapshot("test", &files_v1, None)
+            .unwrap();
 
         let mut files_v2 = BTreeMap::new();
-        files_v2.insert("default.cedar".into(), "forbid(principal, action, resource);".into());
-        let result = store.record_policy_snapshot("test", &files_v2, None).unwrap();
+        files_v2.insert(
+            "default.cedar".into(),
+            "forbid(principal, action, resource);".into(),
+        );
+        let result = store
+            .record_policy_snapshot("test", &files_v2, None)
+            .unwrap();
         assert!(result.is_some());
     }
 
@@ -389,8 +391,11 @@ mod tests {
     #[test]
     fn read_policy_files_skips_non_cedar_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("policy.cedar"), "permit(principal, action, resource);")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("policy.cedar"),
+            "permit(principal, action, resource);",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("notes.txt"), "not a policy").unwrap();
         let result = read_policy_files(dir.path()).unwrap();
         assert_eq!(result.len(), 1);
@@ -402,8 +407,12 @@ mod tests {
         let (_tmp, mut store) = test_db();
         let files = sample_files();
 
-        store.record_policy_snapshot("config-a", &files, None).unwrap();
-        store.record_policy_snapshot("config-b", &files, None).unwrap();
+        store
+            .record_policy_snapshot("config-a", &files, None)
+            .unwrap();
+        store
+            .record_policy_snapshot("config-b", &files, None)
+            .unwrap();
 
         // Same hash for different configs should both be recorded
         let a = store.latest_policy_snapshot("config-a").unwrap();

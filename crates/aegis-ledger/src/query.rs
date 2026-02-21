@@ -17,9 +17,9 @@ impl AuditStore {
     pub fn query_last(&self, n: usize) -> Result<Vec<AuditEntry>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {ENTRY_COLUMNS} FROM audit_log ORDER BY id DESC LIMIT ?1"),
-            )
+            .prepare(&format!(
+                "SELECT {ENTRY_COLUMNS} FROM audit_log ORDER BY id DESC LIMIT ?1"
+            ))
             .map_err(|e| AegisError::LedgerError(format!("query_last({n}) prepare failed: {e}")))?;
 
         let rows = stmt
@@ -34,9 +34,9 @@ impl AuditStore {
     pub fn query_by_principal(&self, principal: &str) -> Result<Vec<AuditEntry>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {ENTRY_COLUMNS} FROM audit_log WHERE principal = ?1 ORDER BY id ASC"),
-            )
+            .prepare(&format!(
+                "SELECT {ENTRY_COLUMNS} FROM audit_log WHERE principal = ?1 ORDER BY id ASC"
+            ))
             .map_err(|e| {
                 AegisError::LedgerError(format!("query_by_principal prepare failed: {e}"))
             })?;
@@ -53,9 +53,9 @@ impl AuditStore {
     pub fn query_by_decision(&self, decision: &str) -> Result<Vec<AuditEntry>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!("SELECT {ENTRY_COLUMNS} FROM audit_log WHERE decision = ?1 ORDER BY id ASC"),
-            )
+            .prepare(&format!(
+                "SELECT {ENTRY_COLUMNS} FROM audit_log WHERE decision = ?1 ORDER BY id ASC"
+            ))
             .map_err(|e| {
                 AegisError::LedgerError(format!("query_by_decision prepare failed: {e}"))
             })?;
@@ -116,9 +116,7 @@ impl AuditStore {
         let mut data_sql = if where_clause.is_empty() {
             format!("SELECT {ENTRY_COLUMNS} FROM audit_log ORDER BY id DESC")
         } else {
-            format!(
-                "SELECT {ENTRY_COLUMNS} FROM audit_log WHERE {where_clause} ORDER BY id DESC"
-            )
+            format!("SELECT {ENTRY_COLUMNS} FROM audit_log WHERE {where_clause} ORDER BY id DESC")
         };
 
         if let Some(lim) = limit {
@@ -171,7 +169,9 @@ impl AuditStore {
         let fragment = filter.to_sql();
 
         let sql = if fragment.where_clause.is_empty() {
-            format!("SELECT {column}, COUNT(*) FROM audit_log GROUP BY {column} ORDER BY COUNT(*) DESC")
+            format!(
+                "SELECT {column}, COUNT(*) FROM audit_log GROUP BY {column} ORDER BY COUNT(*) DESC"
+            )
         } else {
             format!(
                 "SELECT {column}, COUNT(*) FROM audit_log WHERE {} GROUP BY {column} ORDER BY COUNT(*) DESC",
@@ -182,16 +182,17 @@ impl AuditStore {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             fragment.params.iter().map(|p| p.as_ref()).collect();
 
-        let mut stmt = self
-            .connection()
-            .prepare(&sql)
-            .map_err(|e| AegisError::LedgerError(format!("count_grouped_by({column}) failed: {e}")))?;
+        let mut stmt = self.connection().prepare(&sql).map_err(|e| {
+            AegisError::LedgerError(format!("count_grouped_by({column}) failed: {e}"))
+        })?;
 
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
             })
-            .map_err(|e| AegisError::LedgerError(format!("count_grouped_by({column}) query: {e}")))?;
+            .map_err(|e| {
+                AegisError::LedgerError(format!("count_grouped_by({column}) query: {e}"))
+            })?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| AegisError::LedgerError(format!("count_grouped_by({column}) read: {e}")))
@@ -217,17 +218,12 @@ impl AuditStore {
     ///
     /// Used for streaming/tailing the ledger (`--follow` mode). Returns tuples
     /// of `(row_id, entry)` so the caller can track the last seen ID.
-    pub fn query_after_id(
-        &self,
-        after_id: i64,
-    ) -> Result<Vec<(i64, AuditEntry)>, AegisError> {
+    pub fn query_after_id(&self, after_id: i64) -> Result<Vec<(i64, AuditEntry)>, AegisError> {
         let mut stmt = self
             .connection()
-            .prepare(
-                &format!(
-                    "SELECT {ENTRY_COLUMNS}, id FROM audit_log WHERE id > ?1 ORDER BY id ASC"
-                ),
-            )
+            .prepare(&format!(
+                "SELECT {ENTRY_COLUMNS}, id FROM audit_log WHERE id > ?1 ORDER BY id ASC"
+            ))
             .map_err(|e| AegisError::LedgerError(format!("query_after_id prepare: {e}")))?;
 
         let rows = stmt
@@ -277,11 +273,42 @@ mod tests {
     /// Populate a store with varied entries for filter testing.
     fn populate_test_store(store: &mut AuditStore) {
         let actions = vec![
-            ("alice", ActionKind::FileRead { path: PathBuf::from("/a") }, "Allow"),
-            ("alice", ActionKind::FileWrite { path: PathBuf::from("/b") }, "Deny"),
-            ("bob", ActionKind::FileRead { path: PathBuf::from("/c") }, "Allow"),
-            ("bob", ActionKind::NetConnect { host: "example.com".into(), port: 443 }, "Deny"),
-            ("alice", ActionKind::DirList { path: PathBuf::from("/d") }, "Allow"),
+            (
+                "alice",
+                ActionKind::FileRead {
+                    path: PathBuf::from("/a"),
+                },
+                "Allow",
+            ),
+            (
+                "alice",
+                ActionKind::FileWrite {
+                    path: PathBuf::from("/b"),
+                },
+                "Deny",
+            ),
+            (
+                "bob",
+                ActionKind::FileRead {
+                    path: PathBuf::from("/c"),
+                },
+                "Allow",
+            ),
+            (
+                "bob",
+                ActionKind::NetConnect {
+                    host: "example.com".into(),
+                    port: 443,
+                },
+                "Deny",
+            ),
+            (
+                "alice",
+                ActionKind::DirList {
+                    path: PathBuf::from("/d"),
+                },
+                "Allow",
+            ),
         ];
         for (principal, kind, decision) in actions {
             let action = make_action(principal, kind);
@@ -561,9 +588,7 @@ mod tests {
         let mut store = AuditStore::open(tmp.path()).unwrap();
         populate_test_store(&mut store);
 
-        let counts = store
-            .count_by_action_kind(&AuditFilter::default())
-            .unwrap();
+        let counts = store.count_by_action_kind(&AuditFilter::default()).unwrap();
         assert!(!counts.is_empty());
         let total: usize = counts.iter().map(|(_, c)| c).sum();
         assert_eq!(total, 5);
@@ -575,11 +600,17 @@ mod tests {
         let mut store = AuditStore::open(tmp.path()).unwrap();
         populate_test_store(&mut store);
 
-        let counts = store
-            .count_by_decision(&AuditFilter::default())
-            .unwrap();
-        let allow_count = counts.iter().find(|(d, _)| d == "Allow").map(|(_, c)| *c).unwrap_or(0);
-        let deny_count = counts.iter().find(|(d, _)| d == "Deny").map(|(_, c)| *c).unwrap_or(0);
+        let counts = store.count_by_decision(&AuditFilter::default()).unwrap();
+        let allow_count = counts
+            .iter()
+            .find(|(d, _)| d == "Allow")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        let deny_count = counts
+            .iter()
+            .find(|(d, _)| d == "Deny")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
         assert_eq!(allow_count, 3);
         assert_eq!(deny_count, 2);
     }
