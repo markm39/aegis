@@ -810,6 +810,169 @@ pub fn calculate_session_cost(
     summary
 }
 
+// ---------------------------------------------------------------------------
+// Enhanced cost tracking
+// ---------------------------------------------------------------------------
+
+/// Cost breakdown for a single API call.
+#[derive(Debug, Clone)]
+pub struct UsageCost {
+    /// Number of input / prompt tokens.
+    pub input_tokens: u64,
+    /// Number of output / completion tokens.
+    pub output_tokens: u64,
+    /// Cost of input tokens in USD.
+    pub input_cost: f64,
+    /// Cost of output tokens in USD.
+    pub output_cost: f64,
+    /// Total cost in USD (input + output).
+    pub total_cost: f64,
+    /// Model identifier (e.g. `"claude-sonnet-4-5-20250929"`).
+    pub model: String,
+    /// Provider name (e.g. `"anthropic"`).
+    pub provider: String,
+}
+
+/// Calculate the cost for a single API call.
+///
+/// Looks up the model in `pricing` to determine per-token rates, then
+/// computes input and output costs separately. Unknown models yield
+/// zero costs but still record token counts and return `"unknown"` as
+/// the provider.
+pub fn calculate_cost(
+    model: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    pricing: &[crate::pricing::ModelPricing],
+) -> UsageCost {
+    let matched = pricing.iter().find(|p| {
+        glob::Pattern::new(&p.model_pattern)
+            .map(|pat| pat.matches(model))
+            .unwrap_or_else(|_| p.model_pattern == model)
+    });
+
+    let (input_cost, output_cost, provider) = match matched {
+        Some(p) => (
+            input_tokens as f64 * p.input_cost_per_mtok / 1_000_000.0,
+            output_tokens as f64 * p.output_cost_per_mtok / 1_000_000.0,
+            p.provider.clone(),
+        ),
+        None => (0.0, 0.0, "unknown".to_string()),
+    };
+
+    UsageCost {
+        input_tokens,
+        output_tokens,
+        input_cost,
+        output_cost,
+        total_cost: input_cost + output_cost,
+        model: model.to_string(),
+        provider,
+    }
+}
+
+/// Aggregated cost summary across multiple API calls.
+#[derive(Debug, Clone)]
+pub struct CostSummary {
+    /// Total cost in USD across all recorded calls.
+    pub total_cost: f64,
+    /// Total input tokens across all recorded calls.
+    pub total_input_tokens: u64,
+    /// Total output tokens across all recorded calls.
+    pub total_output_tokens: u64,
+    /// Number of API calls recorded.
+    pub calls: usize,
+    /// Cost breakdown by provider name.
+    pub by_provider: HashMap<String, f64>,
+    /// Cost breakdown by model identifier.
+    pub by_model: HashMap<String, f64>,
+}
+
+/// Tracks costs across an entire session (multiple API calls).
+///
+/// Records individual [`UsageCost`] entries and provides aggregation
+/// methods for total cost, per-provider breakdown, and per-model breakdown.
+#[derive(Debug)]
+pub struct SessionCostTracker {
+    entries: Vec<UsageCost>,
+    pricing: Vec<crate::pricing::ModelPricing>,
+}
+
+impl SessionCostTracker {
+    /// Create a new tracker using the built-in default pricing table.
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            pricing: crate::pricing::default_pricing(),
+        }
+    }
+
+    /// Create a new tracker with custom pricing entries.
+    pub fn with_pricing(pricing: Vec<crate::pricing::ModelPricing>) -> Self {
+        Self {
+            entries: Vec::new(),
+            pricing,
+        }
+    }
+
+    /// Record an API call's token usage, computing cost from the pricing table.
+    pub fn record(&mut self, model: &str, input_tokens: u64, output_tokens: u64) {
+        let cost = calculate_cost(model, input_tokens, output_tokens, &self.pricing);
+        self.entries.push(cost);
+    }
+
+    /// Total cost in USD across all recorded calls.
+    pub fn total_cost(&self) -> f64 {
+        self.entries.iter().map(|e| e.total_cost).sum()
+    }
+
+    /// Total input tokens across all recorded calls.
+    pub fn total_input_tokens(&self) -> u64 {
+        self.entries.iter().map(|e| e.input_tokens).sum()
+    }
+
+    /// Total output tokens across all recorded calls.
+    pub fn total_output_tokens(&self) -> u64 {
+        self.entries.iter().map(|e| e.output_tokens).sum()
+    }
+
+    /// Aggregate cost by provider name.
+    pub fn cost_by_provider(&self) -> HashMap<String, f64> {
+        let mut map = HashMap::new();
+        for entry in &self.entries {
+            *map.entry(entry.provider.clone()).or_insert(0.0) += entry.total_cost;
+        }
+        map
+    }
+
+    /// Aggregate cost by model identifier.
+    pub fn cost_by_model(&self) -> HashMap<String, f64> {
+        let mut map = HashMap::new();
+        for entry in &self.entries {
+            *map.entry(entry.model.clone()).or_insert(0.0) += entry.total_cost;
+        }
+        map
+    }
+
+    /// Produce a full [`CostSummary`] snapshot.
+    pub fn summary(&self) -> CostSummary {
+        CostSummary {
+            total_cost: self.total_cost(),
+            total_input_tokens: self.total_input_tokens(),
+            total_output_tokens: self.total_output_tokens(),
+            calls: self.entries.len(),
+            by_provider: self.cost_by_provider(),
+            by_model: self.cost_by_model(),
+        }
+    }
+}
+
+impl Default for SessionCostTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,5 +1256,145 @@ mod tests {
             "expected $8.25, got {}",
             summary.total_cost_usd
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Enhanced cost tracking tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_calculate_cost_known_model() {
+        let pricing = crate::pricing::default_pricing();
+        let cost = calculate_cost("claude-sonnet-4-5-20250929", 1_000_000, 500_000, &pricing);
+        assert_eq!(cost.input_tokens, 1_000_000);
+        assert_eq!(cost.output_tokens, 500_000);
+        // input: 1M * 3.0 / 1M = 3.0
+        assert!((cost.input_cost - 3.0).abs() < 1e-9);
+        // output: 500k * 15.0 / 1M = 7.5
+        assert!((cost.output_cost - 7.5).abs() < 1e-9);
+        assert!((cost.total_cost - 10.5).abs() < 1e-9);
+        assert_eq!(cost.provider, "anthropic");
+        assert_eq!(cost.model, "claude-sonnet-4-5-20250929");
+    }
+
+    #[test]
+    fn test_calculate_cost_unknown_model() {
+        let pricing = crate::pricing::default_pricing();
+        let cost = calculate_cost("totally-unknown", 1_000_000, 500_000, &pricing);
+        assert_eq!(cost.input_tokens, 1_000_000);
+        assert_eq!(cost.output_tokens, 500_000);
+        assert!((cost.input_cost).abs() < f64::EPSILON);
+        assert!((cost.output_cost).abs() < f64::EPSILON);
+        assert!((cost.total_cost).abs() < f64::EPSILON);
+        assert_eq!(cost.provider, "unknown");
+    }
+
+    #[test]
+    fn test_calculate_cost_zero_tokens() {
+        let pricing = crate::pricing::default_pricing();
+        let cost = calculate_cost("claude-opus-4-20250929", 0, 0, &pricing);
+        assert_eq!(cost.input_tokens, 0);
+        assert_eq!(cost.output_tokens, 0);
+        assert!((cost.total_cost).abs() < f64::EPSILON);
+        assert_eq!(cost.provider, "anthropic");
+    }
+
+    #[test]
+    fn test_session_cost_tracker_empty() {
+        let tracker = SessionCostTracker::new();
+        assert!((tracker.total_cost()).abs() < f64::EPSILON);
+        assert_eq!(tracker.total_input_tokens(), 0);
+        assert_eq!(tracker.total_output_tokens(), 0);
+        let summary = tracker.summary();
+        assert_eq!(summary.calls, 0);
+        assert!(summary.by_provider.is_empty());
+        assert!(summary.by_model.is_empty());
+    }
+
+    #[test]
+    fn test_session_cost_tracker_single_call() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.record("gpt-4o", 100_000, 50_000);
+
+        assert_eq!(tracker.total_input_tokens(), 100_000);
+        assert_eq!(tracker.total_output_tokens(), 50_000);
+        // input: 100k * 2.5 / 1M = 0.25
+        // output: 50k * 10.0 / 1M = 0.50
+        let expected_cost = 0.75;
+        assert!(
+            (tracker.total_cost() - expected_cost).abs() < 1e-9,
+            "expected {expected_cost}, got {}",
+            tracker.total_cost()
+        );
+
+        let by_provider = tracker.cost_by_provider();
+        assert!(
+            (by_provider["openai"] - expected_cost).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn test_session_cost_tracker_multi_provider() {
+        let mut tracker = SessionCostTracker::new();
+        // Anthropic call
+        tracker.record("claude-sonnet-4-5-20250929", 1_000_000, 0);
+        // OpenAI call
+        tracker.record("gpt-4o", 100_000, 50_000);
+        // Google call
+        tracker.record("gemini-2-flash", 1_000_000, 500_000);
+
+        // Anthropic: 1M * 3.0 / 1M = 3.0
+        // OpenAI: (100k * 2.5 + 50k * 10.0) / 1M = 0.75
+        // Google: (1M * 0.075 + 500k * 0.30) / 1M = 0.225
+        let expected_total = 3.0 + 0.75 + 0.225;
+        assert!(
+            (tracker.total_cost() - expected_total).abs() < 1e-9,
+            "expected {expected_total}, got {}",
+            tracker.total_cost()
+        );
+
+        let by_provider = tracker.cost_by_provider();
+        assert_eq!(by_provider.len(), 3);
+        assert!((by_provider["anthropic"] - 3.0).abs() < 1e-9);
+        assert!((by_provider["openai"] - 0.75).abs() < 1e-9);
+        assert!((by_provider["google"] - 0.225).abs() < 1e-9);
+
+        let by_model = tracker.cost_by_model();
+        assert_eq!(by_model.len(), 3);
+
+        let summary = tracker.summary();
+        assert_eq!(summary.calls, 3);
+        assert_eq!(summary.total_input_tokens, 2_100_000);
+        assert_eq!(summary.total_output_tokens, 550_000);
+    }
+
+    #[test]
+    fn test_session_cost_tracker_same_model_aggregation() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.record("claude-sonnet-4-5-20250929", 500_000, 100_000);
+        tracker.record("claude-sonnet-4-5-20250929", 500_000, 100_000);
+
+        let by_model = tracker.cost_by_model();
+        assert_eq!(by_model.len(), 1);
+        // Each call: (500k * 3.0 + 100k * 15.0) / 1M = 3.0
+        // Two calls = 6.0
+        assert!(
+            (by_model["claude-sonnet-4-5-20250929"] - 6.0).abs() < 1e-9
+        );
+        assert_eq!(tracker.total_input_tokens(), 1_000_000);
+        assert_eq!(tracker.total_output_tokens(), 200_000);
+    }
+
+    #[test]
+    fn test_session_cost_tracker_ollama_free() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.record("llama-3-70b", 1_000_000, 1_000_000);
+        assert!((tracker.total_cost()).abs() < f64::EPSILON);
+
+        let summary = tracker.summary();
+        assert_eq!(summary.calls, 1);
+        assert_eq!(summary.total_input_tokens, 1_000_000);
+        assert_eq!(summary.total_output_tokens, 1_000_000);
+        assert!((summary.total_cost).abs() < f64::EPSILON);
     }
 }

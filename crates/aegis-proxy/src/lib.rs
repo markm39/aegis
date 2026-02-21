@@ -9,9 +9,13 @@ pub mod audit;
 pub mod budget;
 pub mod pricing;
 pub mod profiles;
+pub mod rate_limit;
 pub mod usage;
 
 #[cfg(target_os = "macos")]
 pub use audit::harvest_seatbelt_violations;
 pub use audit::{log_process_exit, log_process_spawn};
-pub use usage::{UsageProxy, UsageProxyHandle};
+pub use rate_limit::{ProviderRateLimiter, RateLimitError};
+pub use usage::{
+    calculate_cost, CostSummary, SessionCostTracker, UsageCost, UsageProxy, UsageProxyHandle,
+};

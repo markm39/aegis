@@ -25,6 +25,9 @@ pub struct ModelPricing {
     pub cache_read_cost_per_mtok: f64,
     /// Cost per million cache-write (creation) tokens in USD.
     pub cache_write_cost_per_mtok: f64,
+    /// Provider name (e.g. `"anthropic"`, `"openai"`, `"google"`, `"ollama"`).
+    #[serde(default)]
+    pub provider: String,
 }
 
 /// A table of model pricing entries, searched in order.
@@ -42,48 +45,10 @@ impl PricingTable {
         Self { models: Vec::new() }
     }
 
-    /// Create a pricing table pre-populated with current Anthropic and OpenAI
-    /// model pricing (as of early 2025).
+    /// Create a pricing table pre-populated with current Anthropic, OpenAI,
+    /// Google, and Ollama model pricing.
     pub fn with_defaults() -> Self {
-        let models = vec![
-            // Anthropic
-            ModelPricing {
-                model_pattern: "claude-opus-4-*".into(),
-                input_cost_per_mtok: 15.0,
-                output_cost_per_mtok: 75.0,
-                cache_read_cost_per_mtok: 1.875,
-                cache_write_cost_per_mtok: 18.75,
-            },
-            ModelPricing {
-                model_pattern: "claude-sonnet-4-5-*".into(),
-                input_cost_per_mtok: 3.0,
-                output_cost_per_mtok: 15.0,
-                cache_read_cost_per_mtok: 0.375,
-                cache_write_cost_per_mtok: 3.75,
-            },
-            ModelPricing {
-                model_pattern: "claude-haiku-4-5-*".into(),
-                input_cost_per_mtok: 0.80,
-                output_cost_per_mtok: 4.0,
-                cache_read_cost_per_mtok: 0.08,
-                cache_write_cost_per_mtok: 1.0,
-            },
-            // OpenAI
-            ModelPricing {
-                model_pattern: "gpt-4o".into(),
-                input_cost_per_mtok: 2.50,
-                output_cost_per_mtok: 10.0,
-                cache_read_cost_per_mtok: 1.25,
-                cache_write_cost_per_mtok: 0.0,
-            },
-            ModelPricing {
-                model_pattern: "gpt-4o-mini".into(),
-                input_cost_per_mtok: 0.15,
-                output_cost_per_mtok: 0.60,
-                cache_read_cost_per_mtok: 0.075,
-                cache_write_cost_per_mtok: 0.0,
-            },
-        ];
+        let models = default_pricing();
         Self { models }
     }
 
@@ -118,6 +83,13 @@ impl PricingTable {
         Some(cost)
     }
 
+    /// Resolve the provider name for a model by matching against pricing patterns.
+    ///
+    /// Returns `None` if no pattern matches.
+    pub fn provider_for_model(&self, model: &str) -> Option<&str> {
+        self.lookup(model).map(|p| p.provider.as_str())
+    }
+
     /// Add or override a model pricing entry.
     ///
     /// If an entry with the same `model_pattern` already exists, it is replaced.
@@ -138,6 +110,92 @@ impl Default for PricingTable {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Return the built-in default pricing entries for common LLM providers.
+///
+/// Includes Anthropic, OpenAI, Google, and Ollama (local/free) models.
+/// More-specific patterns (e.g. `gpt-4o-mini*`) appear before broader
+/// ones (e.g. `gpt-4o*`) so that the first match wins correctly.
+pub fn default_pricing() -> Vec<ModelPricing> {
+    vec![
+        // -- Anthropic --
+        ModelPricing {
+            model_pattern: "claude-opus-4*".into(),
+            input_cost_per_mtok: 15.0,
+            output_cost_per_mtok: 75.0,
+            cache_read_cost_per_mtok: 1.875,
+            cache_write_cost_per_mtok: 18.75,
+            provider: "anthropic".into(),
+        },
+        ModelPricing {
+            model_pattern: "claude-sonnet-4*".into(),
+            input_cost_per_mtok: 3.0,
+            output_cost_per_mtok: 15.0,
+            cache_read_cost_per_mtok: 0.375,
+            cache_write_cost_per_mtok: 3.75,
+            provider: "anthropic".into(),
+        },
+        ModelPricing {
+            model_pattern: "claude-haiku-4*".into(),
+            input_cost_per_mtok: 0.80,
+            output_cost_per_mtok: 4.0,
+            cache_read_cost_per_mtok: 0.08,
+            cache_write_cost_per_mtok: 1.0,
+            provider: "anthropic".into(),
+        },
+        // -- OpenAI (specific patterns before broader ones) --
+        ModelPricing {
+            model_pattern: "gpt-4o-mini*".into(),
+            input_cost_per_mtok: 0.15,
+            output_cost_per_mtok: 0.60,
+            cache_read_cost_per_mtok: 0.075,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "openai".into(),
+        },
+        ModelPricing {
+            model_pattern: "gpt-4o*".into(),
+            input_cost_per_mtok: 2.50,
+            output_cost_per_mtok: 10.0,
+            cache_read_cost_per_mtok: 1.25,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "openai".into(),
+        },
+        ModelPricing {
+            model_pattern: "o1*".into(),
+            input_cost_per_mtok: 15.0,
+            output_cost_per_mtok: 60.0,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "openai".into(),
+        },
+        // -- Google --
+        ModelPricing {
+            model_pattern: "gemini-2*".into(),
+            input_cost_per_mtok: 0.075,
+            output_cost_per_mtok: 0.30,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "google".into(),
+        },
+        ModelPricing {
+            model_pattern: "gemini-1.5-pro*".into(),
+            input_cost_per_mtok: 1.25,
+            output_cost_per_mtok: 5.0,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "google".into(),
+        },
+        // -- Ollama (local, free) --
+        ModelPricing {
+            model_pattern: "llama*".into(),
+            input_cost_per_mtok: 0.0,
+            output_cost_per_mtok: 0.0,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "ollama".into(),
+        },
+    ]
 }
 
 /// Intermediate TOML representation for deserialization.
@@ -282,16 +340,97 @@ cache_write_cost_per_mtok = 0.0
         let mut table = PricingTable::with_defaults();
         // Override gpt-4o pricing
         table.add_model(ModelPricing {
-            model_pattern: "gpt-4o".into(),
+            model_pattern: "gpt-4o*".into(),
             input_cost_per_mtok: 99.0,
             output_cost_per_mtok: 99.0,
             cache_read_cost_per_mtok: 0.0,
             cache_write_cost_per_mtok: 0.0,
+            provider: "openai".into(),
         });
         let pricing = table.lookup("gpt-4o").unwrap();
         assert!(
             (pricing.input_cost_per_mtok - 99.0).abs() < f64::EPSILON,
             "override should replace existing entry"
         );
+    }
+
+    #[test]
+    fn test_default_pricing_has_all_providers() {
+        let pricing = default_pricing();
+        let providers: std::collections::HashSet<&str> =
+            pricing.iter().map(|p| p.provider.as_str()).collect();
+        assert!(providers.contains("anthropic"));
+        assert!(providers.contains("openai"));
+        assert!(providers.contains("google"));
+        assert!(providers.contains("ollama"));
+    }
+
+    #[test]
+    fn test_provider_for_model() {
+        let table = PricingTable::with_defaults();
+        assert_eq!(
+            table.provider_for_model("claude-opus-4-20250929"),
+            Some("anthropic")
+        );
+        assert_eq!(table.provider_for_model("gpt-4o"), Some("openai"));
+        assert_eq!(
+            table.provider_for_model("gemini-2-flash"),
+            Some("google")
+        );
+        assert_eq!(
+            table.provider_for_model("llama-3-70b"),
+            Some("ollama")
+        );
+        assert_eq!(table.provider_for_model("unknown-model"), None);
+    }
+
+    #[test]
+    fn test_gpt_4o_mini_matches_before_gpt_4o() {
+        let table = PricingTable::with_defaults();
+        let mini = table.lookup("gpt-4o-mini").unwrap();
+        assert!(
+            (mini.input_cost_per_mtok - 0.15).abs() < f64::EPSILON,
+            "gpt-4o-mini should match the mini pricing, not gpt-4o"
+        );
+        let full = table.lookup("gpt-4o").unwrap();
+        assert!(
+            (full.input_cost_per_mtok - 2.50).abs() < f64::EPSILON,
+            "gpt-4o should match the full pricing"
+        );
+    }
+
+    #[test]
+    fn test_o1_model_pricing() {
+        let table = PricingTable::with_defaults();
+        let pricing = table.lookup("o1-preview").expect("should find o1 pricing");
+        assert!(
+            (pricing.input_cost_per_mtok - 15.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (pricing.output_cost_per_mtok - 60.0).abs() < f64::EPSILON
+        );
+        assert_eq!(pricing.provider, "openai");
+    }
+
+    #[test]
+    fn test_ollama_free_pricing() {
+        let table = PricingTable::with_defaults();
+        let cost = table
+            .calculate_cost("llama-3-70b", 1_000_000, 1_000_000, 0, 0)
+            .expect("should calculate cost for ollama model");
+        assert!(
+            cost.abs() < f64::EPSILON,
+            "ollama models should be free, got {cost}"
+        );
+    }
+
+    #[test]
+    fn test_gemini_pricing() {
+        let table = PricingTable::with_defaults();
+        let pricing = table.lookup("gemini-2-flash").expect("should find gemini-2 pricing");
+        assert!(
+            (pricing.input_cost_per_mtok - 0.075).abs() < f64::EPSILON
+        );
+        assert_eq!(pricing.provider, "google");
     }
 }
