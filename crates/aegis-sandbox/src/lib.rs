@@ -99,6 +99,7 @@ pub(crate) fn write_sbpl_base(profile: &mut String) {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "macos")]
 mod escape_tests {
     use super::escape_sbpl_path;
 

@@ -10,16 +10,21 @@ env:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
     name: Build (${{ matrix.target }})
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -128,6 +133,7 @@ jobs:
           mkdir -p release
           cp artifacts/aegis-aarch64-apple-darwin/aegis-*.tar.gz release/
           cp artifacts/aegis-x86_64-apple-darwin/aegis-*.tar.gz release/
+          cp artifacts/aegis-x86_64-unknown-linux-gnu/aegis-*.tar.gz release/
           cp artifacts/aegis-universal/aegis-*.tar.gz release/
           cp artifacts/aegis-universal/completions/* release/ || true
           cp artifacts/aegis-universal/man/* release/ || true
@@ -150,6 +156,66 @@ jobs:
             release/_aegis
             release/aegis.fish
             release/aegis.1
+
+  docker:
+    name: Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-x86_64-unknown-linux-gnu
+          path: docker-build
+
+      - name: Extract binary and prepare Docker context
+        run: |
+          cd docker-build
+          tar xzf aegis-*-x86_64-unknown-linux-gnu.tar.gz
+          cat > Dockerfile <<'DEOF'
+          FROM debian:bookworm-slim
+          RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+          RUN groupadd --gid 1000 aegis && useradd --uid 1000 --gid aegis --create-home aegis
+          COPY aegis /usr/local/bin/aegis
+          RUN chmod +x /usr/local/bin/aegis
+          USER aegis
+          WORKDIR /home/aegis
+          EXPOSE 8080 9090
+          HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD curl -sf http://localhost:8080/v1/status || exit 1
+          ENTRYPOINT ["aegis"]
+          CMD ["daemon", "start", "--foreground"]
+          DEOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker-build
+          file: docker-build/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   update-homebrew:
     name: Update Homebrew Tap
