@@ -459,6 +459,15 @@ pub struct SlackConfig {
     /// Optional active hours window for outbound notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,
+    /// Signing secret for verifying interactive message requests (HMAC-SHA256).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_secret: Option<String>,
+    /// OAuth client ID for the Slack app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
+    /// Port for the interactive message endpoint listener.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive_endpoint_port: Option<u16>,
 }
 
 /// Configuration for a generic webhook channel.

@@ -10,6 +10,9 @@ use crate::slack::api::SlackApi;
 use crate::slack::poller::SlackPoller;
 
 pub mod api;
+pub mod blocks;
+pub mod interactive;
+pub mod oauth;
 pub mod poller;
 
 pub struct SlackChannel {
