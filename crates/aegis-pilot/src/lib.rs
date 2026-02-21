@@ -18,6 +18,7 @@
 pub mod adapter;
 pub mod adapters;
 pub mod ansi;
+pub mod compaction;
 pub mod driver;
 pub mod drivers;
 pub mod json_events;

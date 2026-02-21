@@ -123,6 +123,21 @@ pub enum ToolAction {
         #[serde(default)]
         region: Option<CaptureRegion>,
     },
+    /// Text-to-speech synthesis (stub -- not yet available).
+    TextToSpeech {
+        text: String,
+        voice: Option<String>,
+    },
+    /// Canvas/drawing render action (stub -- not yet available).
+    CanvasRender {
+        canvas_action: String,
+        params: serde_json::Value,
+    },
+    /// Device/hardware control action (stub -- not yet available).
+    DeviceControl {
+        device: String,
+        command: String,
+    },
 }
 
 impl ToolAction {
@@ -147,6 +162,9 @@ impl ToolAction {
             ToolAction::BrowserProfileStop { .. } => "BrowserProfileStop",
             ToolAction::InputBatch { .. } => "InputBatch",
             ToolAction::ImageAnalyze { .. } => "ImageAnalyze",
+            ToolAction::TextToSpeech { .. } => "TextToSpeech",
+            ToolAction::CanvasRender { .. } => "CanvasRender",
+            ToolAction::DeviceControl { .. } => "DeviceControl",
         }
     }
 
@@ -173,6 +191,9 @@ impl ToolAction {
                 max_risk_tag(actions.iter().map(InputAction::risk_tag))
             }
             ToolAction::ImageAnalyze { .. } => RiskTag::Medium,
+            ToolAction::TextToSpeech { .. } => RiskTag::Medium,
+            ToolAction::CanvasRender { .. } => RiskTag::Medium,
+            ToolAction::DeviceControl { .. } => RiskTag::Medium,
         }
     }
 }

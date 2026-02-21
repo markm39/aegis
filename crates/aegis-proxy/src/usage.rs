@@ -427,12 +427,16 @@ struct UsageData {
 }
 
 /// Accumulates usage data from SSE events across a streaming response.
+///
+/// Also tracks which model names have been seen across API calls,
+/// enabling model discovery and fleet-wide model inventory.
 #[derive(Debug)]
 pub(crate) struct UsageAccumulator {
     provider: Provider,
     current_event_type: String,
     data: UsageData,
     has_any_data: bool,
+    seen_models: std::collections::HashSet<String>,
 }
 
 impl UsageAccumulator {
@@ -442,6 +446,7 @@ impl UsageAccumulator {
             current_event_type: String::new(),
             data: UsageData::default(),
             has_any_data: false,
+            seen_models: std::collections::HashSet::new(),
         }
     }
 
@@ -451,6 +456,27 @@ impl UsageAccumulator {
 
     fn into_usage_data(self) -> UsageData {
         self.data
+    }
+
+    /// Return a sorted list of all model names seen by this accumulator.
+    #[allow(dead_code)]
+    pub fn models(&self) -> Vec<String> {
+        let mut models: Vec<String> = self.seen_models.iter().cloned().collect();
+        models.sort();
+        models
+    }
+
+    /// Return the number of distinct models seen.
+    #[allow(dead_code)]
+    pub fn model_count(&self) -> usize {
+        self.seen_models.len()
+    }
+
+    /// Record a model name as seen.
+    fn track_model(&mut self, model: &str) {
+        if !model.is_empty() {
+            self.seen_models.insert(model.to_string());
+        }
     }
 
     /// Process an SSE event (event type + data).
@@ -477,6 +503,7 @@ impl UsageAccumulator {
                 if let Some(message) = json.get("message") {
                     if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
                         self.data.model = model.to_string();
+                        self.track_model(model);
                     }
                     if let Some(usage) = message.get("usage") {
                         self.data.input_tokens = usage
@@ -528,6 +555,7 @@ impl UsageAccumulator {
         if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
             if !model.is_empty() {
                 self.data.model = model.to_string();
+                self.track_model(model);
             }
         }
     }
@@ -847,6 +875,51 @@ mod tests {
             "https://api.anthropic.com"
         );
         assert_eq!(Provider::OpenAi.upstream_base(), "https://api.openai.com");
+    }
+
+    #[test]
+    fn model_tracking_across_events() {
+        let mut acc = UsageAccumulator::new(Provider::Anthropic);
+        acc.feed_event(
+            "message_start",
+            r#"{"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":10}}}"#,
+        );
+        assert_eq!(acc.model_count(), 1);
+        assert_eq!(acc.models(), vec!["claude-sonnet-4-5-20250929"]);
+    }
+
+    #[test]
+    fn model_tracking_deduplication() {
+        let mut acc = UsageAccumulator::new(Provider::OpenAi);
+        // Same model in two events
+        acc.feed_event(
+            "",
+            r#"{"model":"gpt-4-turbo","usage":null}"#,
+        );
+        acc.feed_event(
+            "",
+            r#"{"model":"gpt-4-turbo","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#,
+        );
+        assert_eq!(acc.model_count(), 1);
+        assert_eq!(acc.models(), vec!["gpt-4-turbo"]);
+    }
+
+    #[test]
+    fn model_tracking_multiple_models() {
+        let mut acc = UsageAccumulator::new(Provider::OpenAi);
+        acc.feed_event("", r#"{"model":"gpt-4-turbo","usage":null}"#);
+        acc.feed_event("", r#"{"model":"gpt-3.5-turbo","usage":null}"#);
+        assert_eq!(acc.model_count(), 2);
+        // Sorted output
+        assert_eq!(acc.models(), vec!["gpt-3.5-turbo", "gpt-4-turbo"]);
+    }
+
+    #[test]
+    fn model_tracking_empty_model_ignored() {
+        let mut acc = UsageAccumulator::new(Provider::OpenAi);
+        acc.feed_event("", r#"{"model":"","usage":null}"#);
+        assert_eq!(acc.model_count(), 0);
+        assert!(acc.models().is_empty());
     }
 
     #[test]

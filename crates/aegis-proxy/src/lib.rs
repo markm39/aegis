@@ -6,9 +6,10 @@
 //! proxy for API usage tracking (Anthropic/OpenAI token counting).
 
 pub mod audit;
+pub mod profiles;
 pub mod usage;
 
-pub use audit::{log_process_exit, log_process_spawn};
 #[cfg(target_os = "macos")]
 pub use audit::harvest_seatbelt_violations;
+pub use audit::{log_process_exit, log_process_spawn};
 pub use usage::{UsageProxy, UsageProxyHandle};

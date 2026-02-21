@@ -558,6 +558,15 @@ impl ToolkitRuntime {
                         .to_string(),
                 );
             }
+            ToolAction::TextToSpeech { .. } => {
+                return Err("text-to-speech is not yet available".to_string());
+            }
+            ToolAction::CanvasRender { .. } => {
+                return Err("canvas rendering is not yet available".to_string());
+            }
+            ToolAction::DeviceControl { .. } => {
+                return Err("device control is not yet available".to_string());
+            }
         }
 
         let execution = ToolActionExecution {
