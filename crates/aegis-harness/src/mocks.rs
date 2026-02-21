@@ -386,6 +386,8 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::DeviceRevoke { .. } => "DeviceRevoke",
         ActionKind::DeviceAuth { .. } => "DeviceAuth",
         ActionKind::LlmComplete { .. } => "LlmComplete",
+        ActionKind::RenderA2UI { .. } => "RenderA2UI",
+        ActionKind::GenerateSetupCode { .. } => "GenerateSetupCode",
     }
 }
 

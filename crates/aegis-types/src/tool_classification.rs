@@ -142,6 +142,13 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // Classified as High because they involve cost implications and data
         // exfiltration risk through the provider's API.
         ActionKind::LlmComplete { .. } => ActionRisk::High,
+        // Rendering A2UI specs is a display-only operation with sanitized content.
+        // Classified as Low because it produces output but has no external side effects.
+        ActionKind::RenderA2UI { .. } => ActionRisk::Low,
+        // Generating a setup code creates a time-limited pairing credential.
+        // Classified as Medium because the code expires quickly and still
+        // requires verification before granting persistent access.
+        ActionKind::GenerateSetupCode { .. } => ActionRisk::Medium,
     }
 }
 

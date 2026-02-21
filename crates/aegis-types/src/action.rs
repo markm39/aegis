@@ -294,6 +294,27 @@ pub enum ActionKind {
         /// Output/completion tokens consumed.
         output_tokens: u64,
     },
+    /// Render an A2UI (Agent-to-UI) component specification.
+    ///
+    /// Gated by Cedar policy. Logged when an agent submits a UiSpec
+    /// for rendering. The spec_id uniquely identifies the specification
+    /// being rendered; the component_count records how many components
+    /// it contains for audit purposes.
+    RenderA2UI {
+        /// Unique identifier for the UiSpec being rendered.
+        spec_id: String,
+        /// Number of components in the specification.
+        component_count: usize,
+    },
+    /// Generate a setup code with QR code for device pairing.
+    ///
+    /// Gated by Cedar policy. Logged when a setup code is generated for
+    /// a new device pairing flow. The endpoint is the daemon URL encoded
+    /// in the QR code.
+    GenerateSetupCode {
+        /// Daemon endpoint URL encoded in the setup code.
+        endpoint: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -496,6 +517,15 @@ impl std::fmt::Display for ActionKind {
                     "LlmComplete {provider}/{model} {endpoint} in={input_tokens} out={output_tokens}"
                 )
             }
+            ActionKind::RenderA2UI {
+                spec_id,
+                component_count,
+            } => {
+                write!(f, "RenderA2UI {spec_id} ({component_count} components)")
+            }
+            ActionKind::GenerateSetupCode { endpoint } => {
+                write!(f, "GenerateSetupCode {endpoint}")
+            }
         }
     }
 }
@@ -646,6 +676,10 @@ mod tests {
                 endpoint: "https://api.anthropic.com".into(),
                 input_tokens: 100,
                 output_tokens: 50,
+            },
+            ActionKind::RenderA2UI {
+                spec_id: "00000000-0000-0000-0000-000000000003".into(),
+                component_count: 5,
             },
         ];
         for v in variants {

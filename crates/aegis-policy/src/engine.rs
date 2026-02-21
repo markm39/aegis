@@ -213,6 +213,13 @@ impl PolicyEngine {
                     input_tokens: 0,
                     output_tokens: 0,
                 },
+                "RenderA2UI" => ActionKind::RenderA2UI {
+                    spec_id: "__probe__".into(),
+                    component_count: 0,
+                },
+                "GenerateSetupCode" => ActionKind::GenerateSetupCode {
+                    endpoint: "__probe__".into(),
+                },
                 _ => return false,
             },
         );
@@ -394,6 +401,8 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::DeviceRevoke { device_id, .. } => Ok(("DeviceRevoke", device_id.as_str())),
         ActionKind::DeviceAuth { device_id, .. } => Ok(("DeviceAuth", device_id.as_str())),
         ActionKind::LlmComplete { endpoint, .. } => Ok(("LlmComplete", endpoint.as_str())),
+        ActionKind::RenderA2UI { spec_id, .. } => Ok(("RenderA2UI", spec_id.as_str())),
+        ActionKind::GenerateSetupCode { endpoint, .. } => Ok(("GenerateSetupCode", endpoint.as_str())),
     }
 }
 

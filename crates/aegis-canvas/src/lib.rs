@@ -12,6 +12,8 @@
 //! - Optimistic concurrency control prevents lost updates via version numbers.
 //! - Canvas IDs are validated UUIDs -- arbitrary strings are rejected.
 
+pub mod a2ui;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
