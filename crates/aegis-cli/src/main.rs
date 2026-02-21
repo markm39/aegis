@@ -567,6 +567,9 @@ enum HookCommands {
     /// Handle a PostToolUse hook from Claude Code (reads stdin, records result)
     PostToolUse,
 
+    /// Handle a Stop hook from Claude Code (session end lifecycle event)
+    SessionEnd,
+
     /// Show the settings JSON needed to register the aegis hook
     ShowSettings,
 
@@ -1366,6 +1369,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Hook { action } => match action {
             HookCommands::PreToolUse => commands::hook::pre_tool_use(),
             HookCommands::PostToolUse => commands::hook::post_tool_use(),
+            HookCommands::SessionEnd => commands::hook::session_end(),
             HookCommands::ShowSettings => commands::hook::show_settings(),
             HookCommands::Install { dir } => commands::hook::install_settings(dir.as_deref()),
         },

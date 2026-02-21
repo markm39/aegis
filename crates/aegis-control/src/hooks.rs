@@ -42,8 +42,26 @@ pub fn generate_hook_settings() -> serde_json::Value {
             ],
             "PostToolUse": [
                 post_tool_use_matcher_group()
+            ],
+            "Stop": [
+                stop_matcher_group()
             ]
         }
+    })
+}
+
+/// A matcher group entry for the Stop array.
+///
+/// The `Stop` hook fires when a Claude Code session ends. Aegis records
+/// the session end event in the audit ledger for lifecycle tracking.
+fn stop_matcher_group() -> serde_json::Value {
+    serde_json::json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": "aegis hook session-end"
+            }
+        ]
     })
 }
 
@@ -166,6 +184,20 @@ pub fn install_daemon_hooks(working_dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Install Stop hook (session end lifecycle)
+    {
+        let stop = hooks_obj
+            .entry("Stop")
+            .or_insert(serde_json::json!([]));
+        let stop_array = stop
+            .as_array_mut()
+            .ok_or_else(|| "Stop is not an array".to_string())?;
+        if !is_aegis_hook_installed(stop_array) {
+            stop_array.push(stop_matcher_group());
+            changed = true;
+        }
+    }
+
     if !changed {
         return Ok(());
     }
@@ -238,6 +270,20 @@ pub fn install_project_hooks(project_dir: &Path) -> Result<(), String> {
             .ok_or_else(|| "PostToolUse is not an array".to_string())?;
         if !is_aegis_hook_installed(post_array) {
             post_array.push(post_tool_use_matcher_group());
+            changed = true;
+        }
+    }
+
+    // Install Stop hook (session end lifecycle)
+    {
+        let stop = hooks_obj
+            .entry("Stop")
+            .or_insert(serde_json::json!([]));
+        let stop_array = stop
+            .as_array_mut()
+            .ok_or_else(|| "Stop is not an array".to_string())?;
+        if !is_aegis_hook_installed(stop_array) {
+            stop_array.push(stop_matcher_group());
             changed = true;
         }
     }
@@ -461,6 +507,27 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("aegis hook post-tool-use"));
+
+        // Verify Stop
+        let stop = hooks.get("Stop").expect("should have Stop");
+        let stop_arr = stop.as_array().expect("Stop should be array");
+        assert_eq!(stop_arr.len(), 1);
+        let stop_group = &stop_arr[0];
+        let stop_inner = stop_group
+            .get("hooks")
+            .expect("matcher group should have hooks array");
+        let stop_handlers = stop_inner.as_array().expect("hooks should be array");
+        assert_eq!(stop_handlers.len(), 1);
+        assert_eq!(
+            stop_handlers[0].get("type").unwrap().as_str().unwrap(),
+            "command"
+        );
+        assert!(stop_handlers[0]
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("aegis hook session-end"));
     }
 
     #[test]
@@ -493,6 +560,16 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("aegis hook post-tool-use"));
+
+        // Stop installed
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1);
+        let stop_handlers = stop[0]["hooks"].as_array().unwrap();
+        assert_eq!(stop_handlers.len(), 1);
+        assert!(stop_handlers[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("aegis hook session-end"));
     }
 
     #[test]
@@ -509,6 +586,8 @@ mod tests {
         assert_eq!(pre.len(), 1, "should not duplicate PreToolUse hook entry");
         let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 1, "should not duplicate PostToolUse hook entry");
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "should not duplicate Stop hook entry");
     }
 
     #[test]
@@ -566,6 +645,8 @@ mod tests {
         assert_eq!(pre.len(), 1);
         let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 1);
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1);
     }
 
     #[test]
@@ -581,6 +662,8 @@ mod tests {
         assert_eq!(pre.len(), 1, "should not duplicate PreToolUse hook entry");
         let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(post.len(), 1, "should not duplicate PostToolUse hook entry");
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "should not duplicate Stop hook entry");
     }
 
     #[test]

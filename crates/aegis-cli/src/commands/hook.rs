@@ -262,6 +262,38 @@ pub fn post_tool_use() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handle a Claude Code `Stop` hook event (session end).
+///
+/// Fired when a Claude Code session terminates. Records the session end
+/// event in the audit ledger via the daemon for lifecycle tracking.
+/// This is purely observational -- always exits successfully.
+pub fn session_end() -> anyhow::Result<()> {
+    let agent_name = std::env::var("AEGIS_AGENT_NAME").unwrap_or_else(|_| "unknown".to_string());
+
+    // Read stdin (Stop hook may or may not send a payload)
+    let mut input = String::new();
+    let _ = io::stdin().take(1024 * 1024).read_to_string(&mut input);
+
+    // Notify daemon of session end (best-effort)
+    let client = match std::env::var("AEGIS_SOCKET_PATH") {
+        Ok(path) => DaemonClient::new(path.into()),
+        Err(_) => DaemonClient::default_path(),
+    };
+
+    match client.send(&DaemonCommand::StopAgent {
+        name: agent_name.clone(),
+    }) {
+        Ok(_) => {
+            eprintln!("aegis: session end recorded for {agent_name}");
+        }
+        Err(e) => {
+            eprintln!("aegis: could not record session end for {agent_name}: {e}");
+        }
+    }
+
+    Ok(())
+}
+
 /// Generate the Claude Code settings JSON fragment that registers the aegis hook.
 ///
 /// Delegates to `aegis_control::hooks::generate_hook_settings()` -- the single
