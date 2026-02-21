@@ -415,6 +415,8 @@ pub enum ChannelConfig {
     Tlon(TlonChannelConfig),
     /// Lobster channel.
     Lobster(LobsterChannelConfig),
+    /// Gmail API channel (OAuth2).
+    Gmail(GmailChannelConfig),
 }
 
 /// Configuration for the Telegram messaging channel.
@@ -760,6 +762,34 @@ pub struct LobsterChannelConfig {
     /// Optional active hours window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Gmail API channel (stored in ChannelConfig enum).
+///
+/// The OAuth2 client secret is read from an environment variable at runtime,
+/// never stored in the config file. Only the env var name is persisted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GmailChannelConfig {
+    /// OAuth2 client ID from Google Cloud Console.
+    pub client_id: String,
+    /// Name of the environment variable holding the OAuth2 client secret.
+    pub client_secret_env: String,
+    /// Google Cloud project ID (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Gmail label IDs to watch. Defaults to `["INBOX"]`.
+    #[serde(default = "default_gmail_watch_labels")]
+    pub watch_labels: Vec<String>,
+    /// Path to store OAuth2 tokens. Defaults to `~/.aegis/gmail/tokens.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_path: Option<std::path::PathBuf>,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+fn default_gmail_watch_labels() -> Vec<String> {
+    vec!["INBOX".to_string()]
 }
 
 /// Access control configuration for messaging channels.

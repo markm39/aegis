@@ -315,6 +315,11 @@ pub fn run_fleet(
                 };
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
+            ChannelConfig::Gmail(_cfg) => {
+                // Gmail channel trait implementation is not yet available (task 2).
+                // Log a warning and return without running.
+                tracing::warn!("Gmail channel is not yet fully implemented; skipping");
+            }
         }
     });
 }

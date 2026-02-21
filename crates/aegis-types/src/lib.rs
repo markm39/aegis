@@ -15,7 +15,8 @@ pub use action::{Action, ActionKind};
 pub use config::{
     validate_config_name, ActiveHoursConfig, AdapterConfig, AegisConfig, AlertRule,
     ChannelCommandSetConfig, ChannelConfig, ChannelRoutingConfig, ControlConfig,
-    DiscordChannelConfig, FeishuChannelConfig, GooglechatChannelConfig, ImessageChannelConfig,
+    DiscordChannelConfig, FeishuChannelConfig, GmailChannelConfig, GooglechatChannelConfig,
+    ImessageChannelConfig,
     IrcChannelConfig, IsolationConfig, LineChannelConfig, MatrixChannelConfig,
     MattermostChannelConfig, MsteamsChannelConfig, NetworkRule, NostrChannelConfig, ObserverConfig,
     PilotConfig, PromptPatternConfig, Protocol, SignalChannelConfig, SlackConfig, StallConfig,

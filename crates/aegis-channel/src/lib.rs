@@ -24,6 +24,7 @@ pub mod polls;
 pub mod discord;
 pub mod feishu;
 pub mod format;
+pub mod gmail;
 pub mod googlechat;
 pub mod hooks;
 pub mod imessage;
