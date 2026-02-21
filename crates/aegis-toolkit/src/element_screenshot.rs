@@ -62,9 +62,10 @@ pub enum ScreenshotError {
 // ---------------------------------------------------------------------------
 
 /// Supported screenshot image formats.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ScreenshotFormat {
+    #[default]
     Png,
     Jpeg { quality: u8 },
 }
@@ -119,11 +120,6 @@ impl std::str::FromStr for ScreenshotFormat {
     }
 }
 
-impl Default for ScreenshotFormat {
-    fn default() -> Self {
-        Self::Png
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Bounding box
