@@ -69,10 +69,12 @@ pub fn run() -> anyhow::Result<()> {
         channel_routing: None,
         toolkit: Default::default(),
         memory: Default::default(),
+        session_files: Default::default(),
         cron: Default::default(),
         plugins: Default::default(),
         aliases: Default::default(),
         lanes: vec![],
+        workspace_hooks: Default::default(),
     };
 
     let config_path = daemon_config_path();
@@ -267,10 +269,12 @@ mod tests {
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
+            session_files: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -325,10 +329,12 @@ mod tests {
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
+            session_files: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

@@ -671,10 +671,12 @@ impl FleetApp {
                 channel_routing: None,
                 toolkit: Default::default(),
                 memory: Default::default(),
+                session_files: Default::default(),
                 cron: Default::default(),
                 plugins: Default::default(),
                 aliases: Default::default(),
                 lanes: vec![],
+                workspace_hooks: Default::default(),
             }
         };
 

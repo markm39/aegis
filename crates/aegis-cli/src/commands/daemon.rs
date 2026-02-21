@@ -81,10 +81,12 @@ pub fn init() -> anyhow::Result<()> {
         channel_routing: None,
         toolkit: Default::default(),
         memory: Default::default(),
+        session_files: Default::default(),
         cron: Default::default(),
         plugins: Default::default(),
         aliases: Default::default(),
         lanes: vec![],
+        workspace_hooks: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -149,10 +151,12 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         channel_routing: None,
         toolkit: Default::default(),
         memory: Default::default(),
+        session_files: Default::default(),
         cron: Default::default(),
         plugins: Default::default(),
         aliases: Default::default(),
         lanes: vec![],
+        workspace_hooks: Default::default(),
     };
 
     let toml_str = example.to_toml()?;

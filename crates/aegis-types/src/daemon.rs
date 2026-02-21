@@ -63,6 +63,9 @@ pub struct DaemonConfig {
     /// Agent memory store settings.
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Session-scoped file storage settings.
+    #[serde(default)]
+    pub session_files: SessionFilesConfig,
     /// Cron job scheduler settings.
     #[serde(default)]
     pub cron: CronConfig,
@@ -75,6 +78,35 @@ pub struct DaemonConfig {
     /// Named execution lanes with configurable concurrency limits.
     #[serde(default)]
     pub lanes: Vec<LaneConfig>,
+    /// Per-workspace hook configuration.
+    #[serde(default)]
+    pub workspace_hooks: WorkspaceHooksConfig,
+}
+
+/// Configuration for per-workspace hook discovery and merge behavior.
+///
+/// When enabled, the daemon scans `.aegis/hooks/` inside each agent's
+/// `working_dir` in addition to the global `~/.aegis/hooks/` directory.
+/// Workspace hooks can override global hooks by name, except for reserved
+/// hook names which are protected from workspace-level override.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceHooksConfig {
+    /// Whether workspace-scoped hook discovery is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Hook names that workspace hooks cannot override.
+    /// These are reserved for global/system hooks only.
+    #[serde(default)]
+    pub reserved_hook_names: Vec<String>,
+}
+
+impl Default for WorkspaceHooksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reserved_hook_names: Vec::new(),
+        }
+    }
 }
 
 /// Configuration for a named execution lane in daemon.toml.
@@ -291,10 +323,96 @@ pub struct MemoryConfig {
     /// a 30-day half-life instead of the default.
     #[serde(default)]
     pub category_half_lives: std::collections::HashMap<String, f64>,
+    /// Automatic memory recall settings.
+    #[serde(default)]
+    pub auto_recall: AutoRecallConfig,
 }
 
 fn default_half_life_hours() -> f64 {
     168.0
+}
+
+/// Configuration for automatic memory recall before LLM calls.
+///
+/// When enabled, relevant memories are retrieved from the memory store
+/// and injected into the agent's context before each LLM invocation.
+/// Retrieval uses semantic similarity (if embeddings are available) or
+/// full-text search as a fallback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoRecallConfig {
+    /// Whether automatic recall is enabled. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of tokens (approximate) to inject. Default: 1024.
+    /// Content is truncated to stay within this budget.
+    #[serde(default = "default_auto_recall_max_tokens")]
+    pub max_tokens: usize,
+    /// Minimum relevance score for recalled memories. Default: 0.65.
+    /// Memories scoring below this threshold are excluded.
+    #[serde(default = "default_auto_recall_threshold")]
+    pub relevance_threshold: f32,
+    /// Override namespace for recall. Default: None (uses agent_id).
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+impl Default for AutoRecallConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_tokens: default_auto_recall_max_tokens(),
+            relevance_threshold: default_auto_recall_threshold(),
+            namespace: None,
+        }
+    }
+}
+
+fn default_auto_recall_max_tokens() -> usize {
+    1024
+}
+
+fn default_auto_recall_threshold() -> f32 {
+    0.65
+}
+
+/// Configuration for session-scoped file storage.
+///
+/// When enabled, each agent session gets an isolated directory for storing
+/// files with SHA-256 integrity hashes and configurable size limits.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionFilesConfig {
+    /// Whether session file storage is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum size of a single file in bytes (default 10 MB).
+    #[serde(default = "default_max_file_size_bytes")]
+    pub max_file_size_bytes: u64,
+    /// Maximum total size of all files in a session directory (default 100 MB).
+    #[serde(default = "default_max_total_size_bytes")]
+    pub max_total_size_bytes: u64,
+    /// Base directory for session file storage.
+    /// Defaults to `~/.aegis/sessions/`.
+    #[serde(default)]
+    pub base_dir: Option<String>,
+}
+
+impl Default for SessionFilesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_file_size_bytes: default_max_file_size_bytes(),
+            max_total_size_bytes: default_max_total_size_bytes(),
+            base_dir: None,
+        }
+    }
+}
+
+fn default_max_file_size_bytes() -> u64 {
+    10_485_760 // 10 MB
+}
+
+fn default_max_total_size_bytes() -> u64 {
+    104_857_600 // 100 MB
 }
 
 /// Configuration for the cron job scheduler.
@@ -756,10 +874,12 @@ mod tests {
             channel_routing: None,
             toolkit: ToolkitConfig::default(),
             memory: MemoryConfig::default(),
+            session_files: SessionFilesConfig::default(),
             cron: CronConfig::default(),
             plugins: PluginConfig::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: WorkspaceHooksConfig::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

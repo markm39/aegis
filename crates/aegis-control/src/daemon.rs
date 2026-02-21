@@ -674,6 +674,40 @@ pub enum DaemonCommand {
     /// The skill is NOT loaded -- this is an inspection-only command.
     /// Cedar policy gate: `daemon:scan_skill`.
     ScanSkill { path: String },
+
+    // -- Session file storage commands --
+    /// List files stored in a session's file directory.
+    ///
+    /// Returns metadata (name, size, sha256, created_at) for each file.
+    /// Cedar policy gate: `daemon:session_file_list`.
+    SessionFileList { session_id: String },
+    /// Retrieve the contents of a file from a session's file directory.
+    ///
+    /// Returns the file data as base64-encoded bytes in the response.
+    /// Cedar policy gate: `daemon:session_file_get`.
+    SessionFileGet {
+        session_id: String,
+        filename: String,
+    },
+    /// Store a file in a session's file directory.
+    ///
+    /// The data field contains base64-encoded file contents.
+    /// Enforces per-file and total directory size limits.
+    /// Cedar policy gate: `daemon:session_file_put`.
+    SessionFilePut {
+        session_id: String,
+        filename: String,
+        data: String,
+    },
+    /// Copy files from one session's file directory to another.
+    ///
+    /// Both session IDs are validated against path traversal.
+    /// Cedar policy gate: `daemon:session_file_sync`.
+    SessionFileSync {
+        target_session_id: String,
+        source_session_id: String,
+        filenames: Vec<String>,
+    },
 }
 
 fn default_true() -> bool {
@@ -793,6 +827,10 @@ impl DaemonCommand {
             DaemonCommand::DisableHook { .. } => "daemon:disable_hook",
             DaemonCommand::HookStatus { .. } => "daemon:hook_status",
             DaemonCommand::ScanSkill { .. } => "daemon:scan_skill",
+            DaemonCommand::SessionFileList { .. } => "daemon:session_file_list",
+            DaemonCommand::SessionFileGet { .. } => "daemon:session_file_get",
+            DaemonCommand::SessionFilePut { .. } => "daemon:session_file_put",
+            DaemonCommand::SessionFileSync { .. } => "daemon:session_file_sync",
         }
     }
 }

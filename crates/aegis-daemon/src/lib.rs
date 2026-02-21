@@ -26,6 +26,7 @@ pub mod jobs;
 pub mod lifecycle;
 pub mod memory;
 pub mod memory_guard;
+pub mod memory_recall;
 pub mod ndjson_fmt;
 pub mod semantic_search;
 pub mod persistence;
@@ -34,6 +35,7 @@ pub mod prompt_builder;
 pub mod slot;
 pub mod state;
 pub mod stream_fmt;
+pub mod session_files;
 pub mod session_tools;
 pub mod tool_contract;
 pub mod toolkit_runtime;
@@ -3842,6 +3844,14 @@ impl DaemonRuntime {
             DaemonCommand::ScanSkill { .. } => {
                 DaemonResponse::error("skill scanning not yet wired to daemon fleet".to_string())
             }
+
+            // -- Session file storage commands --
+            DaemonCommand::SessionFileList { .. }
+            | DaemonCommand::SessionFileGet { .. }
+            | DaemonCommand::SessionFilePut { .. }
+            | DaemonCommand::SessionFileSync { .. } => {
+                DaemonResponse::error("session file storage not yet wired to daemon fleet".to_string())
+            }
         }
     }
 
@@ -4740,10 +4750,12 @@ mod tests {
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
+            session_files: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -5080,10 +5092,12 @@ mod tests {
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
+            session_files: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: Default::default(),
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -5759,10 +5773,12 @@ mod tests {
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
+            session_files: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -5849,10 +5865,12 @@ mod tests {
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
+            session_files: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
             lanes: vec![],
+            workspace_hooks: Default::default(),
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);
