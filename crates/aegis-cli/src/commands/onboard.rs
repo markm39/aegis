@@ -315,6 +315,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

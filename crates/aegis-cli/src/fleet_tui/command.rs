@@ -180,6 +180,16 @@ pub enum FleetCommand {
     },
     /// Test provider auth profile readiness.
     AuthTest { target: Option<String> },
+    /// Add a command alias.
+    AliasAdd {
+        alias: String,
+        command: String,
+        args: Vec<String>,
+    },
+    /// Remove a command alias.
+    AliasRemove { alias: String },
+    /// List all command aliases.
+    AliasList,
 }
 
 /// All known command names for completion.
@@ -187,6 +197,7 @@ const COMMAND_NAMES: &[&str] = &[
     "agent",
     "add",
     "alerts",
+    "alias",
     "auth",
     "approve",
     "capture-start",
@@ -352,6 +363,50 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }
             }
         }
+        "alias" => match arg1 {
+            "" | "list" => Ok(Some(FleetCommand::AliasList)),
+            "add" => {
+                if arg2.is_empty() {
+                    return Err("usage: alias add <alias> <command> [args...]".into());
+                }
+                // arg2 = "<alias> <command> [args...]"
+                let mut parts = arg2.splitn(2, ' ');
+                let alias_name = parts.next().unwrap_or("").trim().to_string();
+                let rest = parts.next().unwrap_or("").trim();
+                if alias_name.is_empty() || rest.is_empty() {
+                    return Err("usage: alias add <alias> <command> [args...]".into());
+                }
+                // rest = "<command> [args...]"
+                let mut cmd_parts = rest.splitn(2, ' ');
+                let command = cmd_parts.next().unwrap_or("").trim().to_string();
+                let args_str = cmd_parts.next().unwrap_or("").trim();
+                let args: Vec<String> = if args_str.is_empty() {
+                    vec![]
+                } else {
+                    args_str.split_whitespace().map(String::from).collect()
+                };
+                Ok(Some(FleetCommand::AliasAdd {
+                    alias: alias_name,
+                    command,
+                    args,
+                }))
+            }
+            "remove" => {
+                if arg2.is_empty() {
+                    return Err("usage: alias remove <alias>".into());
+                }
+                let alias_name = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if alias_name.is_empty() {
+                    return Err("usage: alias remove <alias>".into());
+                }
+                Ok(Some(FleetCommand::AliasRemove {
+                    alias: alias_name,
+                }))
+            }
+            other => Err(format!(
+                "unknown alias subcommand: {other}. Use: add, remove, list"
+            )),
+        },
         "add" => Ok(Some(FleetCommand::Add)),
         "subagent" => {
             if arg1.is_empty() {
@@ -808,6 +863,8 @@ const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
 const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
 const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 const MATRIX_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
+/// Subcommands for `:alias`.
+const ALIAS_SUBCOMMANDS: &[&str] = &["add", "list", "remove"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -963,6 +1020,13 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "alias" {
+            return ALIAS_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
 
         // Third token: context field completion
         if cmd == "context" && parts.len() == 3 {
@@ -1011,6 +1075,9 @@ pub fn apply_completion(buffer: &str, completion: &str) -> String {
 /// Help text listing all available commands.
 pub fn help_text() -> &'static str {
     ":add                     Add a new agent\n\
+     :alias list              List command aliases\n\
+     :alias add <a> <cmd>     Add alias (a expands to cmd)\n\
+     :alias remove <a>        Remove alias\n\
      :agent <a>               View agent context\n\
      :agent <a> <f> <val>     Set field (role/goal/context/task)\n\
      :agent set <a> <f> <val> Set field (explicit)\n\
@@ -2041,5 +2108,95 @@ mod tests {
 
         let c = completions("exp", &agents);
         assert_eq!(c, vec!["export"]);
+    }
+
+    #[test]
+    fn parse_alias_list() {
+        assert_eq!(parse("alias").unwrap(), Some(FleetCommand::AliasList));
+        assert_eq!(parse("alias list").unwrap(), Some(FleetCommand::AliasList));
+    }
+
+    #[test]
+    fn parse_alias_add() {
+        assert_eq!(
+            parse("alias add s status").unwrap(),
+            Some(FleetCommand::AliasAdd {
+                alias: "s".into(),
+                command: "status".into(),
+                args: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn parse_alias_add_with_args() {
+        assert_eq!(
+            parse("alias add ap approve --all").unwrap(),
+            Some(FleetCommand::AliasAdd {
+                alias: "ap".into(),
+                command: "approve".into(),
+                args: vec!["--all".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn parse_alias_add_missing_command() {
+        assert!(parse("alias add s").is_err());
+    }
+
+    #[test]
+    fn parse_alias_add_missing_all() {
+        assert!(parse("alias add").is_err());
+    }
+
+    #[test]
+    fn parse_alias_remove() {
+        assert_eq!(
+            parse("alias remove s").unwrap(),
+            Some(FleetCommand::AliasRemove { alias: "s".into() })
+        );
+    }
+
+    #[test]
+    fn parse_alias_remove_missing() {
+        assert!(parse("alias remove").is_err());
+    }
+
+    #[test]
+    fn parse_alias_unknown_sub() {
+        assert!(parse("alias bogus").is_err());
+    }
+
+    #[test]
+    fn completions_alias_subcommands() {
+        let agents = vec![];
+        let c = completions("alias ", &agents);
+        assert!(c.contains(&"add".to_string()));
+        assert!(c.contains(&"list".to_string()));
+        assert!(c.contains(&"remove".to_string()));
+    }
+
+    #[test]
+    fn completions_alias_prefix() {
+        let agents = vec![];
+        let c = completions("alias a", &agents);
+        assert_eq!(c, vec!["add"]);
+    }
+
+    #[test]
+    fn completions_alias_in_command_list() {
+        let agents = vec![];
+        let c = completions("al", &agents);
+        assert!(c.contains(&"alias".to_string()));
+        assert!(c.contains(&"alerts".to_string()));
+    }
+
+    #[test]
+    fn help_text_includes_alias() {
+        let help = help_text();
+        assert!(help.contains(":alias list"));
+        assert!(help.contains(":alias add"));
+        assert!(help.contains(":alias remove"));
     }
 }

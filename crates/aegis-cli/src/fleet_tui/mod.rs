@@ -15,6 +15,7 @@ use std::time::Instant;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use aegis_control::alias::AliasRegistry;
 use aegis_control::daemon::{
     AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
     ParityDiffReport, ParityStatusReport, ParityVerifyReport, PendingPromptSummary,
@@ -142,6 +143,8 @@ pub struct FleetApp {
     client: Option<DaemonClient>,
     /// When we last polled the daemon.
     last_poll: Instant,
+    /// Command alias registry for TUI command bar.
+    alias_registry: AliasRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +194,7 @@ impl FleetApp {
             chat_bootstrapped: false,
             client,
             last_poll: Instant::now() - std::time::Duration::from_secs(10), // force immediate poll
+            alias_registry: AliasRegistry::new(),
         }
     }
 
@@ -1240,8 +1244,13 @@ impl FleetApp {
     }
 
     /// Execute a parsed command.
+    ///
+    /// Before parsing, alias resolution is applied to expand user-defined
+    /// shorthand commands.
     fn execute_command(&mut self, input: &str) {
-        match command::parse(input) {
+        let resolved = self.alias_registry.resolve(input);
+        let effective = resolved.as_deref().unwrap_or(input);
+        match command::parse(effective) {
             Ok(Some(cmd)) => self.dispatch_command(cmd),
             Ok(None) => {}
             Err(e) => {
@@ -2146,6 +2155,38 @@ impl FleetApp {
                     None => "aegis auth test".to_string(),
                 };
                 self.spawn_terminal(&cmd, "Testing auth readiness in new terminal");
+            }
+            FleetCommand::AliasList => {
+                self.send_and_show_result(DaemonCommand::ListAliases);
+            }
+            FleetCommand::AliasAdd {
+                alias,
+                command,
+                args,
+            } => {
+                // Apply locally for immediate use, then send to daemon for persistence.
+                match self.alias_registry.add(alias.clone(), command.clone(), args.clone()) {
+                    Ok(()) => {
+                        self.send_and_show_result(DaemonCommand::AddAlias {
+                            alias,
+                            command,
+                            args,
+                        });
+                    }
+                    Err(e) => {
+                        self.set_result(e);
+                    }
+                }
+            }
+            FleetCommand::AliasRemove { alias } => {
+                match self.alias_registry.remove(&alias) {
+                    Ok(()) => {
+                        self.send_and_show_result(DaemonCommand::RemoveAlias { alias });
+                    }
+                    Err(e) => {
+                        self.set_result(e);
+                    }
+                }
             }
         }
     }

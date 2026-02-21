@@ -656,6 +656,7 @@ mod tests {
             memory: MemoryConfig::default(),
             cron: CronConfig::default(),
             plugins: PluginConfig::default(),
+            aliases: Default::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {
