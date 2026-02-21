@@ -127,6 +127,30 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "CanvasCreate" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "CanvasUpdate" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "DevicePair" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "DeviceRevoke" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "DeviceAuth" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "LlmComplete" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -211,6 +235,12 @@ mod tests {
             "CopilotAuth",
             "GeminiApiCall",
             "ProcessAttachment",
+            "CanvasCreate",
+            "CanvasUpdate",
+            "DevicePair",
+            "DeviceRevoke",
+            "DeviceAuth",
+            "LlmComplete",
         ];
 
         let schema_text = AEGIS_SCHEMA;

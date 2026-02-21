@@ -123,6 +123,25 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // Classified as High because malformed attachments could exploit
         // parser vulnerabilities and the content originates from external sources.
         ActionKind::ProcessAttachment { .. } => ActionRisk::High,
+        // Canvas creation is a write operation that allocates shared state.
+        // Classified as Medium because it has side effects but is recoverable.
+        ActionKind::CanvasCreate { .. } => ActionRisk::Medium,
+        // Canvas updates modify shared state that other agents may depend on.
+        // Classified as Medium because patches are reversible via version history.
+        ActionKind::CanvasUpdate { .. } => ActionRisk::Medium,
+        // Device pairing registers a new device for remote access. Classified as
+        // Critical because it grants persistent authentication credentials.
+        ActionKind::DevicePair { .. } => ActionRisk::Critical,
+        // Device revocation removes access. Classified as High because it is a
+        // security-sensitive operation that invalidates credentials.
+        ActionKind::DeviceRevoke { .. } => ActionRisk::High,
+        // Device authentication verifies credentials. Classified as High because
+        // it gates access to the control plane.
+        ActionKind::DeviceAuth { .. } => ActionRisk::High,
+        // LLM completion requests consume tokens and communicate with external APIs.
+        // Classified as High because they involve cost implications and data
+        // exfiltration risk through the provider's API.
+        ActionKind::LlmComplete { .. } => ActionRisk::High,
     }
 }
 

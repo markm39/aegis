@@ -231,6 +231,69 @@ pub enum ActionKind {
         /// Size of the raw attachment data in bytes.
         size_bytes: u64,
     },
+    /// Create a new shared canvas session.
+    ///
+    /// Gated by Cedar policy. Logged when an agent creates a new canvas
+    /// for collaborative state sharing.
+    CanvasCreate {
+        /// The canvas session UUID being created.
+        canvas_id: String,
+    },
+    /// Update an existing shared canvas session.
+    ///
+    /// Gated by Cedar policy. Logged when an agent applies patches to
+    /// a canvas session's state.
+    CanvasUpdate {
+        /// The canvas session UUID being updated.
+        canvas_id: String,
+    },
+    /// Pair a new device with the daemon (pairing flow completion).
+    ///
+    /// Gated by Cedar policy. Logged when a device completes the pairing
+    /// flow and is registered in the device registry. The device_id is the
+    /// newly assigned identifier; the device name is sanitized before storage.
+    DevicePair {
+        /// Unique device identifier assigned during pairing.
+        device_id: String,
+        /// Sanitized device name.
+        device_name: String,
+        /// Device platform (e.g., "iOS", "Android", "macOS").
+        platform: String,
+    },
+    /// Revoke a paired device, invalidating its authentication token.
+    ///
+    /// Gated by Cedar policy. Logged when a device's access is revoked.
+    /// Revocation immediately clears the auth token hash, preventing any
+    /// subsequent authentication attempts.
+    DeviceRevoke {
+        /// Device identifier being revoked.
+        device_id: String,
+    },
+    /// Authenticate a device using its auth token.
+    ///
+    /// Gated by Cedar policy. Logged on each device authentication attempt.
+    /// The token itself is never recorded; only the device_id is stored in
+    /// the audit trail.
+    DeviceAuth {
+        /// Device identifier attempting authentication.
+        device_id: String,
+    },
+    /// LLM completion request, gated by Cedar policy.
+    ///
+    /// Logged when a completion request is made through the provider
+    /// abstraction layer. Token counts are extracted from the response.
+    LlmComplete {
+        /// Provider name (e.g., "anthropic", "openai", "google").
+        provider: String,
+        /// Model name (e.g., "claude-sonnet-4-20250514", "gpt-4o").
+        model: String,
+        /// API endpoint URL.
+        endpoint: String,
+        /// Input/prompt tokens consumed.
+        input_tokens: u64,
+        /// Output/completion tokens consumed.
+        output_tokens: u64,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -402,6 +465,37 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "ProcessAttachment {mime_type} ({size_bytes} bytes, hash={content_hash})")
             }
+            ActionKind::CanvasCreate { canvas_id } => {
+                write!(f, "CanvasCreate {canvas_id}")
+            }
+            ActionKind::CanvasUpdate { canvas_id } => {
+                write!(f, "CanvasUpdate {canvas_id}")
+            }
+            ActionKind::DevicePair {
+                device_id,
+                device_name,
+                platform,
+            } => {
+                write!(f, "DevicePair {device_id} ({device_name}, {platform})")
+            }
+            ActionKind::DeviceRevoke { device_id } => {
+                write!(f, "DeviceRevoke {device_id}")
+            }
+            ActionKind::DeviceAuth { device_id } => {
+                write!(f, "DeviceAuth {device_id}")
+            }
+            ActionKind::LlmComplete {
+                provider,
+                model,
+                endpoint,
+                input_tokens,
+                output_tokens,
+            } => {
+                write!(
+                    f,
+                    "LlmComplete {provider}/{model} {endpoint} in={input_tokens} out={output_tokens}"
+                )
+            }
         }
     }
 }
@@ -528,6 +622,19 @@ mod tests {
                 content_hash: "abc123".into(),
                 mime_type: "image/png".into(),
                 size_bytes: 2048,
+            },
+            ActionKind::CanvasCreate {
+                canvas_id: "00000000-0000-0000-0000-000000000001".into(),
+            },
+            ActionKind::CanvasUpdate {
+                canvas_id: "00000000-0000-0000-0000-000000000002".into(),
+            },
+            ActionKind::LlmComplete {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-4-20250514".into(),
+                endpoint: "https://api.anthropic.com".into(),
+                input_tokens: 100,
+                output_tokens: 50,
             },
         ];
         for v in variants {

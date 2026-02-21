@@ -23,6 +23,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-canvas"
+version = "0.1.0"
+dependencies = [
+ "aegis-policy",
+ "aegis-types",
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "aegis-channel"
 version = "0.1.0"
 dependencies = [
@@ -139,6 +156,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hex",
+ "hmac",
  "libc",
  "nix 0.29.0",
  "regex",
@@ -147,6 +165,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tempfile",
  "tokio",
  "toml",
@@ -206,6 +225,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "uuid",
 ]

@@ -189,6 +189,30 @@ impl PolicyEngine {
                     mime_type: "application/octet-stream".into(),
                     size_bytes: 0,
                 },
+                "CanvasCreate" => ActionKind::CanvasCreate {
+                    canvas_id: "__probe__".into(),
+                },
+                "CanvasUpdate" => ActionKind::CanvasUpdate {
+                    canvas_id: "__probe__".into(),
+                },
+                "DevicePair" => ActionKind::DevicePair {
+                    device_id: "__probe__".into(),
+                    device_name: "__probe__".into(),
+                    platform: "__probe__".into(),
+                },
+                "DeviceRevoke" => ActionKind::DeviceRevoke {
+                    device_id: "__probe__".into(),
+                },
+                "DeviceAuth" => ActionKind::DeviceAuth {
+                    device_id: "__probe__".into(),
+                },
+                "LlmComplete" => ActionKind::LlmComplete {
+                    provider: "__probe__".into(),
+                    model: "__probe__".into(),
+                    endpoint: "__probe__".into(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
                 _ => return false,
             },
         );
@@ -364,6 +388,12 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::CopilotAuth { grant_type, .. } => Ok(("CopilotAuth", grant_type.as_str())),
         ActionKind::GeminiApiCall { endpoint, .. } => Ok(("GeminiApiCall", endpoint.as_str())),
         ActionKind::ProcessAttachment { content_hash, .. } => Ok(("ProcessAttachment", content_hash.as_str())),
+        ActionKind::CanvasCreate { canvas_id, .. } => Ok(("CanvasCreate", canvas_id.as_str())),
+        ActionKind::CanvasUpdate { canvas_id, .. } => Ok(("CanvasUpdate", canvas_id.as_str())),
+        ActionKind::DevicePair { device_id, .. } => Ok(("DevicePair", device_id.as_str())),
+        ActionKind::DeviceRevoke { device_id, .. } => Ok(("DeviceRevoke", device_id.as_str())),
+        ActionKind::DeviceAuth { device_id, .. } => Ok(("DeviceAuth", device_id.as_str())),
+        ActionKind::LlmComplete { endpoint, .. } => Ok(("LlmComplete", endpoint.as_str())),
     }
 }
 
