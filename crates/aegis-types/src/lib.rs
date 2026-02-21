@@ -7,6 +7,7 @@ pub mod action;
 pub mod config;
 pub mod daemon;
 pub mod error;
+pub mod tool_classification;
 pub mod verdict;
 
 pub use action::{Action, ActionKind};
