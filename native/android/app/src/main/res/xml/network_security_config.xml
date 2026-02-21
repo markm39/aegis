@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security configuration for Aegis Android.
+
+    Security policy:
+    - All remote connections MUST use TLS (HTTPS).
+    - Cleartext (HTTP) is ONLY permitted for localhost and the Android emulator
+      loopback address (10.0.2.2). This is required for local development.
+    - Certificate transparency and system trust store are used for all TLS
+      connections. Additional certificate pinning is enforced at the OkHttp
+      layer in DaemonClient.kt.
+-->
+<network-security-config>
+    <!-- Default: require TLS for all connections -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Exception: allow cleartext to localhost (development only) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- Android emulator maps 10.0.2.2 to host machine localhost -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
