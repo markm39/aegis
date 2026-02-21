@@ -281,6 +281,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-skills"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "aegis-toolkit"
 version = "0.1.0"
 dependencies = [
@@ -298,8 +311,11 @@ dependencies = [
  "aegis-types",
  "anyhow",
  "async-trait",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
