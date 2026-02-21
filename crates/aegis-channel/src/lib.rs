@@ -14,9 +14,11 @@
 //! - [`auto_reply`]: auto-reply rules engine for inbound messages
 //! - [`runner`]: thread/runtime orchestration bridging sync and async worlds
 
+pub mod access_control;
 pub mod active_hours;
 pub mod auto_reply;
 pub mod channel;
+pub mod channel_routing;
 pub mod polls;
 pub mod discord;
 pub mod feishu;
