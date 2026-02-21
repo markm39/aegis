@@ -33,6 +33,8 @@ pub mod stream_fmt;
 pub mod session_tools;
 pub mod tool_contract;
 pub mod toolkit_runtime;
+pub mod message_routing;
+pub mod scheduled_reply;
 pub mod web_tools;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -818,6 +820,10 @@ pub struct DaemonRuntime {
     alias_registry: AliasRegistry,
     /// Command processing framework router.
     command_router: crate::commands::CommandRouter,
+    /// Scheduled auto-reply manager.
+    scheduled_reply_mgr: crate::scheduled_reply::ScheduledReplyManager,
+    /// Message router for inter-agent and cross-channel communication.
+    message_router: crate::message_routing::MessageRouter,
 }
 
 impl DaemonRuntime {
@@ -888,6 +894,8 @@ impl DaemonRuntime {
             heartbeat_last_sent: HashMap::new(),
             alias_registry,
             command_router,
+            scheduled_reply_mgr: crate::scheduled_reply::ScheduledReplyManager::new(),
+            message_router: crate::message_routing::MessageRouter::new(),
         }
     }
 
@@ -3575,6 +3583,42 @@ impl DaemonRuntime {
             | DaemonCommand::SetAutoReplyChat { .. } => {
                 DaemonResponse::error("auto-reply commands not yet wired to daemon")
             }
+
+            // -- Message routing commands --
+            DaemonCommand::RouteMessage { envelope } => {
+                self.handle_route_message(envelope)
+            }
+            DaemonCommand::GetMessageThread { message_id } => {
+                self.handle_get_message_thread(message_id)
+            }
+            DaemonCommand::InjectSystemMessage {
+                agent_name,
+                content,
+            } => self.handle_inject_system_message(&agent_name, &content),
+
+            // -- Scheduled reply commands --
+            DaemonCommand::ScheduleReplyAdd {
+                name,
+                schedule_expr,
+                channel,
+                template,
+                data_source,
+            } => self.handle_schedule_reply_add(name, schedule_expr, channel, template, data_source),
+
+            DaemonCommand::ScheduleReplyRemove { name } => {
+                self.handle_schedule_reply_remove(&name)
+            }
+
+            DaemonCommand::ScheduleReplyList => self.handle_schedule_reply_list(),
+
+            DaemonCommand::ScheduleReplyTrigger { name } => {
+                self.handle_schedule_reply_trigger(&name)
+            }
+
+            // -- Configuration introspection (stub) --
+            DaemonCommand::GetEffectiveConfig => {
+                DaemonResponse::error("effective config introspection not yet implemented")
+            }
         }
     }
 
@@ -3783,6 +3827,297 @@ impl DaemonRuntime {
         DaemonResponse::ok_with_data("session lifecycle status", data)
     }
 
+    // -- Scheduled reply handlers --
+
+    /// Collect live template data from the current fleet state.
+    fn collect_template_data(&self) -> crate::scheduled_reply::TemplateData {
+        let agent_count = self.fleet.agent_names().len();
+        let active_agents = self
+            .fleet
+            .agent_names()
+            .iter()
+            .filter(|name| {
+                self.fleet
+                    .slot(name)
+                    .is_some_and(|s| matches!(s.status, AgentStatus::Running { .. }))
+            })
+            .count();
+        let uptime_secs = self.uptime_secs();
+        let hours = uptime_secs / 3600;
+        let mins = (uptime_secs % 3600) / 60;
+        let uptime = format!("{hours}h {mins}m");
+        let fleet_status = if active_agents == agent_count && agent_count > 0 {
+            "all agents active".into()
+        } else {
+            format!("{active_agents}/{agent_count} agents active")
+        };
+
+        crate::scheduled_reply::TemplateData {
+            agent_count,
+            active_agents,
+            total_sessions: 0, // TODO: wire to ledger query when available
+            uptime,
+            fleet_status,
+        }
+    }
+
+    /// Handle ScheduleReplyAdd: validate schedule, create reply, register with scheduler.
+    fn handle_schedule_reply_add(
+        &mut self,
+        name: String,
+        schedule_expr: String,
+        channel: String,
+        template: String,
+        data_source: String,
+    ) -> DaemonResponse {
+        // Parse schedule expression.
+        let schedule = match crate::cron::Schedule::parse(&schedule_expr) {
+            Ok(s) => s,
+            Err(e) => return DaemonResponse::error(format!("invalid schedule: {e}")),
+        };
+
+        // Parse data source.
+        let ds = match data_source.as_str() {
+            "fleet_status" => crate::scheduled_reply::DataSource::FleetStatus,
+            "session_summary" => crate::scheduled_reply::DataSource::SessionSummary,
+            "usage_report" => crate::scheduled_reply::DataSource::UsageReport,
+            other => crate::scheduled_reply::DataSource::Custom {
+                key: other.to_string(),
+            },
+        };
+
+        // Validate channel name (security: only allow known channel targets).
+        if channel != "telegram" && channel != "webhook" && channel != "log" {
+            return DaemonResponse::error(format!(
+                "unknown channel '{channel}': allowed channels are 'telegram', 'webhook', 'log'"
+            ));
+        }
+
+        let reply = crate::scheduled_reply::ScheduledReply {
+            id: uuid::Uuid::new_v4(),
+            name: name.clone(),
+            schedule,
+            channel,
+            template,
+            data_source: ds,
+            enabled: true,
+            created_at: chrono::Utc::now(),
+        };
+
+        match self.scheduled_reply_mgr.add_scheduled_reply(reply) {
+            Ok(()) => {
+                info!(reply_name = %name, "scheduled reply added");
+                let list = self.scheduled_reply_mgr.list_scheduled_replies();
+                let data = serde_json::to_value(list).unwrap_or_default();
+                DaemonResponse::ok_with_data(format!("scheduled reply '{name}' added"), data)
+            }
+            Err(e) => DaemonResponse::error(e),
+        }
+    }
+
+    /// Handle ScheduleReplyRemove: unregister from scheduler.
+    fn handle_schedule_reply_remove(&mut self, name: &str) -> DaemonResponse {
+        if self.scheduled_reply_mgr.remove_scheduled_reply(name) {
+            info!(reply_name = %name, "scheduled reply removed");
+            DaemonResponse::ok(format!("scheduled reply '{name}' removed"))
+        } else {
+            DaemonResponse::error(format!("scheduled reply '{name}' not found"))
+        }
+    }
+
+    /// Handle ScheduleReplyList: return all scheduled replies.
+    fn handle_schedule_reply_list(&self) -> DaemonResponse {
+        let list = self.scheduled_reply_mgr.list_scheduled_replies();
+        match serde_json::to_value(list) {
+            Ok(data) => DaemonResponse::ok_with_data(
+                format!("{} scheduled repl(ies)", list.len()),
+                data,
+            ),
+            Err(e) => DaemonResponse::error(format!("failed to serialize: {e}")),
+        }
+    }
+
+    /// Handle ScheduleReplyTrigger: render template with current state data.
+    fn handle_schedule_reply_trigger(&mut self, name: &str) -> DaemonResponse {
+        let data = self.collect_template_data();
+        match self.scheduled_reply_mgr.trigger_scheduled_reply(name, &data) {
+            Ok((rendered, channel)) => {
+                info!(reply_name = %name, channel = %channel, "scheduled reply triggered");
+                let payload = serde_json::json!({
+                    "name": name,
+                    "channel": channel,
+                    "rendered": rendered,
+                    "policy_action": "schedule_reply:trigger",
+                });
+                DaemonResponse::ok_with_data(rendered, payload)
+            }
+            Err(e) => DaemonResponse::error(e),
+        }
+    }
+
+    // -- Message routing handlers --
+
+    /// Route a message envelope to an agent or channel.
+    ///
+    /// Validates the target agent exists, evaluates Cedar policy (RouteMessage
+    /// for user messages, RouteSystemMessage for system-injected messages),
+    /// sanitizes content, and enqueues via the MessageRouter.
+    fn handle_route_message(
+        &mut self,
+        envelope: aegis_control::message_routing::MessageEnvelope,
+    ) -> DaemonResponse {
+        // Validate target agent exists in the fleet
+        if self.fleet.slot(&envelope.to).is_none() {
+            return DaemonResponse::error(format!(
+                "routing target '{}' does not exist in the fleet",
+                envelope.to
+            ));
+        }
+
+        // Cedar policy gate: determine the action based on message type
+        let cedar_action = if envelope.is_system {
+            "RouteSystemMessage"
+        } else {
+            "RouteMessage"
+        };
+
+        // Evaluate Cedar policy (fail-closed if no policy engine)
+        if let Some(ref engine) = self.policy_engine {
+            let action = Action::new(
+                envelope.from.clone(),
+                ActionKind::ToolCall {
+                    tool: cedar_action.to_string(),
+                    args: serde_json::json!({
+                        "to": envelope.to,
+                        "channel": envelope.channel,
+                        "is_system": envelope.is_system,
+                    }),
+                },
+            );
+            let verdict = engine.evaluate(&action);
+            if verdict.decision == Decision::Deny {
+                return DaemonResponse::error(format!(
+                    "policy denied {cedar_action}: {}",
+                    verdict.reason
+                ));
+            }
+        }
+
+        // Compute content hash for audit logging (not raw content)
+        let content_hash = envelope.content_hash();
+        let msg_from = envelope.from.clone();
+        let msg_to = envelope.to.clone();
+        let msg_channel = envelope.channel.clone();
+
+        // Route through the message router (sanitization + rate limiting inside)
+        match self.message_router.route_message(envelope) {
+            Ok(msg_id) => {
+                info!(
+                    message_id = %msg_id,
+                    from = %msg_from,
+                    to = %msg_to,
+                    channel = %msg_channel,
+                    content_hash = %content_hash,
+                    "message routed"
+                );
+                let data = serde_json::json!({
+                    "message_id": msg_id.to_string(),
+                    "from": msg_from,
+                    "to": msg_to,
+                    "channel": msg_channel,
+                    "content_hash": content_hash,
+                });
+                DaemonResponse::ok_with_data("message routed", data)
+            }
+            Err(e) => DaemonResponse::error(format!("routing failed: {e}")),
+        }
+    }
+
+    /// Retrieve all messages in a thread by parent message ID.
+    fn handle_get_message_thread(&self, message_id: uuid::Uuid) -> DaemonResponse {
+        let thread = self.message_router.get_thread(message_id);
+        match serde_json::to_value(&thread) {
+            Ok(data) => DaemonResponse::ok_with_data(
+                format!("{} message(s) in thread", thread.len()),
+                data,
+            ),
+            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+        }
+    }
+
+    /// Inject a system message into an agent's input.
+    ///
+    /// Creates a system envelope (is_system=true), evaluates elevated Cedar
+    /// policy (RouteSystemMessage), and injects into the agent's PTY stdin.
+    fn handle_inject_system_message(&mut self, agent_name: &str, content: &str) -> DaemonResponse {
+        // Validate agent name (security: prevent directory traversal)
+        if let Err(e) = aegis_control::message_routing::validate_agent_name(agent_name) {
+            return DaemonResponse::error(format!("invalid agent name: {e}"));
+        }
+
+        // Validate target agent exists
+        if self.fleet.slot(agent_name).is_none() {
+            return DaemonResponse::error(format!(
+                "unknown agent: {agent_name}"
+            ));
+        }
+
+        // Cedar policy gate: system message injection requires elevated action
+        if let Some(ref engine) = self.policy_engine {
+            let action = Action::new(
+                "system",
+                ActionKind::ToolCall {
+                    tool: "RouteSystemMessage".to_string(),
+                    args: serde_json::json!({
+                        "agent": agent_name,
+                        "injection": true,
+                    }),
+                },
+            );
+            let verdict = engine.evaluate(&action);
+            if verdict.decision == Decision::Deny {
+                return DaemonResponse::error(format!(
+                    "policy denied system message injection: {}",
+                    verdict.reason
+                ));
+            }
+        }
+
+        // Sanitize content
+        let sanitized = aegis_control::message_routing::ContentSanitizer::sanitize(content);
+
+        // Compute content hash for audit
+        let envelope = aegis_control::message_routing::MessageEnvelope::system(
+            agent_name, "direct", &sanitized,
+        );
+        let content_hash = envelope.content_hash();
+        let msg_id = envelope.id;
+
+        // Store in the router for thread tracking
+        let _ = self.message_router.route_message(envelope);
+
+        // Inject into the agent's PTY stdin
+        match self.fleet.send_to_agent(agent_name, &sanitized) {
+            Ok(()) => {
+                info!(
+                    agent = %agent_name,
+                    message_id = %msg_id,
+                    content_hash = %content_hash,
+                    "system message injected"
+                );
+                let data = serde_json::json!({
+                    "message_id": msg_id.to_string(),
+                    "agent": agent_name,
+                    "content_hash": content_hash,
+                });
+                DaemonResponse::ok_with_data("system message injected", data)
+            }
+            Err(e) => DaemonResponse::error(format!(
+                "failed to inject system message into '{agent_name}': {e}"
+            )),
+        }
+    }
+
     /// Reload configuration from daemon.toml.
     ///
     /// Adds new agents, updates config for existing agents, and removes
@@ -3961,6 +4296,7 @@ impl DaemonRuntime {
                     suspended_at: slot.suspended_at,
                     last_active_at: slot.last_active_at,
                     accumulated_active_secs: slot.accumulated_active_secs,
+                    last_message_id: self.message_router.last_message_id(&name),
                 });
             }
         }

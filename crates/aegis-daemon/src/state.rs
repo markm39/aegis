@@ -48,6 +48,9 @@ pub struct AgentState {
     /// session has been in the Active state, excluding suspended periods.
     #[serde(default)]
     pub accumulated_active_secs: u64,
+    /// ID of the last message routed to this agent (for display/tracking).
+    #[serde(default)]
+    pub last_message_id: Option<uuid::Uuid>,
 }
 
 fn default_session_state() -> SessionState {
@@ -180,6 +183,7 @@ mod tests {
             suspended_at: None,
             last_active_at: Utc::now(),
             accumulated_active_secs: 120,
+            last_message_id: None,
         });
 
         // Write to a custom path for testing
@@ -219,6 +223,7 @@ mod tests {
             suspended_at: None,
             last_active_at: Utc::now(),
             accumulated_active_secs: 0,
+            last_message_id: None,
         };
 
         let json = serde_json::to_string(&agent).unwrap();
@@ -258,6 +263,7 @@ mod tests {
             suspended_at: Some(suspended_at),
             last_active_at: suspended_at,
             accumulated_active_secs: 3600,
+            last_message_id: None,
         };
 
         let json = serde_json::to_string(&agent).unwrap();
@@ -283,6 +289,7 @@ mod tests {
             suspended_at: Some(now),
             last_active_at: now,
             accumulated_active_secs: 7200,
+            last_message_id: None,
         });
 
         // Serialize and deserialize to simulate crash recovery

@@ -8,6 +8,7 @@ use aegis_alert::AlertEvent;
 use aegis_control::command::Command;
 use aegis_control::daemon::DaemonCommand;
 use aegis_control::event::{PilotEventKind, PilotWebhookEvent};
+use aegis_control::message_routing::MessageEnvelope;
 use uuid::Uuid;
 
 use crate::channel::{InboundAction, OutboundMessage};
@@ -444,6 +445,101 @@ fn parse_uuid(s: &str) -> Option<Uuid> {
     Uuid::parse_str(s.trim()).ok()
 }
 
+// -- Channel-specific message formatters --
+
+/// Trait for channel-specific message formatting.
+///
+/// Each channel (Telegram, Slack, direct) has different formatting
+/// requirements. Implementations convert a [`MessageEnvelope`] into
+/// a channel-appropriate string representation.
+pub trait ChannelFormatter {
+    /// Format a message envelope for the target channel.
+    fn format_message(&self, envelope: &MessageEnvelope) -> String;
+}
+
+/// Telegram MarkdownV2 formatter.
+///
+/// Wraps the existing `escape_md` function to produce Telegram-safe
+/// MarkdownV2 output with sender attribution.
+pub struct TelegramFormatter;
+
+impl ChannelFormatter for TelegramFormatter {
+    fn format_message(&self, envelope: &MessageEnvelope) -> String {
+        let sender = if envelope.is_system {
+            "SYSTEM".to_string()
+        } else {
+            escape_md(&envelope.from)
+        };
+        format!(
+            "*\\[{}\\]* {}\n{}",
+            sender,
+            escape_md(&envelope.timestamp.format("%H:%M:%S").to_string()),
+            escape_md(&envelope.content),
+        )
+    }
+}
+
+/// Plain text formatter (no markup escaping).
+///
+/// Used for direct agent-to-agent messaging where no markup is needed.
+pub struct PlainFormatter;
+
+impl ChannelFormatter for PlainFormatter {
+    fn format_message(&self, envelope: &MessageEnvelope) -> String {
+        let sender = if envelope.is_system {
+            "SYSTEM"
+        } else {
+            &envelope.from
+        };
+        format!(
+            "[{}] {} {}",
+            sender,
+            envelope.timestamp.format("%H:%M:%S"),
+            envelope.content,
+        )
+    }
+}
+
+/// Slack mrkdwn formatter (basic escaping stub).
+///
+/// Escapes `&`, `<`, `>` as required by Slack's mrkdwn format.
+/// This is a minimal implementation; expand as Slack integration matures.
+pub struct SlackFormatter;
+
+impl SlackFormatter {
+    /// Escape special characters for Slack mrkdwn.
+    fn escape_mrkdwn(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+}
+
+impl ChannelFormatter for SlackFormatter {
+    fn format_message(&self, envelope: &MessageEnvelope) -> String {
+        let sender = if envelope.is_system {
+            "*SYSTEM*".to_string()
+        } else {
+            format!("*{}*", Self::escape_mrkdwn(&envelope.from))
+        };
+        format!(
+            "{} _{}_\n{}",
+            sender,
+            envelope.timestamp.format("%H:%M:%S"),
+            Self::escape_mrkdwn(&envelope.content),
+        )
+    }
+}
+
+/// Select the appropriate formatter for a channel name.
+pub fn formatter_for_channel(channel: &str) -> Box<dyn ChannelFormatter> {
+    match channel {
+        "telegram" => Box::new(TelegramFormatter),
+        "slack" => Box::new(SlackFormatter),
+        _ => Box::new(PlainFormatter),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,5 +904,66 @@ mod tests {
         assert!(help.contains("/approve"));
         assert!(help.contains("/stop"));
         assert!(help.contains("/nudge"));
+    }
+
+    // -- ChannelFormatter tests --
+
+    #[test]
+    fn telegram_formatter_escapes_content() {
+        let env = MessageEnvelope::new("agent-1", "agent-2", "telegram", "hello.world");
+        let formatter = TelegramFormatter;
+        let result = formatter.format_message(&env);
+        // Telegram MarkdownV2 should escape the dot
+        assert!(result.contains("hello\\.world"));
+        assert!(result.contains("agent\\-1")); // hyphen escaped
+    }
+
+    #[test]
+    fn telegram_formatter_system_message() {
+        let env = MessageEnvelope::system("agent-1", "telegram", "do this");
+        let formatter = TelegramFormatter;
+        let result = formatter.format_message(&env);
+        assert!(result.contains("SYSTEM"));
+    }
+
+    #[test]
+    fn plain_formatter_no_escaping() {
+        let env = MessageEnvelope::new("agent-1", "agent-2", "direct", "hello.world");
+        let formatter = PlainFormatter;
+        let result = formatter.format_message(&env);
+        assert!(result.contains("hello.world")); // no escaping
+        assert!(result.contains("[agent-1]"));
+    }
+
+    #[test]
+    fn slack_formatter_escapes_angle_brackets() {
+        let env = MessageEnvelope::new("user", "agent", "slack", "a < b > c & d");
+        let formatter = SlackFormatter;
+        let result = formatter.format_message(&env);
+        assert!(result.contains("a &lt; b &gt; c &amp; d"));
+    }
+
+    #[test]
+    fn channel_specific_formatting_applied() {
+        let env = MessageEnvelope::new("sender", "receiver", "telegram", "test.msg");
+        let formatter = formatter_for_channel("telegram");
+        let result = formatter.format_message(&env);
+        // Telegram should escape the dot
+        assert!(result.contains("test\\.msg"));
+
+        let env = MessageEnvelope::new("sender", "receiver", "direct", "test.msg");
+        let formatter = formatter_for_channel("direct");
+        let result = formatter.format_message(&env);
+        // Plain should not escape
+        assert!(result.contains("test.msg"));
+    }
+
+    #[test]
+    fn formatter_for_unknown_channel_returns_plain() {
+        let env = MessageEnvelope::new("a", "b", "unknown", "content");
+        let formatter = formatter_for_channel("unknown");
+        let result = formatter.format_message(&env);
+        assert!(result.contains("content"));
+        assert!(result.contains("[a]"));
     }
 }
