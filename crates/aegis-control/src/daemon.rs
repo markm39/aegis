@@ -421,6 +421,13 @@ pub enum DaemonCommand {
         /// Must pass path validation (no traversal, allowed types, size limit).
         #[serde(default)]
         media_path: Option<String>,
+        /// Optional ISO 639-1 language code to scope the rule to.
+        ///
+        /// When set, the rule only matches messages detected as this language.
+        /// When None, the rule matches messages in any language.
+        /// Validated against the ISO 639-1 allowlist (en, es, fr, de, ja, zh, ko, pt, ru, ar).
+        #[serde(default)]
+        language: Option<String>,
     },
     /// Remove an auto-reply rule by its ID.
     RemoveAutoReply { id: String },
@@ -541,6 +548,65 @@ pub enum DaemonCommand {
         /// Subscription UUID to test.
         id: String,
     },
+
+    // -- Poll commands --
+    /// Create a new interactive poll in a messaging channel.
+    CreatePoll {
+        /// The poll question (non-empty, max 500 chars).
+        question: String,
+        /// Answer options (2-10, each max 200 chars, no duplicates).
+        options: Vec<String>,
+        /// Channel name this poll belongs to.
+        channel: String,
+        /// Duration in seconds (0 = no expiry, 60..86400 for timed).
+        #[serde(default)]
+        duration_secs: Option<u64>,
+    },
+    /// Vote on a poll option.
+    VotePoll {
+        /// Poll UUID.
+        poll_id: uuid::Uuid,
+        /// The option to vote for.
+        option: String,
+        /// Voter identifier (alphanumeric + dash/underscore, max 256 chars).
+        voter_id: String,
+    },
+    /// Close a poll and get final results.
+    ClosePoll {
+        /// Poll UUID.
+        poll_id: uuid::Uuid,
+    },
+    /// Get current results for a poll.
+    PollResults {
+        /// Poll UUID.
+        poll_id: uuid::Uuid,
+    },
+    /// List all active (non-closed) polls.
+    ListPolls,
+
+    // -- Command queue commands --
+    /// Enqueue a command for deferred execution with a given priority.
+    ///
+    /// The command payload must be valid JSON and at most 64 KB.
+    /// Priority ranges from 0 (lowest) to 255 (highest).
+    /// Cedar policy gate: `daemon:queue_command`.
+    QueueCommand {
+        /// Serialized DaemonCommand payload (valid JSON, max 64 KB).
+        command: serde_json::Value,
+        /// Priority level (0-255, higher = more urgent).
+        priority: u8,
+    },
+    /// Get current queue metrics (depth, active, completed, failed, DLQ size).
+    QueueStatus,
+    /// Flush all pending commands from the queue.
+    ///
+    /// Does not affect active or dead-lettered commands.
+    /// Cedar policy gate: `daemon:queue_flush`.
+    QueueFlush,
+    /// Inspect dead letter queue contents.
+    ///
+    /// Returns all commands that exhausted their retry attempts.
+    QueueInspect,
 }
 
 fn default_true() -> bool {
@@ -640,6 +706,15 @@ impl DaemonCommand {
             DaemonCommand::RemovePush { .. } => "daemon:remove_push",
             DaemonCommand::ListPush => "daemon:list_push",
             DaemonCommand::TestPush { .. } => "daemon:test_push",
+            DaemonCommand::CreatePoll { .. } => "daemon:create_poll",
+            DaemonCommand::VotePoll { .. } => "daemon:vote_poll",
+            DaemonCommand::ClosePoll { .. } => "daemon:close_poll",
+            DaemonCommand::PollResults { .. } => "daemon:poll_results",
+            DaemonCommand::ListPolls => "daemon:list_polls",
+            DaemonCommand::QueueCommand { .. } => "daemon:queue_command",
+            DaemonCommand::QueueStatus => "daemon:queue_status",
+            DaemonCommand::QueueFlush => "daemon:queue_flush",
+            DaemonCommand::QueueInspect => "daemon:queue_inspect",
         }
     }
 }
@@ -1538,6 +1613,7 @@ mod tests {
                 priority: 10,
                 response_type: None,
                 media_path: None,
+                language: None,
             },
             DaemonCommand::AddAutoReply {
                 pattern: r"^ping$".into(),
@@ -1546,6 +1622,7 @@ mod tests {
                 priority: 5,
                 response_type: Some(r#"{"type":"image","path":"/tmp/logo.png"}"#.into()),
                 media_path: Some("/tmp/logo.png".into()),
+                language: Some("en".into()),
             },
             DaemonCommand::RemoveAutoReply {
                 id: "550e8400-e29b-41d4-a716-446655440000".into(),
@@ -1628,6 +1705,39 @@ mod tests {
             DaemonCommand::TestPush {
                 id: "550e8400-e29b-41d4-a716-446655440000".into(),
             },
+            // Poll commands
+            DaemonCommand::CreatePoll {
+                question: "Favorite color?".into(),
+                options: vec!["Red".into(), "Blue".into(), "Green".into()],
+                channel: "telegram".into(),
+                duration_secs: Some(3600),
+            },
+            DaemonCommand::CreatePoll {
+                question: "Quick poll".into(),
+                options: vec!["Yes".into(), "No".into()],
+                channel: "slack".into(),
+                duration_secs: None,
+            },
+            DaemonCommand::VotePoll {
+                poll_id: uuid::Uuid::nil(),
+                option: "Red".into(),
+                voter_id: "user-123".into(),
+            },
+            DaemonCommand::ClosePoll {
+                poll_id: uuid::Uuid::nil(),
+            },
+            DaemonCommand::PollResults {
+                poll_id: uuid::Uuid::nil(),
+            },
+            DaemonCommand::ListPolls,
+            // Command queue commands
+            DaemonCommand::QueueCommand {
+                command: serde_json::json!({"type": "ping"}),
+                priority: 100,
+            },
+            DaemonCommand::QueueStatus,
+            DaemonCommand::QueueFlush,
+            DaemonCommand::QueueInspect,
         ];
 
         for cmd in commands {

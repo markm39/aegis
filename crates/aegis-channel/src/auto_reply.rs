@@ -40,6 +40,9 @@ use crate::channel::MediaPayload;
 /// Maximum allowed length for a regex pattern (prevents ReDoS via complexity).
 const MAX_PATTERN_LENGTH: usize = 500;
 
+/// Maximum number of characters to inspect for language detection (DoS prevention).
+const LANG_DETECT_MAX_CHARS: usize = 1000;
+
 /// Maximum auto-reply responses per chat per minute (rate limiting).
 const MAX_REPLIES_PER_MINUTE: usize = 10;
 
@@ -57,6 +60,256 @@ const ALLOWED_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp",
 
 /// Allowed document file extensions.
 const ALLOWED_FILE_EXTENSIONS: &[&str] = &["pdf", "txt", "csv", "json", "zip"];
+
+// ---------------------------------------------------------------------------
+// Language detection and validation
+// ---------------------------------------------------------------------------
+
+/// ISO 639-1 language codes supported by the auto-reply engine.
+///
+/// Any language code not in this allowlist is rejected. This prevents
+/// arbitrary string injection through the language field.
+const ISO_639_1_ALLOWLIST: &[&str] = &[
+    "ar", "de", "en", "es", "fr", "ja", "ko", "pt", "ru", "zh",
+];
+
+/// Validate that a language code is in the ISO 639-1 allowlist.
+///
+/// Returns `Ok(())` if the code is valid, `Err` with a descriptive message
+/// if the code is not recognized. Empty or whitespace-only strings are
+/// also rejected.
+pub fn validate_language_code(code: &str) -> Result<(), String> {
+    if code.is_empty() || code.trim().is_empty() {
+        return Err("language code must not be empty".to_string());
+    }
+    if ISO_639_1_ALLOWLIST.contains(&code) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid language code '{code}': must be one of {}",
+            ISO_639_1_ALLOWLIST.join(", ")
+        ))
+    }
+}
+
+/// Detect the language of the given text using character-range and
+/// common-word heuristics.
+///
+/// Returns an ISO 639-1 code if confidence is sufficient (at least 3
+/// indicator signals found), or `None` if the text is ambiguous, too
+/// short, or unrecognizable.
+///
+/// Security:
+/// - Only inspects the first [`LANG_DETECT_MAX_CHARS`] characters to
+///   prevent CPU-bound DoS on very long messages.
+/// - Never panics on any input (empty, binary, emoji-only).
+pub fn detect_language(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+
+    // Truncate to the first LANG_DETECT_MAX_CHARS characters (not bytes)
+    // to prevent analysis of excessively long messages.
+    let truncated: String = text.chars().take(LANG_DETECT_MAX_CHARS).collect();
+
+    // Phase 1: Character-range detection for non-Latin scripts.
+    // These checks are high-confidence because the character ranges are
+    // unique to specific language families.
+    let mut cjk_count: usize = 0;
+    let mut hiragana_katakana_count: usize = 0;
+    let mut hangul_count: usize = 0;
+    let mut cyrillic_count: usize = 0;
+    let mut arabic_count: usize = 0;
+    let mut total_alpha: usize = 0;
+
+    for ch in truncated.chars() {
+        if ch.is_alphabetic() || is_cjk(ch) {
+            total_alpha += 1;
+        }
+        if is_cjk(ch) {
+            cjk_count += 1;
+        }
+        if is_hiragana_or_katakana(ch) {
+            hiragana_katakana_count += 1;
+        }
+        if is_hangul(ch) {
+            hangul_count += 1;
+        }
+        if is_cyrillic(ch) {
+            cyrillic_count += 1;
+        }
+        if is_arabic(ch) {
+            arabic_count += 1;
+        }
+    }
+
+    if total_alpha == 0 {
+        return None;
+    }
+
+    // Japanese: hiragana/katakana is unique to Japanese.
+    // If we see any hiragana/katakana, it is Japanese.
+    if hiragana_katakana_count >= 3 {
+        return Some("ja".to_string());
+    }
+
+    // Korean: hangul is unique to Korean.
+    if hangul_count >= 3 {
+        return Some("ko".to_string());
+    }
+
+    // Chinese: CJK unified ideographs without hiragana/katakana/hangul.
+    // Japanese also uses CJK, but we already checked for hiragana/katakana above.
+    if cjk_count >= 3 && hiragana_katakana_count == 0 && hangul_count == 0 {
+        return Some("zh".to_string());
+    }
+
+    // Russian: Cyrillic script.
+    if cyrillic_count >= 3 {
+        return Some("ru".to_string());
+    }
+
+    // Arabic: Arabic script.
+    if arabic_count >= 3 {
+        return Some("ar".to_string());
+    }
+
+    // Phase 2: Latin-script language detection via common word frequency.
+    // Extract words, lowercased, for matching.
+    let words: Vec<String> = truncated
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect();
+
+    if words.is_empty() {
+        return None;
+    }
+
+    // Count indicator words for each Latin-script language.
+    // These are high-frequency function words that are strong indicators.
+    let en_words: &[&str] = &[
+        "the", "is", "and", "are", "was", "were", "have", "has", "this", "that",
+        "with", "for", "not", "you", "but", "from", "they", "been", "which",
+    ];
+    let fr_words: &[&str] = &[
+        "le", "la", "les", "de", "des", "du", "un", "une", "est", "et",
+        "en", "que", "qui", "dans", "pour", "pas", "sur", "avec", "ce", "sont",
+    ];
+    let es_words: &[&str] = &[
+        "el", "es", "los", "las", "del", "una", "por", "con", "para", "que",
+        "en", "se", "como", "pero", "sus", "esta", "son", "fue", "todo",
+    ];
+    let de_words: &[&str] = &[
+        "der", "die", "das", "und", "ist", "ein", "eine", "nicht", "sich",
+        "mit", "auf", "den", "von", "auch", "nach", "wie", "aber", "ich",
+    ];
+    let pt_words: &[&str] = &[
+        "o", "a", "os", "as", "do", "da", "dos", "das", "um", "uma",
+        "que", "em", "para", "com", "por", "mais", "como", "mas", "foi",
+    ];
+
+    let mut en_score: usize = 0;
+    let mut fr_score: usize = 0;
+    let mut es_score: usize = 0;
+    let mut de_score: usize = 0;
+    let mut pt_score: usize = 0;
+
+    for word in &words {
+        if en_words.contains(&word.as_str()) {
+            en_score += 1;
+        }
+        if fr_words.contains(&word.as_str()) {
+            fr_score += 1;
+        }
+        if es_words.contains(&word.as_str()) {
+            es_score += 1;
+        }
+        if de_words.contains(&word.as_str()) {
+            de_score += 1;
+        }
+        if pt_words.contains(&word.as_str()) {
+            pt_score += 1;
+        }
+    }
+
+    // Require minimum confidence of 3 indicator words.
+    let min_confidence = 3;
+    let max_score = en_score.max(fr_score).max(es_score).max(de_score).max(pt_score);
+
+    if max_score < min_confidence {
+        return None;
+    }
+
+    // Disambiguation: pick the language with the highest score.
+    // On tie, prefer the language that appears first in this list
+    // (arbitrary but deterministic).
+    let candidates = [
+        ("en", en_score),
+        ("fr", fr_score),
+        ("es", es_score),
+        ("de", de_score),
+        ("pt", pt_score),
+    ];
+
+    candidates
+        .iter()
+        .filter(|(_, score)| *score == max_score)
+        .map(|(lang, _)| lang.to_string())
+        .next()
+}
+
+/// Check if a character is in the CJK Unified Ideographs range.
+fn is_cjk(ch: char) -> bool {
+    let cp = ch as u32;
+    // CJK Unified Ideographs (common block)
+    (0x4E00..=0x9FFF).contains(&cp)
+    // CJK Extension A
+    || (0x3400..=0x4DBF).contains(&cp)
+    // CJK Extension B
+    || (0x20000..=0x2A6DF).contains(&cp)
+    // CJK Compatibility Ideographs
+    || (0xF900..=0xFAFF).contains(&cp)
+}
+
+/// Check if a character is Hiragana or Katakana (unique to Japanese).
+fn is_hiragana_or_katakana(ch: char) -> bool {
+    let cp = ch as u32;
+    // Hiragana
+    (0x3040..=0x309F).contains(&cp)
+    // Katakana
+    || (0x30A0..=0x30FF).contains(&cp)
+    // Katakana Phonetic Extensions
+    || (0x31F0..=0x31FF).contains(&cp)
+}
+
+/// Check if a character is in the Hangul (Korean) range.
+fn is_hangul(ch: char) -> bool {
+    let cp = ch as u32;
+    // Hangul Syllables
+    (0xAC00..=0xD7AF).contains(&cp)
+    // Hangul Jamo
+    || (0x1100..=0x11FF).contains(&cp)
+    // Hangul Compatibility Jamo
+    || (0x3130..=0x318F).contains(&cp)
+}
+
+/// Check if a character is in the Cyrillic range.
+fn is_cyrillic(ch: char) -> bool {
+    let cp = ch as u32;
+    (0x0400..=0x04FF).contains(&cp)
+    || (0x0500..=0x052F).contains(&cp)
+}
+
+/// Check if a character is in the Arabic range.
+fn is_arabic(ch: char) -> bool {
+    let cp = ch as u32;
+    (0x0600..=0x06FF).contains(&cp)
+    || (0x0750..=0x077F).contains(&cp)
+    || (0x08A0..=0x08FF).contains(&cp)
+    || (0xFB50..=0xFDFF).contains(&cp)
+    || (0xFE70..=0xFEFF).contains(&cp)
+}
 
 // ---------------------------------------------------------------------------
 // Existing types (used by runner.rs and existing callers)
@@ -405,6 +658,12 @@ pub struct PersistentAutoReplyRule {
     /// The type of response (text, image, file, sticker). Defaults to Text.
     #[serde(default)]
     pub response_type: MediaResponseType,
+    /// Optional ISO 639-1 language code this rule is scoped to.
+    ///
+    /// When `Some`, the rule only matches messages detected as that language.
+    /// When `None`, the rule matches messages in any language.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +824,8 @@ const STORE_SCHEMA_SQL: &str = "
         chat_id INTEGER,
         priority INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
-        response_type TEXT NOT NULL DEFAULT 'text'
+        response_type TEXT NOT NULL DEFAULT 'text',
+        language TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_auto_reply_enabled ON auto_reply_rules(enabled);
     CREATE INDEX IF NOT EXISTS idx_auto_reply_priority ON auto_reply_rules(priority DESC);
@@ -579,6 +839,10 @@ const STORE_SCHEMA_SQL: &str = "
 /// Migration to add the response_type column to existing databases.
 const MIGRATION_ADD_RESPONSE_TYPE: &str =
     "ALTER TABLE auto_reply_rules ADD COLUMN response_type TEXT NOT NULL DEFAULT 'text'";
+
+/// Migration to add the language column to existing databases.
+const MIGRATION_ADD_LANGUAGE: &str =
+    "ALTER TABLE auto_reply_rules ADD COLUMN language TEXT";
 
 /// SQLite-backed persistent store for auto-reply rules and per-chat state.
 pub struct AutoReplyStore {
@@ -625,12 +889,22 @@ impl AutoReplyStore {
     /// this handles upgrades).
     fn run_migrations(conn: &Connection) {
         // Check if response_type column exists
-        let has_col = conn
+        let has_response_type = conn
             .prepare("SELECT response_type FROM auto_reply_rules LIMIT 0")
             .is_ok();
-        if !has_col {
+        if !has_response_type {
             if let Err(e) = conn.execute_batch(MIGRATION_ADD_RESPONSE_TYPE) {
                 warn!(error = %e, "failed to add response_type column (may already exist)");
+            }
+        }
+
+        // Check if language column exists
+        let has_language = conn
+            .prepare("SELECT language FROM auto_reply_rules LIMIT 0")
+            .is_ok();
+        if !has_language {
+            if let Err(e) = conn.execute_batch(MIGRATION_ADD_LANGUAGE) {
+                warn!(error = %e, "failed to add language column (may already exist)");
             }
         }
     }
@@ -650,7 +924,22 @@ impl AutoReplyStore {
         chat_id: Option<i64>,
         priority: u8,
     ) -> Result<String, String> {
-        self.add_rule_with_media(pattern, response, chat_id, priority, None)
+        self.add_rule_full(pattern, response, chat_id, priority, None, None)
+    }
+
+    /// Add a new auto-reply rule scoped to a specific language.
+    ///
+    /// The language code is validated against the ISO 639-1 allowlist.
+    /// If `language` is `None`, the rule matches all languages.
+    pub fn add_rule_with_language(
+        &self,
+        pattern: &str,
+        response: &str,
+        chat_id: Option<i64>,
+        priority: u8,
+        language: Option<&str>,
+    ) -> Result<String, String> {
+        self.add_rule_full(pattern, response, chat_id, priority, None, language)
     }
 
     /// Add a new auto-reply rule with an explicit media response type.
@@ -666,8 +955,30 @@ impl AutoReplyStore {
         priority: u8,
         response_type: Option<MediaResponseType>,
     ) -> Result<String, String> {
+        self.add_rule_full(pattern, response, chat_id, priority, response_type, None)
+    }
+
+    /// Add a new auto-reply rule with all options: media type and language.
+    ///
+    /// This is the canonical insertion method. All other `add_rule*` methods
+    /// delegate here. The `language` parameter is validated against the
+    /// ISO 639-1 allowlist when `Some`.
+    pub fn add_rule_full(
+        &self,
+        pattern: &str,
+        response: &str,
+        chat_id: Option<i64>,
+        priority: u8,
+        response_type: Option<MediaResponseType>,
+        language: Option<&str>,
+    ) -> Result<String, String> {
         // Validate pattern for safety (ReDoS prevention)
         validate_pattern(pattern).map_err(|e| format!("pattern rejected: {e}"))?;
+
+        // Validate language code against ISO 639-1 allowlist
+        if let Some(lang) = language {
+            validate_language_code(lang)?;
+        }
 
         let media_type = response_type.unwrap_or_default();
 
@@ -695,13 +1006,13 @@ impl AutoReplyStore {
 
         self.conn
             .execute(
-                "INSERT INTO auto_reply_rules (id, pattern, response, enabled, chat_id, priority, created_at, response_type)
-                 VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)",
-                params![id, pattern, sanitized_response, chat_id, priority as i32, now, response_type_str],
+                "INSERT INTO auto_reply_rules (id, pattern, response, enabled, chat_id, priority, created_at, response_type, language)
+                 VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8)",
+                params![id, pattern, sanitized_response, chat_id, priority as i32, now, response_type_str, language],
             )
             .map_err(|e| format!("failed to insert rule: {e}"))?;
 
-        info!(id = %id, pattern = %pattern, "auto-reply rule added");
+        info!(id = %id, pattern = %pattern, language = ?language, "auto-reply rule added");
         Ok(id)
     }
 
@@ -739,7 +1050,7 @@ impl AutoReplyStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, pattern, response, enabled, chat_id, priority, created_at, response_type
+                "SELECT id, pattern, response, enabled, chat_id, priority, created_at, response_type, language
                  FROM auto_reply_rules
                  ORDER BY priority DESC, created_at ASC",
             )
@@ -752,6 +1063,7 @@ impl AutoReplyStore {
                 let priority_int: i32 = row.get(5)?;
                 let created_at_str: String = row.get(6)?;
                 let response_type_str: String = row.get(7)?;
+                let language: Option<String> = row.get(8)?;
 
                 let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -766,6 +1078,7 @@ impl AutoReplyStore {
                     priority: priority_int.clamp(0, 255) as u8,
                     created_at,
                     response_type: MediaResponseType::from_db_string(&response_type_str),
+                    language,
                 })
             })
             .map_err(|e| format!("failed to query rules: {e}"))?
@@ -775,12 +1088,68 @@ impl AutoReplyStore {
         Ok(rules)
     }
 
+    /// List rules filtered by language.
+    ///
+    /// Returns rules that match the given language code, plus rules with
+    /// `language=NULL` (which match all languages). If `language` is `None`,
+    /// returns all rules.
+    pub fn list_rules_for_language(
+        &self,
+        language: Option<&str>,
+    ) -> Result<Vec<PersistentAutoReplyRule>, String> {
+        match language {
+            None => self.list_rules(),
+            Some(lang) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(
+                        "SELECT id, pattern, response, enabled, chat_id, priority, created_at, response_type, language
+                         FROM auto_reply_rules
+                         WHERE language IS NULL OR language = ?1
+                         ORDER BY priority DESC, created_at ASC",
+                    )
+                    .map_err(|e| format!("failed to prepare language-filtered query: {e}"))?;
+
+                let rules = stmt
+                    .query_map(params![lang], |row| {
+                        let enabled_int: i32 = row.get(3)?;
+                        let chat_id: Option<i64> = row.get(4)?;
+                        let priority_int: i32 = row.get(5)?;
+                        let created_at_str: String = row.get(6)?;
+                        let response_type_str: String = row.get(7)?;
+                        let language: Option<String> = row.get(8)?;
+
+                        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now());
+
+                        Ok(PersistentAutoReplyRule {
+                            id: row.get(0)?,
+                            pattern: row.get(1)?,
+                            response: row.get(2)?,
+                            enabled: enabled_int != 0,
+                            chat_id,
+                            priority: priority_int.clamp(0, 255) as u8,
+                            created_at,
+                            response_type: MediaResponseType::from_db_string(&response_type_str),
+                            language,
+                        })
+                    })
+                    .map_err(|e| format!("failed to query rules by language: {e}"))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("failed to read rule row: {e}"))?;
+
+                Ok(rules)
+            }
+        }
+    }
+
     /// Get a single rule by ID.
     pub fn get_rule(&self, id: &str) -> Result<Option<PersistentAutoReplyRule>, String> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, pattern, response, enabled, chat_id, priority, created_at, response_type
+                "SELECT id, pattern, response, enabled, chat_id, priority, created_at, response_type, language
                  FROM auto_reply_rules WHERE id = ?1",
             )
             .map_err(|e| format!("failed to prepare get query: {e}"))?;
@@ -792,6 +1161,7 @@ impl AutoReplyStore {
                 let priority_int: i32 = row.get(5)?;
                 let created_at_str: String = row.get(6)?;
                 let response_type_str: String = row.get(7)?;
+                let language: Option<String> = row.get(8)?;
 
                 let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -806,6 +1176,7 @@ impl AutoReplyStore {
                     priority: priority_int.clamp(0, 255) as u8,
                     created_at,
                     response_type: MediaResponseType::from_db_string(&response_type_str),
+                    language,
                 })
             })
             .optional()
@@ -1033,6 +1404,13 @@ impl PersistentAutoReplyEngine {
     /// If `chat_id` is provided and auto-reply is not active for that chat,
     /// returns `None`. Rate limiting is enforced per chat.
     ///
+    /// Language detection is performed on the input text. Rules with a
+    /// `language` field only match messages detected as that language.
+    /// Rules with `language=None` match any language.
+    ///
+    /// The `{{lang}}` template variable in the response text is replaced
+    /// with the detected language code (or "unknown" if detection fails).
+    ///
     /// For backward compatibility, returns only the text response string.
     /// Use [`check_with_media`] to get an `OutboundMessage` with media payloads.
     pub fn check(&mut self, text: &str, chat_id: Option<i64>) -> Option<String> {
@@ -1049,6 +1427,8 @@ impl PersistentAutoReplyEngine {
             }
         }
 
+        let detected_lang = detect_language(text);
+
         for compiled in &self.rules {
             if let Some(rule_chat_id) = compiled.rule.chat_id {
                 if let Some(cid) = chat_id {
@@ -1060,8 +1440,20 @@ impl PersistentAutoReplyEngine {
                 }
             }
 
+            // Language filter: skip rules scoped to a different language.
+            if let Some(ref rule_lang) = compiled.rule.language {
+                match &detected_lang {
+                    Some(detected) if detected == rule_lang => {}
+                    _ => continue,
+                }
+            }
+
             if compiled.regex.is_match(text) {
-                return Some(compiled.rule.response.clone());
+                let response = render_lang_template(
+                    &compiled.rule.response,
+                    detected_lang.as_deref(),
+                );
+                return Some(response);
             }
         }
 
@@ -1073,6 +1465,9 @@ impl PersistentAutoReplyEngine {
     /// This is the media-aware version of [`check`]. When a matching rule has
     /// a media response type, the media is loaded from disk and attached to
     /// the outbound message. On media load failure, falls back to text-only.
+    ///
+    /// Language detection is performed and `{{lang}}` is substituted in
+    /// response text.
     pub fn check_with_media(
         &mut self,
         text: &str,
@@ -1091,6 +1486,8 @@ impl PersistentAutoReplyEngine {
             }
         }
 
+        let detected_lang = detect_language(text);
+
         for compiled in &self.rules {
             if let Some(rule_chat_id) = compiled.rule.chat_id {
                 if let Some(cid) = chat_id {
@@ -1102,8 +1499,19 @@ impl PersistentAutoReplyEngine {
                 }
             }
 
+            // Language filter: skip rules scoped to a different language.
+            if let Some(ref rule_lang) = compiled.rule.language {
+                match &detected_lang {
+                    Some(detected) if detected == rule_lang => {}
+                    _ => continue,
+                }
+            }
+
             if compiled.regex.is_match(text) {
-                let response_text = compiled.rule.response.clone();
+                let response_text = render_lang_template(
+                    &compiled.rule.response,
+                    detected_lang.as_deref(),
+                );
 
                 // Attempt media loading; fall back to text-only on failure
                 match load_media(&compiled.rule.response_type) {
@@ -1161,12 +1569,17 @@ impl PersistentAutoReplyEngine {
     }
 
     /// Match inbound text and return the full matching rule.
+    ///
+    /// Language detection is performed and language-scoped rules are
+    /// filtered accordingly.
     pub fn check_rule(&self, text: &str, chat_id: Option<i64>) -> Option<&PersistentAutoReplyRule> {
         if let Some(cid) = chat_id {
             if !self.is_active(&cid.to_string()) {
                 return None;
             }
         }
+
+        let detected_lang = detect_language(text);
 
         for compiled in &self.rules {
             if let Some(rule_chat_id) = compiled.rule.chat_id {
@@ -1176,6 +1589,14 @@ impl PersistentAutoReplyEngine {
                     }
                 } else {
                     continue;
+                }
+            }
+
+            // Language filter: skip rules scoped to a different language.
+            if let Some(ref rule_lang) = compiled.rule.language {
+                match &detected_lang {
+                    Some(detected) if detected == rule_lang => {}
+                    _ => continue,
                 }
             }
 
@@ -1191,6 +1612,17 @@ impl PersistentAutoReplyEngine {
     pub fn rule_count(&self) -> usize {
         self.rules.len()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Template rendering helpers
+// ---------------------------------------------------------------------------
+
+/// Replace `{{lang}}` in a response template with the detected language code.
+///
+/// If the language was not detected, substitutes "unknown".
+fn render_lang_template(template: &str, lang: Option<&str>) -> String {
+    template.replace("{{lang}}", lang.unwrap_or("unknown"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1711,6 +2143,7 @@ mod tests {
                 priority: 1,
                 created_at: Utc::now(),
                 response_type: MediaResponseType::default(),
+                language: None,
             },
             PersistentAutoReplyRule {
                 id: "2".into(),
@@ -1721,6 +2154,7 @@ mod tests {
                 priority: 100,
                 created_at: Utc::now(),
                 response_type: MediaResponseType::default(),
+                language: None,
             },
         ];
         let mut engine = PersistentAutoReplyEngine::new(rules);
@@ -1738,6 +2172,7 @@ mod tests {
             priority: 100,
             created_at: Utc::now(),
             response_type: MediaResponseType::default(),
+            language: None,
         }];
         let mut engine = PersistentAutoReplyEngine::new(rules);
         assert_eq!(engine.check("test", None), None);
@@ -1754,6 +2189,7 @@ mod tests {
             priority: 0,
             created_at: Utc::now(),
             response_type: MediaResponseType::default(),
+            language: None,
         }];
         let mut engine = PersistentAutoReplyEngine::new(rules);
 
@@ -1773,6 +2209,7 @@ mod tests {
             priority: 0,
             created_at: Utc::now(),
             response_type: MediaResponseType::default(),
+            language: None,
         }];
         let mut engine = PersistentAutoReplyEngine::new(rules);
 
@@ -1796,6 +2233,7 @@ mod tests {
             priority: 0,
             created_at: Utc::now(),
             response_type: MediaResponseType::default(),
+            language: None,
         }];
         let mut engine = PersistentAutoReplyEngine::new(rules);
 
@@ -1816,6 +2254,7 @@ mod tests {
             priority: 10,
             created_at: Utc::now(),
             response_type: MediaResponseType::default(),
+            language: None,
         };
         let json = serde_json::to_string(&rule).unwrap();
         let back: PersistentAutoReplyRule = serde_json::from_str(&json).unwrap();
@@ -1846,6 +2285,7 @@ mod tests {
             response_type: MediaResponseType::Image {
                 path: img_path.to_string_lossy().to_string(),
             },
+            language: None,
         }];
 
         let mut engine = PersistentAutoReplyEngine::new(rules);
@@ -1882,6 +2322,7 @@ mod tests {
                 path: file_path.to_string_lossy().to_string(),
                 caption: Some("Daily compliance report".to_string()),
             },
+            language: None,
         }];
 
         let mut engine = PersistentAutoReplyEngine::new(rules);
@@ -2134,5 +2575,278 @@ mod tests {
         let id = store.add_rule(r"^ping$", "pong", None, 0).unwrap();
         let rule = store.get_rule(&id).unwrap().unwrap();
         assert_eq!(rule.response_type, MediaResponseType::Text);
+    }
+
+    // ===== Language detection tests =====
+
+    #[test]
+    fn language_detection_identifies_common_languages() {
+        // English
+        assert_eq!(
+            detect_language("The quick brown fox jumps over the lazy dog and was very happy"),
+            Some("en".to_string())
+        );
+
+        // Spanish
+        assert_eq!(
+            detect_language("El gato es muy grande y los perros son buenos para la casa"),
+            Some("es".to_string())
+        );
+
+        // French
+        assert_eq!(
+            detect_language("Le chat est dans la maison et les enfants sont dans le jardin"),
+            Some("fr".to_string())
+        );
+
+        // German
+        assert_eq!(
+            detect_language("Der Hund ist nicht sehr gross und die Katze ist auch nicht klein"),
+            Some("de".to_string())
+        );
+
+        // Japanese (hiragana + kanji)
+        assert_eq!(
+            detect_language("\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{4e16}\u{754c}"),
+            Some("ja".to_string())
+        );
+
+        // Chinese (CJK without hiragana/katakana)
+        assert_eq!(
+            detect_language("\u{4f60}\u{597d}\u{4e16}\u{754c}\u{5927}\u{5bb6}\u{597d}"),
+            Some("zh".to_string())
+        );
+    }
+
+    #[test]
+    fn per_language_rule_matching() {
+        let rules = vec![
+            PersistentAutoReplyRule {
+                id: "en-rule".into(),
+                pattern: r"hello|help".into(),
+                response: "English response".into(),
+                enabled: true,
+                chat_id: None,
+                priority: 10,
+                created_at: Utc::now(),
+                response_type: MediaResponseType::default(),
+                language: Some("en".to_string()),
+            },
+            PersistentAutoReplyRule {
+                id: "es-rule".into(),
+                pattern: r"hola|ayuda".into(),
+                response: "Spanish response".into(),
+                enabled: true,
+                chat_id: None,
+                priority: 10,
+                created_at: Utc::now(),
+                response_type: MediaResponseType::default(),
+                language: Some("es".to_string()),
+            },
+        ];
+
+        let mut engine = PersistentAutoReplyEngine::new(rules);
+
+        // English text should match the English rule
+        let result = engine.check(
+            "hello, this is a message and the user needs help with something",
+            Some(1),
+        );
+        assert_eq!(result, Some("English response".to_string()));
+
+        // Spanish text should match the Spanish rule
+        let result = engine.check(
+            "hola, este es un mensaje y el usuario necesita ayuda con algo para los demas",
+            Some(2),
+        );
+        assert_eq!(result, Some("Spanish response".to_string()));
+    }
+
+    #[test]
+    fn language_none_matches_all() {
+        let rules = vec![PersistentAutoReplyRule {
+            id: "global-rule".into(),
+            pattern: r"test".into(),
+            response: "global response".into(),
+            enabled: true,
+            chat_id: None,
+            priority: 10,
+            created_at: Utc::now(),
+            response_type: MediaResponseType::default(),
+            language: None, // matches any language
+        }];
+
+        let mut engine = PersistentAutoReplyEngine::new(rules);
+
+        // English text
+        assert_eq!(
+            engine.check("test the quick brown fox and the lazy dog was happy", Some(1)),
+            Some("global response".to_string())
+        );
+
+        // Short text with no language detected -- still matches because rule has language=None
+        assert_eq!(
+            engine.check("test", Some(2)),
+            Some("global response".to_string())
+        );
+    }
+
+    #[test]
+    fn localized_response_rendering() {
+        let rules = vec![PersistentAutoReplyRule {
+            id: "lang-template".into(),
+            pattern: r"greet".into(),
+            response: "Detected language: {{lang}}".into(),
+            enabled: true,
+            chat_id: None,
+            priority: 10,
+            created_at: Utc::now(),
+            response_type: MediaResponseType::default(),
+            language: None,
+        }];
+
+        let mut engine = PersistentAutoReplyEngine::new(rules);
+
+        // English text: {{lang}} should be replaced with "en"
+        let result = engine.check(
+            "greet the quick brown fox and the lazy dog was very happy",
+            Some(1),
+        );
+        assert_eq!(result, Some("Detected language: en".to_string()));
+
+        // Undetectable text: {{lang}} should be replaced with "unknown"
+        let result = engine.check("greet", Some(2));
+        assert_eq!(result, Some("Detected language: unknown".to_string()));
+    }
+
+    #[test]
+    fn security_test_invalid_language_code_rejected() {
+        let store = AutoReplyStore::open_in_memory().unwrap();
+
+        // Valid language codes should be accepted
+        let result = store.add_rule_with_language(r"^test$", "ok", None, 0, Some("en"));
+        assert!(result.is_ok());
+
+        let result = store.add_rule_with_language(r"^test$", "ok", None, 0, Some("es"));
+        assert!(result.is_ok());
+
+        // Invalid language codes should be rejected
+        let result = store.add_rule_with_language(r"^test$", "ok", None, 0, Some("xx"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid language code"));
+
+        let result = store.add_rule_with_language(r"^test$", "ok", None, 0, Some("english"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid language code"));
+
+        // SQL injection attempts rejected
+        let result = store.add_rule_with_language(
+            r"^test$", "ok", None, 0, Some("en'; DROP TABLE auto_reply_rules;--")
+        );
+        assert!(result.is_err());
+
+        // Empty string rejected
+        let result = store.add_rule_with_language(r"^test$", "ok", None, 0, Some(""));
+        assert!(result.is_err());
+
+        // None (no language) should be accepted
+        let result = store.add_rule_with_language(r"^test$", "ok", None, 0, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn language_detection_handles_edge_cases() {
+        // Empty string
+        assert_eq!(detect_language(""), None);
+
+        // Emoji-only
+        assert_eq!(detect_language("\u{1F600}\u{1F601}\u{1F602}"), None);
+
+        // Numbers only
+        assert_eq!(detect_language("12345 67890"), None);
+
+        // Single word (below 3-word confidence threshold)
+        assert_eq!(detect_language("hello"), None);
+
+        // Punctuation only
+        assert_eq!(detect_language("!@#$%^&*()"), None);
+
+        // Very short text with mixed signals
+        assert_eq!(detect_language("a"), None);
+
+        // Binary-like bytes that are valid UTF-8 but not meaningful
+        assert_eq!(detect_language("\u{0001}\u{0002}\u{0003}"), None);
+
+        // Mixed script should still detect based on dominant script
+        // (3+ Cyrillic characters)
+        assert_eq!(
+            detect_language("\u{041f}\u{0440}\u{0438}\u{0432}\u{0435}\u{0442} hello"),
+            Some("ru".to_string()),
+        );
+    }
+
+    #[test]
+    fn store_language_persists() {
+        let store = AutoReplyStore::open_in_memory().unwrap();
+
+        // Add rule with language
+        let id = store
+            .add_rule_with_language(r"^hola$", "Hello!", None, 10, Some("es"))
+            .unwrap();
+
+        let rule = store.get_rule(&id).unwrap().unwrap();
+        assert_eq!(rule.language, Some("es".to_string()));
+
+        // Add rule without language
+        let id2 = store
+            .add_rule_with_language(r"^test$", "ok", None, 5, None)
+            .unwrap();
+
+        let rule2 = store.get_rule(&id2).unwrap().unwrap();
+        assert_eq!(rule2.language, None);
+    }
+
+    #[test]
+    fn store_list_rules_for_language() {
+        let store = AutoReplyStore::open_in_memory().unwrap();
+
+        store
+            .add_rule_with_language(r"^en$", "English", None, 10, Some("en"))
+            .unwrap();
+        store
+            .add_rule_with_language(r"^es$", "Spanish", None, 10, Some("es"))
+            .unwrap();
+        store
+            .add_rule_with_language(r"^global$", "Global", None, 10, None)
+            .unwrap();
+
+        // Filter by English: should get English rule + global rule
+        let en_rules = store.list_rules_for_language(Some("en")).unwrap();
+        assert_eq!(en_rules.len(), 2);
+
+        // Filter by Spanish: should get Spanish rule + global rule
+        let es_rules = store.list_rules_for_language(Some("es")).unwrap();
+        assert_eq!(es_rules.len(), 2);
+
+        // No filter: should get all rules
+        let all_rules = store.list_rules_for_language(None).unwrap();
+        assert_eq!(all_rules.len(), 3);
+
+        // Filter by unmatched language: should get only global rule
+        let fr_rules = store.list_rules_for_language(Some("fr")).unwrap();
+        assert_eq!(fr_rules.len(), 1);
+        assert_eq!(fr_rules[0].response, "Global");
+    }
+
+    #[test]
+    fn render_lang_template_substitution() {
+        assert_eq!(render_lang_template("Hello {{lang}}", Some("en")), "Hello en");
+        assert_eq!(render_lang_template("Hello {{lang}}", Some("es")), "Hello es");
+        assert_eq!(render_lang_template("Hello {{lang}}", None), "Hello unknown");
+        assert_eq!(render_lang_template("No template here", Some("en")), "No template here");
+        assert_eq!(
+            render_lang_template("{{lang}} start and {{lang}} end", Some("fr")),
+            "fr start and fr end"
+        );
     }
 }
