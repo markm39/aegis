@@ -196,6 +196,18 @@ pub enum FleetCommand {
     AliasRemove { alias: String },
     /// List all command aliases.
     AliasList,
+    /// Add a scheduled auto-reply.
+    ScheduleAdd {
+        name: String,
+        schedule: String,
+        template: String,
+    },
+    /// Remove a scheduled auto-reply.
+    ScheduleRemove { name: String },
+    /// List all scheduled auto-replies.
+    ScheduleList,
+    /// Manually trigger a scheduled auto-reply.
+    ScheduleTrigger { name: String },
 }
 
 /// All known command names for completion.
@@ -244,6 +256,7 @@ const COMMAND_NAMES: &[&str] = &[
     "restart",
     "resume",
     "run",
+    "schedule",
     "send",
     "session",
     "sessions",
@@ -873,6 +886,61 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }
             }
         }
+        "schedule" => match arg1 {
+            "" | "list" => Ok(Some(FleetCommand::ScheduleList)),
+            "add" => {
+                if arg2.is_empty() {
+                    return Err("usage: schedule add <name> <schedule> <template>".into());
+                }
+                // arg2 = "<name> <schedule> <template>"
+                let mut parts = arg2.splitn(3, ' ');
+                let name = parts.next().unwrap_or("").trim().to_string();
+                let rest = parts.next().unwrap_or("").trim();
+                let template_rest = parts.next().unwrap_or("").trim();
+                if name.is_empty() || rest.is_empty() {
+                    return Err("usage: schedule add <name> <schedule> <template>".into());
+                }
+                // rest could be a schedule like "daily 09:00" or "every 5m"
+                // template_rest is the template (may be empty if schedule consumed it)
+                let (schedule, template) = if template_rest.is_empty() {
+                    // Only two tokens after name -- schedule is rest, template is default
+                    (rest.to_string(), String::new())
+                } else {
+                    (rest.to_string(), template_rest.to_string())
+                };
+                if schedule.is_empty() {
+                    return Err("usage: schedule add <name> <schedule> <template>".into());
+                }
+                Ok(Some(FleetCommand::ScheduleAdd {
+                    name,
+                    schedule,
+                    template,
+                }))
+            }
+            "remove" => {
+                if arg2.is_empty() {
+                    return Err("usage: schedule remove <name>".into());
+                }
+                let name = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if name.is_empty() {
+                    return Err("usage: schedule remove <name>".into());
+                }
+                Ok(Some(FleetCommand::ScheduleRemove { name }))
+            }
+            "trigger" => {
+                if arg2.is_empty() {
+                    return Err("usage: schedule trigger <name>".into());
+                }
+                let name = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if name.is_empty() {
+                    return Err("usage: schedule trigger <name>".into());
+                }
+                Ok(Some(FleetCommand::ScheduleTrigger { name }))
+            }
+            other => Err(format!(
+                "unknown schedule subcommand: {other}. Use: add, remove, list, trigger"
+            )),
+        },
         _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
     }
 }
@@ -898,6 +966,8 @@ const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 const MATRIX_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 /// Subcommands for `:alias`.
 const ALIAS_SUBCOMMANDS: &[&str] = &["add", "list", "remove"];
+/// Subcommands for `:schedule`.
+const SCHEDULE_SUBCOMMANDS: &[&str] = &["add", "list", "remove", "trigger"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -1060,6 +1130,13 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "schedule" {
+            return SCHEDULE_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
 
         // Third token: context field completion
         if cmd == "context" && parts.len() == 3 {
@@ -1175,6 +1252,10 @@ pub fn help_text() -> &'static str {
      :resume <agent>          Resume suspended session (SIGCONT)\n\
      :run <cmd...>            Run sandboxed in terminal\n\
      :send <agent> <text>     Send text to agent stdin\n\
+     :schedule list            List scheduled auto-replies\n\
+     :schedule add <n> <s> <t> Add scheduled reply (name, schedule, template)\n\
+     :schedule remove <name>   Remove scheduled reply\n\
+     :schedule trigger <name>  Manually trigger scheduled reply\n\
      :session list            List active session keys\n\
      :session history <k> [n] Show recent session output\n\
      :session send <k> <txt>  Send text to a session key\n\
@@ -2313,5 +2394,102 @@ mod tests {
         assert!(help.contains(":alias list"));
         assert!(help.contains(":alias add"));
         assert!(help.contains(":alias remove"));
+    }
+
+    // -- Schedule command tests --
+
+    #[test]
+    fn parse_schedule_list() {
+        assert_eq!(parse("schedule").unwrap(), Some(FleetCommand::ScheduleList));
+        assert_eq!(
+            parse("schedule list").unwrap(),
+            Some(FleetCommand::ScheduleList)
+        );
+    }
+
+    #[test]
+    fn parse_schedule_add() {
+        assert_eq!(
+            parse("schedule add daily-digest daily {{agent_count}} agents").unwrap(),
+            Some(FleetCommand::ScheduleAdd {
+                name: "daily-digest".into(),
+                schedule: "daily".into(),
+                template: "{{agent_count}} agents".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_schedule_add_missing_args() {
+        assert!(parse("schedule add").is_err());
+        assert!(parse("schedule add myname").is_err());
+    }
+
+    #[test]
+    fn parse_schedule_remove() {
+        assert_eq!(
+            parse("schedule remove daily-digest").unwrap(),
+            Some(FleetCommand::ScheduleRemove {
+                name: "daily-digest".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_schedule_remove_missing() {
+        assert!(parse("schedule remove").is_err());
+    }
+
+    #[test]
+    fn parse_schedule_trigger() {
+        assert_eq!(
+            parse("schedule trigger health-check").unwrap(),
+            Some(FleetCommand::ScheduleTrigger {
+                name: "health-check".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_schedule_trigger_missing() {
+        assert!(parse("schedule trigger").is_err());
+    }
+
+    #[test]
+    fn parse_schedule_unknown_sub() {
+        assert!(parse("schedule bogus").is_err());
+    }
+
+    #[test]
+    fn completions_schedule_subcommands() {
+        let agents = vec![];
+        let c = completions("schedule ", &agents);
+        assert!(c.contains(&"add".to_string()));
+        assert!(c.contains(&"list".to_string()));
+        assert!(c.contains(&"remove".to_string()));
+        assert!(c.contains(&"trigger".to_string()));
+    }
+
+    #[test]
+    fn completions_schedule_prefix() {
+        let agents = vec![];
+        let c = completions("schedule t", &agents);
+        assert_eq!(c, vec!["trigger"]);
+    }
+
+    #[test]
+    fn completions_schedule_in_command_list() {
+        let agents = vec![];
+        let c = completions("sch", &agents);
+        assert!(c.contains(&"schedule".to_string()));
+    }
+
+    #[test]
+    fn help_text_includes_schedule() {
+        let help = help_text();
+        assert!(help.contains(":schedule list"));
+        assert!(help.contains(":schedule add"));
+        assert!(help.contains(":schedule remove"));
+        assert!(help.contains(":schedule trigger"));
     }
 }

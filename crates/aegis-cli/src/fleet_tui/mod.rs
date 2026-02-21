@@ -2215,6 +2215,28 @@ impl FleetApp {
                     });
                 }
             }
+            FleetCommand::ScheduleList => {
+                self.send_and_show_result(DaemonCommand::ScheduleReplyList);
+            }
+            FleetCommand::ScheduleAdd {
+                name,
+                schedule,
+                template,
+            } => {
+                self.send_and_show_result(DaemonCommand::ScheduleReplyAdd {
+                    name,
+                    schedule_expr: schedule,
+                    channel: "telegram".into(),
+                    template,
+                    data_source: "fleet_status".into(),
+                });
+            }
+            FleetCommand::ScheduleRemove { name } => {
+                self.send_and_show_result(DaemonCommand::ScheduleReplyRemove { name });
+            }
+            FleetCommand::ScheduleTrigger { name } => {
+                self.send_and_show_result(DaemonCommand::ScheduleReplyTrigger { name });
+            }
         }
     }
 
