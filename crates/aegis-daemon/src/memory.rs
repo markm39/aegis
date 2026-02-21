@@ -64,6 +64,21 @@ impl MemoryStore {
             )?;
         }
 
+        // Migration: add quarantine columns if they don't exist yet.
+        let has_quarantined: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'quarantined'")?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .map(|count| count > 0)?;
+
+        if !has_quarantined {
+            conn.execute_batch(
+                "ALTER TABLE agent_memory ADD COLUMN quarantined INTEGER DEFAULT 0;",
+            )?;
+            conn.execute_batch(
+                "ALTER TABLE agent_memory ADD COLUMN quarantine_reason TEXT;",
+            )?;
+        }
+
         Ok(Self { conn })
     }
 
@@ -310,6 +325,133 @@ impl MemoryStore {
         scored.truncate(limit);
 
         Ok(scored)
+    }
+
+    /// Store a value and mark it as quarantined with a reason string.
+    ///
+    /// The value is written to the database but flagged so that
+    /// [`MemoryGuard::get_safe`](crate::memory_guard::MemoryGuard::get_safe)
+    /// will skip it until an admin explicitly unquarantines it.
+    pub fn set_quarantined(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Delete old FTS entry if the row already exists.
+        let old_rowid: Option<i64> = self
+            .conn
+            .prepare_cached(
+                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+            )?
+            .query_row(params![namespace, key], |row| row.get(0))
+            .ok();
+
+        if let Some(rowid) = old_rowid {
+            let (old_val,): (String,) = self
+                .conn
+                .prepare_cached(
+                    "SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+                )?
+                .query_row(params![namespace, key], |row| Ok((row.get(0)?,)))?;
+
+            self.conn.execute(
+                "INSERT INTO agent_memory_fts(agent_memory_fts, rowid, namespace, key, value) VALUES('delete', ?1, ?2, ?3, ?4)",
+                params![rowid, namespace, key, old_val],
+            )?;
+        }
+
+        // Upsert the main row with quarantine flag.
+        self.conn.execute(
+            "INSERT INTO agent_memory (namespace, key, value, updated_at, quarantined, quarantine_reason)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT(namespace, key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at,
+                quarantined = 1,
+                quarantine_reason = excluded.quarantine_reason",
+            params![namespace, key, value, now, reason],
+        )?;
+
+        // Insert new FTS entry.
+        let new_rowid: i64 = self
+            .conn
+            .prepare_cached(
+                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+            )?
+            .query_row(params![namespace, key], |row| row.get(0))?;
+
+        self.conn.execute(
+            "INSERT INTO agent_memory_fts(rowid, namespace, key, value) VALUES(?1, ?2, ?3, ?4)",
+            params![new_rowid, namespace, key, value],
+        )?;
+
+        Ok(())
+    }
+
+    /// Check whether a key is currently quarantined.
+    pub fn is_quarantined(&self, namespace: &str, key: &str) -> Result<bool> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT quarantined FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+        )?;
+
+        let mut rows = stmt.query(params![namespace, key])?;
+        match rows.next()? {
+            Some(row) => {
+                let flag: i64 = row.get(0)?;
+                Ok(flag != 0)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Clear the quarantine flag on a key, making it visible to safe reads again.
+    pub fn unquarantine(&self, namespace: &str, key: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_memory SET quarantined = 0, quarantine_reason = NULL WHERE namespace = ?1 AND key = ?2",
+            params![namespace, key],
+        )?;
+        Ok(())
+    }
+
+    /// List all quarantined entries in a namespace.
+    ///
+    /// Returns `(key, value, reason)` tuples.
+    pub fn list_quarantined(&self, namespace: &str) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT key, value, COALESCE(quarantine_reason, '') FROM agent_memory WHERE namespace = ?1 AND quarantined = 1 ORDER BY updated_at DESC",
+        )?;
+
+        let rows = stmt.query_map(params![namespace], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Get a value only if it is NOT quarantined. Returns `None` for
+    /// missing keys and for quarantined keys.
+    pub fn get_safe(&self, namespace: &str, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2 AND (quarantined IS NULL OR quarantined = 0)",
+        )?;
+
+        let mut rows = stmt.query(params![namespace, key])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
     }
 }
 

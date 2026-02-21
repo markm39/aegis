@@ -112,6 +112,7 @@ dependencies = [
  "aegis-pilot",
  "aegis-policy",
  "aegis-proxy",
+ "aegis-sandbox",
  "aegis-toolkit",
  "aegis-types",
  "anyhow",

@@ -21,6 +21,7 @@ pub mod embeddings;
 pub mod fleet;
 pub mod lifecycle;
 pub mod memory;
+pub mod memory_guard;
 pub mod ndjson_fmt;
 pub mod semantic_search;
 pub mod persistence;
