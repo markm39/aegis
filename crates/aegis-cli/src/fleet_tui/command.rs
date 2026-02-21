@@ -239,6 +239,10 @@ pub enum FleetCommand {
     QueueFlush,
     /// Inspect dead letter queue contents.
     QueueInspect,
+    /// Fetch a URL and display its content (title, text, word count).
+    Fetch { url: String },
+    /// List all execution lanes with utilization.
+    Lanes,
 }
 
 /// All known command names for completion.
@@ -262,6 +266,7 @@ const COMMAND_NAMES: &[&str] = &[
     "disable",
     "enable",
     "export",
+    "fetch",
     "follow",
     "goal",
     "help",
@@ -269,6 +274,7 @@ const COMMAND_NAMES: &[&str] = &[
     "init",
     "job",
     "jobs",
+    "lanes",
     "list",
     "log",
     "logs",
@@ -864,6 +870,14 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }))
             }
         }
+        "fetch" => {
+            if arg1.is_empty() {
+                Err("usage: fetch <url>".into())
+            } else {
+                let full_url = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                Ok(Some(FleetCommand::Fetch { url: full_url }))
+            }
+        }
         "alerts" => Ok(Some(FleetCommand::Alerts)),
         "sessions" => Ok(Some(FleetCommand::Sessions)),
         "verify" => Ok(Some(FleetCommand::Verify)),
@@ -927,6 +941,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             let agent = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
             Ok(Some(FleetCommand::Jobs { agent }))
         }
+        "lanes" => Ok(Some(FleetCommand::Lanes)),
         "job" => match arg1 {
             "create" => {
                 if arg2.is_empty() {
@@ -1454,6 +1469,7 @@ pub fn help_text() -> &'static str {
      :disable <agent>         Disable agent (stop + prevent restart)\n\
      :enable <agent>          Enable agent (allow starting)\n\
      :export [format]         Export audit data (json/csv/cef)\n\
+     :fetch <url>             Fetch URL content (SSRF-safe)\n\
      :follow <agent>          Drill into agent output\n\
      :goal                    View fleet goal\n\
      :goal <text>             Set fleet goal\n\
@@ -1464,6 +1480,7 @@ pub fn help_text() -> &'static str {
      :job cancel <id>         Cancel a job by ID\n\
      :job status <id>         Get job status by ID\n\
      :jobs [agent]            List jobs (optionally by agent)\n\
+     :lanes                   List execution lanes with utilization\n\
      :list                    List all aegis configs\n\
      :log                     Recent audit entries\n\
      :matrix status           Feature parity matrix summary\n\
@@ -2743,5 +2760,33 @@ mod tests {
         assert!(help.contains(":schedule add"));
         assert!(help.contains(":schedule remove"));
         assert!(help.contains(":schedule trigger"));
+    }
+
+    #[test]
+    fn parse_fetch() {
+        assert_eq!(
+            parse("fetch https://example.com").unwrap(),
+            Some(FleetCommand::Fetch {
+                url: "https://example.com".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_fetch_missing_url() {
+        assert!(parse("fetch").is_err());
+    }
+
+    #[test]
+    fn help_text_includes_fetch() {
+        let help = help_text();
+        assert!(help.contains(":fetch"));
+    }
+
+    #[test]
+    fn completions_fetch_in_command_list() {
+        let agents = vec![];
+        let c = completions("fe", &agents);
+        assert!(c.contains(&"fetch".to_string()));
     }
 }

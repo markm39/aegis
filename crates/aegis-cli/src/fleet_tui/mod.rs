@@ -673,6 +673,7 @@ impl FleetApp {
                 cron: Default::default(),
                 plugins: Default::default(),
                 aliases: Default::default(),
+                lanes: vec![],
             }
         };
 
@@ -2311,6 +2312,15 @@ impl FleetApp {
             }
             FleetCommand::QueueInspect => {
                 self.send_and_show_result(DaemonCommand::QueueInspect);
+            }
+            FleetCommand::Fetch { url } => {
+                self.send_and_show_result(DaemonCommand::FetchUrl {
+                    url,
+                    summarize: false,
+                });
+            }
+            FleetCommand::Lanes => {
+                self.send_and_show_result(DaemonCommand::ListLanes);
             }
         }
     }

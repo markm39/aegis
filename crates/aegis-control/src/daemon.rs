@@ -607,6 +607,30 @@ pub enum DaemonCommand {
     ///
     /// Returns all commands that exhausted their retry attempts.
     QueueInspect,
+
+    // -- Link understanding commands --
+    /// Fetch a URL and extract its content (title, text, word count).
+    ///
+    /// SSRF protection is enforced: private IPs, DNS rebinding, Content-Type
+    /// validation, response size limits, and redirect target validation.
+    /// Cedar policy gate: `daemon:fetch_url`.
+    FetchUrl {
+        /// The URL to fetch.
+        url: String,
+        /// Whether to include a summary (reserved for future use).
+        #[serde(default)]
+        summarize: bool,
+    },
+
+    // -- Execution lane commands --
+    /// List all execution lanes with their current utilization.
+    ///
+    /// Cedar policy gate: `daemon:list_lanes`.
+    ListLanes,
+    /// Get utilization status for a single execution lane.
+    ///
+    /// Cedar policy gate: `daemon:lane_utilization`.
+    LaneUtilization { lane: String },
 }
 
 fn default_true() -> bool {
@@ -715,6 +739,9 @@ impl DaemonCommand {
             DaemonCommand::QueueStatus => "daemon:queue_status",
             DaemonCommand::QueueFlush => "daemon:queue_flush",
             DaemonCommand::QueueInspect => "daemon:queue_inspect",
+            DaemonCommand::FetchUrl { .. } => "daemon:fetch_url",
+            DaemonCommand::ListLanes => "daemon:list_lanes",
+            DaemonCommand::LaneUtilization { .. } => "daemon:lane_utilization",
         }
     }
 }
@@ -1404,6 +1431,7 @@ mod tests {
                     security_preset: None,
                     policy_dir: None,
                     isolation: None,
+                    lane: None,
                 }),
                 start: true,
             },
@@ -1738,6 +1766,20 @@ mod tests {
             DaemonCommand::QueueStatus,
             DaemonCommand::QueueFlush,
             DaemonCommand::QueueInspect,
+            // Link understanding commands
+            DaemonCommand::FetchUrl {
+                url: "https://example.com".into(),
+                summarize: false,
+            },
+            DaemonCommand::FetchUrl {
+                url: "https://example.com/page".into(),
+                summarize: true,
+            },
+            // Execution lane commands
+            DaemonCommand::ListLanes,
+            DaemonCommand::LaneUtilization {
+                lane: "build".into(),
+            },
         ];
 
         for cmd in commands {

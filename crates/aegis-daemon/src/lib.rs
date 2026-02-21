@@ -37,6 +37,7 @@ pub mod tool_contract;
 pub mod toolkit_runtime;
 pub mod message_routing;
 pub mod scheduled_reply;
+pub mod link_understanding;
 pub mod web_tools;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1135,6 +1136,7 @@ impl DaemonRuntime {
             security_preset: parent_config.security_preset.clone(),
             policy_dir: parent_config.policy_dir.clone(),
             isolation: parent_config.isolation.clone(),
+            lane: parent_config.lane.clone(),
         };
 
         self.fleet.add_agent(child_config);
@@ -3796,6 +3798,28 @@ impl DaemonRuntime {
                     Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                 }
             }
+
+            DaemonCommand::FetchUrl { url, summarize: _ } => {
+                let config = link_understanding::LinkConfig::default();
+                match link_understanding::fetch_url(&url, &config) {
+                    Ok(content) => match serde_json::to_value(&content) {
+                        Ok(data) => DaemonResponse::ok_with_data(
+                            format!("fetched {} ({} words)", content.url, content.word_count),
+                            data,
+                        ),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(format!("fetch failed: {e}")),
+                }
+            }
+
+            DaemonCommand::ListLanes => {
+                DaemonResponse::error("execution lanes not yet implemented")
+            }
+
+            DaemonCommand::LaneUtilization { lane } => {
+                DaemonResponse::error(format!("execution lane '{lane}' not yet implemented"))
+            }
         }
     }
 
@@ -4696,6 +4720,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -4722,6 +4747,7 @@ mod tests {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         }
     }
 
@@ -5033,6 +5059,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -5323,6 +5350,7 @@ mod tests {
             security_preset: None,
             policy_dir: None,
             isolation: None,
+            lane: None,
         };
 
         let prompt = compose_autonomy_prompt(
@@ -5709,6 +5737,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -5797,6 +5826,7 @@ mod tests {
             cron: Default::default(),
             plugins: Default::default(),
             aliases: Default::default(),
+            lanes: vec![],
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);
