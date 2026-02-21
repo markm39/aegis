@@ -11,6 +11,7 @@
 //! - Hot-reload Cedar policies
 
 pub mod acp_client;
+pub mod acp_server;
 pub mod alias;
 pub mod command;
 pub mod daemon;

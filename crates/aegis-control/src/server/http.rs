@@ -20,6 +20,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use tracing::info;
 
+use aegis_types::AcpServerConfig;
+
+use crate::acp_server::{self, AcpState, IpRateLimiter};
 use crate::command::{Command, CommandResponse};
 use crate::daemon::{DaemonCommand, DaemonResponse};
 use crate::server::handler::handle_command;
@@ -45,12 +48,18 @@ struct AppState {
 ///
 /// Pass `daemon_tx` as `Some(...)` in daemon mode to enable fleet endpoints,
 /// or `None` for standalone pilot mode.
+///
+/// When `acp_config` is provided and `daemon_tx` is available, ACP protocol
+/// endpoints are mounted under `/acp/v1/`. ACP routes have their own
+/// authentication (SHA-256 token hash allowlist) independent of the main
+/// API key.
 pub async fn serve(
     listen_addr: &str,
     command_tx: CommandTx,
     api_key: String,
     shutdown: tokio::sync::watch::Receiver<bool>,
     daemon_tx: Option<DaemonCommandTx>,
+    acp_config: Option<AcpServerConfig>,
 ) -> Result<(), String> {
     let addr: SocketAddr = listen_addr
         .parse()
@@ -59,10 +68,10 @@ pub async fn serve(
     let state = Arc::new(AppState {
         command_tx,
         api_key,
-        daemon_tx,
+        daemon_tx: daemon_tx.clone(),
     });
 
-    let app = Router::new()
+    let mut app = Router::new()
         // Pilot-level endpoints
         .route("/v1/status", get(status_handler))
         .route("/v1/output", get(output_handler))
@@ -79,6 +88,19 @@ pub async fn serve(
         .route("/v1/agents/{name}/context", get(fleet_agent_context))
         .route("/v1/config/reload", post(fleet_config_reload))
         .with_state(state);
+
+    // Mount ACP routes if configured and daemon is available
+    if let (Some(acp_cfg), Some(dtx)) = (acp_config, daemon_tx) {
+        let acp_state = Arc::new(AcpState {
+            token_hashes: acp_cfg.token_hashes,
+            rate_limiter: Arc::new(IpRateLimiter::new(acp_cfg.rate_limit_per_minute)),
+            max_body_size: acp_cfg.max_body_size,
+            daemon_tx: dtx,
+        });
+        let acp_router = acp_server::acp_routes(acp_state);
+        app = app.nest("/acp/v1", acp_router);
+        info!("ACP server routes mounted at /acp/v1");
+    }
 
     info!(addr = %addr, "starting HTTP control server");
 

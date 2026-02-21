@@ -75,6 +75,7 @@ pub fn run() -> anyhow::Result<()> {
         aliases: Default::default(),
         lanes: vec![],
         workspace_hooks: Default::default(),
+        acp_server: None,
     };
 
     let config_path = daemon_config_path();
@@ -275,6 +276,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -335,6 +337,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         };
 
         let toml_str = config.to_toml().unwrap();

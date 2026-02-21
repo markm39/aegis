@@ -87,6 +87,7 @@ pub fn init() -> anyhow::Result<()> {
         aliases: Default::default(),
         lanes: vec![],
         workspace_hooks: Default::default(),
+        acp_server: None,
     };
 
     let toml_str = example.to_toml()?;
@@ -157,6 +158,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         aliases: Default::default(),
         lanes: vec![],
         workspace_hooks: Default::default(),
+        acp_server: None,
     };
 
     let toml_str = example.to_toml()?;

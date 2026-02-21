@@ -29,8 +29,8 @@ pub use config_loader::{
     mask_sensitive, is_sensitive_field, ConfigLoader, ConfigSource, EffectiveConfig,
 };
 pub use daemon::{
-    AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, DaemonControlConfig,
-    PersistenceConfig, RestartPolicy,
+    AcpServerConfig, AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig,
+    DaemonControlConfig, PersistenceConfig, RestartPolicy,
 };
 pub use error::AegisError;
 pub use verdict::{Decision, Verdict};

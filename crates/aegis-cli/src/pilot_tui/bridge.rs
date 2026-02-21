@@ -155,7 +155,7 @@ async fn run_control_servers(
         let listen = config.http_listen.clone();
         let api_key = config.api_key.clone();
         let handle = tokio::spawn(async move {
-            if let Err(e) = server::http::serve(&listen, http_tx, api_key, http_shutdown, None).await {
+            if let Err(e) = server::http::serve(&listen, http_tx, api_key, http_shutdown, None, None).await {
                 warn!("http control server error: {e}");
             }
         });
