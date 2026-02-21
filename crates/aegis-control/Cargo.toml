@@ -20,8 +20,9 @@ hex = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
 thiserror = { workspace = true }
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8", features = ["json", "ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = { workspace = true }

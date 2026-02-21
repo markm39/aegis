@@ -101,6 +101,7 @@ dependencies = [
  "aegis-types",
  "axum",
  "chrono",
+ "futures-util",
  "glob",
  "hex",
  "serde",

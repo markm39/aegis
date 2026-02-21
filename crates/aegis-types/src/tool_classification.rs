@@ -119,6 +119,10 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // external side effects. Classified as High because it involves external API
         // communication with potential cost and data exfiltration implications.
         ActionKind::GeminiApiCall { .. } => ActionRisk::High,
+        // Processing an attachment involves parsing untrusted file content.
+        // Classified as High because malformed attachments could exploit
+        // parser vulnerabilities and the content originates from external sources.
+        ActionKind::ProcessAttachment { .. } => ActionRisk::High,
     }
 }
 

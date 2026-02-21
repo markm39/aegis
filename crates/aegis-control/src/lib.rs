@@ -13,6 +13,7 @@
 pub mod acp_client;
 pub mod acp_server;
 pub mod acp_translator;
+pub mod acp_websocket;
 pub mod alias;
 pub mod command;
 pub mod daemon;

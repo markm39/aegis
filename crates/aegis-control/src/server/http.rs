@@ -91,15 +91,31 @@ pub async fn serve(
 
     // Mount ACP routes if configured and daemon is available
     if let (Some(acp_cfg), Some(dtx)) = (acp_config, daemon_tx) {
+        let rate_limiter = Arc::new(IpRateLimiter::new(acp_cfg.rate_limit_per_minute));
+
         let acp_state = Arc::new(AcpState {
-            token_hashes: acp_cfg.token_hashes,
-            rate_limiter: Arc::new(IpRateLimiter::new(acp_cfg.rate_limit_per_minute)),
+            token_hashes: acp_cfg.token_hashes.clone(),
+            rate_limiter: rate_limiter.clone(),
             max_body_size: acp_cfg.max_body_size,
-            daemon_tx: dtx,
+            daemon_tx: dtx.clone(),
         });
         let acp_router = acp_server::acp_routes(acp_state);
-        app = app.nest("/acp/v1", acp_router);
-        info!("ACP server routes mounted at /acp/v1");
+
+        // Mount ACP WebSocket endpoint alongside HTTP routes
+        let acp_ws_state = Arc::new(crate::acp_websocket::AcpWsState {
+            token_hashes: acp_cfg.token_hashes,
+            rate_limiter,
+            max_body_size: acp_cfg.max_body_size,
+            rate_limit_per_minute: acp_cfg.rate_limit_per_minute,
+            daemon_tx: dtx,
+            shutdown: shutdown.clone(),
+        });
+        let acp_ws_router = crate::acp_websocket::acp_ws_routes(acp_ws_state);
+
+        app = app
+            .nest("/acp/v1", acp_router)
+            .nest("/acp/v1", acp_ws_router);
+        info!("ACP server routes mounted at /acp/v1 (HTTP + WebSocket)");
     }
 
     info!(addr = %addr, "starting HTTP control server");
