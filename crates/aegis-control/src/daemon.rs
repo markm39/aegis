@@ -798,6 +798,18 @@ pub enum DaemonCommand {
         #[serde(default)]
         tools: Option<serde_json::Value>,
     },
+
+    // -- Setup code generation --
+    /// Generate a setup code with QR code for device pairing.
+    ///
+    /// Returns a 6-digit numeric code, a QR code rendered as Unicode block
+    /// characters, and the expiry timestamp. The QR code encodes a JSON
+    /// payload containing the code, daemon endpoint, and expiry.
+    /// Cedar policy gate: `daemon:generate_setup_code`.
+    GenerateSetupCode {
+        /// Daemon endpoint URL to encode in the QR code.
+        endpoint: String,
+    },
 }
 
 fn default_true() -> bool {
@@ -928,6 +940,7 @@ impl DaemonCommand {
             DaemonCommand::RevokeDevice { .. } => "daemon:revoke_device",
             DaemonCommand::DeviceStatus { .. } => "daemon:device_status",
             DaemonCommand::LlmComplete { .. } => "daemon:llm_complete",
+            DaemonCommand::GenerateSetupCode { .. } => "daemon:generate_setup_code",
         }
     }
 }

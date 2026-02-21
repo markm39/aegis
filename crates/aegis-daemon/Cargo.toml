@@ -42,6 +42,7 @@ sha2 = { workspace = true }
 hmac = { workspace = true }
 subtle = { workspace = true }
 hex = { workspace = true }
+qrcode = "0.14"
 
 [dev-dependencies]
 tempfile = { workspace = true }

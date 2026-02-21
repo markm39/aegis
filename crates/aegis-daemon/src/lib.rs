@@ -49,6 +49,7 @@ pub mod video_processing;
 pub mod web_tools;
 pub mod attachment_handler;
 pub mod device_registry;
+pub mod setup_codes;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -843,6 +844,8 @@ pub struct DaemonRuntime {
     command_queue: crate::command_queue::CommandQueue,
     /// Device registry for paired devices.
     device_store: Option<crate::device_registry::DeviceStore>,
+    /// Setup code manager for QR-based device pairing.
+    setup_code_manager: Option<crate::setup_codes::SetupCodeManager>,
 }
 
 impl DaemonRuntime {
@@ -936,6 +939,9 @@ impl DaemonRuntime {
             message_router: crate::message_routing::MessageRouter::new(),
             job_tracker: crate::jobs::JobTracker::new(),
             command_queue: crate::command_queue::CommandQueue::new(),
+            setup_code_manager: device_store.as_ref().map(|store| {
+                crate::setup_codes::SetupCodeManager::new(store.hmac_key().to_vec())
+            }),
             device_store,
         }
     }
@@ -4055,6 +4061,21 @@ impl DaemonRuntime {
                 DaemonResponse::error(format!(
                     "LLM completion not yet wired to daemon fleet (model={model})"
                 ))
+            }
+
+            DaemonCommand::GenerateSetupCode { ref endpoint } => {
+                match self.setup_code_manager {
+                    Some(ref mut mgr) => {
+                        let result = mgr.generate(endpoint);
+                        match serde_json::to_value(&result) {
+                            Ok(data) => DaemonResponse::ok_with_data("setup code generated", data),
+                            Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                        }
+                    }
+                    None => DaemonResponse::error(
+                        "setup code manager not initialized (no device store configured)"
+                    ),
+                }
             }
         }
     }

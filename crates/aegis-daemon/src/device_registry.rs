@@ -257,6 +257,14 @@ impl DeviceStore {
         }
     }
 
+    /// Get a copy of the HMAC key for use by other components (e.g., setup code manager).
+    ///
+    /// The caller must treat this key as a secret. It is used for HMAC-SHA256
+    /// token generation and must not be logged or exposed.
+    pub fn hmac_key(&self) -> &[u8] {
+        &self.hmac_key
+    }
+
     // -----------------------------------------------------------------------
     // Pairing flow
     // -----------------------------------------------------------------------
