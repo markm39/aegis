@@ -147,12 +147,22 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Imessage(cfg) => {
-                let channel = crate::imessage::ImessageChannel::new(
+                let channel = match crate::imessage::ImessageChannel::new(
                     crate::imessage::ImessageConfig {
-                        api_url: cfg.api_url,
                         recipient: cfg.recipient,
+                        mode: Default::default(),
+                        bluebubbles_url: None,
+                        bluebubbles_password: None,
+                        poll_interval_secs: 10,
+                        chat_db_path: None,
                     },
-                );
+                ) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create iMessage channel: {e}");
+                        return;
+                    }
+                };
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Irc(cfg) => {
