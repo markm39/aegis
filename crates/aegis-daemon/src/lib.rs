@@ -51,6 +51,7 @@ pub mod attachment_handler;
 pub mod device_registry;
 pub mod phone_control;
 pub mod setup_codes;
+pub mod speech;
 pub mod voice;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -852,6 +853,8 @@ pub struct DaemonRuntime {
     phone_controller: crate::phone_control::PhoneController,
     /// Voice call manager (Twilio integration), initialized if TWILIO_AUTH_TOKEN is set.
     voice_manager: Option<crate::voice::VoiceManager>,
+    /// Speech recognition manager (Deepgram/Whisper), initialized if STT API key is set.
+    speech_manager: Option<crate::speech::SpeechRecognitionManager>,
 }
 
 impl DaemonRuntime {
@@ -951,6 +954,7 @@ impl DaemonRuntime {
             device_store,
             phone_controller: crate::phone_control::PhoneController::new(),
             voice_manager: None, // Initialized lazily if TWILIO_AUTH_TOKEN is set
+            speech_manager: None, // Initialized lazily if DEEPGRAM_API_KEY or OPENAI_API_KEY is set
         }
     }
 
@@ -4232,6 +4236,88 @@ impl DaemonRuntime {
                     None => DaemonResponse::error(format!("call not found: {call_id}")),
                 },
                 None => DaemonResponse::error("voice manager not configured (set TWILIO_AUTH_TOKEN)"),
+            },
+
+            // -- Speech recognition commands --
+            DaemonCommand::StartSpeechSession {
+                ref agent_id,
+                ref format,
+            } => match &self.speech_manager {
+                Some(mgr) => {
+                    let audio_format = match crate::speech::AudioFormat::from_str_lossy(format) {
+                        Some(f) => f,
+                        None => {
+                            return DaemonResponse::error(format!(
+                                "unsupported audio format: {format}"
+                            ))
+                        }
+                    };
+                    match mgr.start_session(audio_format) {
+                        Ok(_) => {
+                            let session_id = uuid::Uuid::new_v4().to_string();
+                            info!(
+                                agent_id = %agent_id,
+                                session_id = %session_id,
+                                format = %format,
+                                "speech recognition session started"
+                            );
+                            DaemonResponse::ok_with_data(
+                                "speech session started",
+                                serde_json::json!({ "session_id": session_id }),
+                            )
+                        }
+                        Err(e) => DaemonResponse::error(format!("start_speech_session failed: {e}")),
+                    }
+                }
+                None => DaemonResponse::error(
+                    "speech recognition not configured (set DEEPGRAM_API_KEY or OPENAI_API_KEY)",
+                ),
+            },
+            DaemonCommand::StopSpeechSession { ref session_id } => match &self.speech_manager {
+                Some(mgr) => {
+                    mgr.end_session();
+                    info!(session_id = %session_id, "speech recognition session stopped");
+                    DaemonResponse::ok("speech session stopped")
+                }
+                None => DaemonResponse::error(
+                    "speech recognition not configured (set DEEPGRAM_API_KEY or OPENAI_API_KEY)",
+                ),
+            },
+            DaemonCommand::TranscribeAudio {
+                ref audio_base64,
+                ref format,
+            } => match &self.speech_manager {
+                Some(mgr) => {
+                    let audio_format = match crate::speech::AudioFormat::from_str_lossy(format) {
+                        Some(f) => f,
+                        None => {
+                            return DaemonResponse::error(format!(
+                                "unsupported audio format: {format}"
+                            ))
+                        }
+                    };
+                    let audio_data = match base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        audio_base64,
+                    ) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            return DaemonResponse::error(format!(
+                                "invalid base64 audio data: {e}"
+                            ))
+                        }
+                    };
+                    match mgr.transcribe_file(&audio_data, audio_format) {
+                        Ok(text) => DaemonResponse::ok_with_data(
+                            "transcription complete",
+                            serde_json::json!({ "text": text }),
+                        ),
+                        Err(e) => DaemonResponse::error(format!("transcription failed: {e}")),
+                    }
+                }
+                None => DaemonResponse::error(
+                    "speech recognition not configured (set DEEPGRAM_API_KEY or OPENAI_API_KEY)",
+                ),
             },
         }
     }

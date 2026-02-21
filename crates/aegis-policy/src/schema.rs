@@ -171,6 +171,10 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "SpeechRecognition" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -265,6 +269,7 @@ mod tests {
             "DeviceCommand",
             "ManageDevice",
             "MakeVoiceCall",
+            "SpeechRecognition",
         ];
 
         let schema_text = AEGIS_SCHEMA;

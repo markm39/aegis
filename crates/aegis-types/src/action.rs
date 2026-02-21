@@ -350,6 +350,17 @@ pub enum ActionKind {
         /// Agent initiating the call.
         agent_id: String,
     },
+    /// Speech recognition (speech-to-text) via an external STT provider.
+    ///
+    /// Gated by Cedar policy. Classified as ActionRisk::Medium because it
+    /// sends audio data to an external API for transcription. Audio data
+    /// itself is never logged; only metadata (provider, format) is recorded.
+    SpeechRecognition {
+        /// STT provider name (e.g., "deepgram", "whisper").
+        provider: String,
+        /// Audio format (e.g., "pcm_16khz", "mp3", "wav").
+        format: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -578,6 +589,12 @@ impl std::fmt::Display for ActionKind {
                 agent_id,
             } => {
                 write!(f, "MakeVoiceCall {to_number} (agent={agent_id})")
+            }
+            ActionKind::SpeechRecognition {
+                provider,
+                format,
+            } => {
+                write!(f, "SpeechRecognition {provider} ({format})")
             }
         }
     }

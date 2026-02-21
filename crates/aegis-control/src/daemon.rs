@@ -899,6 +899,39 @@ pub enum DaemonCommand {
         /// Twilio Call SID to query.
         call_id: String,
     },
+
+    // -- Speech recognition commands --
+    /// Start a streaming speech recognition session for an agent.
+    ///
+    /// Connects to the configured STT provider (Deepgram or Whisper) and
+    /// returns a session ID for sending audio chunks. Maximum 3 concurrent
+    /// sessions are allowed.
+    /// Cedar policy gate: `daemon:start_speech_session`.
+    StartSpeechSession {
+        /// Agent requesting the speech session.
+        agent_id: String,
+        /// Audio format (e.g., "pcm_16khz", "mp3", "wav").
+        format: String,
+    },
+    /// Stop an active speech recognition session.
+    ///
+    /// Closes the WebSocket connection and releases the session slot.
+    /// Cedar policy gate: `daemon:stop_speech_session`.
+    StopSpeechSession {
+        /// Session identifier returned by StartSpeechSession.
+        session_id: String,
+    },
+    /// Transcribe a complete audio file in batch mode.
+    ///
+    /// The audio data is provided as base64-encoded bytes. Maximum size
+    /// is 25 MB (before base64 encoding). Uses the configured STT provider.
+    /// Cedar policy gate: `daemon:transcribe_audio`.
+    TranscribeAudio {
+        /// Base64-encoded audio data.
+        audio_base64: String,
+        /// Audio format (e.g., "pcm_16khz", "mp3", "wav").
+        format: String,
+    },
 }
 
 fn default_true() -> bool {
@@ -1040,6 +1073,9 @@ impl DaemonCommand {
             DaemonCommand::HangupCall { .. } => "daemon:hangup_call",
             DaemonCommand::ListCalls => "daemon:list_calls",
             DaemonCommand::CallStatus { .. } => "daemon:call_status",
+            DaemonCommand::StartSpeechSession { .. } => "daemon:start_speech_session",
+            DaemonCommand::StopSpeechSession { .. } => "daemon:stop_speech_session",
+            DaemonCommand::TranscribeAudio { .. } => "daemon:transcribe_audio",
         }
     }
 }

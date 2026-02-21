@@ -161,6 +161,10 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // and privacy implications. Classified as High because they involve
         // real-world side effects (charges, reaching external parties).
         ActionKind::MakeVoiceCall { .. } => ActionRisk::High,
+        // Speech recognition sends audio to external APIs for transcription.
+        // Classified as Medium because it involves external API communication
+        // and audio data transfer, but is recoverable and read-oriented.
+        ActionKind::SpeechRecognition { .. } => ActionRisk::Medium,
     }
 }
 
