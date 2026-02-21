@@ -7,6 +7,7 @@
 pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod compiler;
+pub mod docker;
 pub mod process;
 #[cfg(target_os = "macos")]
 pub mod profile;
@@ -19,6 +20,7 @@ pub mod skill_scanner;
 pub use backend::SandboxBackend;
 #[cfg(target_os = "macos")]
 pub use compiler::compile_cedar_to_sbpl;
+pub use docker::DockerBackend;
 pub use process::ProcessBackend;
 #[cfg(target_os = "macos")]
 pub use profile::generate_seatbelt_profile;

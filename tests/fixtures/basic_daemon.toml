@@ -1,0 +1,35 @@
+# Basic daemon test fixture for E2E tests.
+#
+# This fixture defines a minimal daemon configuration with a single
+# echo-based test agent. It uses deny-all Cedar policy and no real
+# API keys or tokens.
+#
+# Security properties:
+# - No real API keys or tokens anywhere
+# - Socket path points to a temp directory (overridden at runtime)
+# - Agent uses /bin/echo (safe, deterministic output)
+# - Persistence features disabled
+# - No channel (Telegram/Slack) configured
+
+[persistence]
+launchd = false
+prevent_sleep = false
+
+[control]
+socket_path = "/tmp/aegis-test-fixture.sock"
+http_listen = ""
+api_key = ""
+
+[[agents]]
+name = "test-echo"
+working_dir = "/tmp"
+role = "test agent"
+restart = "never"
+max_restarts = 0
+enabled = true
+
+[agents.tool]
+type = "custom"
+command = "/bin/echo"
+args = ["fixture-agent-running"]
+adapter = "auto"

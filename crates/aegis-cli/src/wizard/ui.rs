@@ -435,6 +435,7 @@ fn draw_summary(f: &mut Frame, app: &WizardApp, area: ratatui::layout::Rect) {
     let isolation_desc = match &app.isolation {
         aegis_types::IsolationConfig::Process => "Process (no kernel enforcement)",
         aegis_types::IsolationConfig::Seatbelt { .. } => "Seatbelt (macOS kernel sandbox)",
+        aegis_types::IsolationConfig::Docker(_) => "Docker (container isolation)",
         aegis_types::IsolationConfig::None => "None",
     };
 

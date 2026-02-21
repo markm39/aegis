@@ -108,6 +108,9 @@ fn create_backend(config: &AegisConfig) -> Result<(Box<dyn SandboxBackend>, bool
             );
             Ok((Box::new(aegis_sandbox::ProcessBackend), false))
         }
+        IsolationConfig::Docker(_) => {
+            Ok((Box::new(aegis_sandbox::DockerBackend::new()), true))
+        }
         IsolationConfig::Process | IsolationConfig::None => {
             Ok((Box::new(aegis_sandbox::ProcessBackend), false))
         }

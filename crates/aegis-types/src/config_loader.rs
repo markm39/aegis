@@ -447,10 +447,11 @@ fn env_value_to_toml(
         // IsolationConfig is a tagged enum. Map string values to TOML.
         return match raw.to_lowercase().as_str() {
             "seatbelt" => Ok(toml::Value::String("Seatbelt".to_string())),
+            "docker" => Ok(toml::Value::String("Docker".to_string())),
             "process" => Ok(toml::Value::String("Process".to_string())),
             "none" => Ok(toml::Value::String("None".to_string())),
             _ => Err(AegisError::ConfigError(format!(
-                "invalid AEGIS_ISOLATION value: {raw:?} (expected seatbelt, process, or none)"
+                "invalid AEGIS_ISOLATION value: {raw:?} (expected seatbelt, docker, process, or none)"
             ))),
         };
     }

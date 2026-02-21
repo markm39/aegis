@@ -127,11 +127,100 @@ pub enum IsolationConfig {
         /// Optional path to a hand-written SBPL file that overrides the generated profile.
         profile_overrides: Option<PathBuf>,
     },
+    /// Docker container isolation with security-hardened defaults.
+    Docker(DockerSandboxConfig),
     /// Simple process isolation (no OS-level sandbox). Relies on observer + policy only.
     Process,
     /// No isolation at all. The command runs unsandboxed.
     None,
 }
+
+/// Configuration for the Docker sandbox backend.
+///
+/// Controls the container image, resource limits, network mode, and
+/// additional mount points. All security flags (cap-drop, no-new-privileges,
+/// read-only rootfs, PID limits) are enforced unconditionally and cannot
+/// be disabled through configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Eq is implemented manually below because f64 does not derive Eq,
+// but bit-exact equality is correct for configuration values.
+pub struct DockerSandboxConfig {
+    /// Docker image to use (e.g., `"ubuntu:22.04"`).
+    #[serde(default = "default_docker_image")]
+    pub image: String,
+    /// Network mode: `"none"` (default), `"bridge"`, or a custom network name.
+    #[serde(default = "default_docker_network")]
+    pub network: String,
+    /// Memory limit (e.g., `"512m"`).
+    #[serde(default = "default_docker_memory")]
+    pub memory: String,
+    /// CPU limit (e.g., `1.0`).
+    #[serde(default = "default_docker_cpus")]
+    pub cpus: f64,
+    /// PID limit to prevent fork bombs.
+    #[serde(default = "default_docker_pids_limit")]
+    pub pids_limit: u32,
+    /// Size limit for the /tmp tmpfs mount (e.g., `"100m"`).
+    #[serde(default = "default_docker_tmpfs_size")]
+    pub tmpfs_size: String,
+    /// Whether the workspace mount is read-write (default: false = read-only).
+    #[serde(default)]
+    pub workspace_writable: bool,
+    /// Additional read-only bind mounts (`host_path:container_path`).
+    #[serde(default)]
+    pub extra_mounts: Vec<String>,
+    /// Timeout in seconds for container execution. 0 means no timeout.
+    #[serde(default = "default_docker_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_docker_image() -> String {
+    "ubuntu:22.04".to_string()
+}
+
+fn default_docker_network() -> String {
+    "none".to_string()
+}
+
+fn default_docker_memory() -> String {
+    "512m".to_string()
+}
+
+fn default_docker_cpus() -> f64 {
+    1.0
+}
+
+fn default_docker_pids_limit() -> u32 {
+    256
+}
+
+fn default_docker_tmpfs_size() -> String {
+    "100m".to_string()
+}
+
+fn default_docker_timeout() -> u64 {
+    300
+}
+
+impl Default for DockerSandboxConfig {
+    fn default() -> Self {
+        Self {
+            image: default_docker_image(),
+            network: default_docker_network(),
+            memory: default_docker_memory(),
+            cpus: default_docker_cpus(),
+            pids_limit: default_docker_pids_limit(),
+            tmpfs_size: default_docker_tmpfs_size(),
+            workspace_writable: false,
+            extra_mounts: Vec::new(),
+            timeout_secs: default_docker_timeout(),
+        }
+    }
+}
+
+// f64 does not implement Eq, but for configuration values bit-exact
+// equality is the correct semantic. This lets IsolationConfig keep Eq.
+impl Eq for DockerSandboxConfig {}
 
 impl std::fmt::Display for IsolationConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -144,6 +233,9 @@ impl std::fmt::Display for IsolationConfig {
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
             } => write!(f, "Seatbelt"),
+            IsolationConfig::Docker(cfg) => {
+                write!(f, "Docker (image: {}, network: {})", cfg.image, cfg.network)
+            }
             IsolationConfig::Process => write!(f, "Process"),
             IsolationConfig::None => write!(f, "None"),
         }
@@ -912,7 +1004,7 @@ impl Default for UsageProxyConfig {
 /// Loaded from `aegis.toml` and controls sandbox directory, policies,
 /// audit storage, network rules, isolation backend, observer settings,
 /// and real-time webhook alert rules.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AegisConfig {
     /// Human-readable name for this configuration (also the Cedar principal).
     pub name: String,

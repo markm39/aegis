@@ -155,6 +155,9 @@ fn describe_isolation(config: &AegisConfig) -> String {
                 "Seatbelt (macOS kernel sandbox)".to_string()
             }
         }
+        aegis_types::IsolationConfig::Docker(cfg) => {
+            format!("Docker (image: {}, network: {})", cfg.image, cfg.network)
+        }
         aegis_types::IsolationConfig::Process => "Process (no kernel enforcement)".to_string(),
         aegis_types::IsolationConfig::None => "None".to_string(),
     }

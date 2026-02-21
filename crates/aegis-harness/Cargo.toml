@@ -9,7 +9,14 @@ description = "PTY-based TUI integration test harness with terminal emulation"
 [dependencies]
 aegis-pilot = { path = "../aegis-pilot" }
 aegis-types = { workspace = true }
+aegis-control = { workspace = true }
+aegis-policy = { workspace = true }
+aegis-ledger = { workspace = true }
 vt100 = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }

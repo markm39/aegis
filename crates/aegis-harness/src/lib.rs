@@ -12,6 +12,8 @@
 //! - [`Key`]: terminal key encoding (arrows, function keys, ctrl, alt, etc.)
 //! - [`ScreenSnapshot`]: frozen capture of screen state for comparison
 //! - [`HarnessError`]: error types for timeout, assertion failure, etc.
+//! - [`DaemonTestHarness`]: E2E test harness for daemon integration testing
+//! - [`TestFixture`]: structured test fixture with config, policy, and expectations
 //!
 //! # Example
 //!
@@ -26,14 +28,21 @@
 //!     .unwrap();
 //! ```
 
+pub mod daemon_harness;
 pub mod error;
 pub mod expect;
+pub mod fixtures;
 pub mod key;
 pub mod session;
 pub mod snapshot;
 
+pub use daemon_harness::{
+    assert_audit_entry_absent, assert_audit_entry_exists, assert_daemon_command_err,
+    assert_daemon_command_ok, AuditTestHelper, DaemonTestHarness, PolicyTestHelper,
+};
 pub use error::HarnessError;
 pub use expect::Expect;
+pub use fixtures::{TestFixture, FixtureBuilder};
 pub use key::Key;
 pub use session::{SessionOptions, TerminalSession};
 pub use snapshot::ScreenSnapshot;
