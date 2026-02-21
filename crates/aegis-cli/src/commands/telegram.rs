@@ -300,6 +300,11 @@ pub(crate) fn write_config(bot_token: &str, chat_id: i64) -> anyhow::Result<()> 
         poll_timeout_secs: 30,
         allow_group_commands: false,
         active_hours: None,
+        webhook_mode: false,
+        webhook_port: None,
+        webhook_url: None,
+        webhook_secret: None,
+        inline_queries_enabled: false,
     }));
 
     let toml_str = config.to_toml().context("failed to serialize config")?;
