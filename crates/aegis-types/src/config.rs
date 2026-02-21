@@ -368,9 +368,8 @@ fn default_poll_timeout_secs() -> u64 {
 /// Bidirectional messaging channel for remote control and notifications.
 ///
 /// The channel receives pilot events and alert events (outbound) and
-/// forwards user commands back to the supervisor (inbound). Currently
-/// supports Telegram; additional backends (Slack, Discord) can be added
-/// as new enum variants.
+/// forwards user commands back to the supervisor (inbound). Supports
+/// Telegram, Slack, Discord, and many more backends.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChannelConfig {
@@ -378,6 +377,34 @@ pub enum ChannelConfig {
     Telegram(TelegramConfig),
     /// Slack Web API channel.
     Slack(SlackConfig),
+    /// Generic webhook channel.
+    Webhook(WebhookChannelConfig),
+    /// Discord webhook channel.
+    Discord(DiscordChannelConfig),
+    /// WhatsApp Cloud API channel.
+    Whatsapp(WhatsappChannelConfig),
+    /// Signal messenger channel.
+    Signal(SignalChannelConfig),
+    /// Matrix protocol channel.
+    Matrix(MatrixChannelConfig),
+    /// iMessage channel (via API bridge).
+    Imessage(ImessageChannelConfig),
+    /// IRC channel (via HTTP bridge).
+    Irc(IrcChannelConfig),
+    /// Microsoft Teams webhook channel.
+    Msteams(MsteamsChannelConfig),
+    /// Google Chat webhook channel.
+    Googlechat(GooglechatChannelConfig),
+    /// Feishu (Lark) webhook channel.
+    Feishu(FeishuChannelConfig),
+    /// LINE Messaging API channel.
+    Line(LineChannelConfig),
+    /// Nostr relay channel.
+    Nostr(NostrChannelConfig),
+    /// Mattermost webhook channel.
+    Mattermost(MattermostChannelConfig),
+    /// Voice call channel (via telephony API).
+    VoiceCall(VoiceCallChannelConfig),
 }
 
 /// Configuration for the Telegram messaging channel.
@@ -415,6 +442,200 @@ pub struct SlackConfig {
     #[serde(default)]
     pub streaming: bool,
     /// Optional active hours window for outbound notifications.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for a generic webhook channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebhookChannelConfig {
+    /// Human-readable channel name.
+    pub name: String,
+    /// URL to POST outbound messages to.
+    pub outbound_url: String,
+    /// Optional URL to poll for inbound messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbound_url: Option<String>,
+    /// Optional auth header value (e.g., `"Bearer TOKEN"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_header: Option<String>,
+    /// JSON payload template. Use `{text}` for message placeholder.
+    #[serde(default = "default_webhook_payload_template")]
+    pub payload_template: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+fn default_webhook_payload_template() -> String {
+    r#"{"text":"{text}"}"#.to_string()
+}
+
+/// Configuration for the Discord channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscordChannelConfig {
+    /// Discord webhook URL.
+    pub webhook_url: String,
+    /// Optional bot token for API access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_token: Option<String>,
+    /// Optional channel ID for inbound polling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the WhatsApp Cloud API channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhatsappChannelConfig {
+    /// WhatsApp Cloud API base URL.
+    pub api_url: String,
+    /// Access token for the WhatsApp Business API.
+    pub access_token: String,
+    /// Phone number ID for sending messages.
+    pub phone_number_id: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Signal messenger channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignalChannelConfig {
+    /// Signal CLI REST API base URL.
+    pub api_url: String,
+    /// Registered phone number.
+    pub phone_number: String,
+    /// Recipient phone numbers.
+    #[serde(default)]
+    pub recipients: Vec<String>,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Matrix protocol channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MatrixChannelConfig {
+    /// Matrix homeserver URL.
+    pub homeserver_url: String,
+    /// Access token for the bot account.
+    pub access_token: String,
+    /// Room ID to send messages to.
+    pub room_id: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the iMessage channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImessageChannelConfig {
+    /// API bridge URL.
+    pub api_url: String,
+    /// Recipient phone number or email.
+    pub recipient: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the IRC channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IrcChannelConfig {
+    /// IRC server hostname.
+    pub server: String,
+    /// IRC channel to join.
+    pub channel: String,
+    /// Bot nickname.
+    pub nick: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Microsoft Teams channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsteamsChannelConfig {
+    /// Incoming Webhook URL for the Teams channel.
+    pub webhook_url: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Google Chat channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GooglechatChannelConfig {
+    /// Google Chat Incoming Webhook URL.
+    pub webhook_url: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Feishu (Lark) channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeishuChannelConfig {
+    /// Feishu bot webhook URL.
+    pub webhook_url: String,
+    /// Optional webhook signing secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the LINE Messaging API channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LineChannelConfig {
+    /// LINE channel access token.
+    pub channel_access_token: String,
+    /// Recipient user ID.
+    pub user_id: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Nostr relay channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NostrChannelConfig {
+    /// Nostr relay WebSocket URL.
+    pub relay_url: String,
+    /// Private key in hex format for signing events.
+    pub private_key_hex: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Mattermost channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MattermostChannelConfig {
+    /// Mattermost Incoming Webhook URL.
+    pub webhook_url: String,
+    /// Optional channel ID to override the webhook default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the voice call channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VoiceCallChannelConfig {
+    /// Telephony API endpoint URL.
+    pub api_url: String,
+    /// Caller phone number.
+    pub from_number: String,
+    /// Recipient phone number.
+    pub to_number: String,
+    /// Optional active hours window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,
 }

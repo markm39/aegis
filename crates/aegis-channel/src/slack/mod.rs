@@ -1,4 +1,4 @@
-//! Slack channel backend (outbound only, minimal streaming support).
+//! Slack channel backend with outbound messaging and inbound polling.
 
 use async_trait::async_trait;
 use tracing::warn;
@@ -7,25 +7,33 @@ use aegis_types::SlackConfig;
 
 use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, OutboundPhoto};
 use crate::slack::api::SlackApi;
+use crate::slack::poller::SlackPoller;
 
 pub mod api;
+pub mod poller;
 
 pub struct SlackChannel {
     config: SlackConfig,
     api: SlackApi,
+    poller: SlackPoller,
 }
 
 impl SlackChannel {
     pub fn new(config: SlackConfig) -> Self {
         let api = SlackApi::new(config.bot_token.clone());
-        Self { config, api }
+        let poller = SlackPoller::new(config.bot_token.clone(), config.channel_id.clone());
+        Self {
+            config,
+            api,
+            poller,
+        }
     }
 
     async fn send_streaming(&self, text: &str) -> Result<(), ChannelError> {
         // Create a placeholder message to obtain a thread_ts.
         let thread_ts = self
             .api
-            .post_message(&self.config.channel_id, "…", None)
+            .post_message(&self.config.channel_id, "\u{2026}", None)
             .await?;
         let Some(thread_ts) = thread_ts else {
             return Err(ChannelError::Api("missing thread_ts".into()));
@@ -72,7 +80,10 @@ impl Channel for SlackChannel {
     }
 
     async fn recv(&mut self) -> Result<Option<InboundAction>, ChannelError> {
-        Ok(None)
+        match self.poller.poll().await? {
+            Some(text) => Ok(Some(crate::format::parse_text_command(&text))),
+            None => Ok(None),
+        }
     }
 
     fn name(&self) -> &str {

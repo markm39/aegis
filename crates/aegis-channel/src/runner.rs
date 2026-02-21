@@ -1,13 +1,14 @@
 //! Thread/runtime orchestration for the channel.
 //!
 //! Bridges the sync world (pilot event channel, alert events) with the async
-//! Telegram API. Runs a single-threaded tokio runtime on a dedicated thread,
+//! channel backends. Runs a single-threaded tokio runtime on a dedicated thread,
 //! following the same pattern as the alert dispatcher.
 
 use std::sync::mpsc::{Receiver, Sender};
 
 use tracing::{info, warn};
 
+use crate::auto_reply::{AutoReplyEngine, HeartbeatConfig};
 use crate::hooks::MessageHook;
 use aegis_alert::AlertEvent;
 use aegis_control::daemon::DaemonCommand;
@@ -40,9 +41,9 @@ pub enum ChannelInput {
 ///
 /// This function blocks until the `input_rx` channel is closed (sender dropped).
 /// It processes outbound events from the pilot and alert systems, and polls for
-/// inbound user commands from Telegram. Inbound commands are currently logged
-/// but not forwarded (command forwarding requires the supervisor to accept a
-/// `CommandRx`, which will be wired in a follow-up).
+/// inbound user commands. Inbound commands are currently logged but not forwarded
+/// (command forwarding requires the supervisor to accept a `CommandRx`, which
+/// will be wired in a follow-up).
 ///
 /// Call this from a dedicated `std::thread::spawn`.
 pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
@@ -51,9 +52,9 @@ pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
 
 /// Run the channel with fleet-aware inbound command forwarding.
 ///
-/// Like `run()`, but inbound Telegram commands are parsed as fleet commands
-/// and forwarded as `DaemonCommand`s through the `feedback_tx` channel.
-/// The daemon drains this channel alongside its control socket commands.
+/// Like `run()`, but inbound commands are parsed as fleet commands and forwarded
+/// as `DaemonCommand`s through the `feedback_tx` channel. The daemon drains this
+/// channel alongside its control socket commands.
 ///
 /// Call this from a dedicated `std::thread::spawn`.
 pub fn run_fleet(
@@ -80,8 +81,238 @@ pub fn run_fleet(
             ChannelConfig::Slack(slack_config) => {
                 run_slack(slack_config, input_rx, feedback_tx).await;
             }
+            ChannelConfig::Webhook(cfg) => {
+                let channel = crate::webhook::WebhookChannel::new(
+                    crate::webhook::WebhookConfig {
+                        name: cfg.name,
+                        outbound_url: cfg.outbound_url,
+                        inbound_url: cfg.inbound_url,
+                        auth_header: cfg.auth_header,
+                        payload_template: cfg.payload_template,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Discord(cfg) => {
+                let channel = crate::discord::DiscordChannel::new(
+                    crate::discord::DiscordConfig {
+                        webhook_url: cfg.webhook_url,
+                        bot_token: cfg.bot_token,
+                        channel_id: cfg.channel_id,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Whatsapp(cfg) => {
+                let channel = crate::whatsapp::WhatsappChannel::new(
+                    crate::whatsapp::WhatsappConfig {
+                        api_url: cfg.api_url,
+                        access_token: cfg.access_token,
+                        phone_number_id: cfg.phone_number_id,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Signal(cfg) => {
+                let channel = crate::signal::SignalChannel::new(
+                    crate::signal::SignalConfig {
+                        api_url: cfg.api_url,
+                        phone_number: cfg.phone_number,
+                        recipients: cfg.recipients,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Matrix(cfg) => {
+                let channel = crate::matrix::MatrixChannel::new(
+                    crate::matrix::MatrixConfig {
+                        homeserver_url: cfg.homeserver_url,
+                        access_token: cfg.access_token,
+                        room_id: cfg.room_id,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Imessage(cfg) => {
+                let channel = crate::imessage::ImessageChannel::new(
+                    crate::imessage::ImessageConfig {
+                        api_url: cfg.api_url,
+                        recipient: cfg.recipient,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Irc(cfg) => {
+                let channel = crate::irc::IrcChannel::new(crate::irc::IrcConfig {
+                    server: cfg.server,
+                    channel: cfg.channel,
+                    nick: cfg.nick,
+                });
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Msteams(cfg) => {
+                let channel = crate::msteams::MsteamsChannel::new(
+                    crate::msteams::MsteamsConfig {
+                        webhook_url: cfg.webhook_url,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Googlechat(cfg) => {
+                let channel = crate::googlechat::GooglechatChannel::new(
+                    crate::googlechat::GooglechatConfig {
+                        webhook_url: cfg.webhook_url,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Feishu(cfg) => {
+                let channel = crate::feishu::FeishuChannel::new(
+                    crate::feishu::FeishuConfig {
+                        webhook_url: cfg.webhook_url,
+                        secret: cfg.secret,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Line(cfg) => {
+                let channel = crate::line::LineChannel::new(crate::line::LineConfig {
+                    channel_access_token: cfg.channel_access_token,
+                    user_id: cfg.user_id,
+                });
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Nostr(cfg) => {
+                let channel = crate::nostr::NostrChannel::new(crate::nostr::NostrConfig {
+                    relay_url: cfg.relay_url,
+                    private_key_hex: cfg.private_key_hex,
+                });
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Mattermost(cfg) => {
+                let channel = crate::mattermost::MattermostChannel::new(
+                    crate::mattermost::MattermostConfig {
+                        webhook_url: cfg.webhook_url,
+                        channel_id: cfg.channel_id,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::VoiceCall(cfg) => {
+                let channel = crate::voice_call::VoiceCallChannel::new(
+                    crate::voice_call::VoiceCallConfig {
+                        api_url: cfg.api_url,
+                        from_number: cfg.from_number,
+                        to_number: cfg.to_number,
+                    },
+                );
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
         }
     });
+}
+
+/// Generic channel runner for webhook-based backends.
+///
+/// Runs the same send/recv loop pattern as Telegram and Slack, but works
+/// with any `Channel` implementation. Used by all webhook-based channel stubs.
+async fn run_generic_channel(
+    mut channel: impl crate::channel::Channel,
+    active_hours_cfg: Option<aegis_types::ActiveHoursConfig>,
+    input_rx: Receiver<ChannelInput>,
+    feedback_tx: Option<Sender<DaemonCommand>>,
+) {
+    let channel_name = channel.name().to_string();
+    info!(channel = %channel_name, "channel starting");
+
+    let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<ChannelInput>(64);
+    tokio::task::spawn_blocking(move || {
+        while let Ok(input) = input_rx.recv() {
+            if bridge_tx.blocking_send(input).is_err() {
+                break;
+            }
+        }
+    });
+
+    let auto_reply = AutoReplyEngine::new(vec![]);
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+
+    loop {
+        tokio::select! {
+            Some(input) = bridge_rx.recv() => {
+                let message = match input {
+                    ChannelInput::Alert { ref event, ref rule_name } => {
+                        format::format_alert(event, rule_name)
+                    }
+                    ChannelInput::PilotEvent(ref event) => {
+                        format::format_pilot_event(event)
+                    }
+                    ChannelInput::TextMessage(ref text) => {
+                        crate::channel::OutboundMessage::text(text)
+                    }
+                    ChannelInput::Photo(_) => {
+                        warn!(channel = %channel_name, "photo messages not supported");
+                        continue;
+                    }
+                };
+
+                if !active_hours::within_active_hours(
+                    active_hours_cfg.as_ref(),
+                    chrono::Utc::now(),
+                ) {
+                    warn!("outbound message suppressed (inactive hours)");
+                    continue;
+                }
+
+                {
+                    let text_copy = message.text.clone();
+                    tracing::debug!(hook = ?MessageHook::pre_send(channel.name(), &text_copy), "message hook");
+                    let send_result = channel.send(message).await;
+                    let success = send_result.is_ok();
+                    tracing::debug!(hook = ?MessageHook::post_send(channel.name(), &text_copy, success), "message hook");
+                    if let Err(e) = send_result {
+                        warn!("failed to send outbound message: {e}");
+                    }
+                }
+            }
+            _ = interval.tick() => {
+                match channel.recv().await {
+                    Ok(Some(action)) => {
+                        tracing::debug!(hook = ?MessageHook::received(channel.name(), &format!("{:?}", action)), "message hook");
+
+                        // Check auto-reply before fleet command parsing
+                        if let InboundAction::Unknown(ref text) = action {
+                            if let Some(auto_action) = auto_reply.check(text, None) {
+                                if let crate::auto_reply::AutoAction::Reply(reply) = auto_action {
+                                    let msg = crate::channel::OutboundMessage::text(reply);
+                                    if let Err(e) = channel.send(msg).await {
+                                        warn!("failed to send auto-reply: {e}");
+                                    }
+                                    continue;
+                                }
+                                // Approve/Deny/Forward actions would need daemon
+                                // integration; log for now.
+                                tracing::debug!(action = ?auto_action, "auto-reply action (not yet wired)");
+                            }
+                        }
+
+                        handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
+                    }
+                    Ok(None) => {}
+                    Err(crate::channel::ChannelError::Shutdown) => {
+                        info!(channel = %channel_name, "channel shut down");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(channel = %channel_name, "channel recv error: {e}");
+                    }
+                }
+            }
+            else => break,
+        }
+    }
+
+    info!(channel = %channel_name, "channel stopped");
 }
 
 async fn run_slack(
@@ -104,6 +335,7 @@ async fn run_slack(
         }
     });
 
+    let auto_reply = AutoReplyEngine::new(vec![]);
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
 
     loop {
@@ -148,6 +380,18 @@ async fn run_slack(
                 match channel.recv().await {
                     Ok(Some(action)) => {
                         tracing::debug!(hook = ?MessageHook::received(channel.name(), &format!("{:?}", action)), "message hook");
+
+                        // Check auto-reply before fleet command parsing
+                        if let InboundAction::Unknown(ref text) = action {
+                            if let Some(crate::auto_reply::AutoAction::Reply(reply)) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply);
+                                if let Err(e) = channel.send(msg).await {
+                                    warn!("failed to send auto-reply: {e}");
+                                }
+                                continue;
+                            }
+                        }
+
                         handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
                     }
                     Ok(None) => {}
@@ -191,6 +435,8 @@ async fn run_telegram(
             }
         }
     });
+
+    let auto_reply = AutoReplyEngine::new(vec![]);
 
     // Main loop: process outbound events and poll for inbound actions
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
@@ -247,6 +493,18 @@ async fn run_telegram(
                 match channel.recv().await {
                     Ok(Some(action)) => {
                         tracing::debug!(hook = ?MessageHook::received(channel.name(), &format!("{:?}", action)), "message hook");
+
+                        // Check auto-reply before fleet command parsing
+                        if let InboundAction::Unknown(ref text) = action {
+                            if let Some(crate::auto_reply::AutoAction::Reply(reply)) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply);
+                                if let Err(e) = channel.send(msg).await {
+                                    warn!("failed to send auto-reply: {e}");
+                                }
+                                continue;
+                            }
+                        }
+
                         handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
                     }
                     Ok(None) => {} // No pending action
@@ -267,7 +525,15 @@ async fn run_telegram(
     info!("Telegram channel stopped");
 }
 
-/// Handle an inbound action from Telegram.
+/// Format a heartbeat message from the heartbeat config.
+///
+/// Since fleet data is not directly available in the channel layer,
+/// placeholder values are used.
+fn _format_heartbeat(config: &HeartbeatConfig) -> String {
+    config.format_message("N/A", "N/A", "N/A")
+}
+
+/// Handle an inbound action from a channel.
 ///
 /// If a `feedback_tx` is provided (fleet mode), attempts to parse the input
 /// as a fleet command and forward it to the daemon. Falls back to legacy
@@ -280,7 +546,7 @@ async fn handle_inbound_action(
     match action {
         InboundAction::Command(ref cmd) => {
             // Legacy single-agent command -- log it
-            info!(?cmd, "received inbound command from Telegram");
+            info!(?cmd, "received inbound command");
 
             // If in fleet mode, try to convert to a DaemonCommand
             // (single-agent commands don't have agent names, so they
@@ -304,7 +570,7 @@ async fn handle_inbound_action(
             // Try fleet command parsing if feedback channel is available
             if let Some(tx) = feedback_tx {
                 if let Some(daemon_cmd) = format::parse_fleet_command(text) {
-                    info!(?daemon_cmd, "forwarding fleet command from Telegram");
+                    info!(?daemon_cmd, "forwarding fleet command");
                     if tx.send(daemon_cmd).is_err() {
                         warn!("failed to forward fleet command (daemon feedback channel closed)");
                     }
@@ -312,7 +578,7 @@ async fn handle_inbound_action(
                 }
             }
 
-            info!(text, "unrecognized input from Telegram");
+            info!(text, "unrecognized input from channel");
         }
     }
 }

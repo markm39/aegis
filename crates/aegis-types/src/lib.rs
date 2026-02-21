@@ -12,8 +12,12 @@ pub mod verdict;
 pub use action::{Action, ActionKind};
 pub use config::{
     validate_config_name, ActiveHoursConfig, AdapterConfig, AegisConfig, AlertRule, ChannelConfig,
-    ControlConfig, IsolationConfig, NetworkRule, ObserverConfig, PilotConfig, PromptPatternConfig,
-    Protocol, SlackConfig, StallConfig, TelegramConfig, UncertainAction, UsageProxyConfig,
+    ControlConfig, DiscordChannelConfig, FeishuChannelConfig, GooglechatChannelConfig,
+    ImessageChannelConfig, IrcChannelConfig, IsolationConfig, LineChannelConfig,
+    MatrixChannelConfig, MattermostChannelConfig, MsteamsChannelConfig, NetworkRule,
+    NostrChannelConfig, ObserverConfig, PilotConfig, PromptPatternConfig, Protocol,
+    SignalChannelConfig, SlackConfig, StallConfig, TelegramConfig, UncertainAction,
+    UsageProxyConfig, VoiceCallChannelConfig, WebhookChannelConfig, WhatsappChannelConfig,
     CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
 };
 pub use daemon::{
