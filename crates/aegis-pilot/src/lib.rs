@@ -24,6 +24,7 @@ pub mod drivers;
 pub mod json_events;
 pub mod json_stream;
 pub mod jsonl;
+pub mod kill_tree;
 pub mod output;
 pub mod pty;
 pub mod session;

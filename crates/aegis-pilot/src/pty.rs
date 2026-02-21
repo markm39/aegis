@@ -11,7 +11,7 @@ use std::path::Path;
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::pty::openpty;
-use nix::sys::signal::{self, Signal};
+use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, ForkResult, Pid};
 
@@ -284,10 +284,14 @@ impl PtySession {
         }
     }
 
-    /// Send SIGTERM to the child process.
+    /// Terminate the child process and its entire process tree.
+    ///
+    /// Walks the process tree from this child, kills descendants from leaves
+    /// to root with SIGTERM, then escalates to SIGKILL after 5 seconds.
     pub fn terminate(&self) -> Result<(), AegisError> {
-        signal::kill(self.child_pid, Signal::SIGTERM)
-            .map_err(|e| AegisError::PilotError(format!("kill SIGTERM: {e}")))
+        let pid = self.child_pid.as_raw();
+        let config = crate::kill_tree::KillTreeConfig::default();
+        crate::kill_tree::kill_tree(pid, &config)
     }
 }
 
@@ -326,28 +330,23 @@ impl crate::session::AgentSession for PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Attempt to terminate the child if still alive, then reap to avoid zombies.
-        // Ignore errors -- we're in a destructor and best-effort cleanup is fine.
+        // Attempt to terminate the child and its entire process tree, then reap
+        // to avoid zombies. Ignore errors -- we're in a destructor and
+        // best-effort cleanup is fine.
         if matches!(
             waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)),
             Ok(WaitStatus::StillAlive)
         ) {
-            let _ = signal::kill(self.child_pid, Signal::SIGTERM);
+            // Use kill_tree with a 2-second grace period for the Drop path
+            // (shorter than the default 5s to avoid long destructor delays).
+            let config = crate::kill_tree::KillTreeConfig {
+                grace_period: std::time::Duration::from_secs(2),
+                poll_interval: std::time::Duration::from_millis(50),
+            };
+            let _ = crate::kill_tree::kill_tree(self.child_pid.as_raw(), &config);
 
-            // Poll for up to 2 seconds for graceful exit before resorting to SIGKILL.
-            // Agent processes (like Claude Code) may need time to clean up.
-            for _ in 0..40 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                if !matches!(
-                    waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)),
-                    Ok(WaitStatus::StillAlive)
-                ) {
-                    return; // Reaped successfully
-                }
-            }
-
-            // Still alive after 2s: force kill and block until reaped.
-            let _ = signal::kill(self.child_pid, Signal::SIGKILL);
+            // Reap the direct child to avoid zombies. kill_tree handles signals
+            // but the parent must still waitpid to collect the exit status.
             let _ = waitpid(self.child_pid, None);
         }
         // OwnedFd closes the master fd automatically when dropped.
