@@ -28,19 +28,14 @@ use crate::format;
 // ---------------------------------------------------------------------------
 
 /// Operating mode for the iMessage channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ImessageMode {
     /// Use macOS AppleScript to send messages and chat.db to receive.
+    #[default]
     Applescript,
     /// Use the BlueBubbles REST API for both send and receive.
     Bluebubbles,
-}
-
-impl Default for ImessageMode {
-    fn default() -> Self {
-        Self::Applescript
-    }
 }
 
 /// Configuration for the iMessage channel.

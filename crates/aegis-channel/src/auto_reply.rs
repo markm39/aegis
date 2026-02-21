@@ -382,10 +382,11 @@ impl HeartbeatConfig {
 ///
 /// Defaults to `Text` for backward compatibility with existing rules that
 /// store only a text response string.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MediaResponseType {
     /// Plain text response (default).
+    #[default]
     Text,
     /// Respond with an image from a local filesystem path.
     Image {
@@ -404,12 +405,6 @@ pub enum MediaResponseType {
         /// Telegram sticker file_id.
         file_id: String,
     },
-}
-
-impl Default for MediaResponseType {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 impl MediaResponseType {
