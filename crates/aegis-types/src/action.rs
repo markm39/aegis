@@ -195,6 +195,29 @@ pub enum ActionKind {
         /// Translation direction: "inbound" (ACP -> Daemon) or "outbound" (Daemon -> ACP).
         direction: String,
     },
+    /// GitHub Copilot authentication via OAuth2 device flow.
+    ///
+    /// Gated by Cedar policy. Logged when a Copilot token is obtained
+    /// or refreshed via the device flow or refresh grant.
+    CopilotAuth {
+        /// OAuth2 grant type (e.g., "device_code", "refresh_token").
+        grant_type: String,
+    },
+    /// API call to Google AI Gemini, gated by Cedar policy.
+    ///
+    /// Logged when a request is made to the Gemini generateContent or
+    /// streamGenerateContent endpoint. Token counts are extracted from
+    /// the response usage metadata.
+    GeminiApiCall {
+        /// Gemini model name (e.g., "gemini-pro", "gemini-1.5-pro").
+        model: String,
+        /// Gemini API endpoint URL.
+        endpoint: String,
+        /// Input/prompt tokens consumed.
+        input_tokens: u64,
+        /// Output/completion tokens consumed.
+        output_tokens: u64,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -345,6 +368,20 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "AcpTranslate {direction} {method} (session={session_id})")
             }
+            ActionKind::CopilotAuth { grant_type } => {
+                write!(f, "CopilotAuth ({grant_type})")
+            }
+            ActionKind::GeminiApiCall {
+                model,
+                endpoint,
+                input_tokens,
+                output_tokens,
+            } => {
+                write!(
+                    f,
+                    "GeminiApiCall {model} {endpoint} in={input_tokens} out={output_tokens}"
+                )
+            }
         }
     }
 }
@@ -457,6 +494,15 @@ mod tests {
                 content_hash: "deadbeef".into(),
                 format: "mp4".into(),
                 size_bytes: 4096,
+            },
+            ActionKind::CopilotAuth {
+                grant_type: "device_code".into(),
+            },
+            ActionKind::GeminiApiCall {
+                model: "gemini-pro".into(),
+                endpoint: "https://generativelanguage.googleapis.com".into(),
+                input_tokens: 100,
+                output_tokens: 50,
             },
         ];
         for v in variants {

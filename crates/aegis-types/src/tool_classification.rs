@@ -112,6 +112,13 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // ACP translation is a protocol-level operation that can trigger daemon commands.
         // Classified as High because it bridges external ACP messages to internal commands.
         ActionKind::AcpTranslate { .. } => ActionRisk::High,
+        // Copilot authentication involves credential exchange. Classified as High because
+        // it grants access to external AI model APIs via token issuance.
+        ActionKind::CopilotAuth { .. } => ActionRisk::High,
+        // Gemini API calls consume tokens and can trigger function calling with
+        // external side effects. Classified as High because it involves external API
+        // communication with potential cost and data exfiltration implications.
+        ActionKind::GeminiApiCall { .. } => ActionRisk::High,
     }
 }
 

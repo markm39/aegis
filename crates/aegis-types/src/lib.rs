@@ -6,8 +6,10 @@
 pub mod action;
 pub mod config;
 pub mod config_loader;
+pub mod copilot;
 pub mod daemon;
 pub mod error;
+pub mod google_ai;
 pub mod oauth;
 pub mod tool_classification;
 pub mod verdict;

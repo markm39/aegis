@@ -175,6 +175,15 @@ impl PolicyEngine {
                     method: "__probe__".into(),
                     direction: "inbound".into(),
                 },
+                "CopilotAuth" => ActionKind::CopilotAuth {
+                    grant_type: "device_code".into(),
+                },
+                "GeminiApiCall" => ActionKind::GeminiApiCall {
+                    model: "__probe__".into(),
+                    endpoint: String::new(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
                 _ => return false,
             },
         );
@@ -347,6 +356,8 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::TranscribeAudio { content_hash, .. } => Ok(("TranscribeAudio", content_hash.as_str())),
         ActionKind::VideoProcess { content_hash, .. } => Ok(("VideoProcess", content_hash.as_str())),
         ActionKind::AcpTranslate { session_id, .. } => Ok(("AcpTranslate", session_id.as_str())),
+        ActionKind::CopilotAuth { grant_type, .. } => Ok(("CopilotAuth", grant_type.as_str())),
+        ActionKind::GeminiApiCall { endpoint, .. } => Ok(("GeminiApiCall", endpoint.as_str())),
     }
 }
 

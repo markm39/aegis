@@ -115,6 +115,14 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "CopilotAuth" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "GeminiApiCall" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -196,6 +204,8 @@ mod tests {
             "TranscribeAudio",
             "VideoProcess",
             "AcpTranslate",
+            "CopilotAuth",
+            "GeminiApiCall",
         ];
 
         let schema_text = AEGIS_SCHEMA;
