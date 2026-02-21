@@ -329,12 +329,13 @@ pub fn run_fleet(
 /// Runs the same send/recv loop pattern as Telegram and Slack, but works
 /// with any `Channel` implementation. Used by all webhook-based channel stubs.
 async fn run_generic_channel(
-    mut channel: impl crate::channel::Channel,
+    mut channel: impl crate::channel::Channel + std::marker::Sync,
     active_hours_cfg: Option<aegis_types::ActiveHoursConfig>,
     input_rx: Receiver<ChannelInput>,
     feedback_tx: Option<Sender<DaemonCommand>>,
 ) {
     let channel_name = channel.name().to_string();
+    let has_typing = channel.capabilities().typing_indicators;
     info!(channel = %channel_name, "channel starting");
 
     let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<ChannelInput>(64);
@@ -377,6 +378,13 @@ async fn run_generic_channel(
                 }
 
                 {
+                    // Send typing indicator before the message for visual feedback
+                    if has_typing {
+                        if let Err(e) = channel.send_typing().await {
+                            tracing::debug!("typing indicator failed (non-fatal): {e}");
+                        }
+                    }
+
                     let text_copy = message.text.clone();
                     tracing::debug!(hook = ?MessageHook::pre_send(channel.name(), &text_copy), "message hook");
                     let send_result = channel.send(message).await;
@@ -430,6 +438,7 @@ async fn run_slack(
     use crate::channel::Channel;
 
     let mut channel = slack::SlackChannel::new(config.clone());
+    let has_typing = channel.capabilities().typing_indicators;
 
     info!("Slack channel starting");
 
@@ -473,6 +482,13 @@ async fn run_slack(
                 }
 
                 {
+                    // Send typing indicator before the message for visual feedback
+                    if has_typing {
+                        if let Err(e) = channel.send_typing().await {
+                            tracing::debug!("typing indicator failed (non-fatal): {e}");
+                        }
+                    }
+
                     let text_copy = message.text.clone();
                     tracing::debug!(hook = ?MessageHook::pre_send(channel.name(), &text_copy), "message hook");
                     let send_result = channel.send(message).await;
@@ -526,6 +542,7 @@ async fn run_telegram(
     use crate::channel::Channel;
 
     let mut channel = telegram::TelegramChannel::new(config.clone());
+    let has_typing = channel.capabilities().typing_indicators;
 
     // Send startup announcement
     info!("Telegram channel starting");
@@ -584,6 +601,13 @@ async fn run_telegram(
                     continue;
                 }
                 {
+                    // Send typing indicator before the message for visual feedback
+                    if has_typing {
+                        if let Err(e) = channel.send_typing().await {
+                            tracing::debug!("typing indicator failed (non-fatal): {e}");
+                        }
+                    }
+
                     let text_copy = message.text.clone();
                     tracing::debug!(hook = ?MessageHook::pre_send(channel.name(), &text_copy), "message hook");
                     let send_result = channel.send(message).await;

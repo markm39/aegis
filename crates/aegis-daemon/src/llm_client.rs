@@ -22,9 +22,10 @@ use serde_json::Value;
 use tracing::{debug, info};
 
 use aegis_types::llm::{
-    to_anthropic_message, to_openai_message, AnthropicConfig, LlmRequest, LlmResponse,
-    LlmToolCall, LlmUsage, MaskedApiKey, OpenAiConfig, ProviderConfig,
-    ProviderRegistry, StopReason,
+    to_anthropic_message, to_gemini_content, to_openai_message, from_gemini_response,
+    AnthropicConfig, GeminiProviderConfig, LlmRequest, LlmResponse,
+    LlmToolCall, LlmUsage, MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig,
+    ProviderConfig, ProviderRegistry, StopReason,
 };
 
 // ---------------------------------------------------------------------------
@@ -212,21 +213,14 @@ impl LlmClient {
     /// Send a completion request to the appropriate provider.
     ///
     /// 1. Validates the request.
-    /// 2. Resolves the provider from the model name via the registry.
+    /// 2. Resolves model aliases and gets the failover chain.
     /// 3. Checks rate limit.
-    /// 4. Dispatches to the provider-specific method.
+    /// 4. Tries the primary model, then each fallback in the failover chain.
     pub fn complete(&self, request: &LlmRequest) -> Result<LlmResponse, String> {
         Self::validate_request(request)?;
 
-        let provider_config = self
-            .registry
-            .get_provider_for_model(&request.model)
-            .ok_or_else(|| {
-                format!(
-                    "no provider configured for model '{}' (check provider registry)",
-                    request.model
-                )
-            })?;
+        // Resolve aliases and get failover chain.
+        let failover_chain = self.registry.get_failover_chain(&request.model);
 
         // Rate limit check.
         {
@@ -238,10 +232,50 @@ impl LlmClient {
             }
         }
 
-        match provider_config.clone() {
-            ProviderConfig::Anthropic(config) => self.complete_anthropic(request, &config),
-            ProviderConfig::OpenAi(config) => self.complete_openai(request, &config),
+        let mut last_error = String::new();
+        for model in &failover_chain {
+            let provider_config = match self.registry.get_provider_for_model(model) {
+                Some(config) => config,
+                None => {
+                    last_error = format!(
+                        "no provider configured for model '{model}' (check provider registry)"
+                    );
+                    continue;
+                }
+            };
+
+            // Build a request with the current model from the failover chain.
+            let req = if model != &request.model {
+                let mut r = request.clone();
+                r.model = model.clone();
+                r
+            } else {
+                request.clone()
+            };
+
+            let result = match provider_config.clone() {
+                ProviderConfig::Anthropic(config) => self.complete_anthropic(&req, &config),
+                ProviderConfig::OpenAi(config) => self.complete_openai(&req, &config),
+                ProviderConfig::Gemini(config) => self.complete_gemini(&req, &config),
+                ProviderConfig::Ollama(config) => self.complete_ollama(&req, &config),
+                ProviderConfig::OpenRouter(config) => self.complete_openrouter(&req, &config),
+            };
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    info!(
+                        model = %model,
+                        error = %e,
+                        remaining_fallbacks = failover_chain.len() - 1,
+                        "model failed, trying next in failover chain"
+                    );
+                    last_error = e;
+                }
+            }
         }
+
+        Err(last_error)
     }
 
     /// Send a completion request to the Anthropic Messages API.
@@ -598,6 +632,503 @@ impl LlmClient {
         Self::parse_openai_response(&resp_json, &request.model)
     }
 
+    /// Send a completion request to the Gemini API.
+    fn complete_gemini(
+        &self,
+        request: &LlmRequest,
+        config: &GeminiProviderConfig,
+    ) -> Result<LlmResponse, String> {
+        // Read API key from environment.
+        let api_key = config.read_api_key().map_err(|e| e.to_string())?;
+        let masked = MaskedApiKey(api_key.clone());
+        debug!(provider = "gemini", key = %masked, "resolved API key");
+
+        // Build the URL.
+        let url = format!(
+            "{}/v1beta/models/{}:generateContent?key={}",
+            aegis_types::llm::DEFAULT_GEMINI_ENDPOINT.trim_end_matches('/'),
+            request.model,
+            api_key,
+        );
+
+        // Convert messages to Gemini format, separating out system messages.
+        let mut system_text = request.system_prompt.clone().unwrap_or_default();
+        let mut gemini_contents = Vec::new();
+        for msg in &request.messages {
+            if msg.role == aegis_types::llm::LlmRole::System {
+                if !system_text.is_empty() {
+                    system_text.push('\n');
+                }
+                system_text.push_str(&msg.content);
+            } else {
+                gemini_contents.push(to_gemini_content(msg));
+            }
+        }
+
+        // Build request body.
+        let mut body = serde_json::json!({
+            "contents": gemini_contents,
+        });
+
+        if !system_text.is_empty() {
+            body["system_instruction"] = serde_json::json!({
+                "parts": [{"text": system_text}]
+            });
+        }
+
+        // Generation config.
+        let mut gen_config = serde_json::Map::new();
+        if let Some(temp) = request.temperature {
+            gen_config.insert("temperature".into(), serde_json::json!(temp));
+        }
+        if let Some(max_tokens) = request.max_tokens {
+            gen_config.insert("maxOutputTokens".into(), serde_json::json!(max_tokens));
+        }
+        if !gen_config.is_empty() {
+            body["generationConfig"] = Value::Object(gen_config);
+        }
+
+        // Tool definitions.
+        if !request.tools.is_empty() {
+            let declarations: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    })
+                })
+                .collect();
+            body["tools"] = serde_json::json!([{
+                "function_declarations": declarations
+            }]);
+        }
+
+        // Validate request body size.
+        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
+            format!("failed to serialize Gemini request body: {e}")
+        })?;
+        if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
+            return Err(format!(
+                "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
+                body_bytes.len()
+            ));
+        }
+
+        info!(
+            provider = "gemini",
+            model = %request.model,
+            message_count = request.messages.len(),
+            "sending LLM completion request"
+        );
+
+        // Send the request.
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body_bytes)
+            .send()
+            .map_err(|e| format!("Gemini API request failed: {e}"))?;
+
+        // Check response size from Content-Length header.
+        if let Some(content_length) = resp.content_length() {
+            if content_length > MAX_RESPONSE_BODY_BYTES {
+                return Err(format!(
+                    "Gemini response too large: {content_length} bytes (max {MAX_RESPONSE_BODY_BYTES})"
+                ));
+            }
+        }
+
+        let status = resp.status();
+        let resp_text = resp
+            .text()
+            .map_err(|e| format!("failed to read Gemini response: {e}"))?;
+
+        if resp_text.len() as u64 > MAX_RESPONSE_BODY_BYTES {
+            return Err(format!(
+                "Gemini response body too large: {} bytes (max {MAX_RESPONSE_BODY_BYTES})",
+                resp_text.len()
+            ));
+        }
+
+        if !status.is_success() {
+            return Err(format!("Gemini API returned {status}: {resp_text}"));
+        }
+
+        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
+            format!("failed to parse Gemini response JSON: {e}")
+        })?;
+
+        let response = from_gemini_response(&resp_json, &request.model)
+            .map_err(|e| format!("failed to parse Gemini response: {e}"))?;
+
+        info!(
+            provider = "gemini",
+            model = %response.model,
+            input_tokens = response.usage.input_tokens,
+            output_tokens = response.usage.output_tokens,
+            tool_calls = response.tool_calls.len(),
+            "LLM completion response received"
+        );
+
+        Ok(response)
+    }
+
+    /// Send a completion request to the Ollama API.
+    ///
+    /// Ollama uses OpenAI-compatible message format but with a different
+    /// endpoint structure and no API key requirement.
+    fn complete_ollama(
+        &self,
+        request: &LlmRequest,
+        config: &OllamaConfig,
+    ) -> Result<LlmResponse, String> {
+        // Validate endpoint.
+        config.validate_endpoint().map_err(|e| e.to_string())?;
+
+        // Build the URL.
+        let url = format!(
+            "{}/api/chat",
+            config.base_url.trim_end_matches('/')
+        );
+
+        // Convert messages to OpenAI format (which Ollama understands).
+        let mut messages: Vec<Value> = Vec::new();
+        if let Some(ref system_prompt) = request.system_prompt {
+            if !system_prompt.is_empty() {
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": system_prompt,
+                }));
+            }
+        }
+        for msg in &request.messages {
+            let converted = to_openai_message(msg);
+            messages.push(
+                serde_json::to_value(&converted).map_err(|e| {
+                    format!("failed to serialize Ollama message: {e}")
+                })?,
+            );
+        }
+
+        // Build request body.
+        let mut body = serde_json::json!({
+            "model": request.model,
+            "messages": messages,
+            "stream": false,
+        });
+
+        // Options.
+        let mut options = serde_json::Map::new();
+        if let Some(temp) = request.temperature {
+            options.insert("temperature".into(), serde_json::json!(temp));
+        }
+        if !options.is_empty() {
+            body["options"] = Value::Object(options);
+        }
+
+        // Validate request body size.
+        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
+            format!("failed to serialize Ollama request body: {e}")
+        })?;
+        if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
+            return Err(format!(
+                "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
+                body_bytes.len()
+            ));
+        }
+
+        info!(
+            provider = "ollama",
+            model = %request.model,
+            message_count = request.messages.len(),
+            "sending LLM completion request"
+        );
+
+        // Send the request.
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body_bytes)
+            .send()
+            .map_err(|e| format!("Ollama API request failed: {e}"))?;
+
+        // Check response size.
+        if let Some(content_length) = resp.content_length() {
+            if content_length > MAX_RESPONSE_BODY_BYTES {
+                return Err(format!(
+                    "Ollama response too large: {content_length} bytes (max {MAX_RESPONSE_BODY_BYTES})"
+                ));
+            }
+        }
+
+        let status = resp.status();
+        let resp_text = resp
+            .text()
+            .map_err(|e| format!("failed to read Ollama response: {e}"))?;
+
+        if resp_text.len() as u64 > MAX_RESPONSE_BODY_BYTES {
+            return Err(format!(
+                "Ollama response body too large: {} bytes (max {MAX_RESPONSE_BODY_BYTES})",
+                resp_text.len()
+            ));
+        }
+
+        if !status.is_success() {
+            return Err(format!("Ollama API returned {status}: {resp_text}"));
+        }
+
+        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
+            format!("failed to parse Ollama response JSON: {e}")
+        })?;
+
+        Self::parse_ollama_response(&resp_json, &request.model)
+    }
+
+    /// Parse an Ollama `/api/chat` response into an `LlmResponse`.
+    fn parse_ollama_response(json: &Value, model: &str) -> Result<LlmResponse, String> {
+        let message = json
+            .get("message")
+            .ok_or("Ollama response missing message object")?;
+
+        let content = message
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Ollama may include tool calls in the message.
+        let mut tool_calls = Vec::new();
+        if let Some(tcs) = message.get("tool_calls").and_then(|v| v.as_array()) {
+            for tc in tcs {
+                let function = tc.get("function").unwrap_or(&Value::Null);
+                let id = tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = function
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args_val = function
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                // Arguments may be a string (JSON-encoded) or already an object.
+                let input = if let Some(s) = args_val.as_str() {
+                    serde_json::from_str(s)
+                        .unwrap_or(Value::Object(serde_json::Map::new()))
+                } else {
+                    args_val
+                };
+                tool_calls.push(LlmToolCall { id, name, input });
+            }
+        }
+
+        // Extract token counts from Ollama's response fields.
+        let eval_count = json
+            .get("eval_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let prompt_eval_count = json
+            .get("prompt_eval_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let usage = LlmUsage {
+            input_tokens: prompt_eval_count,
+            output_tokens: eval_count,
+        };
+
+        let response_model = json
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or(model)
+            .to_string();
+
+        let stop_reason = if !tool_calls.is_empty() {
+            Some(StopReason::ToolUse)
+        } else if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+            Some(StopReason::EndTurn)
+        } else {
+            None
+        };
+
+        info!(
+            provider = "ollama",
+            model = %response_model,
+            input_tokens = usage.input_tokens,
+            output_tokens = usage.output_tokens,
+            tool_calls = tool_calls.len(),
+            "LLM completion response received"
+        );
+
+        Ok(LlmResponse {
+            content,
+            model: response_model,
+            usage,
+            tool_calls,
+            stop_reason,
+        })
+    }
+
+    /// Send a completion request to the OpenRouter API.
+    ///
+    /// OpenRouter is OpenAI-compatible, so we reuse the OpenAI format
+    /// converters with different endpoint and auth headers.
+    fn complete_openrouter(
+        &self,
+        request: &LlmRequest,
+        config: &OpenRouterConfig,
+    ) -> Result<LlmResponse, String> {
+        // Read API key from environment.
+        let api_key = config.read_api_key().map_err(|e| e.to_string())?;
+        let masked = MaskedApiKey(api_key.clone());
+        debug!(provider = "openrouter", key = %masked, "resolved API key");
+
+        // Build the URL.
+        let url = format!(
+            "{}/api/v1/chat/completions",
+            aegis_types::llm::DEFAULT_OPENROUTER_ENDPOINT.trim_end_matches('/')
+        );
+
+        // Convert messages to OpenAI format (which OpenRouter uses).
+        let mut openai_messages: Vec<Value> = Vec::new();
+        if let Some(ref system_prompt) = request.system_prompt {
+            if !system_prompt.is_empty() {
+                openai_messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": system_prompt,
+                }));
+            }
+        }
+        for msg in &request.messages {
+            let converted = to_openai_message(msg);
+            openai_messages.push(
+                serde_json::to_value(&converted).map_err(|e| {
+                    format!("failed to serialize OpenRouter message: {e}")
+                })?,
+            );
+        }
+
+        // Build request body.
+        let mut body = serde_json::json!({
+            "model": request.model,
+            "messages": openai_messages,
+        });
+
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = serde_json::json!(max_tokens);
+        }
+        if let Some(temp) = request.temperature {
+            body["temperature"] = serde_json::json!(temp);
+        }
+
+        if !request.tools.is_empty() {
+            let tools: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema,
+                        }
+                    })
+                })
+                .collect();
+            body["tools"] = Value::Array(tools);
+        }
+
+        // Validate request body size.
+        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
+            format!("failed to serialize OpenRouter request body: {e}")
+        })?;
+        if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
+            return Err(format!(
+                "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
+                body_bytes.len()
+            ));
+        }
+
+        info!(
+            provider = "openrouter",
+            model = %request.model,
+            message_count = request.messages.len(),
+            "sending LLM completion request"
+        );
+
+        // Send the request.
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("HTTP-Referer", "https://github.com/aegis-project/aegis")
+            .header("content-type", "application/json")
+            .body(body_bytes)
+            .send()
+            .map_err(|e| format!("OpenRouter API request failed: {e}"))?;
+
+        // Check response size.
+        if let Some(content_length) = resp.content_length() {
+            if content_length > MAX_RESPONSE_BODY_BYTES {
+                return Err(format!(
+                    "OpenRouter response too large: {content_length} bytes (max {MAX_RESPONSE_BODY_BYTES})"
+                ));
+            }
+        }
+
+        let status = resp.status();
+        let resp_text = resp
+            .text()
+            .map_err(|e| format!("failed to read OpenRouter response: {e}"))?;
+
+        if resp_text.len() as u64 > MAX_RESPONSE_BODY_BYTES {
+            return Err(format!(
+                "OpenRouter response body too large: {} bytes (max {MAX_RESPONSE_BODY_BYTES})",
+                resp_text.len()
+            ));
+        }
+
+        if !status.is_success() {
+            return Err(format!(
+                "OpenRouter API returned {status}: {resp_text}"
+            ));
+        }
+
+        // Parse using OpenAI format (OpenRouter is API-compatible).
+        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
+            format!("failed to parse OpenRouter response JSON: {e}")
+        })?;
+
+        let mut response = Self::parse_openai_response(&resp_json, &request.model)?;
+
+        // Override the provider name in logs.
+        info!(
+            provider = "openrouter",
+            model = %response.model,
+            input_tokens = response.usage.input_tokens,
+            output_tokens = response.usage.output_tokens,
+            tool_calls = response.tool_calls.len(),
+            "LLM completion response received"
+        );
+
+        // OpenRouter may return a different model name; keep it.
+        if response.model.is_empty() {
+            response.model = request.model.clone();
+        }
+
+        Ok(response)
+    }
+
     /// Parse an OpenAI Chat Completions API response into an `LlmResponse`.
     fn parse_openai_response(json: &Value, model: &str) -> Result<LlmResponse, String> {
         // Extract the first choice.
@@ -699,9 +1230,16 @@ impl LlmClient {
 
 /// Build a `ProviderRegistry` from environment variables.
 ///
-/// Registers Anthropic and OpenAI providers using default configurations.
-/// Both providers are registered regardless of whether API keys are present;
+/// Registers all known providers using default configurations.
+/// Providers are registered regardless of whether API keys are present;
 /// key availability is checked at request time.
+///
+/// Provider detection:
+/// - Anthropic and OpenAI are always registered (standard providers).
+/// - Gemini is registered if `GOOGLE_API_KEY` or `GEMINI_API_KEY` is set.
+/// - Ollama is always registered (local, no key needed). The base URL can
+///   be overridden with `OLLAMA_BASE_URL`.
+/// - OpenRouter is registered if `OPENROUTER_API_KEY` is set.
 pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
     let mut registry = ProviderRegistry::new();
 
@@ -720,6 +1258,53 @@ pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
             ProviderConfig::OpenAi(OpenAiConfig::default()),
         )
         .map_err(|e| format!("failed to register OpenAI provider: {e}"))?;
+
+    // Register Gemini if GOOGLE_API_KEY or GEMINI_API_KEY is available.
+    let has_google_key = std::env::var("GOOGLE_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_some();
+    let has_gemini_key = std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_some();
+    if has_google_key || has_gemini_key {
+        registry
+            .register_provider(
+                "google",
+                ProviderConfig::Gemini(GeminiProviderConfig::default()),
+            )
+            .map_err(|e| format!("failed to register Gemini provider: {e}"))?;
+    }
+
+    // Register Ollama (always available, local service).
+    let ollama_base_url = std::env::var("OLLAMA_BASE_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| aegis_types::llm::DEFAULT_OLLAMA_BASE_URL.to_string());
+    registry
+        .register_provider(
+            "ollama",
+            ProviderConfig::Ollama(OllamaConfig {
+                base_url: ollama_base_url,
+                ..Default::default()
+            }),
+        )
+        .map_err(|e| format!("failed to register Ollama provider: {e}"))?;
+
+    // Register OpenRouter if OPENROUTER_API_KEY is available.
+    let has_openrouter_key = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_some();
+    if has_openrouter_key {
+        registry
+            .register_provider(
+                "openrouter",
+                ProviderConfig::OpenRouter(OpenRouterConfig::default()),
+            )
+            .map_err(|e| format!("failed to register OpenRouter provider: {e}"))?;
+    }
 
     Ok(registry)
 }
@@ -1171,13 +1756,17 @@ mod tests {
         assert_eq!(registry.resolve_provider("o1-preview"), Some("openai"));
         assert_eq!(registry.resolve_provider("o3-mini"), Some("openai"));
 
+        // Ollama models (now route via default prefixes).
+        assert_eq!(registry.resolve_provider("llama3.2"), Some("ollama"));
+        assert_eq!(registry.resolve_provider("mistral-7b"), Some("ollama"));
+
         // Unknown models.
-        assert!(registry.resolve_provider("llama-70b").is_none());
-        assert!(registry.resolve_provider("mistral-7b").is_none());
+        assert!(registry.resolve_provider("unknown-model-xyz").is_none());
 
         // Provider configs are registered.
         assert!(registry.get_provider("anthropic").is_some());
         assert!(registry.get_provider("openai").is_some());
+        assert!(registry.get_provider("ollama").is_some());
 
         // Model resolution returns the correct provider config.
         let anthropic_config = registry.get_provider_for_model("claude-sonnet-4-20250514");
@@ -1187,6 +1776,10 @@ mod tests {
         let openai_config = registry.get_provider_for_model("gpt-4o");
         assert!(openai_config.is_some());
         assert_eq!(openai_config.unwrap().provider_name(), "openai");
+
+        let ollama_config = registry.get_provider_for_model("llama3.2");
+        assert!(ollama_config.is_some());
+        assert_eq!(ollama_config.unwrap().provider_name(), "ollama");
     }
 
     // -- test_anthropic_response_parsing --
@@ -1325,5 +1918,269 @@ mod tests {
         let registry = build_registry_from_env().unwrap();
         assert!(registry.get_provider("anthropic").is_some());
         assert!(registry.get_provider("openai").is_some());
+        // Ollama is always registered.
+        assert!(registry.get_provider("ollama").is_some());
+    }
+
+    // -- test_ollama_response_parsing --
+
+    #[test]
+    fn test_ollama_response_parsing() {
+        let json: Value = serde_json::from_str(r#"{
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "Hello! I am Llama."
+            },
+            "done": true,
+            "eval_count": 12,
+            "prompt_eval_count": 8
+        }"#).unwrap();
+
+        let resp = LlmClient::parse_ollama_response(&json, "llama3.2").unwrap();
+        assert_eq!(resp.content, "Hello! I am Llama.");
+        assert_eq!(resp.model, "llama3.2");
+        assert_eq!(resp.usage.input_tokens, 8);
+        assert_eq!(resp.usage.output_tokens, 12);
+        assert_eq!(resp.stop_reason, Some(StopReason::EndTurn));
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    // -- test_ollama_response_with_tool_calls --
+
+    #[test]
+    fn test_ollama_response_with_tool_calls() {
+        let json: Value = serde_json::from_str(r#"{
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"city\": \"NYC\"}"
+                    }
+                }]
+            },
+            "done": true,
+            "eval_count": 20,
+            "prompt_eval_count": 15
+        }"#).unwrap();
+
+        let resp = LlmClient::parse_ollama_response(&json, "llama3.2").unwrap();
+        assert!(resp.content.is_empty());
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "call_1");
+        assert_eq!(resp.tool_calls[0].name, "get_weather");
+        assert_eq!(resp.tool_calls[0].input["city"], "NYC");
+        assert_eq!(resp.stop_reason, Some(StopReason::ToolUse));
+    }
+
+    // -- test_gemini_response_parsing_via_client --
+
+    #[test]
+    fn test_gemini_response_parsing_via_from_gemini_response() {
+        let json: Value = serde_json::from_str(r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello from Gemini!"}],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 6
+            }
+        }"#).unwrap();
+
+        let resp = from_gemini_response(&json, "gemini-2.0-flash").unwrap();
+        assert_eq!(resp.content, "Hello from Gemini!");
+        assert_eq!(resp.model, "gemini-2.0-flash");
+        assert_eq!(resp.usage.input_tokens, 10);
+        assert_eq!(resp.usage.output_tokens, 6);
+        assert_eq!(resp.stop_reason, Some(StopReason::EndTurn));
+    }
+
+    // -- test_openrouter_uses_openai_format --
+
+    #[test]
+    fn test_openrouter_uses_openai_format() {
+        // OpenRouter responses are parsed with the OpenAI parser.
+        let json: Value = serde_json::from_str(r#"{
+            "id": "gen-123",
+            "model": "anthropic/claude-sonnet-4-20250514",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Via OpenRouter."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }"#).unwrap();
+
+        let resp = LlmClient::parse_openai_response(&json, "anthropic/claude-sonnet-4-20250514").unwrap();
+        assert_eq!(resp.content, "Via OpenRouter.");
+        assert_eq!(resp.model, "anthropic/claude-sonnet-4-20250514");
+        assert_eq!(resp.usage.input_tokens, 10);
+        assert_eq!(resp.usage.output_tokens, 5);
+    }
+
+    // -- test_build_registry_with_gemini_env --
+
+    #[test]
+    fn test_build_registry_with_gemini_env() {
+        // Set a Gemini key and verify it gets registered.
+        std::env::set_var("GOOGLE_API_KEY", "test-gemini-key");
+        let registry = build_registry_from_env().unwrap();
+        assert!(registry.get_provider("google").is_some());
+        std::env::remove_var("GOOGLE_API_KEY");
+    }
+
+    // -- test_build_registry_with_openrouter_env --
+
+    #[test]
+    fn test_build_registry_with_openrouter_env() {
+        std::env::set_var("OPENROUTER_API_KEY", "test-or-key");
+        let registry = build_registry_from_env().unwrap();
+        assert!(registry.get_provider("openrouter").is_some());
+        std::env::remove_var("OPENROUTER_API_KEY");
+    }
+
+    // -- test_build_registry_ollama_custom_url --
+
+    #[test]
+    fn test_build_registry_ollama_custom_url() {
+        std::env::set_var("OLLAMA_BASE_URL", "http://gpu-server:11434");
+        let registry = build_registry_from_env().unwrap();
+        let ollama = registry.get_provider("ollama").unwrap();
+        match ollama {
+            ProviderConfig::Ollama(c) => {
+                assert_eq!(c.base_url, "http://gpu-server:11434");
+            }
+            _ => panic!("expected Ollama provider config"),
+        }
+        std::env::remove_var("OLLAMA_BASE_URL");
+    }
+
+    // -- test_failover_chain_in_complete --
+
+    #[test]
+    fn test_failover_chain_resolution_in_registry() {
+        let mut registry = ProviderRegistry::new();
+
+        // Set up failover: gpt-4o -> claude-sonnet -> gemini-flash
+        registry.set_failover("gpt-4o", vec![
+            "claude-sonnet-4-20250514".to_string(),
+            "gemini-2.0-flash".to_string(),
+        ]);
+
+        let chain = registry.get_failover_chain("gpt-4o");
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0], "gpt-4o");
+        assert_eq!(chain[1], "claude-sonnet-4-20250514");
+        assert_eq!(chain[2], "gemini-2.0-flash");
+    }
+
+    // -- test_alias_resolution_in_registry --
+
+    #[test]
+    fn test_alias_resolution_in_registry() {
+        let mut registry = ProviderRegistry::new();
+
+        registry.add_alias("fast", "gemini-2.0-flash");
+        registry.add_alias("smart", "claude-sonnet-4-20250514");
+        registry.add_alias("local", "llama3.2");
+
+        assert_eq!(registry.resolve_alias("fast"), "gemini-2.0-flash");
+        assert_eq!(registry.resolve_alias("smart"), "claude-sonnet-4-20250514");
+        assert_eq!(registry.resolve_alias("local"), "llama3.2");
+        assert_eq!(registry.resolve_alias("unknown"), "unknown");
+
+        // Aliases affect provider resolution.
+        assert_eq!(registry.resolve_provider("fast"), Some("google"));
+        assert_eq!(registry.resolve_provider("smart"), Some("anthropic"));
+        assert_eq!(registry.resolve_provider("local"), Some("ollama"));
+    }
+
+    // -- test_gemini_request_body_format --
+
+    #[test]
+    fn test_gemini_request_body_format() {
+        let request = LlmRequest {
+            model: "gemini-2.0-flash".into(),
+            messages: vec![
+                LlmMessage::user("Hello, Gemini!"),
+                LlmMessage::assistant("Hi there!"),
+                LlmMessage::user("What is Rust?"),
+            ],
+            temperature: Some(0.7),
+            max_tokens: Some(2048),
+            system_prompt: Some("You are a helpful assistant.".into()),
+            tools: vec![LlmToolDefinition {
+                name: "search".into(),
+                description: "Search the web".into(),
+                input_schema: serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}}),
+            }],
+        };
+
+        // Build the body as complete_gemini would.
+        let mut system_text = request.system_prompt.clone().unwrap_or_default();
+        let mut gemini_contents = Vec::new();
+        for msg in &request.messages {
+            if msg.role == aegis_types::llm::LlmRole::System {
+                if !system_text.is_empty() {
+                    system_text.push('\n');
+                }
+                system_text.push_str(&msg.content);
+            } else {
+                gemini_contents.push(to_gemini_content(msg));
+            }
+        }
+
+        let mut body = serde_json::json!({
+            "contents": gemini_contents,
+        });
+
+        if !system_text.is_empty() {
+            body["system_instruction"] = serde_json::json!({
+                "parts": [{"text": system_text}]
+            });
+        }
+
+        let mut gen_config = serde_json::Map::new();
+        if let Some(temp) = request.temperature {
+            gen_config.insert("temperature".into(), serde_json::json!(temp));
+        }
+        if let Some(max_tokens) = request.max_tokens {
+            gen_config.insert("maxOutputTokens".into(), serde_json::json!(max_tokens));
+        }
+        if !gen_config.is_empty() {
+            body["generationConfig"] = Value::Object(gen_config);
+        }
+
+        // Verify body structure.
+        let contents = body["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[2]["role"], "user");
+
+        // System instruction should be separate.
+        assert_eq!(
+            body["system_instruction"]["parts"][0]["text"],
+            "You are a helpful assistant."
+        );
+
+        // Generation config.
+        assert_eq!(body["generationConfig"]["temperature"], 0.7);
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 2048);
     }
 }

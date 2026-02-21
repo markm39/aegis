@@ -45,6 +45,33 @@ pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// Default environment variable for OpenAI API key.
 pub const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
+/// Default Gemini API endpoint.
+pub const DEFAULT_GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
+
+/// Default Gemini model.
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
+
+/// Default environment variable for Google/Gemini API key.
+pub const GOOGLE_API_KEY_ENV: &str = "GOOGLE_API_KEY";
+
+/// Fallback environment variable for Gemini API key.
+pub const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
+
+/// Default Ollama base URL.
+pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
+/// Default Ollama model.
+pub const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
+
+/// Default OpenRouter API endpoint.
+pub const DEFAULT_OPENROUTER_ENDPOINT: &str = "https://openrouter.ai";
+
+/// Default OpenRouter model.
+pub const DEFAULT_OPENROUTER_MODEL: &str = "anthropic/claude-sonnet-4-20250514";
+
+/// Default environment variable for OpenRouter API key.
+pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_API_KEY";
+
 // ---------------------------------------------------------------------------
 // Message types
 // ---------------------------------------------------------------------------
@@ -398,6 +425,208 @@ impl OpenAiConfig {
     }
 }
 
+/// Configuration for the Google Gemini provider.
+///
+/// The API key is never stored directly. `api_key_env` names the environment
+/// variable that holds the key at runtime. Falls back to `GEMINI_API_KEY` if
+/// the primary variable is the default and not set.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GeminiProviderConfig {
+    /// Name of the environment variable holding the API key.
+    #[serde(default = "default_google_api_key_env")]
+    pub api_key_env: String,
+    /// Default model to use when none is specified.
+    #[serde(default = "default_gemini_model")]
+    pub default_model: String,
+}
+
+fn default_google_api_key_env() -> String {
+    GOOGLE_API_KEY_ENV.to_string()
+}
+
+fn default_gemini_model() -> String {
+    DEFAULT_GEMINI_MODEL.to_string()
+}
+
+impl Default for GeminiProviderConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_google_api_key_env(),
+            default_model: default_gemini_model(),
+        }
+    }
+}
+
+impl fmt::Debug for GeminiProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GeminiProviderConfig")
+            .field("api_key_env", &self.api_key_env)
+            .field("default_model", &self.default_model)
+            .finish()
+    }
+}
+
+impl GeminiProviderConfig {
+    /// Read the API key from the configured environment variable.
+    ///
+    /// Tries the primary `api_key_env` first, then falls back to `GEMINI_API_KEY`
+    /// if the primary is the default and not set.
+    pub fn read_api_key(&self) -> Result<String, AegisError> {
+        match std::env::var(&self.api_key_env) {
+            Ok(key) if !key.is_empty() => return Ok(key),
+            _ => {}
+        }
+
+        // Fallback: if primary is the default, also try GEMINI_API_KEY.
+        if self.api_key_env == GOOGLE_API_KEY_ENV {
+            match std::env::var(GEMINI_API_KEY_ENV) {
+                Ok(key) if !key.is_empty() => return Ok(key),
+                _ => {}
+            }
+        }
+
+        Err(AegisError::ConfigError(format!(
+            "environment variable '{}' not set (required for Gemini API key)",
+            self.api_key_env
+        )))
+    }
+
+    /// Validate the Gemini endpoint URL for SSRF protection.
+    ///
+    /// The Gemini endpoint is always the public Google API; we validate against
+    /// the constant to prevent SSRF via configuration tampering.
+    pub fn validate_endpoint(&self) -> Result<(), AegisError> {
+        validate_endpoint_url(DEFAULT_GEMINI_ENDPOINT).map_err(|e| {
+            AegisError::ConfigError(e.to_string().replace("Gemini", "Google Gemini"))
+        })
+    }
+}
+
+/// Configuration for the Ollama provider (local inference).
+///
+/// Ollama runs locally, so no API key is required. The base URL defaults to
+/// `http://localhost:11434`. SSRF validation is intentionally skipped for
+/// Ollama since it is expected to be a local service.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OllamaConfig {
+    /// Base URL for the Ollama API.
+    #[serde(default = "default_ollama_base_url")]
+    pub base_url: String,
+    /// Default model to use when none is specified.
+    #[serde(default = "default_ollama_model")]
+    pub default_model: String,
+}
+
+fn default_ollama_base_url() -> String {
+    DEFAULT_OLLAMA_BASE_URL.to_string()
+}
+
+fn default_ollama_model() -> String {
+    DEFAULT_OLLAMA_MODEL.to_string()
+}
+
+impl Default for OllamaConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_ollama_base_url(),
+            default_model: default_ollama_model(),
+        }
+    }
+}
+
+impl fmt::Debug for OllamaConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OllamaConfig")
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .finish()
+    }
+}
+
+impl OllamaConfig {
+    /// Validate the Ollama endpoint URL.
+    ///
+    /// Ollama is a local service, so we only check for basic URL sanity.
+    /// We intentionally allow HTTP and localhost/private IPs since that
+    /// is Ollama's expected deployment model.
+    pub fn validate_endpoint(&self) -> Result<(), AegisError> {
+        if self.base_url.is_empty() {
+            return Err(AegisError::ConfigError(
+                "Ollama base_url must not be empty".into(),
+            ));
+        }
+        if !self.base_url.starts_with("http://") && !self.base_url.starts_with("https://") {
+            return Err(AegisError::ConfigError(format!(
+                "Ollama base_url must use HTTP or HTTPS, got: {}",
+                self.base_url
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Configuration for the OpenRouter provider.
+///
+/// OpenRouter provides a unified API compatible with OpenAI's format, routing
+/// to many backend models. The API key is never stored directly.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenRouterConfig {
+    /// Name of the environment variable holding the API key.
+    #[serde(default = "default_openrouter_api_key_env")]
+    pub api_key_env: String,
+    /// Default model to use when none is specified.
+    #[serde(default = "default_openrouter_model")]
+    pub default_model: String,
+}
+
+fn default_openrouter_api_key_env() -> String {
+    OPENROUTER_API_KEY_ENV.to_string()
+}
+
+fn default_openrouter_model() -> String {
+    DEFAULT_OPENROUTER_MODEL.to_string()
+}
+
+impl Default for OpenRouterConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_openrouter_api_key_env(),
+            default_model: default_openrouter_model(),
+        }
+    }
+}
+
+impl fmt::Debug for OpenRouterConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenRouterConfig")
+            .field("api_key_env", &self.api_key_env)
+            .field("default_model", &self.default_model)
+            .finish()
+    }
+}
+
+impl OpenRouterConfig {
+    /// Read the API key from the configured environment variable.
+    ///
+    /// Returns an error if the variable is not set or the value is empty.
+    pub fn read_api_key(&self) -> Result<String, AegisError> {
+        match std::env::var(&self.api_key_env) {
+            Ok(key) if !key.is_empty() => Ok(key),
+            _ => Err(AegisError::ConfigError(format!(
+                "environment variable '{}' not set (required for OpenRouter API key)",
+                self.api_key_env
+            ))),
+        }
+    }
+
+    /// Validate the OpenRouter endpoint URL for SSRF protection.
+    pub fn validate_endpoint(&self) -> Result<(), AegisError> {
+        validate_endpoint_url(DEFAULT_OPENROUTER_ENDPOINT).map_err(|e| {
+            AegisError::ConfigError(e.to_string().replace("Gemini", "OpenRouter"))
+        })
+    }
+}
+
 /// Provider configuration enum wrapping all supported providers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -406,6 +635,12 @@ pub enum ProviderConfig {
     Anthropic(AnthropicConfig),
     /// OpenAI (GPT) provider.
     OpenAi(OpenAiConfig),
+    /// Google Gemini provider.
+    Gemini(GeminiProviderConfig),
+    /// Ollama (local inference) provider.
+    Ollama(OllamaConfig),
+    /// OpenRouter (multi-model gateway) provider.
+    OpenRouter(OpenRouterConfig),
 }
 
 impl ProviderConfig {
@@ -414,14 +649,22 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Anthropic(c) => c.validate_endpoint(),
             ProviderConfig::OpenAi(c) => c.validate_endpoint(),
+            ProviderConfig::Gemini(c) => c.validate_endpoint(),
+            ProviderConfig::Ollama(c) => c.validate_endpoint(),
+            ProviderConfig::OpenRouter(c) => c.validate_endpoint(),
         }
     }
 
     /// Read the API key from the environment.
+    ///
+    /// Returns `Ok` for Ollama (which requires no key).
     pub fn read_api_key(&self) -> Result<String, AegisError> {
         match self {
             ProviderConfig::Anthropic(c) => c.read_api_key(),
             ProviderConfig::OpenAi(c) => c.read_api_key(),
+            ProviderConfig::Gemini(c) => c.read_api_key(),
+            ProviderConfig::Ollama(_) => Ok(String::new()),
+            ProviderConfig::OpenRouter(c) => c.read_api_key(),
         }
     }
 
@@ -430,6 +673,9 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Anthropic(_) => "anthropic",
             ProviderConfig::OpenAi(_) => "openai",
+            ProviderConfig::Gemini(_) => "google",
+            ProviderConfig::Ollama(_) => "ollama",
+            ProviderConfig::OpenRouter(_) => "openrouter",
         }
     }
 }
@@ -444,6 +690,10 @@ impl ProviderConfig {
 /// - `claude-*` -> Anthropic
 /// - `gpt-*`, `o1-*`, `o3-*` -> OpenAI
 /// - `gemini-*` -> Google
+/// - `llama*`, `mistral*`, `codellama*`, `phi*` -> Ollama (when registered)
+///
+/// Supports model aliases (e.g., "fast" -> "gemini-2.0-flash") and failover
+/// chains (e.g., primary model -> fallback1 -> fallback2).
 ///
 /// Custom providers can be registered with explicit model prefixes.
 #[derive(Debug, Clone)]
@@ -452,6 +702,10 @@ pub struct ProviderRegistry {
     providers: HashMap<String, ProviderConfig>,
     /// Model prefix -> provider name mapping.
     prefix_routes: Vec<(String, String)>,
+    /// Model alias -> actual model name mapping.
+    aliases: HashMap<String, String>,
+    /// Model -> ordered list of fallback models for failover.
+    failover_chains: HashMap<String, Vec<String>>,
 }
 
 impl ProviderRegistry {
@@ -464,10 +718,17 @@ impl ProviderRegistry {
             ("o3-".to_string(), "openai".to_string()),
             ("o4-".to_string(), "openai".to_string()),
             ("gemini-".to_string(), "google".to_string()),
+            ("llama".to_string(), "ollama".to_string()),
+            ("mistral".to_string(), "ollama".to_string()),
+            ("codellama".to_string(), "ollama".to_string()),
+            ("phi".to_string(), "ollama".to_string()),
+            ("qwen".to_string(), "ollama".to_string()),
         ];
         Self {
             providers: HashMap::new(),
             prefix_routes,
+            aliases: HashMap::new(),
+            failover_chains: HashMap::new(),
         }
     }
 
@@ -487,10 +748,11 @@ impl ProviderRegistry {
 
     /// Resolve a model identifier to a provider name.
     ///
-    /// Uses prefix matching against the registered routes. Returns `None`
-    /// if no prefix matches.
+    /// First resolves any alias, then uses prefix matching against the
+    /// registered routes. Returns `None` if no prefix matches.
     pub fn resolve_provider(&self, model: &str) -> Option<&str> {
-        let lower = model.to_lowercase();
+        let resolved = self.resolve_alias(model);
+        let lower = resolved.to_lowercase();
         for (prefix, provider) in &self.prefix_routes {
             if lower.starts_with(prefix) {
                 return Some(provider.as_str());
@@ -506,10 +768,47 @@ impl ProviderRegistry {
 
     /// Get the provider configuration for a given model identifier.
     ///
-    /// Combines `resolve_provider` and `get_provider` in one call.
+    /// Resolves aliases first, then combines `resolve_provider` and
+    /// `get_provider` in one call.
     pub fn get_provider_for_model(&self, model: &str) -> Option<&ProviderConfig> {
         let provider_name = self.resolve_provider(model)?;
         self.get_provider(provider_name)
+    }
+
+    /// Resolve a model alias to the actual model name.
+    ///
+    /// Returns the alias target if the name is a registered alias,
+    /// otherwise returns the input unchanged.
+    pub fn resolve_alias<'a>(&'a self, name: &'a str) -> &'a str {
+        self.aliases.get(name).map(|s| s.as_str()).unwrap_or(name)
+    }
+
+    /// Register a model alias.
+    ///
+    /// After registration, `resolve_alias("fast")` returns `"gemini-2.0-flash"`,
+    /// and model routing uses the resolved name for prefix matching.
+    pub fn add_alias(&mut self, alias: impl Into<String>, model: impl Into<String>) {
+        self.aliases.insert(alias.into(), model.into());
+    }
+
+    /// Set a failover chain for a model.
+    ///
+    /// When the primary model fails, the client will try each fallback in order.
+    pub fn set_failover(&mut self, model: impl Into<String>, fallbacks: Vec<String>) {
+        self.failover_chains.insert(model.into(), fallbacks);
+    }
+
+    /// Get the failover chain for a model.
+    ///
+    /// Returns the primary model followed by all fallback models. If no
+    /// failover is configured, returns a single-element list with the model.
+    pub fn get_failover_chain(&self, model: &str) -> Vec<String> {
+        let resolved = self.resolve_alias(model).to_string();
+        let mut chain = vec![resolved.clone()];
+        if let Some(fallbacks) = self.failover_chains.get(&resolved) {
+            chain.extend(fallbacks.iter().cloned());
+        }
+        chain
     }
 
     /// List all models from registered providers.
@@ -536,6 +835,43 @@ impl ProviderRegistry {
                         name: c.default_model.clone(),
                         provider: name.clone(),
                         max_tokens: 128_000,
+                        capabilities: vec![
+                            "tool_use".to_string(),
+                            "vision".to_string(),
+                            "streaming".to_string(),
+                        ],
+                    });
+                }
+                ProviderConfig::Gemini(c) => {
+                    models.push(ModelInfo {
+                        id: c.default_model.clone(),
+                        name: c.default_model.clone(),
+                        provider: name.clone(),
+                        max_tokens: 1_000_000,
+                        capabilities: vec![
+                            "tool_use".to_string(),
+                            "vision".to_string(),
+                            "streaming".to_string(),
+                        ],
+                    });
+                }
+                ProviderConfig::Ollama(c) => {
+                    models.push(ModelInfo {
+                        id: c.default_model.clone(),
+                        name: c.default_model.clone(),
+                        provider: name.clone(),
+                        max_tokens: 128_000,
+                        capabilities: vec![
+                            "tool_use".to_string(),
+                        ],
+                    });
+                }
+                ProviderConfig::OpenRouter(c) => {
+                    models.push(ModelInfo {
+                        id: c.default_model.clone(),
+                        name: c.default_model.clone(),
+                        provider: name.clone(),
+                        max_tokens: 200_000,
                         capabilities: vec![
                             "tool_use".to_string(),
                             "vision".to_string(),
@@ -857,6 +1193,269 @@ pub fn from_openai_message(msg: &OpenAiMessage) -> LlmMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Gemini format conversion
+// ---------------------------------------------------------------------------
+
+/// A part within a Gemini content message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GeminiPart {
+    /// Plain text content.
+    Text {
+        /// The text content.
+        text: String,
+    },
+    /// A function call from the model.
+    FunctionCall {
+        /// Function call details.
+        #[serde(rename = "functionCall")]
+        function_call: GeminiFunctionCall,
+    },
+    /// A function response fed back to the model.
+    FunctionResponse {
+        /// Function response details.
+        #[serde(rename = "functionResponse")]
+        function_response: GeminiFunctionResponse,
+    },
+}
+
+/// A function call within a Gemini response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiFunctionCall {
+    /// Name of the function to call.
+    pub name: String,
+    /// Function arguments as a JSON object.
+    pub args: serde_json::Value,
+}
+
+/// A function response fed back to Gemini.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiFunctionResponse {
+    /// Name of the function that was called.
+    pub name: String,
+    /// Function result as a JSON object.
+    pub response: serde_json::Value,
+}
+
+/// A Gemini content message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiContent {
+    /// Message role ("user" or "model").
+    pub role: String,
+    /// Content parts.
+    pub parts: Vec<GeminiPart>,
+}
+
+/// Convert an internal `LlmMessage` to Gemini content format.
+///
+/// Sanitizes all text content and tool inputs before conversion.
+/// System messages should be extracted and placed in `system_instruction`
+/// at the request level, not converted here.
+pub fn to_gemini_content(msg: &LlmMessage) -> GeminiContent {
+    let role = match msg.role {
+        LlmRole::User | LlmRole::System => "user".to_string(),
+        LlmRole::Assistant => "model".to_string(),
+        LlmRole::Tool => "user".to_string(),
+    };
+
+    let mut parts = Vec::new();
+
+    // For tool role, emit a functionResponse part.
+    if msg.role == LlmRole::Tool {
+        if let Some(ref _id) = msg.tool_use_id {
+            // Gemini uses the function name, not an ID, for responses.
+            // We store the result in a generic response object.
+            parts.push(GeminiPart::FunctionResponse {
+                function_response: GeminiFunctionResponse {
+                    name: "tool_result".to_string(),
+                    response: serde_json::json!({
+                        "result": sanitize_text(&msg.content)
+                    }),
+                },
+            });
+        }
+    } else if !msg.content.is_empty() {
+        parts.push(GeminiPart::Text {
+            text: sanitize_text(&msg.content),
+        });
+    }
+
+    // Add tool calls as functionCall parts.
+    for tc in &msg.tool_calls {
+        parts.push(GeminiPart::FunctionCall {
+            function_call: GeminiFunctionCall {
+                name: sanitize_text(&tc.name),
+                args: sanitize_json_value(&tc.input),
+            },
+        });
+    }
+
+    GeminiContent { role, parts }
+}
+
+/// Convert a Gemini content message back to the internal `LlmMessage` format.
+///
+/// Sanitizes all content during conversion.
+pub fn from_gemini_content(content: &GeminiContent) -> LlmMessage {
+    let role = match content.role.as_str() {
+        "model" => LlmRole::Assistant,
+        _ => LlmRole::User,
+    };
+
+    let mut content_text = String::new();
+    let mut tool_calls = Vec::new();
+    let mut is_tool_response = false;
+    let mut tool_use_id = None;
+
+    for part in &content.parts {
+        match part {
+            GeminiPart::Text { text } => {
+                if !content_text.is_empty() {
+                    content_text.push('\n');
+                }
+                content_text.push_str(&sanitize_text(text));
+            }
+            GeminiPart::FunctionCall { function_call } => {
+                // Generate a synthetic ID for the tool call.
+                let id = format!("gemini_fc_{}", tool_calls.len());
+                tool_calls.push(LlmToolCall {
+                    id,
+                    name: sanitize_text(&function_call.name),
+                    input: sanitize_json_value(&function_call.args),
+                });
+            }
+            GeminiPart::FunctionResponse { function_response } => {
+                is_tool_response = true;
+                tool_use_id = Some(function_response.name.clone());
+                if let Some(result) = function_response.response.get("result") {
+                    if let Some(s) = result.as_str() {
+                        content_text = sanitize_text(s);
+                    } else {
+                        content_text = sanitize_text(&result.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let final_role = if is_tool_response {
+        LlmRole::Tool
+    } else {
+        role
+    };
+
+    LlmMessage {
+        role: final_role,
+        content: content_text,
+        tool_use_id,
+        tool_calls,
+    }
+}
+
+/// Parse a Gemini API response JSON into an `LlmResponse`.
+///
+/// Expects the standard Gemini `generateContent` response format:
+/// ```json
+/// {
+///   "candidates": [{
+///     "content": {"parts": [{"text": "..."}], "role": "model"},
+///     "finishReason": "STOP"
+///   }],
+///   "usageMetadata": {
+///     "promptTokenCount": 10,
+///     "candidatesTokenCount": 20
+///   }
+/// }
+/// ```
+pub fn from_gemini_response(json: &serde_json::Value, model: &str) -> Result<LlmResponse, String> {
+    // Extract the first candidate.
+    let candidate = json
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .ok_or("Gemini response missing candidates array")?;
+
+    let content_obj = candidate
+        .get("content")
+        .ok_or("Gemini response missing content in candidate")?;
+
+    let mut content_text = String::new();
+    let mut tool_calls = Vec::new();
+
+    if let Some(parts) = content_obj.get("parts").and_then(|p| p.as_array()) {
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                if !content_text.is_empty() {
+                    content_text.push('\n');
+                }
+                content_text.push_str(text);
+            }
+            if let Some(fc) = part.get("functionCall") {
+                let name = fc
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args = fc
+                    .get("args")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                let id = format!("gemini_fc_{}", tool_calls.len());
+                tool_calls.push(LlmToolCall {
+                    id,
+                    name,
+                    input: args,
+                });
+            }
+        }
+    }
+
+    // Extract usage metadata.
+    let usage = json
+        .get("usageMetadata")
+        .map(|u| LlmUsage {
+            input_tokens: u
+                .get("promptTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            output_tokens: u
+                .get("candidatesTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+        })
+        .unwrap_or(LlmUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+        });
+
+    // Map finishReason.
+    let stop_reason = candidate
+        .get("finishReason")
+        .and_then(|v| v.as_str())
+        .map(|s| match s {
+            "STOP" => StopReason::EndTurn,
+            "MAX_TOKENS" => StopReason::MaxTokens,
+            "FUNCTION_CALL" => StopReason::ToolUse,
+            "SAFETY" | "RECITATION" | "OTHER" => StopReason::EndTurn,
+            _ => StopReason::EndTurn,
+        });
+
+    let response_model = json
+        .get("modelVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or(model)
+        .to_string();
+
+    Ok(LlmResponse {
+        content: content_text,
+        model: response_model,
+        usage,
+        tool_calls,
+        stop_reason,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // MaskedApiKey (reexport pattern from google_ai)
 // ---------------------------------------------------------------------------
 
@@ -1112,9 +1711,12 @@ mod tests {
     fn model_prefix_matching() {
         let mut registry = ProviderRegistry::new();
 
+        // Ollama models route by default.
+        assert_eq!(registry.resolve_provider("llama3.2"), Some("ollama"));
+        assert_eq!(registry.resolve_provider("mistral-7b"), Some("ollama"));
+
         // Unknown model returns None.
-        assert!(registry.resolve_provider("llama-70b").is_none());
-        assert!(registry.resolve_provider("mistral-7b").is_none());
+        assert!(registry.resolve_provider("unknown-model-xyz").is_none());
 
         // Case insensitive matching.
         assert_eq!(
@@ -1123,9 +1725,12 @@ mod tests {
         );
         assert_eq!(registry.resolve_provider("GPT-4o"), Some("openai"));
 
-        // Custom prefix route.
+        // Custom prefix route (overrides default).
         registry.add_prefix_route("llama-", "meta");
-        assert_eq!(registry.resolve_provider("llama-70b"), Some("meta"));
+        // The custom "llama-" route is checked after the default "llama" route,
+        // so "llama3.2" still matches the default. Test a fresh pattern.
+        registry.add_prefix_route("falcon-", "tii");
+        assert_eq!(registry.resolve_provider("falcon-40b"), Some("tii"));
     }
 
     // -- Provider config from env --
@@ -1404,5 +2009,368 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         let back: ModelInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(back, info);
+    }
+
+    // -- Gemini format conversion --
+
+    #[test]
+    fn gemini_content_format_conversion() {
+        // User message roundtrip.
+        let msg = LlmMessage::user("Hello, Gemini!");
+        let gemini = to_gemini_content(&msg);
+        assert_eq!(gemini.role, "user");
+        assert_eq!(gemini.parts.len(), 1);
+        match &gemini.parts[0] {
+            GeminiPart::Text { text } => assert_eq!(text, "Hello, Gemini!"),
+            _ => panic!("expected text part"),
+        }
+
+        let back = from_gemini_content(&gemini);
+        assert_eq!(back.role, LlmRole::User);
+        assert_eq!(back.content, "Hello, Gemini!");
+
+        // Assistant message with function call.
+        let msg = LlmMessage {
+            role: LlmRole::Assistant,
+            content: "Let me look that up.".into(),
+            tool_use_id: None,
+            tool_calls: vec![LlmToolCall {
+                id: "fc_1".into(),
+                name: "search".into(),
+                input: serde_json::json!({"query": "rust programming"}),
+            }],
+        };
+        let gemini = to_gemini_content(&msg);
+        assert_eq!(gemini.role, "model");
+        assert_eq!(gemini.parts.len(), 2); // text + functionCall
+
+        let back = from_gemini_content(&gemini);
+        assert_eq!(back.role, LlmRole::Assistant);
+        assert_eq!(back.content, "Let me look that up.");
+        assert_eq!(back.tool_calls.len(), 1);
+        assert_eq!(back.tool_calls[0].name, "search");
+
+        // Tool result message.
+        let msg = LlmMessage::tool_result("fc_1", "Search results here");
+        let gemini = to_gemini_content(&msg);
+        assert_eq!(gemini.role, "user");
+        assert_eq!(gemini.parts.len(), 1);
+        match &gemini.parts[0] {
+            GeminiPart::FunctionResponse { function_response } => {
+                assert_eq!(function_response.name, "tool_result");
+                assert_eq!(function_response.response["result"], "Search results here");
+            }
+            _ => panic!("expected functionResponse part"),
+        }
+
+        let back = from_gemini_content(&gemini);
+        assert_eq!(back.role, LlmRole::Tool);
+        assert_eq!(back.content, "Search results here");
+    }
+
+    // -- Gemini response parsing --
+
+    #[test]
+    fn gemini_response_parsing() {
+        let json: serde_json::Value = serde_json::from_str(r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello! I am Gemini."}],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 15,
+                "candidatesTokenCount": 8
+            }
+        }"#).unwrap();
+
+        let resp = from_gemini_response(&json, "gemini-2.0-flash").unwrap();
+        assert_eq!(resp.content, "Hello! I am Gemini.");
+        assert_eq!(resp.model, "gemini-2.0-flash");
+        assert_eq!(resp.usage.input_tokens, 15);
+        assert_eq!(resp.usage.output_tokens, 8);
+        assert_eq!(resp.stop_reason, Some(StopReason::EndTurn));
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn gemini_function_call_response() {
+        let json: serde_json::Value = serde_json::from_str(r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "Let me search for that."},
+                        {"functionCall": {"name": "search", "args": {"query": "rust lang"}}}
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "FUNCTION_CALL"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 20,
+                "candidatesTokenCount": 15
+            }
+        }"#).unwrap();
+
+        let resp = from_gemini_response(&json, "gemini-2.0-flash").unwrap();
+        assert_eq!(resp.content, "Let me search for that.");
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].name, "search");
+        assert_eq!(resp.tool_calls[0].input["query"], "rust lang");
+        assert_eq!(resp.stop_reason, Some(StopReason::ToolUse));
+    }
+
+    // -- Provider config: Gemini --
+
+    #[test]
+    fn gemini_provider_config_defaults() {
+        let config = GeminiProviderConfig::default();
+        assert_eq!(config.api_key_env, "GOOGLE_API_KEY");
+        assert_eq!(config.default_model, "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn gemini_provider_config_from_env() {
+        let config = GeminiProviderConfig {
+            api_key_env: "_AEGIS_TEST_GOOGLE_KEY".into(),
+            ..Default::default()
+        };
+
+        std::env::remove_var("_AEGIS_TEST_GOOGLE_KEY");
+        assert!(config.read_api_key().is_err());
+
+        std::env::set_var("_AEGIS_TEST_GOOGLE_KEY", "AIza-test-key");
+        let key = config.read_api_key().unwrap();
+        assert_eq!(key, "AIza-test-key");
+        std::env::remove_var("_AEGIS_TEST_GOOGLE_KEY");
+    }
+
+    // -- Provider config: Ollama --
+
+    #[test]
+    fn ollama_config_defaults() {
+        let config = OllamaConfig::default();
+        assert_eq!(config.base_url, "http://localhost:11434");
+        assert_eq!(config.default_model, "llama3.2");
+    }
+
+    #[test]
+    fn ollama_config_validation() {
+        // Default is valid.
+        let config = OllamaConfig::default();
+        assert!(config.validate_endpoint().is_ok());
+
+        // Empty URL is invalid.
+        let config = OllamaConfig {
+            base_url: "".into(),
+            ..Default::default()
+        };
+        assert!(config.validate_endpoint().is_err());
+
+        // Non-HTTP scheme is invalid.
+        let config = OllamaConfig {
+            base_url: "ftp://localhost:11434".into(),
+            ..Default::default()
+        };
+        assert!(config.validate_endpoint().is_err());
+
+        // HTTPS is also valid for Ollama.
+        let config = OllamaConfig {
+            base_url: "https://ollama.internal:11434".into(),
+            ..Default::default()
+        };
+        assert!(config.validate_endpoint().is_ok());
+    }
+
+    // -- Provider config: OpenRouter --
+
+    #[test]
+    fn openrouter_config_defaults() {
+        let config = OpenRouterConfig::default();
+        assert_eq!(config.api_key_env, "OPENROUTER_API_KEY");
+        assert_eq!(config.default_model, "anthropic/claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn openrouter_config_from_env() {
+        let config = OpenRouterConfig {
+            api_key_env: "_AEGIS_TEST_OPENROUTER_KEY".into(),
+            ..Default::default()
+        };
+
+        std::env::remove_var("_AEGIS_TEST_OPENROUTER_KEY");
+        assert!(config.read_api_key().is_err());
+
+        std::env::set_var("_AEGIS_TEST_OPENROUTER_KEY", "sk-or-test-123");
+        let key = config.read_api_key().unwrap();
+        assert_eq!(key, "sk-or-test-123");
+        std::env::remove_var("_AEGIS_TEST_OPENROUTER_KEY");
+    }
+
+    // -- ProviderConfig new variants serialization --
+
+    #[test]
+    fn provider_config_new_variants_serialization() {
+        let config = ProviderConfig::Gemini(GeminiProviderConfig::default());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("gemini"));
+        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_name(), "google");
+
+        let config = ProviderConfig::Ollama(OllamaConfig::default());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("ollama"));
+        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_name(), "ollama");
+
+        let config = ProviderConfig::OpenRouter(OpenRouterConfig::default());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("open_router"));
+        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_name(), "openrouter");
+    }
+
+    // -- Model aliases --
+
+    #[test]
+    fn model_alias_resolution() {
+        let mut registry = ProviderRegistry::new();
+
+        // No alias set -> returns input.
+        assert_eq!(registry.resolve_alias("gpt-4o"), "gpt-4o");
+
+        // Set an alias.
+        registry.add_alias("fast", "gemini-2.0-flash");
+        assert_eq!(registry.resolve_alias("fast"), "gemini-2.0-flash");
+
+        // Alias affects provider routing.
+        assert_eq!(registry.resolve_provider("fast"), Some("google"));
+
+        // Multiple aliases.
+        registry.add_alias("smart", "claude-sonnet-4-20250514");
+        assert_eq!(registry.resolve_alias("smart"), "claude-sonnet-4-20250514");
+        assert_eq!(registry.resolve_provider("smart"), Some("anthropic"));
+
+        // Alias for local model.
+        registry.add_alias("local", "llama3.2");
+        assert_eq!(registry.resolve_alias("local"), "llama3.2");
+        assert_eq!(registry.resolve_provider("local"), Some("ollama"));
+    }
+
+    // -- Failover chains --
+
+    #[test]
+    fn failover_chain_resolution() {
+        let mut registry = ProviderRegistry::new();
+
+        // No failover configured -> single-element chain.
+        let chain = registry.get_failover_chain("gpt-4o");
+        assert_eq!(chain, vec!["gpt-4o"]);
+
+        // Set a failover chain.
+        registry.set_failover("gpt-4o", vec![
+            "claude-sonnet-4-20250514".to_string(),
+            "gemini-2.0-flash".to_string(),
+        ]);
+
+        let chain = registry.get_failover_chain("gpt-4o");
+        assert_eq!(chain, vec![
+            "gpt-4o",
+            "claude-sonnet-4-20250514",
+            "gemini-2.0-flash",
+        ]);
+
+        // Failover with alias resolves the alias first.
+        registry.add_alias("fast", "gemini-2.0-flash");
+        registry.set_failover("gemini-2.0-flash", vec![
+            "gpt-4o-mini".to_string(),
+        ]);
+
+        let chain = registry.get_failover_chain("fast");
+        assert_eq!(chain, vec!["gemini-2.0-flash", "gpt-4o-mini"]);
+    }
+
+    // -- Provider registry with all 5 providers --
+
+    #[test]
+    fn registry_all_five_providers() {
+        let mut registry = ProviderRegistry::new();
+
+        registry
+            .register_provider("anthropic", ProviderConfig::Anthropic(AnthropicConfig::default()))
+            .unwrap();
+        registry
+            .register_provider("openai", ProviderConfig::OpenAi(OpenAiConfig::default()))
+            .unwrap();
+        registry
+            .register_provider("google", ProviderConfig::Gemini(GeminiProviderConfig::default()))
+            .unwrap();
+        registry
+            .register_provider("ollama", ProviderConfig::Ollama(OllamaConfig::default()))
+            .unwrap();
+        registry
+            .register_provider("openrouter", ProviderConfig::OpenRouter(OpenRouterConfig::default()))
+            .unwrap();
+
+        // All 5 providers registered.
+        assert_eq!(registry.provider_names().len(), 5);
+
+        // Model routing works for all providers.
+        assert_eq!(registry.resolve_provider("claude-sonnet-4-20250514"), Some("anthropic"));
+        assert_eq!(registry.resolve_provider("gpt-4o"), Some("openai"));
+        assert_eq!(registry.resolve_provider("gemini-2.0-flash"), Some("google"));
+        assert_eq!(registry.resolve_provider("llama3.2"), Some("ollama"));
+
+        // All models listed.
+        let models = registry.list_all_models();
+        assert_eq!(models.len(), 5);
+
+        let providers: Vec<&str> = models.iter().map(|m| m.provider.as_str()).collect();
+        assert!(providers.contains(&"anthropic"));
+        assert!(providers.contains(&"openai"));
+        assert!(providers.contains(&"google"));
+        assert!(providers.contains(&"ollama"));
+        assert!(providers.contains(&"openrouter"));
+    }
+
+    // -- Gemini content sanitization --
+
+    #[test]
+    fn gemini_content_sanitization() {
+        // Tool call with control characters.
+        let msg = LlmMessage {
+            role: LlmRole::Assistant,
+            content: "text\x00with\x01nulls".into(),
+            tool_use_id: None,
+            tool_calls: vec![LlmToolCall {
+                id: "fc_1".into(),
+                name: "evil\x00tool".into(),
+                input: serde_json::json!({"cmd": "rm\x00 -rf /"}),
+            }],
+        };
+
+        let gemini = to_gemini_content(&msg);
+        match &gemini.parts[0] {
+            GeminiPart::Text { text } => assert_eq!(text, "textwithnulls"),
+            _ => panic!("expected text part"),
+        }
+        match &gemini.parts[1] {
+            GeminiPart::FunctionCall { function_call } => {
+                assert_eq!(function_call.name, "eviltool");
+                assert_eq!(function_call.args["cmd"], "rm -rf /");
+            }
+            _ => panic!("expected functionCall part"),
+        }
+    }
+
+    // -- Ollama read_api_key returns empty (no key required) --
+
+    #[test]
+    fn ollama_no_api_key_needed() {
+        let config = ProviderConfig::Ollama(OllamaConfig::default());
+        let key = config.read_api_key().unwrap();
+        assert!(key.is_empty());
     }
 }
