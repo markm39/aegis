@@ -268,7 +268,7 @@ impl Default for ToolkitLoopExecutorConfig {
 }
 
 /// Configuration for the agent memory store.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct MemoryConfig {
     /// Whether the memory store is enabled.
     #[serde(default)]
@@ -277,6 +277,24 @@ pub struct MemoryConfig {
     /// Defaults to `~/.aegis/daemon/memory.db`.
     #[serde(default)]
     pub db_path: Option<String>,
+    /// Whether temporal decay is applied to search result ranking.
+    /// When enabled, recent memories are weighted higher in search results.
+    #[serde(default)]
+    pub decay_enabled: bool,
+    /// Default half-life in hours for temporal decay.
+    /// A memory exactly this old will have its relevance score halved.
+    /// Defaults to 168.0 (1 week).
+    #[serde(default = "default_half_life_hours")]
+    pub default_half_life_hours: f64,
+    /// Per-category half-life overrides in hours.
+    /// For example, `{"instruction": 720.0}` gives instruction memories
+    /// a 30-day half-life instead of the default.
+    #[serde(default)]
+    pub category_half_lives: std::collections::HashMap<String, f64>,
+}
+
+fn default_half_life_hours() -> f64 {
+    168.0
 }
 
 /// Configuration for the cron job scheduler.

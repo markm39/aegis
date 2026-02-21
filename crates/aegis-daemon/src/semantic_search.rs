@@ -178,7 +178,7 @@ impl SemanticSearchEngine {
         let raw_limit = self.config.max_results * 10;
         let results = self
             .memory
-            .search_similar(&self.config.namespace, &query_embedding, raw_limit)
+            .search_similar(&self.config.namespace, &query_embedding, raw_limit, None)
             .context("search similar embeddings")?;
 
         let filtered: Vec<SearchResult> = results

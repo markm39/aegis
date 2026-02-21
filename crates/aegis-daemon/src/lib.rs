@@ -3830,6 +3830,14 @@ impl DaemonRuntime {
             DaemonCommand::DeleteBrowserProfile { agent_id } => {
                 DaemonResponse::error(format!("browser profile deletion for '{agent_id}' not yet wired to daemon fleet"))
             }
+
+            DaemonCommand::InstallHook { .. }
+            | DaemonCommand::ListHooks
+            | DaemonCommand::EnableHook { .. }
+            | DaemonCommand::DisableHook { .. }
+            | DaemonCommand::HookStatus { .. } => {
+                DaemonResponse::error("hook management not yet wired to daemon fleet".to_string())
+            }
         }
     }
 

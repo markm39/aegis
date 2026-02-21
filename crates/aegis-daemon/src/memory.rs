@@ -3,13 +3,54 @@
 //! Provides per-namespace key-value storage with full-text search (FTS5)
 //! and optional vector embeddings for similarity search. Reuses the
 //! existing rusqlite dependency from aegis-ledger.
+//!
+//! ## Temporal Decay
+//!
+//! When enabled, search results are weighted by recency using exponential
+//! decay. A configurable half-life controls how quickly older memories
+//! lose relevance. Decay only affects ranking weights -- it never deletes
+//! entries.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use rusqlite::{params, Connection};
 
 use crate::embeddings::{blob_to_embedding, cosine_similarity, embedding_to_blob};
+
+/// Compute temporal decay factor for a memory entry.
+///
+/// Returns a value in `[0.0, 1.0]` representing how relevant a memory is
+/// based on its age. A memory exactly one half-life old returns ~0.5.
+/// The formula is `0.5^(hours_since_update / half_life_hours)`.
+///
+/// Edge cases:
+/// - Zero or negative age returns 1.0 (freshest possible).
+/// - Very old entries approach 0.0 but never go negative.
+/// - Invalid timestamps return 1.0 (fail-safe: never penalize on parse error).
+pub fn compute_decay(updated_at: &str, half_life_hours: f64) -> f64 {
+    let updated = match chrono::DateTime::parse_from_rfc3339(updated_at) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => return 1.0, // fail-safe: don't penalize on bad timestamp
+    };
+
+    let now = Utc::now();
+    let duration = now.signed_duration_since(updated);
+    let hours = duration.num_milliseconds() as f64 / 3_600_000.0;
+
+    if hours <= 0.0 {
+        return 1.0;
+    }
+
+    if half_life_hours <= 0.0 {
+        // Invalid half-life: fail-safe to no decay.
+        return 1.0;
+    }
+
+    let decay = 0.5_f64.powf(hours / half_life_hours);
+    decay.clamp(0.0, 1.0)
+}
 
 /// SQLite-backed key-value store with FTS5 full-text search.
 pub struct MemoryStore {
@@ -76,6 +117,24 @@ impl MemoryStore {
             )?;
             conn.execute_batch(
                 "ALTER TABLE agent_memory ADD COLUMN quarantine_reason TEXT;",
+            )?;
+        }
+
+        // Migration: add temporal decay columns if they don't exist yet.
+        let has_decay_factor: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'decay_factor'")?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .map(|count| count > 0)?;
+
+        if !has_decay_factor {
+            conn.execute_batch(
+                "ALTER TABLE agent_memory ADD COLUMN decay_factor REAL DEFAULT 1.0;",
+            )?;
+            conn.execute_batch(
+                "ALTER TABLE agent_memory ADD COLUMN access_count INTEGER DEFAULT 0;",
+            )?;
+            conn.execute_batch(
+                "ALTER TABLE agent_memory ADD COLUMN last_accessed TEXT;",
             )?;
         }
 
@@ -190,38 +249,57 @@ impl MemoryStore {
         Ok(result)
     }
 
-    /// Full-text search within a namespace. Returns (key, value, rank) tuples
-    /// ordered by FTS5 relevance (lower rank = more relevant).
+    /// Full-text search within a namespace. Returns (key, value, score) tuples
+    /// ordered by relevance.
+    ///
+    /// If `half_life_hours` is `Some`, temporal decay is applied: each result's
+    /// raw FTS5 rank is multiplied by a decay factor based on its age. This
+    /// causes newer entries to rank higher. The decay factor is always in
+    /// `[0.0, 1.0]` and never deletes entries.
+    ///
+    /// FTS5 rank values are negative (more negative = more relevant), so
+    /// we negate them before multiplying by decay to produce positive scores.
     pub fn search(
         &self,
         namespace: &str,
         query: &str,
         limit: usize,
+        half_life_hours: Option<f64>,
     ) -> Result<Vec<(String, String, f64)>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT m.key, m.value, f.rank
+            "SELECT m.key, m.value, f.rank, m.updated_at
              FROM agent_memory_fts f
              JOIN agent_memory m ON m.rowid = f.rowid
              WHERE agent_memory_fts MATCH ?1
-               AND m.namespace = ?2
-             ORDER BY f.rank
-             LIMIT ?3",
+               AND m.namespace = ?2",
         )?;
 
-        // FTS5 match query. We prefix-match on the value column.
-        let rows = stmt.query_map(params![query, namespace, limit as i64], |row| {
+        let rows = stmt.query_map(params![query, namespace], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, f64>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
 
-        let mut result = Vec::new();
+        let mut scored: Vec<(String, String, f64)> = Vec::new();
         for row in rows {
-            result.push(row?);
+            let (key, value, rank, updated_at) = row?;
+            // FTS5 rank is negative; negate to get a positive relevance score.
+            let raw_score = -rank;
+            let final_score = match half_life_hours {
+                Some(hl) => raw_score * compute_decay(&updated_at, hl),
+                None => raw_score,
+            };
+            scored.push((key, value, final_score));
         }
-        Ok(result)
+
+        // Sort by final score descending (higher = more relevant).
+        scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored)
     }
 
     /// Insert or update a key-value pair together with its embedding vector.
@@ -292,14 +370,19 @@ impl MemoryStore {
     ///
     /// Returns `(key, value, similarity_score)` tuples sorted by descending
     /// cosine similarity. Only entries that have an embedding are considered.
+    ///
+    /// If `half_life_hours` is `Some`, temporal decay is applied: each result's
+    /// raw cosine similarity is multiplied by a decay factor based on its age.
+    /// The decay factor is always in `[0.0, 1.0]` and never deletes entries.
     pub fn search_similar(
         &self,
         namespace: &str,
         query_embedding: &[f32],
         limit: usize,
+        half_life_hours: Option<f64>,
     ) -> Result<Vec<(String, String, f32)>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT key, value, embedding FROM agent_memory WHERE namespace = ?1 AND embedding IS NOT NULL",
+            "SELECT key, value, embedding, updated_at FROM agent_memory WHERE namespace = ?1 AND embedding IS NOT NULL",
         )?;
 
         let rows = stmt.query_map(params![namespace], |row| {
@@ -307,16 +390,21 @@ impl MemoryStore {
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
 
         let mut scored: Vec<(String, String, f32)> = Vec::new();
         for row in rows {
-            let (key, value, blob) = row?;
+            let (key, value, blob, updated_at) = row?;
             let emb = blob_to_embedding(&blob);
             if emb.len() == query_embedding.len() {
-                let score = cosine_similarity(&emb, query_embedding);
-                scored.push((key, value, score));
+                let raw_score = cosine_similarity(&emb, query_embedding);
+                let final_score = match half_life_hours {
+                    Some(hl) => raw_score * compute_decay(&updated_at, hl) as f32,
+                    None => raw_score,
+                };
+                scored.push((key, value, final_score));
             }
         }
 
@@ -453,6 +541,27 @@ impl MemoryStore {
             None => Ok(None),
         }
     }
+
+    /// Refresh a memory entry, resetting its `updated_at` timestamp to now
+    /// and incrementing its `access_count`.
+    ///
+    /// This should be called when a memory is recalled so that frequently
+    /// accessed memories maintain higher relevance under temporal decay.
+    /// Does nothing if the key does not exist.
+    pub fn refresh(&self, namespace: &str, key: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+
+        self.conn.execute(
+            "UPDATE agent_memory
+             SET updated_at = ?1,
+                 last_accessed = ?1,
+                 access_count = COALESCE(access_count, 0) + 1
+             WHERE namespace = ?2 AND key = ?3",
+            params![now, namespace, key],
+        )?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -523,7 +632,7 @@ mod tests {
             .set("ns1", "task3", "login flow redesign and login form validation")
             .unwrap();
 
-        let results = store.search("ns1", "login", 10).unwrap();
+        let results = store.search("ns1", "login", 10, None).unwrap();
         assert!(!results.is_empty());
 
         // All results should mention login.
@@ -566,7 +675,7 @@ mod tests {
     fn search_empty_namespace() {
         let (store, _dir) = test_store();
 
-        let results = store.search("empty", "anything", 10).unwrap();
+        let results = store.search("empty", "anything", 10, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -577,18 +686,18 @@ mod tests {
         store.set("ns1", "task", "old description about cats").unwrap();
 
         // Search for old content should find it.
-        let results = store.search("ns1", "cats", 10).unwrap();
+        let results = store.search("ns1", "cats", 10, None).unwrap();
         assert_eq!(results.len(), 1);
 
         // Update the value.
         store.set("ns1", "task", "new description about dogs").unwrap();
 
         // Old content should no longer match.
-        let results = store.search("ns1", "cats", 10).unwrap();
+        let results = store.search("ns1", "cats", 10, None).unwrap();
         assert_eq!(results.len(), 0);
 
         // New content should match.
-        let results = store.search("ns1", "dogs", 10).unwrap();
+        let results = store.search("ns1", "dogs", 10, None).unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -597,12 +706,12 @@ mod tests {
         let (store, _dir) = test_store();
 
         store.set("ns1", "task", "searchable content here").unwrap();
-        let results = store.search("ns1", "searchable", 10).unwrap();
+        let results = store.search("ns1", "searchable", 10, None).unwrap();
         assert_eq!(results.len(), 1);
 
         store.delete("ns1", "task").unwrap();
 
-        let results = store.search("ns1", "searchable", 10).unwrap();
+        let results = store.search("ns1", "searchable", 10, None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -622,7 +731,7 @@ mod tests {
         );
 
         // Searching with the same embedding should return the entry with score ~1.0.
-        let results = store.search_similar("ns1", &embedding, 10).unwrap();
+        let results = store.search_similar("ns1", &embedding, 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "vec_key");
         assert_eq!(results[0].1, "vector value");
@@ -644,7 +753,7 @@ mod tests {
 
         // Query along x axis -- should rank a first, then c, then b.
         let query = vec![1.0_f32, 0.0, 0.0, 0.0];
-        let results = store.search_similar("ns1", &query, 10).unwrap();
+        let results = store.search_similar("ns1", &query, 10, None).unwrap();
         assert_eq!(results.len(), 3);
 
         // "a" is an exact match (similarity 1.0), should be first.
@@ -662,5 +771,212 @@ mod tests {
         // Verify descending order.
         assert!(results[0].2 >= results[1].2);
         assert!(results[1].2 >= results[2].2);
+    }
+
+    // -- Temporal decay tests ------------------------------------------------
+
+    #[test]
+    fn test_decay_halves_at_half_life() {
+        // A memory exactly one half-life old should have decay ~0.5.
+        let half_life = 24.0; // 24 hours
+        let one_half_life_ago = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let decay = compute_decay(&one_half_life_ago, half_life);
+        assert!(
+            (decay - 0.5).abs() < 0.05,
+            "decay at exactly one half-life should be ~0.5, got {decay}"
+        );
+    }
+
+    #[test]
+    fn test_decay_zero_age_returns_one() {
+        // A memory just created should have decay 1.0.
+        let now = Utc::now().to_rfc3339();
+        let decay = compute_decay(&now, 168.0);
+        assert!(
+            (decay - 1.0).abs() < 0.01,
+            "decay of a just-created memory should be ~1.0, got {decay}"
+        );
+    }
+
+    #[test]
+    fn test_decay_affects_search_ranking() {
+        // Older memories should rank lower than newer ones with the same raw relevance.
+        let (store, _dir) = test_store();
+
+        // Insert an "old" entry by manually setting a past timestamp.
+        let old_time = (Utc::now() - chrono::Duration::hours(168)).to_rfc3339(); // 1 week old
+        store.set("ns1", "old_login", "login page with authentication").unwrap();
+        store.conn.execute(
+            "UPDATE agent_memory SET updated_at = ?1 WHERE namespace = 'ns1' AND key = 'old_login'",
+            params![old_time],
+        ).unwrap();
+
+        // Also update the FTS index is already in place from set().
+        // Insert a "new" entry (timestamp is now).
+        store.set("ns1", "new_login", "login page with authentication").unwrap();
+
+        // Search with decay enabled (half-life = 168h = 1 week).
+        let results = store.search("ns1", "login", 10, Some(168.0)).unwrap();
+        assert!(results.len() >= 2, "should find both entries");
+
+        // The new entry should rank higher (appear first).
+        assert_eq!(
+            results[0].0, "new_login",
+            "newer entry should rank higher with decay enabled"
+        );
+        assert_eq!(
+            results[1].0, "old_login",
+            "older entry should rank lower with decay enabled"
+        );
+        // The new entry's score should be higher.
+        assert!(
+            results[0].2 > results[1].2,
+            "newer entry score ({}) should exceed older entry score ({})",
+            results[0].2,
+            results[1].2
+        );
+    }
+
+    #[test]
+    fn test_refresh_resets_decay() {
+        let (store, _dir) = test_store();
+
+        // Insert a memory and then backdated it.
+        store.set("ns1", "task", "important task details").unwrap();
+        let old_time = (Utc::now() - chrono::Duration::hours(168)).to_rfc3339();
+        store.conn.execute(
+            "UPDATE agent_memory SET updated_at = ?1 WHERE namespace = 'ns1' AND key = 'task'",
+            params![old_time],
+        ).unwrap();
+
+        // Verify it's old.
+        let updated_before: String = store.conn.prepare_cached(
+            "SELECT updated_at FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+        ).unwrap().query_row([], |row| row.get(0)).unwrap();
+        let decay_before = compute_decay(&updated_before, 168.0);
+        assert!(
+            decay_before < 0.6,
+            "before refresh, decay should be low (~0.5), got {decay_before}"
+        );
+
+        // Refresh the entry.
+        store.refresh("ns1", "task").unwrap();
+
+        // Verify updated_at was reset to approximately now.
+        let updated_after: String = store.conn.prepare_cached(
+            "SELECT updated_at FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+        ).unwrap().query_row([], |row| row.get(0)).unwrap();
+        let decay_after = compute_decay(&updated_after, 168.0);
+        assert!(
+            (decay_after - 1.0).abs() < 0.01,
+            "after refresh, decay should be ~1.0, got {decay_after}"
+        );
+
+        // Verify access_count was incremented.
+        let access_count: i64 = store.conn.prepare_cached(
+            "SELECT access_count FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+        ).unwrap().query_row([], |row| row.get(0)).unwrap();
+        assert_eq!(access_count, 1, "access_count should be 1 after one refresh");
+
+        // Refresh again and check access_count increments.
+        store.refresh("ns1", "task").unwrap();
+        let access_count: i64 = store.conn.prepare_cached(
+            "SELECT access_count FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+        ).unwrap().query_row([], |row| row.get(0)).unwrap();
+        assert_eq!(access_count, 2, "access_count should be 2 after two refreshes");
+    }
+
+    #[test]
+    fn test_per_category_half_life() {
+        // Different categories can have different decay rates via the half_life parameter.
+        let half_life_short = 24.0; // 24 hours
+        let half_life_long = 720.0; // 30 days
+
+        let one_day_ago = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+
+        let decay_short = compute_decay(&one_day_ago, half_life_short);
+        let decay_long = compute_decay(&one_day_ago, half_life_long);
+
+        // With a 24h half-life, a 24h-old entry should have decay ~0.5.
+        assert!(
+            (decay_short - 0.5).abs() < 0.05,
+            "short half-life: 24h-old entry should have decay ~0.5, got {decay_short}"
+        );
+
+        // With a 720h half-life, a 24h-old entry should still have high decay (~0.977).
+        assert!(
+            decay_long > 0.95,
+            "long half-life: 24h-old entry should have decay >0.95, got {decay_long}"
+        );
+
+        // The long half-life should always produce a higher decay for the same age.
+        assert!(
+            decay_long > decay_short,
+            "longer half-life should produce higher decay for same age: {decay_long} > {decay_short}"
+        );
+    }
+
+    #[test]
+    fn test_decay_never_negative() {
+        // Security test: decay_factor must always be in [0.0, 1.0].
+
+        // Test with a very old timestamp.
+        let ancient = "2000-01-01T00:00:00+00:00";
+        let decay = compute_decay(ancient, 1.0);
+        assert!(
+            (0.0..=1.0).contains(&decay),
+            "very old timestamp decay should be in [0.0, 1.0], got {decay}"
+        );
+        assert!(decay >= 0.0, "decay must never be negative, got {decay}");
+
+        // Test with a future timestamp.
+        let future = (Utc::now() + chrono::Duration::hours(1000)).to_rfc3339();
+        let decay = compute_decay(&future, 168.0);
+        assert!(
+            (0.0..=1.0).contains(&decay),
+            "future timestamp decay should be in [0.0, 1.0], got {decay}"
+        );
+
+        // Test with zero half-life (edge case).
+        let now = Utc::now().to_rfc3339();
+        let decay = compute_decay(&now, 0.0);
+        assert!(
+            (0.0..=1.0).contains(&decay),
+            "zero half-life decay should be in [0.0, 1.0], got {decay}"
+        );
+
+        // Test with negative half-life (edge case).
+        let decay = compute_decay(&now, -1.0);
+        assert!(
+            (0.0..=1.0).contains(&decay),
+            "negative half-life decay should be in [0.0, 1.0], got {decay}"
+        );
+
+        // Test with invalid timestamp.
+        let decay = compute_decay("not-a-timestamp", 168.0);
+        assert_eq!(
+            decay, 1.0,
+            "invalid timestamp should return 1.0 (fail-safe), got {decay}"
+        );
+
+        // Test with extremely small half-life and old entry.
+        let old = (Utc::now() - chrono::Duration::hours(10000)).to_rfc3339();
+        let decay = compute_decay(&old, 0.001);
+        assert!(
+            (0.0..=1.0).contains(&decay),
+            "extreme decay scenario should be in [0.0, 1.0], got {decay}"
+        );
+
+        // Run a sweep of many half-life values and timestamps.
+        for hours_ago in [0, 1, 24, 168, 720, 8760, 87600] {
+            for hl in [0.001, 0.1, 1.0, 24.0, 168.0, 720.0, 8760.0] {
+                let ts = (Utc::now() - chrono::Duration::hours(hours_ago)).to_rfc3339();
+                let d = compute_decay(&ts, hl);
+                assert!(
+                    (0.0..=1.0).contains(&d),
+                    "decay({hours_ago}h ago, hl={hl}) = {d} is outside [0.0, 1.0]"
+                );
+            }
+        }
     }
 }
