@@ -49,6 +49,7 @@ pub mod video_processing;
 pub mod web_tools;
 pub mod attachment_handler;
 pub mod device_registry;
+pub mod phone_control;
 pub mod setup_codes;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -846,6 +847,8 @@ pub struct DaemonRuntime {
     device_store: Option<crate::device_registry::DeviceStore>,
     /// Setup code manager for QR-based device pairing.
     setup_code_manager: Option<crate::setup_codes::SetupCodeManager>,
+    /// Phone control command queue for paired devices.
+    phone_controller: crate::phone_control::PhoneController,
 }
 
 impl DaemonRuntime {
@@ -943,6 +946,7 @@ impl DaemonRuntime {
                 crate::setup_codes::SetupCodeManager::new(store.hmac_key().to_vec())
             }),
             device_store,
+            phone_controller: crate::phone_control::PhoneController::new(),
         }
     }
 
@@ -4075,6 +4079,105 @@ impl DaemonRuntime {
                     None => DaemonResponse::error(
                         "setup code manager not initialized (no device store configured)"
                     ),
+                }
+            }
+
+            // Gateway device management commands (added by another agent).
+            DaemonCommand::UpdateDeviceStatus { .. } => {
+                DaemonResponse::error("UpdateDeviceStatus not yet wired to daemon")
+            }
+            DaemonCommand::RemoveDevice { .. } => {
+                DaemonResponse::error("RemoveDevice not yet wired to daemon")
+            }
+            DaemonCommand::DeviceHeartbeat { .. } => {
+                DaemonResponse::error("DeviceHeartbeat not yet wired to daemon")
+            }
+
+            // Phone control commands.
+            DaemonCommand::QueueDeviceCommand {
+                ref device_id,
+                ref command,
+            } => {
+                // Validate device exists and is not revoked.
+                if let Some(ref store) = self.device_store {
+                    let uid = match uuid::Uuid::parse_str(device_id) {
+                        Ok(u) => u,
+                        Err(e) => return DaemonResponse::error(format!("invalid device ID: {e}")),
+                    };
+                    match store.get_device(&crate::device_registry::DeviceId(uid)) {
+                        Ok(Some(device)) => {
+                            if device.status == crate::device_registry::DeviceStatus::Revoked {
+                                return DaemonResponse::error(format!(
+                                    "device {device_id} has been revoked"
+                                ));
+                            }
+                        }
+                        Ok(None) => {
+                            return DaemonResponse::error(format!(
+                                "device not found: {device_id}"
+                            ));
+                        }
+                        Err(e) => {
+                            return DaemonResponse::error(format!(
+                                "device lookup failed: {e}"
+                            ));
+                        }
+                    }
+                } else {
+                    return DaemonResponse::error("device registry not initialized");
+                }
+
+                // Parse and queue the command.
+                let device_cmd: crate::phone_control::DeviceCommand =
+                    match serde_json::from_value(command.clone()) {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            return DaemonResponse::error(format!(
+                                "invalid device command: {e}"
+                            ))
+                        }
+                    };
+
+                match self
+                    .phone_controller
+                    .queue_command(device_id, device_cmd)
+                {
+                    Ok(result) => match serde_json::to_value(&result) {
+                        Ok(data) => {
+                            DaemonResponse::ok_with_data("command queued", data)
+                        }
+                        Err(e) => {
+                            DaemonResponse::error(format!("serialization failed: {e}"))
+                        }
+                    },
+                    Err(e) => DaemonResponse::error(format!("queue failed: {e}")),
+                }
+            }
+
+            DaemonCommand::PollDeviceCommands { ref device_id } => {
+                let commands = self.phone_controller.poll_commands(device_id);
+                match serde_json::to_value(&commands) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} command(s)", commands.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+
+            DaemonCommand::ReportDeviceCommandResult {
+                ref command_id,
+                ref result,
+            } => {
+                let uid = match uuid::Uuid::parse_str(command_id) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        return DaemonResponse::error(format!("invalid command ID: {e}"))
+                    }
+                };
+                match self.phone_controller.report_result(uid, result.clone()) {
+                    Ok(()) => DaemonResponse::ok("result reported"),
+                    Err(e) => DaemonResponse::error(format!("report failed: {e}")),
                 }
             }
         }
