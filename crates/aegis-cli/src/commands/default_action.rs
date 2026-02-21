@@ -1,9 +1,9 @@
 //! Default action when `aegis` is invoked with no subcommand.
 //!
 //! Routing:
-//! 1. daemon.toml exists or daemon running -> fleet TUI hub (offline-capable)
+//! 1. daemon.toml exists or daemon running -> chat TUI (offline-capable)
 //! 2. Legacy audit configs only -> monitor dashboard
-//! 3. Nothing configured -> onboard wizard -> fleet TUI hub
+//! 3. Nothing configured -> onboard wizard -> chat TUI
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -17,9 +17,9 @@ use crate::commands::init::{dirs_from_env, load_config_from_dir};
 /// Run the default action for bare `aegis` invocation.
 ///
 /// Routing logic:
-/// 1. daemon.toml exists OR daemon running -> fleet TUI hub (works offline, auto-reconnects)
+/// 1. daemon.toml exists OR daemon running -> chat TUI (works offline, auto-reconnects)
 /// 2. Legacy audit configs (no daemon.toml) -> monitor dashboard
-/// 3. Nothing configured -> onboard wizard (which transitions to fleet TUI when done)
+/// 3. Nothing configured -> onboard wizard (which transitions to chat TUI when done)
 pub fn run() -> Result<()> {
     let home = dirs_from_env()?;
     let aegis_dir = home.join(".aegis");
@@ -28,8 +28,8 @@ pub fn run() -> Result<()> {
     let daemon_running = DaemonClient::default_path().is_running();
 
     if has_daemon_config || daemon_running {
-        // Fleet TUI hub -- works in offline mode, auto-connects when daemon starts
-        return crate::fleet_tui::run_fleet_tui();
+        // Chat TUI -- works in offline mode, auto-connects when daemon starts
+        return crate::chat_tui::run_chat_tui();
     }
 
     // Legacy audit-only configs (no daemon.toml): monitor dashboard

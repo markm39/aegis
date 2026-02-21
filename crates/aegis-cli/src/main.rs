@@ -1,3 +1,4 @@
+mod chat_tui;
 mod commands;
 mod fleet_tui;
 mod onboard_tui;
