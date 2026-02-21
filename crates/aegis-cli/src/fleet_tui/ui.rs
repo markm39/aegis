@@ -523,7 +523,7 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
     }
 
     if let Some(caps) = &app.detail_runtime {
-        let med_color = match caps.policy_mediation.as_str() {
+        let med_color = match caps.mediation_mode.as_str() {
             "enforced" => Color::Green,
             "partial" => Color::Yellow,
             _ => Color::Red,
@@ -533,10 +533,19 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
             Style::default().fg(Color::DarkGray),
         ));
         header_spans.push(Span::styled(
-            caps.policy_mediation.as_str(),
+            caps.mediation_mode.as_str(),
             Style::default().fg(med_color).add_modifier(Modifier::BOLD),
         ));
         header_spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+
+        header_spans.push(Span::styled(
+            format!("  [bridge:{}]", caps.hook_bridge),
+            Style::default().fg(Color::DarkGray),
+        ));
+        header_spans.push(Span::styled(
+            format!("  [compliance:{}]", caps.compliance_mode),
+            Style::default().fg(Color::DarkGray),
+        ));
 
         if let Some(session_id) = &caps.active_capture_session_id {
             let fps = caps.active_capture_target_fps.unwrap_or(0);

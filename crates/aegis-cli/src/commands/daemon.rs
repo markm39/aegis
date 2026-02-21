@@ -21,7 +21,8 @@ use tracing::info;
 use crate::terminal::open_url;
 use aegis_control::daemon::{
     CaptureSessionRequest, DaemonClient, DaemonCommand, DashboardStatus, LatestCaptureFrame,
-    SpawnSubagentRequest, SpawnSubagentResult, ToolActionOutcome, ToolBatchOutcome,
+    ParityDiffReport, ParityStatusReport, ParityVerifyReport, SpawnSubagentRequest,
+    SpawnSubagentResult, ToolActionOutcome, ToolBatchOutcome,
 };
 use aegis_daemon::persistence;
 use aegis_toolkit::contract::ToolAction;
@@ -846,6 +847,10 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
         println!("Runtime capabilities for '{}':", caps.name);
         println!("  Tool:              {}", caps.tool);
         println!("  Headless:          {}", caps.headless);
+        println!("  Mediation:         {}", caps.mediation_mode);
+        println!("  Hook bridge:       {}", caps.hook_bridge);
+        println!("  Tool coverage:     {}", caps.tool_coverage);
+        println!("  Compliance mode:   {}", caps.compliance_mode);
         println!("  Policy mediation:  {}", caps.policy_mediation);
         println!("  Note:              {}", caps.mediation_note);
         println!(
@@ -884,6 +889,105 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Show secure-runtime parity status from internal matrix.
+pub fn parity_status() -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::ParityStatus)
+        .map_err(|e| anyhow::anyhow!("failed to get secure-runtime status: {e}"))?;
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+    if let Some(data) = response.data {
+        let report: ParityStatusReport = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime status: {e}"))?;
+        println!("Secure-runtime status:");
+        println!("  Source:            {}", report.source_dir);
+        println!("  Updated:           {}", report.updated_at_utc);
+        println!("  Features:          {}", report.total_features);
+        println!("  Complete:          {}", report.complete_features);
+        println!("  Partial:           {}", report.partial_features);
+        println!("  High-risk blockers: {}", report.high_risk_blockers);
+    }
+    Ok(())
+}
+
+/// Show latest secure-runtime delta impact from internal reports.
+pub fn parity_diff() -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::ParityDiff)
+        .map_err(|e| anyhow::anyhow!("failed to get secure-runtime diff: {e}"))?;
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+    if let Some(data) = response.data {
+        let report: ParityDiffReport = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime diff: {e}"))?;
+        println!("Secure-runtime diff:");
+        println!("  Report:            {}", report.report_file);
+        println!("  Upstream SHA:      {}", report.upstream_sha);
+        println!("  Changed files:     {}", report.changed_files);
+        if report.impacted_feature_ids.is_empty() {
+            println!("  Impacted features: none");
+        } else {
+            println!(
+                "  Impacted features: {}",
+                report.impacted_feature_ids.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Verify secure-runtime controls and fail-closed gates.
+pub fn parity_verify() -> anyhow::Result<()> {
+    let client = DaemonClient::default_path();
+    if !client.is_running() {
+        println!("Daemon is not running. Start it with `aegis daemon start`.");
+        return Ok(());
+    }
+
+    let response = client
+        .send(&DaemonCommand::ParityVerify)
+        .map_err(|e| anyhow::anyhow!("failed to verify secure-runtime controls: {e}"))?;
+    if !response.ok {
+        println!("Error: {}", response.message);
+        return Ok(());
+    }
+    if let Some(data) = response.data {
+        let report: ParityVerifyReport = serde_json::from_value(data)
+            .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime verification: {e}"))?;
+        println!("Secure-runtime verification:");
+        println!("  Result:            {}", if report.ok { "pass" } else { "fail" });
+        println!("  Checked features:  {}", report.checked_features);
+        if report.violations.is_empty() {
+            println!("  Violations:        none");
+        } else {
+            println!("  Violations:");
+            for v in &report.violations {
+                println!("    - {v}");
+            }
+        }
+        if !report.ok {
+            anyhow::bail!("secure-runtime verification failed");
+        }
+    }
     Ok(())
 }
 
@@ -934,8 +1038,8 @@ pub fn tool_action(name: &str, action_json: &str) -> anyhow::Result<()> {
                 println!("  WS URL:    {ws_url}");
             }
             if let Some(result) = browser.result_json {
-                let rendered = serde_json::to_string_pretty(&result)
-                    .unwrap_or_else(|_| result.to_string());
+                let rendered =
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
                 println!("  Result:   {rendered}");
             }
         }

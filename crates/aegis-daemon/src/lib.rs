@@ -25,7 +25,7 @@ pub mod stream_fmt;
 pub mod tool_contract;
 pub mod toolkit_runtime;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,10 +37,12 @@ use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
     FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
+    ParityDiffReport, ParityFeatureStatus, ParityStatusReport, ParityVerifyReport,
     RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, SessionHistory, SessionInfo,
     SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution, ToolActionOutcome,
     ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
+use aegis_control::hooks;
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_ledger::AuditStore;
 use aegis_toolkit::contract::{CaptureRegion as ToolkitCaptureRegion, RiskTag, ToolAction};
@@ -182,32 +184,67 @@ fn status_label(status: &AgentStatus) -> String {
 fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
     use aegis_types::daemon::AgentToolConfig;
 
-    let (tool, headless, policy_mediation, mediation_note) = match &config.tool {
-        AgentToolConfig::ClaudeCode { .. } => (
-            "ClaudeCode".to_string(),
-            true,
-            "enforced".to_string(),
-            "Cedar policy checks are enforced via PreToolUse hooks".to_string(),
-        ),
-        AgentToolConfig::Codex { .. } => (
-            "Codex".to_string(),
-            true,
-            "partial".to_string(),
-            "Codex hook bridge is not available yet; policy mediation is limited".to_string(),
-        ),
-        AgentToolConfig::OpenClaw { .. } => (
-            "OpenClaw".to_string(),
-            true,
-            "partial".to_string(),
-            "OpenClaw hook bridge is not implemented yet; policy mediation is limited".to_string(),
-        ),
-        AgentToolConfig::Custom { .. } => (
-            "Custom".to_string(),
-            true,
-            "custom".to_string(),
-            "Custom runtime; policy mediation depends on external integration".to_string(),
-        ),
-    };
+    let (tool, headless, policy_mediation, mediation_note, mediation_mode, hook_bridge, tool_coverage, compliance_mode) =
+        match &config.tool {
+            AgentToolConfig::ClaudeCode { .. } => (
+                "ClaudeCode".to_string(),
+                true,
+                "enforced".to_string(),
+                "Cedar policy checks are enforced via PreToolUse hooks".to_string(),
+                "enforced".to_string(),
+                "connected".to_string(),
+                "covered".to_string(),
+                "blocking".to_string(),
+            ),
+            AgentToolConfig::Codex { .. } => (
+                "Codex".to_string(),
+                true,
+                "partial".to_string(),
+                "runtime mediation is limited until a secure bridge is available".to_string(),
+                "partial".to_string(),
+                "unavailable".to_string(),
+                "partial".to_string(),
+                "advisory".to_string(),
+            ),
+            AgentToolConfig::OpenClaw { .. } => {
+                let bridge_connected = hooks::openclaw_bridge_connected(&config.working_dir);
+                if bridge_connected {
+                    (
+                        "OpenClaw".to_string(),
+                        true,
+                        "enforced".to_string(),
+                        "secure runtime bridge connected; privileged actions are policy-gated"
+                            .to_string(),
+                        "enforced".to_string(),
+                        "connected".to_string(),
+                        "covered".to_string(),
+                        "blocking".to_string(),
+                    )
+                } else {
+                    (
+                        "OpenClaw".to_string(),
+                        true,
+                        "enforced".to_string(),
+                        "secure runtime bridge disconnected; privileged actions are fail-closed"
+                            .to_string(),
+                        "enforced".to_string(),
+                        "disconnected".to_string(),
+                        "restricted".to_string(),
+                        "blocking".to_string(),
+                    )
+                }
+            }
+            AgentToolConfig::Custom { .. } => (
+                "Custom".to_string(),
+                true,
+                "custom".to_string(),
+                "Custom runtime; policy mediation depends on external integration".to_string(),
+                "custom".to_string(),
+                "custom".to_string(),
+                "custom".to_string(),
+                "custom".to_string(),
+            ),
+        };
     let (auth_mode, auth_ready, auth_hint) = tool_auth_readiness(config);
 
     RuntimeCapabilities {
@@ -216,6 +253,10 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
         headless,
         policy_mediation,
         mediation_note,
+        mediation_mode,
+        hook_bridge,
+        tool_coverage,
+        compliance_mode,
         active_capture_session_id: None,
         active_capture_target_fps: None,
         last_tool_action: None,
@@ -335,6 +376,290 @@ fn parse_session_key(session_key: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ParityFeatureRow {
+    feature_id: String,
+    status: String,
+    risk_level: String,
+    owner: String,
+    required_controls: Vec<String>,
+}
+
+fn parity_dir() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("AEGIS_PARITY_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join("aegis-parity");
+    }
+    std::path::PathBuf::from("aegis-parity")
+}
+
+fn strip_yaml_scalar(value: &str) -> String {
+    value.trim().trim_matches('"').trim_matches('\'').to_string()
+}
+
+fn parse_features_yaml(raw: &str) -> (String, Vec<ParityFeatureRow>) {
+    let mut updated_at_utc = String::new();
+    let mut rows: Vec<ParityFeatureRow> = Vec::new();
+    let mut current: Option<ParityFeatureRow> = None;
+    let mut in_required_controls = false;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some((k, v)) = trimmed.split_once(':') {
+            if k.trim() == "updated_at_utc" {
+                updated_at_utc = strip_yaml_scalar(v);
+            }
+        }
+
+        if let Some(value) = trimmed.strip_prefix("- feature_id:") {
+            if let Some(prev) = current.take() {
+                if !prev.feature_id.is_empty() {
+                    rows.push(prev);
+                }
+            }
+            current = Some(ParityFeatureRow {
+                feature_id: strip_yaml_scalar(value),
+                ..ParityFeatureRow::default()
+            });
+            in_required_controls = false;
+            continue;
+        }
+
+        let Some(row) = current.as_mut() else {
+            continue;
+        };
+
+        if let Some(value) = trimmed.strip_prefix("aegis_status:") {
+            row.status = strip_yaml_scalar(value);
+            in_required_controls = false;
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("risk_level:") {
+            row.risk_level = strip_yaml_scalar(value);
+            in_required_controls = false;
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("owner:") {
+            row.owner = strip_yaml_scalar(value);
+            in_required_controls = false;
+            continue;
+        }
+        if trimmed.starts_with("required_controls:") {
+            in_required_controls = true;
+            continue;
+        }
+        if in_required_controls {
+            if let Some(value) = trimmed.strip_prefix("- ") {
+                let control = strip_yaml_scalar(value);
+                if !control.is_empty() {
+                    row.required_controls.push(control);
+                }
+                continue;
+            }
+            if trimmed.contains(':') {
+                in_required_controls = false;
+            }
+        }
+    }
+
+    if let Some(prev) = current.take() {
+        if !prev.feature_id.is_empty() {
+            rows.push(prev);
+        }
+    }
+
+    (updated_at_utc, rows)
+}
+
+fn parse_security_controls_yaml(raw: &str) -> HashSet<String> {
+    let mut controls = HashSet::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("- control_id:") {
+            let control_id = strip_yaml_scalar(value);
+            if !control_id.is_empty() {
+                controls.insert(control_id);
+            }
+        }
+    }
+    controls
+}
+
+fn parity_status_report_from_dir(dir: &std::path::Path) -> Result<ParityStatusReport, String> {
+    let features_path = dir.join("matrix").join("features.yaml");
+    let controls_path = dir.join("matrix").join("security_controls.yaml");
+
+    let features_raw = std::fs::read_to_string(&features_path)
+        .map_err(|e| format!("failed to read {}: {e}", features_path.display()))?;
+    let controls_raw = std::fs::read_to_string(&controls_path)
+        .map_err(|e| format!("failed to read {}: {e}", controls_path.display()))?;
+
+    let (updated_at_utc, rows) = parse_features_yaml(&features_raw);
+    let known_controls = parse_security_controls_yaml(&controls_raw);
+
+    let mut complete_features = 0usize;
+    let mut partial_features = 0usize;
+    let mut high_risk_blockers = 0usize;
+    let mut features: Vec<ParityFeatureStatus> = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let status = if row.status.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            row.status.clone()
+        };
+        if status == "complete" {
+            complete_features += 1;
+        } else if status == "partial" {
+            partial_features += 1;
+        }
+        let missing_controls: Vec<String> = row
+            .required_controls
+            .iter()
+            .filter(|c| !known_controls.contains(*c))
+            .cloned()
+            .collect();
+
+        let is_high = row.risk_level.eq_ignore_ascii_case("high");
+        if is_high && (status != "complete" || !missing_controls.is_empty()) {
+            high_risk_blockers += 1;
+        }
+
+        features.push(ParityFeatureStatus {
+            feature_id: row.feature_id,
+            status,
+            risk_level: row.risk_level,
+            owner: row.owner,
+            required_controls: row.required_controls,
+            missing_controls,
+        });
+    }
+
+    Ok(ParityStatusReport {
+        source_dir: dir.display().to_string(),
+        updated_at_utc,
+        total_features: features.len(),
+        complete_features,
+        partial_features,
+        high_risk_blockers,
+        features,
+    })
+}
+
+fn parity_status_report() -> Result<ParityStatusReport, String> {
+    let dir = parity_dir();
+    parity_status_report_from_dir(&dir)
+}
+
+fn parity_diff_report_from_dir(dir: &std::path::Path) -> Result<ParityDiffReport, String> {
+    let reports_dir = dir.join("reports");
+    let mut latest_path: Option<std::path::PathBuf> = None;
+    let mut latest_mtime: Option<std::time::SystemTime> = None;
+
+    let entries = std::fs::read_dir(&reports_dir)
+        .map_err(|e| format!("failed to read {}: {e}", reports_dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let mtime = match entry.metadata().and_then(|m| m.modified()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if latest_mtime.is_none_or(|current| mtime > current) {
+            latest_mtime = Some(mtime);
+            latest_path = Some(path);
+        }
+    }
+
+    let report_path = latest_path
+        .ok_or_else(|| format!("no parity reports found in {}", reports_dir.display()))?;
+    let raw = std::fs::read_to_string(&report_path)
+        .map_err(|e| format!("failed to read {}: {e}", report_path.display()))?;
+
+    let mut upstream_sha = String::new();
+    let mut changed_files = 0usize;
+    let mut in_changed_files = false;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("- new_processed_sha:") {
+            upstream_sha = strip_yaml_scalar(value);
+        }
+        if trimmed == "## Changed Files" {
+            in_changed_files = true;
+            continue;
+        }
+        if in_changed_files && trimmed.starts_with("## ") {
+            in_changed_files = false;
+        }
+        if in_changed_files && trimmed.starts_with("- ") {
+            changed_files += 1;
+        }
+    }
+
+    let status = parity_status_report_from_dir(dir)?;
+    let impacted_feature_ids = status
+        .features
+        .into_iter()
+        .filter(|f| {
+            f.risk_level.eq_ignore_ascii_case("high") && (f.status != "complete")
+        })
+        .map(|f| f.feature_id)
+        .collect::<Vec<_>>();
+
+    Ok(ParityDiffReport {
+        report_file: report_path.to_string_lossy().into_owned(),
+        upstream_sha,
+        changed_files,
+        impacted_feature_ids,
+    })
+}
+
+fn parity_diff_report() -> Result<ParityDiffReport, String> {
+    let dir = parity_dir();
+    parity_diff_report_from_dir(&dir)
+}
+
+fn parity_verify_report_from_dir(dir: &std::path::Path) -> Result<ParityVerifyReport, String> {
+    let status = parity_status_report_from_dir(dir)?;
+    let mut violations = Vec::new();
+    for feature in &status.features {
+        if feature.risk_level.eq_ignore_ascii_case("high") && feature.status != "complete" {
+            violations.push(format!(
+                "{} is high risk and not complete ({})",
+                feature.feature_id, feature.status
+            ));
+        }
+        if !feature.missing_controls.is_empty() {
+            violations.push(format!(
+                "{} has missing controls: {}",
+                feature.feature_id,
+                feature.missing_controls.join(", ")
+            ));
+        }
+    }
+    Ok(ParityVerifyReport {
+        ok: violations.is_empty(),
+        checked_features: status.features.len(),
+        violations,
+    })
+}
+
+fn parity_verify_report() -> Result<ParityVerifyReport, String> {
+    let dir = parity_dir();
+    parity_verify_report_from_dir(&dir)
 }
 
 /// The daemon runtime: main loop managing the fleet and control plane.
@@ -1720,6 +2045,44 @@ impl DaemonRuntime {
                 ref tool_name,
                 ref tool_input,
             } => {
+                let slot = self.fleet.slot(agent);
+                let is_openclaw_agent = slot
+                    .as_ref()
+                    .map(|s| matches!(s.config.tool, AgentToolConfig::OpenClaw { .. }))
+                    .unwrap_or(false);
+                if is_openclaw_agent {
+                    let bridge_connected = slot
+                        .as_ref()
+                        .map(|s| hooks::openclaw_bridge_connected(&s.config.working_dir))
+                        .unwrap_or(false);
+                    if !bridge_connected {
+                        let tool_verdict = ToolUseVerdict {
+                            decision: "deny".to_string(),
+                            reason: "secure runtime bridge unavailable; action denied by fail-closed policy".to_string(),
+                        };
+                        return match serde_json::to_value(&tool_verdict) {
+                            Ok(data) => DaemonResponse::ok_with_data("deny", data),
+                            Err(e) => {
+                                DaemonResponse::error(format!("serialization failed: {e}"))
+                            }
+                        };
+                    }
+                    if !is_known_policy_tool(tool_name) {
+                        let tool_verdict = ToolUseVerdict {
+                            decision: "deny".to_string(),
+                            reason: format!(
+                                "unmapped runtime tool '{tool_name}' denied by fail-closed policy"
+                            ),
+                        };
+                        return match serde_json::to_value(&tool_verdict) {
+                            Ok(data) => DaemonResponse::ok_with_data("deny", data),
+                            Err(e) => {
+                                DaemonResponse::error(format!("serialization failed: {e}"))
+                            }
+                        };
+                    }
+                }
+
                 // Interactive tools (AskUserQuestion, EnterPlanMode) would stall
                 // a headless daemon-managed agent. Deny them with a contextual
                 // prompt so the model proceeds autonomously.
@@ -1829,6 +2192,37 @@ impl DaemonRuntime {
                 }
             }
 
+            DaemonCommand::ParityStatus => match parity_status_report() {
+                Ok(report) => match serde_json::to_value(report) {
+                    Ok(data) => DaemonResponse::ok_with_data("secure-runtime status", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                },
+                Err(e) => DaemonResponse::error(e),
+            },
+
+            DaemonCommand::ParityDiff => match parity_diff_report() {
+                Ok(report) => match serde_json::to_value(report) {
+                    Ok(data) => DaemonResponse::ok_with_data("secure-runtime diff", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                },
+                Err(e) => DaemonResponse::error(e),
+            },
+
+            DaemonCommand::ParityVerify => match parity_verify_report() {
+                Ok(report) => {
+                    let msg = if report.ok {
+                        "secure-runtime verification passed"
+                    } else {
+                        "secure-runtime verification failed"
+                    };
+                    match serde_json::to_value(report) {
+                        Ok(data) => DaemonResponse::ok_with_data(msg, data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    }
+                }
+                Err(e) => DaemonResponse::error(e),
+            },
+
             DaemonCommand::StopBrowserProfile {
                 ref name,
                 ref session_id,
@@ -1843,11 +2237,63 @@ impl DaemonRuntime {
                 ref name,
                 ref action,
             } => {
-                if self.fleet.slot(name).is_none() {
-                    return DaemonResponse::error(format!("unknown agent: {name}"));
-                }
+                let slot = match self.fleet.slot(name) {
+                    Some(slot) => slot,
+                    None => return DaemonResponse::error(format!("unknown agent: {name}")),
+                };
 
                 let mapping = map_tool_action(action);
+                if matches!(slot.config.tool, AgentToolConfig::OpenClaw { .. })
+                    && !hooks::openclaw_bridge_connected(&slot.config.working_dir)
+                {
+                    let deny_reason =
+                        "secure runtime bridge unavailable; action denied by fail-closed policy";
+                    let execution = ToolActionExecution {
+                        result: aegis_toolkit::contract::ToolResult {
+                            action: mapping.cedar_action.to_string(),
+                            risk_tag: mapping.risk_tag,
+                            capture_latency_ms: None,
+                            input_latency_ms: None,
+                            frame_id: None,
+                            window_id: None,
+                            session_id: self
+                                .capture_sessions
+                                .get(name)
+                                .map(|s| s.session_id.clone()),
+                            note: Some(format!("deny: {deny_reason}")),
+                        },
+                        risk_tag: mapping.risk_tag,
+                    };
+                    self.last_tool_actions
+                        .insert(name.clone(), execution.clone());
+                    let fallback_action = Action::new(
+                        name.clone(),
+                        ActionKind::ToolCall {
+                            tool: mapping.cedar_action.to_string(),
+                            args: serde_json::json!({ "bridge_connected": false }),
+                        },
+                    );
+                    self.append_runtime_audit(
+                        fallback_action,
+                        self.runtime_provenance(
+                            name,
+                            RuntimeOperation::ExecuteToolAction,
+                            action,
+                            "deny",
+                            deny_reason,
+                            &execution,
+                        ),
+                    );
+                    let data = serde_json::to_value(ToolActionOutcome {
+                        execution,
+                        frame: None,
+                        tui: None,
+                        browser: None,
+                    })
+                    .unwrap_or(serde_json::Value::Null);
+                    return DaemonResponse::ok_with_data("deny", data);
+                }
+
                 if let Err(precheck_reason) = self.precheck_tool_action(action) {
                     let execution = ToolActionExecution {
                         result: aegis_toolkit::contract::ToolResult {
@@ -3168,6 +3614,26 @@ fn is_interactive_tool(tool_name: &str) -> bool {
     tool_name == "AskUserQuestion"
 }
 
+fn is_known_policy_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "Bash"
+            | "Read"
+            | "NotebookRead"
+            | "Write"
+            | "Edit"
+            | "NotebookEdit"
+            | "Glob"
+            | "Grep"
+            | "LS"
+            | "WebFetch"
+            | "WebSearch"
+            | "AskUserQuestion"
+            | "EnterPlanMode"
+            | "ExitPlanMode"
+    )
+}
+
 /// Compose a denial reason that guides the model to proceed autonomously.
 ///
 /// Includes the agent's role, goal, context, and task (if configured) so the
@@ -4464,5 +4930,138 @@ mod tests {
         assert!(
             resp.message.contains("not a directory") || resp.message.contains("does not exist")
         );
+    }
+
+    #[test]
+    fn parity_status_report_from_dir_parses_matrix() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let matrix = tmp.path().join("matrix");
+        let reports = tmp.path().join("reports");
+        std::fs::create_dir_all(&matrix).expect("create matrix dir");
+        std::fs::create_dir_all(&reports).expect("create reports dir");
+
+        std::fs::write(
+            matrix.join("features.yaml"),
+            r#"
+version: 1
+updated_at_utc: "2026-02-21T00:00:00Z"
+features:
+  - feature_id: runtime.hooks.before_tool_call
+    aegis_status: complete
+    risk_level: high
+    required_controls:
+      - policy_gate_all_privileged_actions
+    owner: runtime
+  - feature_id: browser.cdp.session_control
+    aegis_status: partial
+    risk_level: high
+    required_controls:
+      - missing_control
+    owner: browser
+"#,
+        )
+        .expect("write features");
+        std::fs::write(
+            matrix.join("security_controls.yaml"),
+            r#"
+controls:
+  - control_id: policy_gate_all_privileged_actions
+"#,
+        )
+        .expect("write controls");
+
+        let report = parity_status_report_from_dir(tmp.path()).expect("status report");
+        assert_eq!(report.total_features, 2);
+        assert_eq!(report.complete_features, 1);
+        assert_eq!(report.partial_features, 1);
+        assert_eq!(report.high_risk_blockers, 1);
+    }
+
+    #[test]
+    fn parity_verify_report_from_dir_fails_on_high_risk_partial() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let matrix = tmp.path().join("matrix");
+        std::fs::create_dir_all(&matrix).expect("create matrix dir");
+
+        std::fs::write(
+            matrix.join("features.yaml"),
+            r#"
+version: 1
+updated_at_utc: "2026-02-21T00:00:00Z"
+features:
+  - feature_id: orchestrator.computer_use.fast_loop
+    aegis_status: partial
+    risk_level: high
+    required_controls:
+      - policy_gate_all_privileged_actions
+    owner: runtime
+"#,
+        )
+        .expect("write features");
+        std::fs::write(
+            matrix.join("security_controls.yaml"),
+            r#"
+controls:
+  - control_id: policy_gate_all_privileged_actions
+"#,
+        )
+        .expect("write controls");
+
+        let verify = parity_verify_report_from_dir(tmp.path()).expect("verify report");
+        assert!(!verify.ok);
+        assert_eq!(verify.checked_features, 1);
+        assert!(!verify.violations.is_empty());
+    }
+
+    #[test]
+    fn parity_diff_report_from_dir_reads_latest_report() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let matrix = tmp.path().join("matrix");
+        let reports = tmp.path().join("reports");
+        std::fs::create_dir_all(&matrix).expect("create matrix dir");
+        std::fs::create_dir_all(&reports).expect("create reports dir");
+
+        std::fs::write(
+            matrix.join("features.yaml"),
+            r#"
+version: 1
+updated_at_utc: "2026-02-21T00:00:00Z"
+features:
+  - feature_id: orchestrator.computer_use.fast_loop
+    aegis_status: partial
+    risk_level: high
+    required_controls:
+      - policy_gate_all_privileged_actions
+    owner: runtime
+"#,
+        )
+        .expect("write features");
+        std::fs::write(
+            matrix.join("security_controls.yaml"),
+            r#"
+controls:
+  - control_id: policy_gate_all_privileged_actions
+"#,
+        )
+        .expect("write controls");
+
+        let report_path = reports.join("abc.md");
+        std::fs::write(
+            &report_path,
+            r#"
+# OpenClaw Sync Report
+- new_processed_sha: deadbeef
+
+## Changed Files
+- M src/a.ts
+- A src/b.ts
+"#,
+        )
+        .expect("write report");
+
+        let diff = parity_diff_report_from_dir(tmp.path()).expect("diff report");
+        assert_eq!(diff.upstream_sha, "deadbeef");
+        assert_eq!(diff.changed_files, 2);
+        assert_eq!(diff.impacted_feature_ids.len(), 1);
     }
 }

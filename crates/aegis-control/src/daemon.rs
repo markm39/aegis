@@ -78,6 +78,12 @@ pub enum DaemonCommand {
     },
     /// Get runtime capability and policy-mediation coverage for an agent.
     RuntimeCapabilities { name: String },
+    /// Show secure-runtime compatibility status against internal parity matrix.
+    ParityStatus,
+    /// Show latest upstream delta impact on secure-runtime features.
+    ParityDiff,
+    /// Verify secure-runtime parity controls and fail-closed gates.
+    ParityVerify,
     /// Execute one computer-use action through the orchestrator runtime.
     ///
     /// This path is expected to be policy-gated and fail closed if runtime
@@ -375,6 +381,14 @@ pub struct RuntimeCapabilities {
     pub policy_mediation: String,
     /// One-line explanation of mediation coverage.
     pub mediation_note: String,
+    /// Runtime mediation mode ("enforced", "partial", "observe_only", "custom").
+    pub mediation_mode: String,
+    /// Hook bridge status ("connected", "disconnected", "unavailable", "custom").
+    pub hook_bridge: String,
+    /// Tool-coverage status ("covered", "restricted", "partial", "custom").
+    pub tool_coverage: String,
+    /// Compliance gate mode ("blocking", "advisory", "custom").
+    pub compliance_mode: String,
     /// Active capture session id (if any).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_capture_session_id: Option<String>,
@@ -423,6 +437,46 @@ pub struct RuntimeCapabilities {
     /// Config-derived tool capability contract for orchestrator usage.
     #[serde(default)]
     pub tool_contract: String,
+}
+
+/// One feature row returned in secure-runtime parity status.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParityFeatureStatus {
+    pub feature_id: String,
+    pub status: String,
+    pub risk_level: String,
+    pub owner: String,
+    pub required_controls: Vec<String>,
+    pub missing_controls: Vec<String>,
+}
+
+/// Summary payload for `ParityStatus`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParityStatusReport {
+    pub source_dir: String,
+    pub updated_at_utc: String,
+    pub total_features: usize,
+    pub complete_features: usize,
+    pub partial_features: usize,
+    pub high_risk_blockers: usize,
+    pub features: Vec<ParityFeatureStatus>,
+}
+
+/// Latest delta payload for `ParityDiff`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParityDiffReport {
+    pub report_file: String,
+    pub upstream_sha: String,
+    pub changed_files: usize,
+    pub impacted_feature_ids: Vec<String>,
+}
+
+/// Verification payload for `ParityVerify`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParityVerifyReport {
+    pub ok: bool,
+    pub checked_features: usize,
+    pub violations: Vec<String>,
 }
 
 /// Parameters used to start a capture stream.
@@ -806,6 +860,9 @@ mod tests {
             DaemonCommand::RuntimeCapabilities {
                 name: "claude-1".into(),
             },
+            DaemonCommand::ParityStatus,
+            DaemonCommand::ParityDiff,
+            DaemonCommand::ParityVerify,
             DaemonCommand::ExecuteToolAction {
                 name: "claude-1".into(),
                 action: ToolAction::MouseClick {
@@ -1005,8 +1062,12 @@ mod tests {
             name: "worker-1".into(),
             tool: "OpenClaw".into(),
             headless: true,
-            policy_mediation: "partial".into(),
-            mediation_note: "OpenClaw hook bridge not yet implemented".into(),
+            policy_mediation: "enforced".into(),
+            mediation_note: "secure runtime bridge disconnected; actions are fail-closed".into(),
+            mediation_mode: "enforced".into(),
+            hook_bridge: "disconnected".into(),
+            tool_coverage: "restricted".into(),
+            compliance_mode: "blocking".into(),
             active_capture_session_id: Some("cap-1".into()),
             active_capture_target_fps: Some(30),
             last_tool_action: Some("MouseClick".into()),
@@ -1029,7 +1090,9 @@ mod tests {
         assert_eq!(back.name, "worker-1");
         assert_eq!(back.tool, "OpenClaw");
         assert!(back.headless);
-        assert_eq!(back.policy_mediation, "partial");
+        assert_eq!(back.policy_mediation, "enforced");
+        assert_eq!(back.hook_bridge, "disconnected");
+        assert_eq!(back.compliance_mode, "blocking");
         assert_eq!(back.active_capture_target_fps, Some(30));
         assert_eq!(back.last_tool_decision.as_deref(), Some("deny"));
         assert_eq!(back.auth_mode, "oauth");

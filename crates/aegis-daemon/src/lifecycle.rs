@@ -244,11 +244,13 @@ fn run_agent_slot_inner(
             );
         }
         AgentToolConfig::OpenClaw { .. } => {
-            // OpenClaw's before_tool_call plugin hook is not fully wired (Issue #6535).
-            // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the driver.
+            hooks::install_openclaw_daemon_bridge(&working_dir, name).map_err(|e| {
+                format!("failed to install OpenClaw secure runtime bridge for {name}: {e}")
+            })?;
             info!(
                 agent = name,
-                "OpenClaw hook bridge not yet implemented, env vars set"
+                config = %hooks::openclaw_bridge_config_path(&working_dir).display(),
+                "installed OpenClaw secure runtime bridge"
             );
         }
         AgentToolConfig::Custom { .. } => {
@@ -259,14 +261,17 @@ fn run_agent_slot_inner(
     // Runtime mediation hardening:
     // If the runtime doesn't have enforced hook mediation, mark it as needing
     // attention so operators/orchestrators keep a human in the loop.
-    let mediation_enforced = matches!(&slot_config.tool, AgentToolConfig::ClaudeCode { .. });
+    let mediation_enforced = matches!(
+        &slot_config.tool,
+        AgentToolConfig::ClaudeCode { .. } | AgentToolConfig::OpenClaw { .. }
+    );
     if !mediation_enforced {
         let note = match &slot_config.tool {
             AgentToolConfig::Codex { .. } => {
                 "policy mediation is partial (Codex hook bridge unavailable)"
             }
             AgentToolConfig::OpenClaw { .. } => {
-                "policy mediation is partial (OpenClaw hook bridge unavailable)"
+                "secure runtime bridge is not connected; privileged actions will fail closed"
             }
             AgentToolConfig::Custom { .. } => "policy mediation is custom and may be incomplete",
             _ => "policy mediation is not fully enforced",

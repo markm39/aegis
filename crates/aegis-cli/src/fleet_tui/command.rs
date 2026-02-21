@@ -71,6 +71,12 @@ pub enum FleetCommand {
     Pending { agent: String },
     /// Show runtime capability/mediation profile for an agent.
     Capabilities { agent: String },
+    /// Show secure-runtime status from internal matrix.
+    ParityStatus,
+    /// Show latest secure-runtime delta impact.
+    ParityDiff,
+    /// Verify secure-runtime controls and fail-closed gates.
+    ParityVerify,
     /// Execute a computer-use tool action from JSON payload.
     Tool { agent: String, action_json: String },
     /// Execute a short computer-use tool batch from JSON payload.
@@ -202,6 +208,7 @@ const COMMAND_NAMES: &[&str] = &[
     "dashboard",
     "nudge",
     "orch",
+    "parity",
     "pending",
     "pilot",
     "policy",
@@ -540,6 +547,17 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "unknown auth subcommand: {other}. Use: list, add, login, test"
             )),
         },
+        "parity" => match arg1 {
+            "" | "status" => Ok(Some(FleetCommand::ParityStatus)),
+            "diff" => Ok(Some(FleetCommand::ParityDiff)),
+            "verify" => Ok(Some(FleetCommand::ParityVerify)),
+            other => Err(format!(
+                "unknown parity subcommand: {other}. Use: status, diff, verify"
+            )),
+        },
+        "parity-status" => Ok(Some(FleetCommand::ParityStatus)),
+        "parity-diff" => Ok(Some(FleetCommand::ParityDiff)),
+        "parity-verify" => Ok(Some(FleetCommand::ParityVerify)),
         "pop" => {
             if arg1.is_empty() {
                 Err("usage: pop <agent>".into())
@@ -759,6 +777,7 @@ const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
 /// Subcommands for `:auth`.
 const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
 const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
+const PARITY_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -893,6 +912,13 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "parity" {
+            return PARITY_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
         if cmd == "session" {
             return SESSION_SUBCOMMANDS
                 .iter()
@@ -990,6 +1016,9 @@ pub fn help_text() -> &'static str {
      :nudge <agent> [msg]     Nudge stalled agent\n\
      :orch                    Orchestrator fleet overview\n\
      :pending <agent>         Show pending prompts\n\
+     :parity status           Secure-runtime status summary\n\
+     :parity diff             Latest secure-runtime delta impact\n\
+     :parity verify           Verify secure-runtime controls\n\
      :capabilities <agent>    Runtime capability/mediation profile\n\
      :tool <agent> <json>     Execute computer-use ToolAction JSON\n\
      :tool-batch <a> <json> [n] Execute computer-use ToolAction batch\n\
@@ -1179,6 +1208,24 @@ mod tests {
     #[test]
     fn parse_status() {
         assert_eq!(parse("status").unwrap(), Some(FleetCommand::Status));
+    }
+
+    #[test]
+    fn parse_parity_commands() {
+        assert_eq!(
+            parse("parity").unwrap(),
+            Some(FleetCommand::ParityStatus)
+        );
+        assert_eq!(
+            parse("parity status").unwrap(),
+            Some(FleetCommand::ParityStatus)
+        );
+        assert_eq!(parse("parity diff").unwrap(), Some(FleetCommand::ParityDiff));
+        assert_eq!(
+            parse("parity verify").unwrap(),
+            Some(FleetCommand::ParityVerify)
+        );
+        assert!(parse("parity nope").is_err());
     }
 
     #[test]

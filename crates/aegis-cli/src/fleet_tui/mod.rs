@@ -17,8 +17,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{
     AgentSummary, CaptureSessionRequest, CaptureSessionStarted, DaemonClient, DaemonCommand,
-    PendingPromptSummary, RuntimeCapabilities, SessionHistory, SessionInfo, SpawnSubagentRequest,
-    ToolActionOutcome, ToolBatchOutcome,
+    ParityDiffReport, ParityStatusReport, ParityVerifyReport, PendingPromptSummary,
+    RuntimeCapabilities, SessionHistory, SessionInfo, SpawnSubagentRequest, ToolActionOutcome,
+    ToolBatchOutcome,
 };
 use aegis_toolkit::contract::ToolAction;
 use aegis_types::AgentStatus;
@@ -1574,8 +1575,10 @@ impl FleetApp {
                                 match serde_json::from_value::<RuntimeCapabilities>(data) {
                                     Ok(caps) => {
                                         self.set_result(format!(
-                                            "{agent}: mediation={} headless={} auth={} ready={} ({})",
-                                            caps.policy_mediation,
+                                            "{agent}: mediation={} bridge={} compliance={} headless={} auth={} ready={} ({})",
+                                            caps.mediation_mode,
+                                            caps.hook_bridge,
+                                            caps.compliance_mode,
                                             caps.headless,
                                             caps.auth_mode,
                                             caps.auth_ready,
@@ -1590,6 +1593,86 @@ impl FleetApp {
                         }
                         Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
                         Err(e) => self.set_result(format!("failed to query capabilities: {e}")),
+                    }
+                }
+            }
+            FleetCommand::ParityStatus => {
+                if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::ParityStatus) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<ParityStatusReport>(data) {
+                                    Ok(report) => self.set_result(format!(
+                                        "secure-runtime: total={} complete={} partial={} high-risk-blockers={}",
+                                        report.total_features,
+                                        report.complete_features,
+                                        report.partial_features,
+                                        report.high_risk_blockers
+                                    )),
+                                    Err(e) => self
+                                        .set_result(format!("failed to parse parity status: {e}")),
+                                }
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to query parity status: {e}")),
+                    }
+                }
+            }
+            FleetCommand::ParityDiff => {
+                if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::ParityDiff) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<ParityDiffReport>(data) {
+                                    Ok(report) => self.set_result(format!(
+                                        "secure-runtime diff: {} files, sha={}, impacted={}",
+                                        report.changed_files,
+                                        report.upstream_sha,
+                                        report.impacted_feature_ids.len()
+                                    )),
+                                    Err(e) => self
+                                        .set_result(format!("failed to parse parity diff: {e}")),
+                                }
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to query parity diff: {e}")),
+                    }
+                }
+            }
+            FleetCommand::ParityVerify => {
+                if !self.connected {
+                    self.set_result("daemon not connected".to_string());
+                } else if let Some(client) = &self.client {
+                    match client.send(&DaemonCommand::ParityVerify) {
+                        Ok(resp) if resp.ok => {
+                            if let Some(data) = resp.data {
+                                match serde_json::from_value::<ParityVerifyReport>(data) {
+                                    Ok(report) => {
+                                        if report.ok {
+                                            self.set_result(format!(
+                                                "secure-runtime verification passed (features={})",
+                                                report.checked_features
+                                            ));
+                                        } else {
+                                            self.set_result(format!(
+                                                "secure-runtime verification failed ({} violations)",
+                                                report.violations.len()
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => self
+                                        .set_result(format!("failed to parse parity verify: {e}")),
+                                }
+                            }
+                        }
+                        Ok(resp) => self.set_result(format!("failed: {}", resp.message)),
+                        Err(e) => self.set_result(format!("failed to verify parity: {e}")),
                     }
                 }
             }

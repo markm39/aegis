@@ -9,7 +9,7 @@
 //! - `.claude/settings.json` -- project-level, committed to VCS (manual install via CLI)
 //! - `.claude/settings.local.json` -- local override, not committed (daemon-managed)
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Generate the Claude Code settings JSON fragment that registers the aegis hook.
 ///
@@ -194,6 +194,163 @@ pub fn install_project_hooks(project_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Current schema version for daemon-managed OpenClaw bridge metadata.
+pub const OPENCLAW_BRIDGE_VERSION: u32 = 1;
+
+/// Path to daemon-managed OpenClaw bridge marker JSON.
+pub fn openclaw_bridge_marker_path(working_dir: &Path) -> PathBuf {
+    working_dir
+        .join(".aegis")
+        .join("openclaw")
+        .join("bridge.json")
+}
+
+/// Path to daemon-managed OpenClaw config JSON.
+pub fn openclaw_bridge_config_path(working_dir: &Path) -> PathBuf {
+    working_dir
+        .join(".aegis")
+        .join("openclaw")
+        .join("openclaw.json")
+}
+
+/// Return true when the daemon-managed OpenClaw bridge marker is present and valid.
+pub fn openclaw_bridge_connected(working_dir: &Path) -> bool {
+    let marker_path = openclaw_bridge_marker_path(working_dir);
+    let Ok(raw) = std::fs::read_to_string(marker_path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let version = value
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let connected = value
+        .get("connected")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    version == OPENCLAW_BRIDGE_VERSION as u64 && connected
+}
+
+/// Return true when daemon-managed OpenClaw bridge artifacts are present.
+pub fn openclaw_bridge_installed(working_dir: &Path) -> bool {
+    let marker_path = openclaw_bridge_marker_path(working_dir);
+    let config_path = openclaw_bridge_config_path(working_dir);
+    let hook_md = working_dir
+        .join("hooks")
+        .join("aegis-policy-gate")
+        .join("HOOK.md");
+    let hook_handler = working_dir
+        .join("hooks")
+        .join("aegis-policy-gate")
+        .join("handler.ts");
+    marker_path.exists() && config_path.exists() && hook_md.exists() && hook_handler.exists()
+}
+
+/// Install a daemon-managed OpenClaw bridge bundle for strict policy mediation.
+///
+/// This creates:
+/// - workspace hook metadata/handler under `hooks/aegis-policy-gate/`
+/// - a daemon-owned OpenClaw config at `.aegis/openclaw/openclaw.json`
+/// - a bridge marker file at `.aegis/openclaw/bridge.json`
+pub fn install_openclaw_daemon_bridge(working_dir: &Path, agent_name: &str) -> Result<(), String> {
+    let hook_dir = working_dir.join("hooks").join("aegis-policy-gate");
+    std::fs::create_dir_all(&hook_dir)
+        .map_err(|e| format!("failed to create OpenClaw hook dir: {e}"))?;
+
+    let hook_md = hook_dir.join("HOOK.md");
+    let hook_md_body = r#"---
+name: aegis-policy-gate
+description: "Aegis daemon policy bridge for OpenClaw"
+metadata: { "openclaw": { "events": ["command:new", "gateway:startup"] } }
+---
+
+# Aegis Policy Gate
+
+Managed by Aegis daemon. Do not edit manually.
+"#;
+    std::fs::write(&hook_md, hook_md_body)
+        .map_err(|e| format!("failed to write {}: {e}", hook_md.display()))?;
+
+    let hook_handler = hook_dir.join("handler.ts");
+    let hook_handler_body = r#"const handler = async (event) => {
+  if (!event || typeof event !== "object") {
+    return;
+  }
+  const marker = process.env.AEGIS_OPENCLAW_BRIDGE_MARKER;
+  if (!marker) {
+    return;
+  }
+  try {
+    const fs = await import("node:fs/promises");
+    const payload = JSON.stringify(
+      {
+        version: 1,
+        connected: true,
+        updated_at_utc: new Date().toISOString(),
+      },
+      null,
+      2,
+    );
+    await fs.writeFile(marker, payload, "utf8");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[aegis-policy-gate] marker update failed: ${msg}`);
+  }
+};
+
+export default handler;
+"#;
+    std::fs::write(&hook_handler, hook_handler_body)
+        .map_err(|e| format!("failed to write {}: {e}", hook_handler.display()))?;
+
+    let bridge_dir = working_dir.join(".aegis").join("openclaw");
+    std::fs::create_dir_all(&bridge_dir)
+        .map_err(|e| format!("failed to create OpenClaw bridge dir: {e}"))?;
+
+    let marker_path = openclaw_bridge_marker_path(working_dir);
+    let socket_path = aegis_types::daemon::daemon_dir().join("daemon.sock");
+    let marker = serde_json::json!({
+        "version": OPENCLAW_BRIDGE_VERSION,
+        "connected": false,
+        "installed": true,
+        "agent": agent_name,
+        "socket_path": socket_path.to_string_lossy(),
+        "installed_at_utc": chrono::Utc::now().to_rfc3339(),
+    });
+    let marker_json = serde_json::to_string_pretty(&marker)
+        .map_err(|e| format!("failed to serialize OpenClaw bridge marker: {e}"))?;
+    std::fs::write(&marker_path, marker_json)
+        .map_err(|e| format!("failed to write {}: {e}", marker_path.display()))?;
+
+    let config_path = openclaw_bridge_config_path(working_dir);
+    let config = serde_json::json!({
+        "hooks": {
+            "internal": {
+                "enabled": true,
+                "entries": {
+                    "aegis-policy-gate": {
+                        "enabled": true,
+                        "env": {
+                            "AEGIS_AGENT_NAME": agent_name,
+                            "AEGIS_SOCKET_PATH": socket_path.to_string_lossy(),
+                            "AEGIS_OPENCLAW_BRIDGE_MARKER": marker_path.to_string_lossy(),
+                            "AEGIS_OPENCLAW_BRIDGE_REQUIRED": "1"
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let config_json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("failed to serialize OpenClaw bridge config: {e}"))?;
+    std::fs::write(&config_path, config_json)
+        .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +511,49 @@ mod tests {
             }]
         })];
         assert!(!is_aegis_hook_installed(&other));
+    }
+
+    #[test]
+    fn openclaw_bridge_connected_false_when_missing() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        assert!(!openclaw_bridge_connected(tmpdir.path()));
+    }
+
+    #[test]
+    fn install_openclaw_daemon_bridge_creates_bundle() {
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        install_openclaw_daemon_bridge(tmpdir.path(), "openclaw-1").expect("install bridge");
+
+        let marker = openclaw_bridge_marker_path(tmpdir.path());
+        let config = openclaw_bridge_config_path(tmpdir.path());
+        let hook_md = tmpdir
+            .path()
+            .join("hooks")
+            .join("aegis-policy-gate")
+            .join("HOOK.md");
+        let hook_handler = tmpdir
+            .path()
+            .join("hooks")
+            .join("aegis-policy-gate")
+            .join("handler.ts");
+
+        assert!(marker.exists(), "marker should exist");
+        assert!(config.exists(), "bridge config should exist");
+        assert!(hook_md.exists(), "hook metadata should exist");
+        assert!(hook_handler.exists(), "hook handler should exist");
+        assert!(openclaw_bridge_installed(tmpdir.path()));
+        assert!(!openclaw_bridge_connected(tmpdir.path()));
+
+        let config_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+        assert_eq!(
+            config_json["hooks"]["internal"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            config_json["hooks"]["internal"]["entries"]["aegis-policy-gate"]["enabled"]
+                .as_bool(),
+            Some(true)
+        );
     }
 }

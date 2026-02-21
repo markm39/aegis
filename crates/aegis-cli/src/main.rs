@@ -713,6 +713,18 @@ enum DaemonCommands {
         name: String,
     },
 
+    /// Show secure-runtime status from the internal parity matrix
+    #[command(name = "parity-status")]
+    ParityStatus,
+
+    /// Show latest secure-runtime delta impact
+    #[command(name = "parity-diff")]
+    ParityDiff,
+
+    /// Verify secure-runtime controls and fail-closed gates
+    #[command(name = "parity-verify")]
+    ParityVerify,
+
     /// Execute a computer-use ToolAction JSON payload for an agent
     Tool {
         /// Agent name
@@ -1238,6 +1250,9 @@ fn main() -> anyhow::Result<()> {
             }
             DaemonCommands::Pending { name } => commands::daemon::pending(&name),
             DaemonCommands::Capabilities { name } => commands::daemon::capabilities(&name),
+            DaemonCommands::ParityStatus => commands::daemon::parity_status(),
+            DaemonCommands::ParityDiff => commands::daemon::parity_diff(),
+            DaemonCommands::ParityVerify => commands::daemon::parity_verify(),
             DaemonCommands::Tool { name, action_json } => {
                 commands::daemon::tool_action(&name, &action_json)
             }
@@ -2556,6 +2571,45 @@ mod tests {
                 assert_eq!(name, "claude-1");
             }
             _ => panic!("expected Daemon Capabilities command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_parity_status() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "parity-status"]);
+        assert!(cli.is_ok(), "should parse daemon parity-status: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::ParityStatus,
+            } => {}
+            _ => panic!("expected Daemon ParityStatus command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_parity_diff() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "parity-diff"]);
+        assert!(cli.is_ok(), "should parse daemon parity-diff: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::ParityDiff,
+            } => {}
+            _ => panic!("expected Daemon ParityDiff command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_parity_verify() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "parity-verify"]);
+        assert!(cli.is_ok(), "should parse daemon parity-verify: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::ParityVerify,
+            } => {}
+            _ => panic!("expected Daemon ParityVerify command"),
         }
     }
 

@@ -1,7 +1,6 @@
 //! OpenClaw driver.
 //!
-//! Spawns `openclaw agent` in a PTY. OpenClaw is an autonomous agent with
-//! its own heartbeat daemon, so Aegis uses a PassthroughAdapter (observe-only).
+//! Spawns `openclaw agent` in a PTY with daemon-managed bridge env vars.
 //! Task injection is via `--message` flag or stdin.
 
 use std::path::Path;
@@ -25,7 +24,7 @@ impl AgentDriver for OpenClawDriver {
         "OpenClaw"
     }
 
-    fn spawn_strategy(&self, _working_dir: &Path) -> SpawnStrategy {
+    fn spawn_strategy(&self, working_dir: &Path) -> SpawnStrategy {
         let mut args = vec!["agent".to_string()];
 
         if let Some(name) = &self.agent_name {
@@ -43,6 +42,26 @@ impl AgentDriver for OpenClawDriver {
         env.push((
             "AEGIS_SOCKET_PATH".to_string(),
             socket_path.to_string_lossy().into_owned(),
+        ));
+        let bridge_config = working_dir
+            .join(".aegis")
+            .join("openclaw")
+            .join("openclaw.json");
+        let bridge_marker = working_dir
+            .join(".aegis")
+            .join("openclaw")
+            .join("bridge.json");
+        env.push((
+            "OPENCLAW_CONFIG_PATH".to_string(),
+            bridge_config.to_string_lossy().into_owned(),
+        ));
+        env.push((
+            "AEGIS_OPENCLAW_BRIDGE_REQUIRED".to_string(),
+            "1".to_string(),
+        ));
+        env.push((
+            "AEGIS_OPENCLAW_BRIDGE_MARKER".to_string(),
+            bridge_marker.to_string_lossy().into_owned(),
         ));
 
         SpawnStrategy::Pty {
@@ -150,6 +169,27 @@ mod tests {
                 assert_eq!(value, "build the API");
             }
             other => panic!("expected CliArg, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spawn_sets_openclaw_bridge_env() {
+        let driver = OpenClawDriver {
+            aegis_agent_name: Some("oc-2".to_string()),
+            agent_name: Some("builder".to_string()),
+            extra_args: vec![],
+        };
+        let workdir = PathBuf::from("/tmp/workspace");
+        let strategy = driver.spawn_strategy(&workdir);
+        match strategy {
+            SpawnStrategy::Pty { env, .. } => {
+                assert!(env.iter().any(|(k, _)| k == "OPENCLAW_CONFIG_PATH"));
+                assert!(env
+                    .iter()
+                    .any(|(k, v)| k == "AEGIS_OPENCLAW_BRIDGE_REQUIRED" && v == "1"));
+                assert!(env.iter().any(|(k, _)| k == "AEGIS_OPENCLAW_BRIDGE_MARKER"));
+            }
+            _ => panic!("expected Pty strategy"),
         }
     }
 }
