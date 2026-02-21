@@ -109,6 +109,10 @@ pub fn run_fleet(
                         api_url: cfg.api_url,
                         access_token: cfg.access_token,
                         phone_number_id: cfg.phone_number_id,
+                        app_secret: None,
+                        verify_token: None,
+                        webhook_port: None,
+                        template_namespace: None,
                     },
                 );
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
@@ -179,6 +183,10 @@ pub fn run_fleet(
                 let channel = crate::line::LineChannel::new(crate::line::LineConfig {
                     channel_access_token: cfg.channel_access_token,
                     user_id: cfg.user_id,
+                    channel_secret: None,
+                    webhook_port: None,
+                    oauth_channel_id: None,
+                    multicast_enabled: false,
                 });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
