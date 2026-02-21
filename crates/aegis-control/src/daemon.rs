@@ -631,6 +631,17 @@ pub enum DaemonCommand {
     ///
     /// Cedar policy gate: `daemon:lane_utilization`.
     LaneUtilization { lane: String },
+
+    // -- Browser profile management commands --
+    /// List all managed browser profiles across agents.
+    ///
+    /// Cedar policy gate: `daemon:list_browser_profiles`.
+    ListBrowserProfiles,
+    /// Delete the browser profile for a specific agent.
+    ///
+    /// Removes the profile directory and all associated data.
+    /// Cedar policy gate: `daemon:delete_browser_profile`.
+    DeleteBrowserProfile { agent_id: String },
 }
 
 fn default_true() -> bool {
@@ -742,6 +753,8 @@ impl DaemonCommand {
             DaemonCommand::FetchUrl { .. } => "daemon:fetch_url",
             DaemonCommand::ListLanes => "daemon:list_lanes",
             DaemonCommand::LaneUtilization { .. } => "daemon:lane_utilization",
+            DaemonCommand::ListBrowserProfiles => "daemon:list_browser_profiles",
+            DaemonCommand::DeleteBrowserProfile { .. } => "daemon:delete_browser_profile",
         }
     }
 }
@@ -1779,6 +1792,11 @@ mod tests {
             DaemonCommand::ListLanes,
             DaemonCommand::LaneUtilization {
                 lane: "build".into(),
+            },
+            // Browser profile management commands
+            DaemonCommand::ListBrowserProfiles,
+            DaemonCommand::DeleteBrowserProfile {
+                agent_id: "agent-1".into(),
             },
         ];
 

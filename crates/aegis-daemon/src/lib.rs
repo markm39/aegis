@@ -13,6 +13,7 @@
 //! - [`persistence`]: launchd integration, PID files, caffeinate
 //! - [`state`]: crash recovery via persistent state.json
 
+pub mod browser_profile;
 pub mod command_queue;
 pub mod commands;
 pub mod control;
@@ -3820,6 +3821,14 @@ impl DaemonRuntime {
 
             DaemonCommand::LaneUtilization { lane } => {
                 DaemonResponse::error(format!("execution lane '{lane}' not yet implemented"))
+            }
+
+            DaemonCommand::ListBrowserProfiles => {
+                DaemonResponse::error("browser profile management not yet wired to daemon fleet".to_string())
+            }
+
+            DaemonCommand::DeleteBrowserProfile { agent_id } => {
+                DaemonResponse::error(format!("browser profile deletion for '{agent_id}' not yet wired to daemon fleet"))
             }
         }
     }
