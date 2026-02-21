@@ -9,8 +9,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use cedar_policy::{
-    Authorizer, Context, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicySet,
-    Request, RestrictedExpression, Schema,
+    Authorizer, Context, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicySet, Request,
+    RestrictedExpression, Schema,
 };
 
 use aegis_types::{Action, ActionKind, AegisError, Verdict};
@@ -128,6 +128,47 @@ impl PolicyEngine {
         verdict.decision == aegis_types::Decision::Allow
     }
 
+    /// Evaluate an action with agent depth context.
+    ///
+    /// Applies depth-based hard guardrails before Cedar evaluation:
+    /// - If `depth >= 2`, denies ProcessSpawn, FileWrite, and FileDelete
+    /// - If `depth >= depth_limit`, denies SubagentSpawn (mapped from ToolCall
+    ///   with tool name "SubagentSpawn")
+    ///
+    /// This is a wrapper around `evaluate()` that enforces subagent isolation
+    /// without requiring Cedar context attributes in the schema.
+    #[must_use = "verdict must be checked to enforce policy decisions"]
+    pub fn evaluate_with_depth(&self, action: &Action, depth: u8, depth_limit: u8) -> Verdict {
+        if depth >= 2 {
+            match &action.kind {
+                ActionKind::ProcessSpawn { .. }
+                | ActionKind::FileWrite { .. }
+                | ActionKind::FileDelete { .. } => {
+                    return Verdict::deny(
+                        action.id,
+                        format!(
+                            "denied: agent depth {depth} >= 2, dangerous action forbidden for deep subagents"
+                        ),
+                        Some("builtin:subagent-isolation".to_string()),
+                    );
+                }
+                ActionKind::ToolCall { tool, .. } if tool == "SubagentSpawn" => {
+                    if depth >= depth_limit {
+                        return Verdict::deny(
+                            action.id,
+                            format!(
+                                "denied: agent depth {depth} >= limit {depth_limit}, subagent spawn forbidden"
+                            ),
+                            Some("builtin:subagent-isolation".to_string()),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.evaluate(action)
+    }
+
     /// Reload policies from the given directory, replacing the current policy set.
     pub fn reload(&mut self, policy_dir: &Path) -> Result<(), AegisError> {
         let new_policy_set = load_policies_from_dir(policy_dir)?;
@@ -159,11 +200,9 @@ impl PolicyEngine {
         let principal_entity = Entity::new_no_attrs(principal_uid.clone(), HashSet::new());
 
         // Build entities collection including action entities from schema
-        let mut entities = Entities::from_entities(
-            vec![principal_entity, resource_entity],
-            Some(&self.schema),
-        )
-        .map_err(|e| AegisError::PolicyError(format!("failed to build entities: {e}")))?;
+        let mut entities =
+            Entities::from_entities(vec![principal_entity, resource_entity], Some(&self.schema))
+                .map_err(|e| AegisError::PolicyError(format!("failed to build entities: {e}")))?;
 
         // Add action entities from the schema
         let action_entities = self
@@ -248,15 +287,15 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
 
 /// Require a path to be valid UTF-8, returning an error otherwise.
 fn require_utf8(path: &std::path::Path) -> Result<&str, AegisError> {
-    path.to_str().ok_or_else(|| {
-        AegisError::PolicyError(format!("non-UTF8 path: {}", path.display()))
-    })
+    path.to_str()
+        .ok_or_else(|| AegisError::PolicyError(format!("non-UTF8 path: {}", path.display())))
 }
 
 /// Build a Cedar `EntityUid` from a type name string and an id string.
 fn build_entity_uid(type_name: &str, id: &str) -> Result<EntityUid, AegisError> {
-    let tn = EntityTypeName::from_str(type_name)
-        .map_err(|e| AegisError::PolicyError(format!("invalid entity type name '{type_name}': {e}")))?;
+    let tn = EntityTypeName::from_str(type_name).map_err(|e| {
+        AegisError::PolicyError(format!("invalid entity type name '{type_name}': {e}"))
+    })?;
     let eid = EntityId::new(id);
     Ok(EntityUid::from_type_name_and_id(tn, eid))
 }
@@ -346,8 +385,7 @@ mod tests {
     // Test 1: Default-deny policy returns Deny for any action
     #[test]
     fn default_deny_denies_everything() {
-        let engine =
-            PolicyEngine::from_policies(DEFAULT_DENY, None).expect("should create engine");
+        let engine = PolicyEngine::from_policies(DEFAULT_DENY, None).expect("should create engine");
 
         let action = file_read_action("agent-1", "/tmp/secret.txt");
         let verdict = engine.evaluate(&action);
@@ -420,7 +458,11 @@ mod tests {
             .expect("should reload policies");
 
         let verdict = engine.evaluate(&action);
-        assert_eq!(verdict.decision, Decision::Allow, "should allow after reload");
+        assert_eq!(
+            verdict.decision,
+            Decision::Allow,
+            "should allow after reload"
+        );
     }
 
     // Test 5: from_policies constructor works
@@ -535,11 +577,8 @@ mod tests {
     // Test: default-deny denies writes even when reads are allowed
     #[test]
     fn read_only_policy_denies_writes() {
-        let engine = PolicyEngine::from_policies(
-            crate::builtin::ALLOW_READ_ONLY,
-            None,
-        )
-        .expect("should create engine");
+        let engine = PolicyEngine::from_policies(crate::builtin::ALLOW_READ_ONLY, None)
+            .expect("should create engine");
 
         let read_action = file_read_action("agent-1", "/tmp/file.txt");
         let verdict = engine.evaluate(&read_action);
@@ -547,7 +586,11 @@ mod tests {
 
         let list_action = dir_list_action("agent-1", "/tmp");
         let verdict = engine.evaluate(&list_action);
-        assert_eq!(verdict.decision, Decision::Allow, "dir list should be allowed");
+        assert_eq!(
+            verdict.decision,
+            Decision::Allow,
+            "dir list should be allowed"
+        );
 
         let write_action = file_write_action("agent-1", "/tmp/file.txt");
         let verdict = engine.evaluate(&write_action);
@@ -615,8 +658,7 @@ mod tests {
     // Test: permits_action returns false for default-deny
     #[test]
     fn permits_action_default_deny() {
-        let engine =
-            PolicyEngine::from_policies(DEFAULT_DENY, None).expect("should create engine");
+        let engine = PolicyEngine::from_policies(DEFAULT_DENY, None).expect("should create engine");
 
         assert!(!engine.permits_action("FileRead"));
         assert!(!engine.permits_action("FileWrite"));
@@ -713,22 +755,92 @@ mod tests {
     #[test]
     fn extract_action_info_maps_all_kinds() {
         let cases: Vec<(ActionKind, &str)> = vec![
-            (ActionKind::FileRead { path: PathBuf::from("/f") }, "FileRead"),
-            (ActionKind::FileWrite { path: PathBuf::from("/f") }, "FileWrite"),
-            (ActionKind::FileDelete { path: PathBuf::from("/f") }, "FileDelete"),
-            (ActionKind::DirCreate { path: PathBuf::from("/d") }, "DirCreate"),
-            (ActionKind::DirList { path: PathBuf::from("/d") }, "DirList"),
-            (ActionKind::NetConnect { host: "h".into(), port: 80 }, "NetConnect"),
-            (ActionKind::NetRequest { method: "GET".into(), url: "u".into() }, "NetConnect"),
-            (ActionKind::ToolCall { tool: "t".into(), args: serde_json::Value::Null }, "ToolCall"),
-            (ActionKind::ProcessSpawn { command: "c".into(), args: vec![] }, "ProcessSpawn"),
-            (ActionKind::ProcessExit { command: "c".into(), exit_code: 0 }, "ProcessExit"),
-            (ActionKind::ApiUsage { provider: "anthropic".into(), model: "m".into(), endpoint: "/v1".into(), input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, "ApiUsage"),
+            (
+                ActionKind::FileRead {
+                    path: PathBuf::from("/f"),
+                },
+                "FileRead",
+            ),
+            (
+                ActionKind::FileWrite {
+                    path: PathBuf::from("/f"),
+                },
+                "FileWrite",
+            ),
+            (
+                ActionKind::FileDelete {
+                    path: PathBuf::from("/f"),
+                },
+                "FileDelete",
+            ),
+            (
+                ActionKind::DirCreate {
+                    path: PathBuf::from("/d"),
+                },
+                "DirCreate",
+            ),
+            (
+                ActionKind::DirList {
+                    path: PathBuf::from("/d"),
+                },
+                "DirList",
+            ),
+            (
+                ActionKind::NetConnect {
+                    host: "h".into(),
+                    port: 80,
+                },
+                "NetConnect",
+            ),
+            (
+                ActionKind::NetRequest {
+                    method: "GET".into(),
+                    url: "u".into(),
+                },
+                "NetConnect",
+            ),
+            (
+                ActionKind::ToolCall {
+                    tool: "t".into(),
+                    args: serde_json::Value::Null,
+                },
+                "ToolCall",
+            ),
+            (
+                ActionKind::ProcessSpawn {
+                    command: "c".into(),
+                    args: vec![],
+                },
+                "ProcessSpawn",
+            ),
+            (
+                ActionKind::ProcessExit {
+                    command: "c".into(),
+                    exit_code: 0,
+                },
+                "ProcessExit",
+            ),
+            (
+                ActionKind::ApiUsage {
+                    provider: "anthropic".into(),
+                    model: "m".into(),
+                    endpoint: "/v1".into(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                },
+                "ApiUsage",
+            ),
         ];
 
         for (kind, expected_name) in &cases {
             let (name, _resource) = extract_action_info(kind).unwrap();
-            assert_eq!(name, *expected_name, "action kind {:?} should map to {}", kind, expected_name);
+            assert_eq!(
+                name, *expected_name,
+                "action kind {:?} should map to {}",
+                kind, expected_name
+            );
         }
     }
 
@@ -748,6 +860,124 @@ mod tests {
             },
         );
         let verdict = engine.evaluate(&action);
+        assert_eq!(verdict.decision, Decision::Allow);
+    }
+
+    // Test: evaluate_with_depth allows actions at depth 0
+    #[test]
+    fn evaluate_with_depth_allows_at_depth_zero() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = file_write_action("agent-1", "/tmp/file.txt");
+        let verdict = engine.evaluate_with_depth(&action, 0, 3);
+        assert_eq!(verdict.decision, Decision::Allow);
+    }
+
+    // Test: evaluate_with_depth allows actions at depth 1
+    #[test]
+    fn evaluate_with_depth_allows_at_depth_one() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = file_write_action("agent-1", "/tmp/file.txt");
+        let verdict = engine.evaluate_with_depth(&action, 1, 3);
+        assert_eq!(verdict.decision, Decision::Allow);
+    }
+
+    // Test: evaluate_with_depth denies dangerous actions at depth >= 2
+    #[test]
+    fn evaluate_with_depth_denies_write_at_depth_two() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = file_write_action("agent-1", "/tmp/file.txt");
+        let verdict = engine.evaluate_with_depth(&action, 2, 3);
+        assert_eq!(verdict.decision, Decision::Deny);
+        assert!(verdict.reason.contains("depth 2"));
+        assert_eq!(
+            verdict.policy_id.as_deref(),
+            Some("builtin:subagent-isolation")
+        );
+    }
+
+    // Test: evaluate_with_depth denies ProcessSpawn at depth >= 2
+    #[test]
+    fn evaluate_with_depth_denies_spawn_at_depth_two() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = Action::new(
+            "agent-1",
+            ActionKind::ProcessSpawn {
+                command: "rm".into(),
+                args: vec!["-rf".into(), "/".into()],
+            },
+        );
+        let verdict = engine.evaluate_with_depth(&action, 2, 3);
+        assert_eq!(verdict.decision, Decision::Deny);
+        assert!(verdict.reason.contains("dangerous action"));
+    }
+
+    // Test: evaluate_with_depth denies FileDelete at depth >= 2
+    #[test]
+    fn evaluate_with_depth_denies_delete_at_depth_two() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = Action::new(
+            "agent-1",
+            ActionKind::FileDelete {
+                path: PathBuf::from("/tmp/file.txt"),
+            },
+        );
+        let verdict = engine.evaluate_with_depth(&action, 2, 3);
+        assert_eq!(verdict.decision, Decision::Deny);
+    }
+
+    // Test: evaluate_with_depth allows reads at any depth
+    #[test]
+    fn evaluate_with_depth_allows_reads_at_any_depth() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = file_read_action("agent-1", "/tmp/file.txt");
+        let verdict = engine.evaluate_with_depth(&action, 5, 3);
+        assert_eq!(verdict.decision, Decision::Allow);
+    }
+
+    // Test: evaluate_with_depth denies SubagentSpawn ToolCall at depth >= limit
+    #[test]
+    fn evaluate_with_depth_denies_subagent_spawn_at_limit() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = Action::new(
+            "agent-1",
+            ActionKind::ToolCall {
+                tool: "SubagentSpawn".into(),
+                args: serde_json::json!({"target": "sub-agent"}),
+            },
+        );
+        let verdict = engine.evaluate_with_depth(&action, 3, 3);
+        assert_eq!(verdict.decision, Decision::Deny);
+        assert!(verdict.reason.contains("subagent spawn forbidden"));
+    }
+
+    // Test: evaluate_with_depth allows SubagentSpawn below limit
+    #[test]
+    fn evaluate_with_depth_allows_subagent_spawn_below_limit() {
+        let policies = r#"permit(principal, action, resource);"#;
+        let engine = PolicyEngine::from_policies(policies, None).expect("should create engine");
+
+        let action = Action::new(
+            "agent-1",
+            ActionKind::ToolCall {
+                tool: "SubagentSpawn".into(),
+                args: serde_json::json!({"target": "sub-agent"}),
+            },
+        );
+        let verdict = engine.evaluate_with_depth(&action, 2, 3);
         assert_eq!(verdict.decision, Decision::Allow);
     }
 }

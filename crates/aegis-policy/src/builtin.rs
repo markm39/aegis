@@ -137,6 +137,32 @@ permit(
 );
 "#;
 
+/// Subagent isolation policy template (documentation / intent).
+///
+/// Depth-based enforcement is implemented as a hard guardrail in
+/// `PolicyEngine::evaluate_with_depth()` rather than as Cedar policy,
+/// because the current Cedar schema does not define context attributes.
+/// This constant documents the intended semantics:
+///
+/// - Agents at depth >= 2 cannot execute shell commands, write/delete files
+/// - Agents at depth >= 3 cannot spawn further subagents
+///
+/// The actual enforcement logic lives in `engine.rs::evaluate_with_depth()`.
+pub const SUBAGENT_ISOLATION: &str = r#"
+// NOTE: This policy template documents intent only. Enforcement is via
+// PolicyEngine::evaluate_with_depth() because Cedar context attributes
+// are not yet defined in the schema.
+//
+// forbid(principal, action == Aegis::Action::"ProcessSpawn", resource)
+//   when { context.agent_depth >= 2 };
+// forbid(principal, action == Aegis::Action::"FileWrite", resource)
+//   when { context.agent_depth >= 2 };
+// forbid(principal, action == Aegis::Action::"FileDelete", resource)
+//   when { context.agent_depth >= 2 };
+// forbid(principal, action == Aegis::Action::"SubagentSpawn", resource)
+//   when { context.agent_depth >= 3 };
+"#;
+
 /// Permit-all policy: allows every action. Used for observe-only mode
 /// where Aegis logs all file operations but enforces no restrictions.
 pub const PERMIT_ALL: &str = r#"permit(principal, action, resource);"#;
@@ -186,6 +212,7 @@ pub fn get_builtin_policy(name: &str) -> Option<&'static str> {
         "ci-runner" => Some(CI_RUNNER),
         "data-science" => Some(DATA_SCIENCE),
         "orchestrator-computer-use" => Some(ORCHESTRATOR_COMPUTER_USE),
+        "subagent-isolation" => Some(SUBAGENT_ISOLATION),
         "permit-all" => Some(PERMIT_ALL),
         _ => None,
     }
@@ -200,6 +227,7 @@ pub fn list_builtin_policies() -> &'static [&'static str] {
         "ci-runner",
         "data-science",
         "orchestrator-computer-use",
+        "subagent-isolation",
         "permit-all",
     ]
 }
@@ -258,6 +286,7 @@ mod tests {
         assert!(names.contains(&"ci-runner"));
         assert!(names.contains(&"data-science"));
         assert!(names.contains(&"orchestrator-computer-use"));
+        assert!(names.contains(&"subagent-isolation"));
         assert!(names.contains(&"permit-all"));
     }
 
