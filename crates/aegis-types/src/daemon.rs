@@ -64,6 +64,19 @@ pub struct DaemonConfig {
     /// Plugin system settings.
     #[serde(default)]
     pub plugins: PluginConfig,
+    /// Command aliases for the TUI command bar.
+    #[serde(default)]
+    pub aliases: std::collections::HashMap<String, AliasConfig>,
+}
+
+/// Serializable alias configuration for persistence in daemon.toml.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AliasConfig {
+    /// The target command name.
+    pub command: String,
+    /// Optional additional arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
 }
 
 /// Top-level configuration for orchestrator computer-use runtime behavior.

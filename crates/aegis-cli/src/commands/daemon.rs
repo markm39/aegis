@@ -81,6 +81,7 @@ pub fn init() -> anyhow::Result<()> {
         memory: Default::default(),
         cron: Default::default(),
         plugins: Default::default(),
+        aliases: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -145,6 +146,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         memory: Default::default(),
         cron: Default::default(),
         plugins: Default::default(),
+        aliases: Default::default(),
     };
 
     let toml_str = example.to_toml()?;

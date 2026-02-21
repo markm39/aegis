@@ -70,6 +70,7 @@ pub fn run() -> anyhow::Result<()> {
         memory: Default::default(),
         cron: Default::default(),
         plugins: Default::default(),
+        aliases: Default::default(),
     };
 
     let config_path = daemon_config_path();
@@ -264,6 +265,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

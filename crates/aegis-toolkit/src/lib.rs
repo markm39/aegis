@@ -3,6 +3,7 @@
 //! This crate provides the low-latency building blocks for the orchestrator
 //! to "see" and "act" like a human operator, while remaining policy-gated.
 
+pub mod browser_discovery;
 pub mod capture;
 pub mod contract;
 pub mod input;

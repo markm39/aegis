@@ -804,6 +804,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         }
     }
 

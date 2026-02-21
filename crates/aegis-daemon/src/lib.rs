@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use aegis_channel::ChannelInput;
+use aegis_control::alias::AliasRegistry;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
@@ -809,6 +810,8 @@ pub struct DaemonRuntime {
     dashboard_token: Option<String>,
     /// Last heartbeat sent per orchestrator agent.
     heartbeat_last_sent: HashMap<String, Instant>,
+    /// Command alias registry.
+    alias_registry: AliasRegistry,
 }
 
 impl DaemonRuntime {
@@ -848,6 +851,8 @@ impl DaemonRuntime {
                 }
             });
 
+        let alias_registry = AliasRegistry::from_config(&config.aliases);
+
         Self {
             fleet,
             config,
@@ -866,6 +871,7 @@ impl DaemonRuntime {
             dashboard_listen: None,
             dashboard_token: None,
             heartbeat_last_sent: HashMap::new(),
+            alias_registry,
         }
     }
 
@@ -3450,6 +3456,40 @@ impl DaemonRuntime {
             DaemonCommand::ListModels => {
                 DaemonResponse::error("model listing not yet implemented")
             }
+            DaemonCommand::AddAlias { alias, command, args } => {
+                match self.alias_registry.add(alias, command, args) {
+                    Ok(()) => {
+                        let config = self.alias_registry.to_config();
+                        DaemonResponse::ok_with_data(
+                            "alias added",
+                            serde_json::to_value(config).unwrap_or_default(),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::RemoveAlias { alias } => {
+                match self.alias_registry.remove(&alias) {
+                    Ok(()) => {
+                        let config = self.alias_registry.to_config();
+                        DaemonResponse::ok_with_data(
+                            "alias removed",
+                            serde_json::to_value(config).unwrap_or_default(),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::ListAliases => {
+                let entries: Vec<_> = self.alias_registry.list().into_iter().cloned().collect();
+                match serde_json::to_value(&entries) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} alias(es)", entries.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("failed to serialize aliases: {e}")),
+                }
+            }
         }
     }
 
@@ -3863,6 +3903,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -4199,6 +4240,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -4874,6 +4916,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -4961,6 +5004,7 @@ mod tests {
             memory: Default::default(),
             cron: Default::default(),
             plugins: Default::default(),
+            aliases: Default::default(),
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

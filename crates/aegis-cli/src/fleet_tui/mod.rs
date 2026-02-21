@@ -668,6 +668,7 @@ impl FleetApp {
                 memory: Default::default(),
                 cron: Default::default(),
                 plugins: Default::default(),
+                aliases: Default::default(),
             }
         };
 

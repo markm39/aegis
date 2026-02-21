@@ -10,6 +10,7 @@
 //! - Send input/nudges to the agent
 //! - Hot-reload Cedar policies
 
+pub mod alias;
 pub mod command;
 pub mod daemon;
 pub mod event;

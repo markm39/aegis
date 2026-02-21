@@ -226,6 +226,20 @@ pub enum DaemonCommand {
     },
 
     // -- ACP protocol commands --
+    // -- Alias commands --
+    /// Add a command alias.
+    AddAlias {
+        alias: String,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Remove a command alias.
+    RemoveAlias { alias: String },
+    /// List all command aliases.
+    ListAliases,
+
+    // -- ACP protocol commands --
     /// Broadcast a message to all agents in the fleet.
     BroadcastToFleet {
         message: String,
@@ -1082,6 +1096,21 @@ mod tests {
             DaemonCommand::UnloadPlugin {
                 name: "my-plugin".into(),
             },
+            // Alias commands
+            DaemonCommand::AddAlias {
+                alias: "s".into(),
+                command: "status".into(),
+                args: vec![],
+            },
+            DaemonCommand::AddAlias {
+                alias: "ap".into(),
+                command: "approve".into(),
+                args: vec!["--all".into()],
+            },
+            DaemonCommand::RemoveAlias {
+                alias: "s".into(),
+            },
+            DaemonCommand::ListAliases,
             // ACP protocol commands
             DaemonCommand::BroadcastToFleet {
                 message: "Deploy phase 2".into(),
