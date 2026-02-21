@@ -33,6 +33,34 @@ pub struct ToolkitOutput {
     pub browser: Option<BrowserToolData>,
 }
 
+/// Result of a budget-enforced batch execution.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchResult {
+    /// Completed action outputs.
+    pub completed: Vec<ToolkitOutput>,
+    /// Number of actions that were executed.
+    pub executed_count: usize,
+    /// Total actions requested.
+    pub total_requested: usize,
+    /// Reason the batch stopped (if stopped early).
+    pub halt_reason: Option<BatchHaltReason>,
+    /// Total wall time for the batch in milliseconds.
+    pub elapsed_ms: u64,
+}
+
+/// Why a batch was halted before completing all actions.
+#[derive(Debug, Clone, serde::Serialize)]
+pub enum BatchHaltReason {
+    /// Time budget exceeded.
+    TimeBudgetExceeded { budget_ms: u64, elapsed_ms: u64 },
+    /// Maximum micro-actions reached.
+    MaxActionsReached { max: u8, executed: usize },
+    /// A high-risk action was encountered and halt_on_high_risk is enabled.
+    HighRiskHalt { action_name: String },
+    /// An action failed.
+    ActionFailed { action_name: String, error: String },
+}
+
 pub trait TuiRuntimeBridge {
     fn snapshot(&self, session_id: &str) -> Result<TuiToolData, String>;
     fn send_input(&self, session_id: &str, text: &str) -> Result<TuiToolData, String>;
@@ -254,7 +282,9 @@ impl ToolkitRuntime {
                 let started = Instant::now();
                 let mut eval_result = None;
                 let res = self.with_browser_session(session_id, |session| {
-                    session.client.call("Runtime.enable", serde_json::json!({}))?;
+                    session
+                        .client
+                        .call("Runtime.enable", serde_json::json!({}))?;
                     let result = session.client.call(
                         "Runtime.evaluate",
                         serde_json::json!({
@@ -285,7 +315,10 @@ impl ToolkitRuntime {
                     result_json: eval_result,
                 });
             }
-            ToolAction::BrowserClick { session_id, selector } => {
+            ToolAction::BrowserClick {
+                session_id,
+                selector,
+            } => {
                 if !self.config.browser.enabled {
                     return Err("browser actions are disabled by daemon toolkit config".to_string());
                 }
@@ -353,10 +386,9 @@ impl ToolkitRuntime {
                 let res = self.with_browser_session(session_id, |session| {
                     let (x, y) = query_selector_center(session, selector)?;
                     dispatch_mouse_click(session, x, y)?;
-                    session.client.call(
-                        "Input.insertText",
-                        serde_json::json!({ "text": text }),
-                    )?;
+                    session
+                        .client
+                        .call("Input.insertText", serde_json::json!({ "text": text }))?;
                     typed_point = Some(serde_json::json!({ "x": x, "y": y }));
                     Ok(())
                 });
@@ -520,6 +552,12 @@ impl ToolkitRuntime {
                 }
                 result.input_latency_ms = Some(started.elapsed().as_millis() as u64);
             }
+            ToolAction::ImageAnalyze { .. } => {
+                return Err(
+                    "image analysis requires a vision backend (configure toolkit.vision in daemon.toml)"
+                        .to_string(),
+                );
+            }
         }
 
         let execution = ToolActionExecution {
@@ -532,6 +570,80 @@ impl ToolkitRuntime {
             tui: tui_payload,
             browser: browser_payload,
         })
+    }
+
+    /// Execute a batch of tool actions with budget enforcement.
+    ///
+    /// Respects the `ToolkitLoopExecutorConfig` from the daemon config:
+    /// - `time_budget_ms`: stop if wall time exceeds budget
+    /// - `max_micro_actions`: stop after N actions
+    /// - `halt_on_high_risk`: stop if a High-risk action is encountered
+    ///
+    /// Returns partial results if halted early.
+    pub fn execute_batch_with_budget(
+        &mut self,
+        actions: &[ToolAction],
+    ) -> BatchResult {
+        let time_budget_ms = self.config.loop_executor.time_budget_ms;
+        let time_budget = Duration::from_millis(time_budget_ms);
+        let max_micro_actions = self.config.loop_executor.max_micro_actions;
+        let max_actions = max_micro_actions as usize;
+        let halt_on_high_risk = self.config.loop_executor.halt_on_high_risk;
+
+        let started = Instant::now();
+        let mut completed = Vec::new();
+        let mut halt_reason = None;
+
+        for (i, action) in actions.iter().enumerate() {
+            // Check time budget
+            let elapsed = started.elapsed();
+            if elapsed >= time_budget {
+                halt_reason = Some(BatchHaltReason::TimeBudgetExceeded {
+                    budget_ms: time_budget_ms,
+                    elapsed_ms: elapsed.as_millis() as u64,
+                });
+                break;
+            }
+
+            // Check action count
+            if i >= max_actions {
+                halt_reason = Some(BatchHaltReason::MaxActionsReached {
+                    max: max_micro_actions,
+                    executed: i,
+                });
+                break;
+            }
+
+            // Check high-risk halt
+            if halt_on_high_risk && action.risk_tag() == aegis_toolkit::contract::RiskTag::High {
+                halt_reason = Some(BatchHaltReason::HighRiskHalt {
+                    action_name: action.policy_action_name().to_string(),
+                });
+                break;
+            }
+
+            // Execute the action
+            match self.execute(action) {
+                Ok(output) => completed.push(output),
+                Err(e) => {
+                    halt_reason = Some(BatchHaltReason::ActionFailed {
+                        action_name: action.policy_action_name().to_string(),
+                        error: e,
+                    });
+                    break;
+                }
+            }
+        }
+
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+
+        BatchResult {
+            executed_count: completed.len(),
+            total_requested: actions.len(),
+            completed,
+            halt_reason,
+            elapsed_ms,
+        }
     }
 
     fn capture(&self, request: &CaptureRequest) -> Result<CaptureFrame, ToolkitError> {
@@ -701,6 +813,16 @@ impl ToolkitRuntime {
     where
         F: FnOnce(&mut BrowserSession) -> Result<(), String>,
     {
+        // Check max concurrent sessions before creating new one
+        if !self.browser_sessions.contains_key(session_id) {
+            let max = self.config.browser.max_concurrent_sessions;
+            if max > 0 && self.browser_sessions.len() >= max as usize {
+                return Err(format!(
+                    "max concurrent browser sessions ({max}) reached, close an existing session first"
+                ));
+            }
+        }
+
         let session = match self.browser_sessions.get_mut(session_id) {
             Some(session) => session,
             None => {
@@ -709,7 +831,7 @@ impl ToolkitRuntime {
                     .get(session_id)
                     .map(|browser| browser.ws_url.as_str());
                 let (client, endpoint) =
-                    CdpClient::connect(ws_override.or(self.config.browser.cdp_ws_url.as_deref()))?;
+                    CdpClient::connect(ws_override.or(self.config.browser.cdp_ws_url.as_deref()), self.config.browser.max_response_bytes)?;
                 self.browser_sessions.insert(
                     session_id.to_string(),
                     BrowserSession {
@@ -754,7 +876,7 @@ impl ToolkitRuntime {
         }
 
         let (child, ws_url, data_dir) = self.spawn_managed_browser(session_id, headless, url)?;
-        let (client, endpoint) = CdpClient::connect(Some(&ws_url))?;
+        let (client, endpoint) = CdpClient::connect(Some(&ws_url), self.config.browser.max_response_bytes)?;
         self.browser_sessions.insert(
             session_id.to_string(),
             BrowserSession {
@@ -940,10 +1062,12 @@ fn wait_for_cdp_ws(port: u16, timeout: Duration) -> Result<String, String> {
 struct CdpClient {
     socket: WebSocket<MaybeTlsStream<TcpStream>>,
     next_id: u64,
+    ws_url: String,
+    max_response_bytes: usize,
 }
 
 impl CdpClient {
-    fn connect(ws_url_override: Option<&str>) -> Result<(Self, String), String> {
+    fn connect(ws_url_override: Option<&str>, max_response_bytes: usize) -> Result<(Self, String), String> {
         let ws_url = match ws_url_override {
             Some(url) if !url.trim().is_empty() => url.to_string(),
             _ => env::var("AEGIS_CDP_WS")
@@ -958,13 +1082,39 @@ impl CdpClient {
             .map_err(|e| format!("invalid CDP websocket URL ({ws_url}): {e}"))?;
         let (socket, _) = connect(url).map_err(|e| format!("cdp connect failed: {e}"))?;
 
-        Ok((Self { socket, next_id: 1 }, ws_url))
+        Ok((Self { socket, next_id: 1, ws_url: ws_url.clone(), max_response_bytes }, ws_url))
+    }
+
+    fn reconnect(&mut self) -> Result<(), String> {
+        let url = Url::parse(&self.ws_url)
+            .map_err(|e| format!("invalid CDP URL for reconnect: {e}"))?;
+        let (socket, _) = connect(url)
+            .map_err(|e| format!("cdp reconnect failed: {e}"))?;
+        self.socket = socket;
+        self.next_id = 1;
+        Ok(())
     }
 
     fn call(
         &mut self,
         method: &str,
         params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        match self.call_inner(method, &params) {
+            Ok(v) => Ok(v),
+            Err(e) if e.contains("cdp send failed") || e.contains("cdp read failed") || e.contains("cdp socket closed") => {
+                tracing::warn!(error = %e, "CDP socket error, attempting reconnect");
+                self.reconnect()?;
+                self.call_inner(method, &params)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn call_inner(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let id = self.next_id;
         self.next_id += 1;
@@ -985,9 +1135,27 @@ impl CdpClient {
                 .read()
                 .map_err(|e| format!("cdp read failed: {e}"))?;
             let text = match msg {
-                Message::Text(text) => text,
-                Message::Binary(bytes) => String::from_utf8(bytes)
-                    .map_err(|e| format!("cdp binary decode failed: {e}"))?,
+                Message::Text(text) => {
+                    if self.max_response_bytes > 0 && text.len() > self.max_response_bytes {
+                        return Err(format!(
+                            "CDP response too large ({} bytes, limit {} bytes)",
+                            text.len(),
+                            self.max_response_bytes
+                        ));
+                    }
+                    text
+                }
+                Message::Binary(bytes) => {
+                    if self.max_response_bytes > 0 && bytes.len() > self.max_response_bytes {
+                        return Err(format!(
+                            "CDP response too large ({} bytes, limit {} bytes)",
+                            bytes.len(),
+                            self.max_response_bytes
+                        ));
+                    }
+                    String::from_utf8(bytes)
+                        .map_err(|e| format!("cdp binary decode failed: {e}"))?
+                }
                 Message::Ping(_) | Message::Pong(_) => continue,
                 Message::Close(_) => return Err("cdp socket closed".to_string()),
                 _ => continue,
@@ -1010,7 +1178,10 @@ impl CdpClient {
     }
 }
 
-fn query_selector_center(session: &mut BrowserSession, selector: &str) -> Result<(f64, f64), String> {
+fn query_selector_center(
+    session: &mut BrowserSession,
+    selector: &str,
+) -> Result<(f64, f64), String> {
     session.client.call("DOM.enable", serde_json::json!({}))?;
     session.client.call("Page.enable", serde_json::json!({}))?;
     let document = session
@@ -1025,17 +1196,13 @@ fn query_selector_center(session: &mut BrowserSession, selector: &str) -> Result
         "DOM.querySelector",
         serde_json::json!({ "nodeId": root_id, "selector": selector }),
     )?;
-    let node_id = found
-        .get("nodeId")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let node_id = found.get("nodeId").and_then(|v| v.as_u64()).unwrap_or(0);
     if node_id == 0 {
         return Err(format!("selector not found: {selector}"));
     }
-    let box_model =
-        session
-            .client
-            .call("DOM.getBoxModel", serde_json::json!({ "nodeId": node_id }))?;
+    let box_model = session
+        .client
+        .call("DOM.getBoxModel", serde_json::json!({ "nodeId": node_id }))?;
     let content = box_model
         .get("model")
         .and_then(|v| v.get("content"))

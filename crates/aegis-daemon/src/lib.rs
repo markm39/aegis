@@ -1267,6 +1267,7 @@ impl DaemonRuntime {
                 }
             }
             ToolAction::TuiSnapshot { .. } | ToolAction::TuiInput { .. } => {}
+            ToolAction::ImageAnalyze { .. } => {}
         }
         if let ToolAction::InputBatch { actions } = action {
             if actions.len() > toolkit.input.max_batch_actions as usize {

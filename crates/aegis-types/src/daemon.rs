@@ -155,6 +155,12 @@ pub struct ToolkitBrowserConfig {
     pub extra_args: Vec<String>,
     #[serde(default)]
     pub user_data_root: Option<String>,
+    /// Maximum number of concurrent CDP browser sessions (0 = unlimited).
+    #[serde(default = "default_browser_max_sessions")]
+    pub max_concurrent_sessions: u8,
+    /// Maximum CDP response size in bytes (0 = unlimited, default 10MB).
+    #[serde(default = "default_browser_max_response_bytes")]
+    pub max_response_bytes: usize,
 }
 
 impl Default for ToolkitBrowserConfig {
@@ -167,6 +173,8 @@ impl Default for ToolkitBrowserConfig {
             binary_path: None,
             extra_args: Vec::new(),
             user_data_root: None,
+            max_concurrent_sessions: default_browser_max_sessions(),
+            max_response_bytes: default_browser_max_response_bytes(),
         }
     }
 }
@@ -295,6 +303,14 @@ fn default_input_max_batch_actions() -> u8 {
 
 fn default_browser_backend() -> String {
     "cdp".to_string()
+}
+
+fn default_browser_max_sessions() -> u8 {
+    4
+}
+
+fn default_browser_max_response_bytes() -> usize {
+    10 * 1024 * 1024 // 10 MB
 }
 
 fn default_loop_max_micro_actions() -> u8 {

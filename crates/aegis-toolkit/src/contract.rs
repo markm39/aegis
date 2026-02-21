@@ -118,6 +118,11 @@ pub enum ToolAction {
     InputBatch {
         actions: Vec<InputAction>,
     },
+    ImageAnalyze {
+        session_id: String,
+        #[serde(default)]
+        region: Option<CaptureRegion>,
+    },
 }
 
 impl ToolAction {
@@ -141,6 +146,7 @@ impl ToolAction {
             ToolAction::BrowserProfileStart { .. } => "BrowserProfileStart",
             ToolAction::BrowserProfileStop { .. } => "BrowserProfileStop",
             ToolAction::InputBatch { .. } => "InputBatch",
+            ToolAction::ImageAnalyze { .. } => "ImageAnalyze",
         }
     }
 
@@ -166,6 +172,7 @@ impl ToolAction {
             ToolAction::InputBatch { actions } => {
                 max_risk_tag(actions.iter().map(InputAction::risk_tag))
             }
+            ToolAction::ImageAnalyze { .. } => RiskTag::Medium,
         }
     }
 }
