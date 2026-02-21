@@ -390,6 +390,7 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::GenerateSetupCode { .. } => "GenerateSetupCode",
         ActionKind::DeviceCommand { .. } => "DeviceCommand",
         ActionKind::ManageDevice { .. } => "ManageDevice",
+        ActionKind::MakeVoiceCall { .. } => "MakeVoiceCall",
     }
 }
 

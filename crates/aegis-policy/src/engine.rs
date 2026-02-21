@@ -228,6 +228,10 @@ impl PolicyEngine {
                     device_id: "__probe__".into(),
                     operation: "__probe__".into(),
                 },
+                "MakeVoiceCall" => ActionKind::MakeVoiceCall {
+                    to_number: "+10000000000".into(),
+                    agent_id: "__probe__".into(),
+                },
                 _ => return false,
             },
         );
@@ -413,6 +417,7 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::GenerateSetupCode { endpoint, .. } => Ok(("GenerateSetupCode", endpoint.as_str())),
         ActionKind::DeviceCommand { device_id, .. } => Ok(("DeviceCommand", device_id.as_str())),
         ActionKind::ManageDevice { device_id, .. } => Ok(("ManageDevice", device_id.as_str())),
+        ActionKind::MakeVoiceCall { to_number, .. } => Ok(("MakeVoiceCall", to_number.as_str())),
     }
 }
 

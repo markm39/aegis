@@ -49,6 +49,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ratatui = "0.29"
 crossterm = "0.28"
+sha1 = "0.10"
 sha2 = "0.10"
 hmac = "0.12"
 chrono = { version = "0.4", features = ["serde"] }

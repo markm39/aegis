@@ -157,6 +157,10 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // Classified as Medium because they have side effects (adding/removing
         // devices, updating status) but are recoverable and policy-gated.
         ActionKind::ManageDevice { .. } => ActionRisk::Medium,
+        // Voice calls initiate external telephone calls with associated cost
+        // and privacy implications. Classified as High because they involve
+        // real-world side effects (charges, reaching external parties).
+        ActionKind::MakeVoiceCall { .. } => ActionRisk::High,
     }
 }
 

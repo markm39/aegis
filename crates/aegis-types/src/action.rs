@@ -338,6 +338,18 @@ pub enum ActionKind {
         /// "remove", "heartbeat", "update_capabilities").
         operation: String,
     },
+    /// Initiate a voice call via Twilio.
+    ///
+    /// Gated by Cedar policy. Classified as ActionRisk::High because it
+    /// initiates an external telephone call with associated cost. Phone
+    /// numbers are validated for E.164 format and cost limits are enforced
+    /// before the call is placed.
+    MakeVoiceCall {
+        /// Destination phone number (E.164 format).
+        to_number: String,
+        /// Agent initiating the call.
+        agent_id: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -561,6 +573,12 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "ManageDevice {device_id} ({operation})")
             }
+            ActionKind::MakeVoiceCall {
+                to_number,
+                agent_id,
+            } => {
+                write!(f, "MakeVoiceCall {to_number} (agent={agent_id})")
+            }
         }
     }
 }
@@ -723,6 +741,10 @@ mod tests {
             ActionKind::ManageDevice {
                 device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
                 operation: "register".into(),
+            },
+            ActionKind::MakeVoiceCall {
+                to_number: "+15551234567".into(),
+                agent_id: "agent-1".into(),
             },
         ];
         for v in variants {

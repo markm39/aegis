@@ -51,6 +51,7 @@ pub mod attachment_handler;
 pub mod device_registry;
 pub mod phone_control;
 pub mod setup_codes;
+pub mod voice;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -849,6 +850,8 @@ pub struct DaemonRuntime {
     setup_code_manager: Option<crate::setup_codes::SetupCodeManager>,
     /// Phone control command queue for paired devices.
     phone_controller: crate::phone_control::PhoneController,
+    /// Voice call manager (Twilio integration), initialized if TWILIO_AUTH_TOKEN is set.
+    voice_manager: Option<crate::voice::VoiceManager>,
 }
 
 impl DaemonRuntime {
@@ -947,6 +950,7 @@ impl DaemonRuntime {
             }),
             device_store,
             phone_controller: crate::phone_control::PhoneController::new(),
+            voice_manager: None, // Initialized lazily if TWILIO_AUTH_TOKEN is set
         }
     }
 
@@ -4180,6 +4184,55 @@ impl DaemonRuntime {
                     Err(e) => DaemonResponse::error(format!("report failed: {e}")),
                 }
             }
+
+            // -- Voice call management --
+            DaemonCommand::MakeCall {
+                ref to,
+                ref agent_id,
+            } => match &mut self.voice_manager {
+                Some(vm) => match vm.make_call(to, agent_id) {
+                    Ok(record) => match serde_json::to_value(&record) {
+                        Ok(data) => DaemonResponse::ok_with_data("call initiated", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(format!("make_call failed: {e}")),
+                },
+                None => DaemonResponse::error("voice manager not configured (set TWILIO_AUTH_TOKEN)"),
+            },
+            DaemonCommand::HangupCall { ref call_id } => match &mut self.voice_manager {
+                Some(vm) => {
+                    // For hangup, we use a generic agent check; in production the
+                    // requesting agent would be identified from the control session.
+                    match vm.hangup_call(call_id, "daemon") {
+                        Ok(()) => DaemonResponse::ok("call hung up"),
+                        Err(e) => DaemonResponse::error(format!("hangup failed: {e}")),
+                    }
+                }
+                None => DaemonResponse::error("voice manager not configured (set TWILIO_AUTH_TOKEN)"),
+            },
+            DaemonCommand::ListCalls => match &self.voice_manager {
+                Some(vm) => {
+                    let calls: Vec<_> = vm.list_calls().into_iter().cloned().collect();
+                    match serde_json::to_value(&calls) {
+                        Ok(data) => DaemonResponse::ok_with_data(
+                            format!("{} call(s)", calls.len()),
+                            data,
+                        ),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    }
+                }
+                None => DaemonResponse::error("voice manager not configured (set TWILIO_AUTH_TOKEN)"),
+            },
+            DaemonCommand::CallStatus { ref call_id } => match &self.voice_manager {
+                Some(vm) => match vm.call_status(call_id) {
+                    Some(record) => match serde_json::to_value(record) {
+                        Ok(data) => DaemonResponse::ok_with_data("call found", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    None => DaemonResponse::error(format!("call not found: {call_id}")),
+                },
+                None => DaemonResponse::error("voice manager not configured (set TWILIO_AUTH_TOKEN)"),
+            },
         }
     }
 

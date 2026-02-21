@@ -167,6 +167,10 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "MakeVoiceCall" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -260,6 +264,7 @@ mod tests {
             "RenderA2UI",
             "DeviceCommand",
             "ManageDevice",
+            "MakeVoiceCall",
         ];
 
         let schema_text = AEGIS_SCHEMA;

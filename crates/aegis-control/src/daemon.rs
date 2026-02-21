@@ -867,6 +867,38 @@ pub enum DaemonCommand {
         /// Result data from the device as JSON.
         result: serde_json::Value,
     },
+
+    // -- Voice call management commands --
+    /// Initiate a voice call via Twilio.
+    ///
+    /// Phone number must be E.164 format (starts with +, digits only).
+    /// Cost limits and concurrent call limits are enforced before the call.
+    /// Cedar policy gate: `daemon:make_call`.
+    MakeCall {
+        /// Destination phone number (E.164 format).
+        to: String,
+        /// Agent initiating the call.
+        agent_id: String,
+    },
+    /// Hang up an active voice call.
+    ///
+    /// Only the agent that initiated the call may hang it up.
+    /// Cedar policy gate: `daemon:hangup_call`.
+    HangupCall {
+        /// Twilio Call SID to hang up.
+        call_id: String,
+    },
+    /// List all voice calls (active and recent).
+    ///
+    /// Cedar policy gate: `daemon:list_calls`.
+    ListCalls,
+    /// Get the status of a specific voice call.
+    ///
+    /// Cedar policy gate: `daemon:call_status`.
+    CallStatus {
+        /// Twilio Call SID to query.
+        call_id: String,
+    },
 }
 
 fn default_true() -> bool {
@@ -1004,6 +1036,10 @@ impl DaemonCommand {
             DaemonCommand::QueueDeviceCommand { .. } => "daemon:queue_device_command",
             DaemonCommand::PollDeviceCommands { .. } => "daemon:poll_device_commands",
             DaemonCommand::ReportDeviceCommandResult { .. } => "daemon:report_device_command_result",
+            DaemonCommand::MakeCall { .. } => "daemon:make_call",
+            DaemonCommand::HangupCall { .. } => "daemon:hangup_call",
+            DaemonCommand::ListCalls => "daemon:list_calls",
+            DaemonCommand::CallStatus { .. } => "daemon:call_status",
         }
     }
 }
