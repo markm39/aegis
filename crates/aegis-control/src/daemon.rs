@@ -64,6 +64,11 @@ pub enum DaemonCommand {
     },
     /// List pending permission prompts for an agent.
     ListPending { name: String },
+    /// Delegate a pending approval request to another approver.
+    DelegateApproval {
+        request_id: String,
+        delegate_to: String,
+    },
     /// Evaluate a tool use against Cedar policy (used by hooks).
     ///
     /// The hook client sends this when Claude Code fires a `PreToolUse` hook.
@@ -987,6 +992,10 @@ mod tests {
             },
             DaemonCommand::ListPending {
                 name: "claude-1".into(),
+            },
+            DaemonCommand::DelegateApproval {
+                request_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+                delegate_to: "security-lead".into(),
             },
             DaemonCommand::EvaluateToolUse {
                 agent: "claude-1".into(),
