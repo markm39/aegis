@@ -5,6 +5,7 @@
 //! token/model usage data from responses (including streaming SSE).
 //! Usage data is logged to the audit ledger as `ActionKind::ApiUsage`.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -711,6 +712,104 @@ fn log_usage(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Session-level usage aggregation
+// ---------------------------------------------------------------------------
+
+use crate::pricing::PricingTable;
+
+/// Per-model usage breakdown.
+#[derive(Debug, Clone, Default)]
+pub struct ModelUsageSummary {
+    /// Total input tokens for this model.
+    pub input_tokens: u64,
+    /// Total output tokens for this model.
+    pub output_tokens: u64,
+    /// Total cache-read tokens for this model.
+    pub cache_read_tokens: u64,
+    /// Total cache-write (creation) tokens for this model.
+    pub cache_write_tokens: u64,
+    /// Estimated cost in USD for this model (if pricing is available).
+    pub cost_usd: Option<f64>,
+}
+
+/// Aggregated usage summary across one or more API calls.
+#[derive(Debug, Clone, Default)]
+pub struct UsageSummary {
+    /// Total input tokens across all models.
+    pub total_input_tokens: u64,
+    /// Total output tokens across all models.
+    pub total_output_tokens: u64,
+    /// Total cache-read tokens across all models.
+    pub total_cache_read: u64,
+    /// Total cache-write tokens across all models.
+    pub total_cache_write: u64,
+    /// Total estimated cost in USD (sum of per-model costs for known models).
+    pub total_cost_usd: f64,
+    /// Per-model breakdown.
+    pub by_model: HashMap<String, ModelUsageSummary>,
+}
+
+/// A single API usage record, matching the fields in `ActionKind::ApiUsage`.
+///
+/// This is a lightweight input struct for [`calculate_session_cost`] so that
+/// callers do not need to depend on `ActionKind` directly.
+#[derive(Debug, Clone)]
+pub struct ApiUsageRecord {
+    /// Model identifier (e.g. `"claude-sonnet-4-5-20250929"`).
+    pub model: String,
+    /// Input / prompt tokens.
+    pub input_tokens: u64,
+    /// Output / completion tokens.
+    pub output_tokens: u64,
+    /// Cache-read input tokens.
+    pub cache_read_input_tokens: u64,
+    /// Cache-creation input tokens.
+    pub cache_creation_input_tokens: u64,
+}
+
+/// Aggregate a list of API usage records into a [`UsageSummary`], using the
+/// provided [`PricingTable`] to compute costs.
+///
+/// Records whose model is not found in the pricing table contribute to token
+/// totals but not to `total_cost_usd`.
+pub fn calculate_session_cost(
+    records: &[ApiUsageRecord],
+    pricing: &PricingTable,
+) -> UsageSummary {
+    let mut summary = UsageSummary::default();
+
+    for record in records {
+        summary.total_input_tokens += record.input_tokens;
+        summary.total_output_tokens += record.output_tokens;
+        summary.total_cache_read += record.cache_read_input_tokens;
+        summary.total_cache_write += record.cache_creation_input_tokens;
+
+        let model_summary = summary
+            .by_model
+            .entry(record.model.clone())
+            .or_default();
+
+        model_summary.input_tokens += record.input_tokens;
+        model_summary.output_tokens += record.output_tokens;
+        model_summary.cache_read_tokens += record.cache_read_input_tokens;
+        model_summary.cache_write_tokens += record.cache_creation_input_tokens;
+
+        if let Some(cost) = pricing.calculate_cost(
+            &record.model,
+            record.input_tokens,
+            record.output_tokens,
+            record.cache_read_input_tokens,
+            record.cache_creation_input_tokens,
+        ) {
+            *model_summary.cost_usd.get_or_insert(0.0) += cost;
+            summary.total_cost_usd += cost;
+        }
+    }
+
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,5 +1036,62 @@ mod tests {
         assert!(display.contains("anthropic"));
         assert!(display.contains("in=100"));
         assert!(display.contains("out=50"));
+    }
+
+    #[test]
+    fn test_usage_summary_aggregation() {
+        let pricing = PricingTable::with_defaults();
+        let records = vec![
+            ApiUsageRecord {
+                model: "claude-sonnet-4-5-20250929".into(),
+                input_tokens: 1_000_000,
+                output_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+            ApiUsageRecord {
+                model: "claude-sonnet-4-5-20250929".into(),
+                input_tokens: 500_000,
+                output_tokens: 200_000,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+            ApiUsageRecord {
+                model: "gpt-4o".into(),
+                input_tokens: 100_000,
+                output_tokens: 50_000,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            },
+        ];
+
+        let summary = calculate_session_cost(&records, &pricing);
+
+        // Total tokens
+        assert_eq!(summary.total_input_tokens, 1_600_000);
+        assert_eq!(summary.total_output_tokens, 250_000);
+        assert_eq!(summary.total_cache_read, 0);
+        assert_eq!(summary.total_cache_write, 0);
+
+        // Per-model breakdown
+        assert_eq!(summary.by_model.len(), 2);
+
+        let sonnet = summary.by_model.get("claude-sonnet-4-5-20250929").unwrap();
+        assert_eq!(sonnet.input_tokens, 1_500_000);
+        assert_eq!(sonnet.output_tokens, 200_000);
+
+        let gpt = summary.by_model.get("gpt-4o").unwrap();
+        assert_eq!(gpt.input_tokens, 100_000);
+        assert_eq!(gpt.output_tokens, 50_000);
+
+        // Cost check: sonnet calls = (1M*3 + 0)/1M + (500k*3 + 200k*15)/1M
+        //           = 3.0 + 4.5 = 7.5
+        // gpt-4o call = (100k*2.5 + 50k*10)/1M = 0.75
+        // Total = 8.25
+        assert!(
+            (summary.total_cost_usd - 8.25).abs() < 1e-9,
+            "expected $8.25, got {}",
+            summary.total_cost_usd
+        );
     }
 }

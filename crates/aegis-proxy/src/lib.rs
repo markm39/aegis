@@ -6,6 +6,8 @@
 //! proxy for API usage tracking (Anthropic/OpenAI token counting).
 
 pub mod audit;
+pub mod budget;
+pub mod pricing;
 pub mod profiles;
 pub mod usage;
 
