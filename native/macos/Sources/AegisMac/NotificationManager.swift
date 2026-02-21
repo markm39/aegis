@@ -1,0 +1,215 @@
+import Foundation
+import UserNotifications
+import SwiftUI
+
+/// Manages macOS notifications for agent events.
+///
+/// Provides notification categories with actionable buttons:
+/// - Pending approval: Approve/Deny inline actions
+/// - Agent crash: Restart/View actions
+///
+/// Notifications require user permission. The manager requests
+/// authorization on init and degrades gracefully if denied.
+@MainActor
+final class NotificationManager: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
+    /// Whether notifications are authorized by the user.
+    @Published var isAuthorized: Bool = false
+
+    // MARK: - Notification Category IDs
+
+    static let pendingApprovalCategory = "AEGIS_PENDING_APPROVAL"
+    static let agentCrashCategory = "AEGIS_AGENT_CRASH"
+
+    // MARK: - Action IDs
+
+    static let approveAction = "AEGIS_APPROVE"
+    static let denyAction = "AEGIS_DENY"
+    static let restartAction = "AEGIS_RESTART"
+    static let viewAction = "AEGIS_VIEW"
+
+    override init() {
+        super.init()
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        registerCategories()
+        requestAuthorization()
+    }
+
+    // MARK: - Setup
+
+    /// Request notification authorization from the user.
+    private func requestAuthorization() {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, error in
+            Task { @MainActor in
+                self?.isAuthorized = granted
+                if let error = error {
+                    // Log but don't crash -- notifications are optional
+                    print("[Aegis] Notification authorization error: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Register notification categories with action buttons.
+    private func registerCategories() {
+        let center = UNUserNotificationCenter.current()
+
+        // Pending approval: Approve / Deny
+        let approveAction = UNNotificationAction(
+            identifier: Self.approveAction,
+            title: "Approve",
+            options: [.authenticationRequired]
+        )
+        let denyAction = UNNotificationAction(
+            identifier: Self.denyAction,
+            title: "Deny",
+            options: [.authenticationRequired, .destructive]
+        )
+        let pendingCategory = UNNotificationCategory(
+            identifier: Self.pendingApprovalCategory,
+            actions: [approveAction, denyAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        // Agent crash: Restart / View Dashboard
+        let restartAction = UNNotificationAction(
+            identifier: Self.restartAction,
+            title: "Restart",
+            options: [.authenticationRequired]
+        )
+        let viewAction = UNNotificationAction(
+            identifier: Self.viewAction,
+            title: "View Dashboard",
+            options: [.foreground]
+        )
+        let crashCategory = UNNotificationCategory(
+            identifier: Self.agentCrashCategory,
+            actions: [restartAction, viewAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        center.setNotificationCategories([pendingCategory, crashCategory])
+    }
+
+    // MARK: - Send Notifications
+
+    /// Post a notification for a pending approval request.
+    ///
+    /// - Parameters:
+    ///   - agentName: Name of the agent with the pending prompt.
+    ///   - requestId: The unique pending request ID.
+    ///   - prompt: The raw prompt text (truncated in the notification).
+    func notifyPendingApproval(agentName: String, requestId: String, prompt: String) {
+        guard isAuthorized else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Aegis: Approval Needed"
+        content.subtitle = agentName
+        // Truncate long prompts to prevent notification overflow
+        let truncated = prompt.count > 200 ? String(prompt.prefix(200)) + "..." : prompt
+        content.body = truncated
+        content.sound = .default
+        content.categoryIdentifier = Self.pendingApprovalCategory
+        content.userInfo = [
+            "agentName": agentName,
+            "requestId": requestId,
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "pending-\(requestId)",
+            content: content,
+            trigger: nil // deliver immediately
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("[Aegis] Failed to deliver notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Post a notification for an agent crash.
+    ///
+    /// - Parameters:
+    ///   - agentName: Name of the crashed agent.
+    ///   - exitCode: The exit code of the crashed process.
+    func notifyAgentCrash(agentName: String, exitCode: Int32) {
+        guard isAuthorized else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Aegis: Agent Crashed"
+        content.subtitle = agentName
+        content.body = "Agent '\(agentName)' exited with code \(exitCode)"
+        content.sound = .defaultCritical
+        content.categoryIdentifier = Self.agentCrashCategory
+        content.userInfo = [
+            "agentName": agentName,
+            "exitCode": exitCode,
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "crash-\(agentName)-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("[Aegis] Failed to deliver notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    /// Handle notification actions (approve, deny, restart).
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        let actionId = response.actionIdentifier
+
+        Task { @MainActor in
+            switch actionId {
+            case Self.approveAction:
+                if let agentName = userInfo["agentName"] as? String,
+                   let requestId = userInfo["requestId"] as? String {
+                    let client = DaemonClient()
+                    try? await client.approve(requestId: requestId, agentName: agentName)
+                }
+
+            case Self.denyAction:
+                if let agentName = userInfo["agentName"] as? String,
+                   let requestId = userInfo["requestId"] as? String {
+                    let client = DaemonClient()
+                    try? await client.deny(requestId: requestId, agentName: agentName, reason: "Denied from notification")
+                }
+
+            case Self.restartAction:
+                if let agentName = userInfo["agentName"] as? String {
+                    let client = DaemonClient()
+                    try? await client.restartAgent(name: agentName)
+                }
+
+            default:
+                break
+            }
+
+            completionHandler()
+        }
+    }
+
+    /// Show notifications even when the app is in the foreground.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+}

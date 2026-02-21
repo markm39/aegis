@@ -25,3 +25,4 @@
 /man/
 /dist/
 tools/aegis-macos-helper/.build/
+native/macos/.build/
