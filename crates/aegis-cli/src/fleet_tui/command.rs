@@ -166,6 +166,12 @@ pub enum FleetCommand {
     MatrixDiff,
     /// Verify parity matrix from features.yaml (standalone, no daemon).
     MatrixVerify,
+    /// Suspend a running agent session (SIGSTOP).
+    Suspend { agent: String },
+    /// Resume a suspended agent session (SIGCONT).
+    Resume { agent: String },
+    /// Terminate an agent session permanently.
+    Terminate { agent: String },
     /// List configured model/provider auth profiles.
     AuthList,
     /// Add a provider auth profile.
@@ -236,6 +242,7 @@ const COMMAND_NAMES: &[&str] = &[
     "remove",
     "report",
     "restart",
+    "resume",
     "run",
     "send",
     "session",
@@ -245,6 +252,8 @@ const COMMAND_NAMES: &[&str] = &[
     "status",
     "stop",
     "subagent",
+    "suspend",
+    "terminate",
     "tool",
     "tool-batch",
     "telegram",
@@ -273,10 +282,13 @@ const AGENT_COMMANDS: &[&str] = &[
     "pop",
     "remove",
     "restart",
+    "resume",
     "send",
     "start",
     "stop",
     "subagent",
+    "suspend",
+    "terminate",
     "tool-batch",
 ];
 
@@ -460,6 +472,27 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Err("usage: restart <agent>".into())
             } else {
                 Ok(Some(FleetCommand::Restart { agent: arg1.into() }))
+            }
+        }
+        "suspend" => {
+            if arg1.is_empty() {
+                Err("usage: suspend <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Suspend { agent: arg1.into() }))
+            }
+        }
+        "resume" => {
+            if arg1.is_empty() {
+                Err("usage: resume <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Resume { agent: arg1.into() }))
+            }
+        }
+        "terminate" => {
+            if arg1.is_empty() {
+                Err("usage: terminate <agent>".into())
+            } else {
+                Ok(Some(FleetCommand::Terminate { agent: arg1.into() }))
             }
         }
         "send" => {
@@ -1139,6 +1172,7 @@ pub fn help_text() -> &'static str {
      :remove <agent>          Remove agent from config\n\
      :report                  Compliance report\n\
      :restart <agent>         Restart agent\n\
+     :resume <agent>          Resume suspended session (SIGCONT)\n\
      :run <cmd...>            Run sandboxed in terminal\n\
      :send <agent> <text>     Send text to agent stdin\n\
      :session list            List active session keys\n\
@@ -1149,6 +1183,8 @@ pub fn help_text() -> &'static str {
      :start <agent>           Start agent\n\
      :status                  Daemon status summary\n\
      :stop <agent>            Stop agent\n\
+     :suspend <agent>         Suspend session (SIGSTOP)\n\
+     :terminate <agent>       Terminate session permanently\n\
      :subagent <p> [name]     Spawn constrained subagent session\n\
      :telegram                Show Telegram config status\n\
      :telegram setup           Run Telegram setup wizard\n\
@@ -2190,6 +2226,85 @@ mod tests {
         let c = completions("al", &agents);
         assert!(c.contains(&"alias".to_string()));
         assert!(c.contains(&"alerts".to_string()));
+    }
+
+    #[test]
+    fn parse_suspend() {
+        assert_eq!(
+            parse("suspend claude-1").unwrap(),
+            Some(FleetCommand::Suspend {
+                agent: "claude-1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_suspend_missing_agent() {
+        assert!(parse("suspend").is_err());
+    }
+
+    #[test]
+    fn parse_resume() {
+        assert_eq!(
+            parse("resume claude-1").unwrap(),
+            Some(FleetCommand::Resume {
+                agent: "claude-1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_resume_missing_agent() {
+        assert!(parse("resume").is_err());
+    }
+
+    #[test]
+    fn parse_terminate() {
+        assert_eq!(
+            parse("terminate claude-1").unwrap(),
+            Some(FleetCommand::Terminate {
+                agent: "claude-1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_terminate_missing_agent() {
+        assert!(parse("terminate").is_err());
+    }
+
+    #[test]
+    fn completions_session_lifecycle_commands() {
+        let agents = vec!["claude-1".to_string()];
+        let c = completions("su", &agents);
+        assert!(c.contains(&"suspend".to_string()));
+        assert!(c.contains(&"subagent".to_string()));
+
+        let c = completions("res", &agents);
+        assert!(c.contains(&"resume".to_string()));
+        assert!(c.contains(&"restart".to_string()));
+
+        let c = completions("ter", &agents);
+        assert_eq!(c, vec!["terminate"]);
+    }
+
+    #[test]
+    fn completions_session_lifecycle_agent_names() {
+        let agents = vec!["claude-1".to_string(), "codex-1".to_string()];
+        let c = completions("suspend cl", &agents);
+        assert_eq!(c, vec!["claude-1"]);
+        let c = completions("resume co", &agents);
+        assert_eq!(c, vec!["codex-1"]);
+        let c = completions("terminate cl", &agents);
+        assert_eq!(c, vec!["claude-1"]);
+    }
+
+    #[test]
+    fn help_text_includes_session_lifecycle() {
+        let help = help_text();
+        assert!(help.contains(":suspend"));
+        assert!(help.contains(":resume"));
+        assert!(help.contains(":terminate"));
     }
 
     #[test]

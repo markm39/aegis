@@ -8,6 +8,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use aegis_control::daemon::SessionState;
 use aegis_types::daemon::daemon_state_path;
 
 /// Persistent state of the daemon, saved to disk for crash recovery.
@@ -34,6 +35,23 @@ pub struct AgentState {
     pub session_id: Option<uuid::Uuid>,
     /// Restart count at time of save.
     pub restart_count: u32,
+    /// Session lifecycle state at time of save.
+    #[serde(default = "default_session_state")]
+    pub session_state: SessionState,
+    /// When the session was last suspended (if applicable).
+    #[serde(default)]
+    pub suspended_at: Option<DateTime<Utc>>,
+    /// When the session was last actively executing.
+    #[serde(default = "Utc::now")]
+    pub last_active_at: DateTime<Utc>,
+    /// Accumulated active session time in seconds. This is the total time the
+    /// session has been in the Active state, excluding suspended periods.
+    #[serde(default)]
+    pub accumulated_active_secs: u64,
+}
+
+fn default_session_state() -> SessionState {
+    SessionState::Created
 }
 
 impl DaemonState {
@@ -158,6 +176,10 @@ mod tests {
             was_running: true,
             session_id: Some(uuid::Uuid::new_v4()),
             restart_count: 2,
+            session_state: SessionState::Active,
+            suspended_at: None,
+            last_active_at: Utc::now(),
+            accumulated_active_secs: 120,
         });
 
         // Write to a custom path for testing
@@ -193,6 +215,10 @@ mod tests {
             was_running: false,
             session_id: None,
             restart_count: 0,
+            session_state: SessionState::Created,
+            suspended_at: None,
+            last_active_at: Utc::now(),
+            accumulated_active_secs: 0,
         };
 
         let json = serde_json::to_string(&agent).unwrap();
@@ -200,5 +226,76 @@ mod tests {
         assert_eq!(back.name, "codex-1");
         assert!(!back.was_running);
         assert!(back.session_id.is_none());
+        assert_eq!(back.session_state, SessionState::Created);
+        assert!(back.suspended_at.is_none());
+    }
+
+    #[test]
+    fn agent_state_backward_compat_defaults() {
+        // Verify that old state files without session_state fields still deserialize.
+        let old_json = r#"{
+            "name": "old-agent",
+            "was_running": true,
+            "session_id": null,
+            "restart_count": 1
+        }"#;
+        let back: AgentState = serde_json::from_str(old_json).unwrap();
+        assert_eq!(back.name, "old-agent");
+        assert_eq!(back.session_state, SessionState::Created);
+        assert!(back.suspended_at.is_none());
+        assert_eq!(back.accumulated_active_secs, 0);
+    }
+
+    #[test]
+    fn suspended_agent_state_roundtrip() {
+        let suspended_at = Utc::now();
+        let agent = AgentState {
+            name: "suspended-1".into(),
+            was_running: false,
+            session_id: Some(uuid::Uuid::new_v4()),
+            restart_count: 0,
+            session_state: SessionState::Suspended,
+            suspended_at: Some(suspended_at),
+            last_active_at: suspended_at,
+            accumulated_active_secs: 3600,
+        };
+
+        let json = serde_json::to_string(&agent).unwrap();
+        let back: AgentState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.session_state, SessionState::Suspended);
+        assert_eq!(back.suspended_at, Some(suspended_at));
+        assert_eq!(back.accumulated_active_secs, 3600);
+    }
+
+    #[test]
+    fn crash_recovery_restores_suspended_sessions() {
+        // A daemon crash should preserve suspended session metadata.
+        let now = Utc::now();
+        let session_uuid = uuid::Uuid::new_v4();
+
+        let mut state = DaemonState::new(99);
+        state.agents.push(AgentState {
+            name: "suspended-agent".into(),
+            was_running: false, // suspended agents are not "running"
+            session_id: Some(session_uuid),
+            restart_count: 0,
+            session_state: SessionState::Suspended,
+            suspended_at: Some(now),
+            last_active_at: now,
+            accumulated_active_secs: 7200,
+        });
+
+        // Serialize and deserialize to simulate crash recovery
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let recovered: DaemonState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(recovered.agents.len(), 1);
+        let agent = &recovered.agents[0];
+        assert_eq!(agent.name, "suspended-agent");
+        assert_eq!(agent.session_state, SessionState::Suspended);
+        assert_eq!(agent.suspended_at, Some(now));
+        assert_eq!(agent.accumulated_active_secs, 7200);
+        // Suspended sessions should NOT trigger audit session closure
+        assert!(!agent.was_running);
     }
 }

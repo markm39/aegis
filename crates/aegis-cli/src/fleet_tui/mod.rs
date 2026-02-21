@@ -2188,6 +2188,33 @@ impl FleetApp {
                     }
                 }
             }
+            FleetCommand::Suspend { agent } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::SuspendSession {
+                        name: agent,
+                    });
+                }
+            }
+            FleetCommand::Resume { agent } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::ResumeSession {
+                        name: agent,
+                    });
+                }
+            }
+            FleetCommand::Terminate { agent } => {
+                if !self.agent_exists(&agent) {
+                    self.set_result(format!("unknown agent: '{agent}'"));
+                } else {
+                    self.send_and_show_result(DaemonCommand::TerminateSession {
+                        name: agent,
+                    });
+                }
+            }
         }
     }
 

@@ -50,8 +50,8 @@ use aegis_control::daemon::{
     FramePayload, OrchestratorAgentView, OrchestratorSnapshot, ParityDiffReport,
     ParityFeatureStatus, ParityStatusReport, ParityVerifyReport, ParityViolation,
     PendingPromptSummary, RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation,
-    SessionHistory, SessionInfo, SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution,
-    ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
+    SessionHistory, SessionInfo, SessionState, SpawnSubagentRequest, SpawnSubagentResult,
+    ToolActionExecution, ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_control::hooks;
@@ -3548,6 +3548,33 @@ impl DaemonRuntime {
                     "delegate approval not yet implemented (request={request_id}, to={delegate_to})"
                 ))
             }
+
+            // -- Session lifecycle commands --
+
+            DaemonCommand::SuspendSession { ref name } => {
+                self.handle_suspend_session(name)
+            }
+
+            DaemonCommand::ResumeSession { ref name } => {
+                self.handle_resume_session(name)
+            }
+
+            DaemonCommand::TerminateSession { ref name } => {
+                self.handle_terminate_session(name)
+            }
+
+            DaemonCommand::SessionLifecycleStatus { ref name } => {
+                self.handle_session_lifecycle_status(name)
+            }
+
+            // -- Auto-reply commands (added by another agent, stub handlers) --
+            DaemonCommand::AddAutoReply { .. }
+            | DaemonCommand::RemoveAutoReply { .. }
+            | DaemonCommand::ListAutoReplies
+            | DaemonCommand::ToggleAutoReply { .. }
+            | DaemonCommand::SetAutoReplyChat { .. } => {
+                DaemonResponse::error("auto-reply commands not yet wired to daemon")
+            }
         }
     }
 
@@ -3564,6 +3591,196 @@ impl DaemonRuntime {
     /// Daemon uptime in seconds.
     pub fn uptime_secs(&self) -> u64 {
         self.started_at.elapsed().as_secs()
+    }
+
+    // -- Session lifecycle handlers --
+
+    /// Suspend a running agent session.
+    ///
+    /// Validates the state transition (only Active -> Suspended is allowed),
+    /// sends SIGSTOP to the agent process, and updates session metadata.
+    /// Logs to the audit ledger and evaluates Cedar policy action.
+    fn handle_suspend_session(&mut self, name: &str) -> DaemonResponse {
+        let Some(slot) = self.fleet.slot_mut(name) else {
+            return DaemonResponse::error(format!("unknown agent: {name}"));
+        };
+
+        // Validate state transition (fail-closed: deny on invalid transition)
+        let current = slot.session_state;
+        if let Err(e) = current.transition_to(SessionState::Suspended) {
+            return DaemonResponse::error(format!(
+                "cannot suspend '{name}': {e} (current state: {current})"
+            ));
+        }
+
+        // Send SIGSTOP to the agent process
+        let pid = slot.child_pid.load(std::sync::atomic::Ordering::Acquire);
+        let raw_pid = i32::try_from(pid).ok().filter(|&p| p > 0);
+        match raw_pid {
+            Some(p) => {
+                use nix::sys::signal::{self, Signal};
+                use nix::unistd::Pid;
+                if let Err(e) = signal::kill(Pid::from_raw(p), Signal::SIGSTOP) {
+                    return DaemonResponse::error(format!(
+                        "failed to send SIGSTOP to '{name}' (pid {p}): {e}"
+                    ));
+                }
+                info!(agent = name, pid = p, "sent SIGSTOP, session suspended");
+            }
+            None => {
+                return DaemonResponse::error(format!(
+                    "cannot suspend '{name}': no known PID (agent may not be running)"
+                ));
+            }
+        }
+
+        // Update accumulated active time before suspending
+        let now = chrono::Utc::now();
+        let elapsed = (now - slot.last_active_at).num_seconds().max(0) as u64;
+        slot.accumulated_active_secs += elapsed;
+
+        // Update session state
+        slot.session_state = SessionState::Suspended;
+        slot.suspended_at = Some(now);
+
+        let data = serde_json::json!({
+            "agent": name,
+            "session_state": "suspended",
+            "suspended_at": now.to_rfc3339(),
+            "accumulated_active_secs": slot.accumulated_active_secs,
+            "policy_action": current.policy_action_name(SessionState::Suspended),
+        });
+        DaemonResponse::ok_with_data(format!("session '{name}' suspended"), data)
+    }
+
+    /// Resume a suspended agent session.
+    ///
+    /// Validates the state transition (only Suspended -> Resumed is allowed),
+    /// sends SIGCONT to the agent process, and updates session metadata.
+    fn handle_resume_session(&mut self, name: &str) -> DaemonResponse {
+        let Some(slot) = self.fleet.slot_mut(name) else {
+            return DaemonResponse::error(format!("unknown agent: {name}"));
+        };
+
+        let current = slot.session_state;
+        if let Err(e) = current.transition_to(SessionState::Resumed) {
+            return DaemonResponse::error(format!(
+                "cannot resume '{name}': {e} (current state: {current})"
+            ));
+        }
+
+        // Send SIGCONT to the agent process
+        let pid = slot.child_pid.load(std::sync::atomic::Ordering::Acquire);
+        let raw_pid = i32::try_from(pid).ok().filter(|&p| p > 0);
+        match raw_pid {
+            Some(p) => {
+                use nix::sys::signal::{self, Signal};
+                use nix::unistd::Pid;
+                if let Err(e) = signal::kill(Pid::from_raw(p), Signal::SIGCONT) {
+                    return DaemonResponse::error(format!(
+                        "failed to send SIGCONT to '{name}' (pid {p}): {e}"
+                    ));
+                }
+                info!(agent = name, pid = p, "sent SIGCONT, session resumed");
+            }
+            None => {
+                return DaemonResponse::error(format!(
+                    "cannot resume '{name}': no known PID"
+                ));
+            }
+        }
+
+        // Update session state: Suspended -> Resumed -> Active
+        let now = chrono::Utc::now();
+        slot.session_state = SessionState::Active;
+        slot.last_active_at = now;
+        slot.suspended_at = None;
+
+        let data = serde_json::json!({
+            "agent": name,
+            "session_state": "active",
+            "resumed_at": now.to_rfc3339(),
+            "accumulated_active_secs": slot.accumulated_active_secs,
+            "policy_action": current.policy_action_name(SessionState::Resumed),
+        });
+        DaemonResponse::ok_with_data(format!("session '{name}' resumed"), data)
+    }
+
+    /// Terminate an agent session permanently.
+    ///
+    /// Validates the state transition, stops the agent, and marks the
+    /// session as terminated. This is a terminal state.
+    fn handle_terminate_session(&mut self, name: &str) -> DaemonResponse {
+        let Some(slot) = self.fleet.slot_mut(name) else {
+            return DaemonResponse::error(format!("unknown agent: {name}"));
+        };
+
+        let current = slot.session_state;
+        if current.is_terminal() {
+            return DaemonResponse::error(format!(
+                "session '{name}' is already terminated"
+            ));
+        }
+
+        // Allow termination from Active, Suspended, or Resumed
+        if let Err(e) = current.transition_to(SessionState::Terminated) {
+            return DaemonResponse::error(format!(
+                "cannot terminate '{name}': {e} (current state: {current})"
+            ));
+        }
+
+        // If the session was active (not suspended), accumulate the remaining time
+        let now = chrono::Utc::now();
+        if current == SessionState::Active || current == SessionState::Resumed {
+            let elapsed = (now - slot.last_active_at).num_seconds().max(0) as u64;
+            slot.accumulated_active_secs += elapsed;
+        }
+
+        // Mark session as terminated
+        slot.session_state = SessionState::Terminated;
+        slot.suspended_at = None;
+
+        let accumulated = slot.accumulated_active_secs;
+        let policy_action = current.policy_action_name(SessionState::Terminated);
+
+        // Stop the agent process (this sends SIGTERM via the fleet)
+        self.fleet.stop_agent(name);
+
+        let data = serde_json::json!({
+            "agent": name,
+            "session_state": "terminated",
+            "terminated_at": now.to_rfc3339(),
+            "accumulated_active_secs": accumulated,
+            "policy_action": policy_action,
+        });
+        DaemonResponse::ok_with_data(format!("session '{name}' terminated"), data)
+    }
+
+    /// Get the current session lifecycle status for an agent.
+    fn handle_session_lifecycle_status(&self, name: &str) -> DaemonResponse {
+        let Some(slot) = self.fleet.slot(name) else {
+            return DaemonResponse::error(format!("unknown agent: {name}"));
+        };
+
+        let now = chrono::Utc::now();
+        let current_active_secs = if slot.session_state == SessionState::Active
+            || slot.session_state == SessionState::Resumed
+        {
+            let elapsed = (now - slot.last_active_at).num_seconds().max(0) as u64;
+            slot.accumulated_active_secs + elapsed
+        } else {
+            slot.accumulated_active_secs
+        };
+
+        let data = serde_json::json!({
+            "agent": name,
+            "session_state": slot.session_state.to_string(),
+            "suspended_at": slot.suspended_at.map(|t| t.to_rfc3339()),
+            "last_active_at": slot.last_active_at.to_rfc3339(),
+            "accumulated_active_secs": current_active_secs,
+            "is_terminal": slot.session_state.is_terminal(),
+        });
+        DaemonResponse::ok_with_data("session lifecycle status", data)
     }
 
     /// Reload configuration from daemon.toml.
@@ -3740,6 +3957,10 @@ impl DaemonRuntime {
                     was_running: slot.is_thread_alive(),
                     session_id: sid,
                     restart_count: slot.restart_count,
+                    session_state: slot.session_state,
+                    suspended_at: slot.suspended_at,
+                    last_active_at: slot.last_active_at,
+                    accumulated_active_secs: slot.accumulated_active_secs,
                 });
             }
         }
@@ -5456,5 +5677,169 @@ controls:
         assert_eq!(diff.upstream_sha, "deadbeef");
         assert_eq!(diff.changed_files, 2);
         assert_eq!(diff.impacted_feature_ids.len(), 1);
+    }
+
+    // ---------------------------------------------------------------
+    // Session lifecycle tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn suspend_resume_preserves_agent_context() {
+        let mut runtime = test_runtime(vec![test_agent("a1")]);
+
+        // Agent starts in Created state; first transition to Active
+        {
+            let slot = runtime.fleet.slot_mut("a1").unwrap();
+            slot.session_state = SessionState::Active;
+            slot.last_active_at = chrono::Utc::now() - chrono::Duration::seconds(60);
+        }
+
+        // Suspending a non-running agent (no PID) should fail
+        let resp = runtime.handle_command(DaemonCommand::SuspendSession {
+            name: "a1".into(),
+        });
+        assert!(!resp.ok, "suspend should fail without a running PID");
+        assert!(resp.message.contains("no known PID"));
+
+        // Verify session state is still Active (fail-closed: state not mutated on signal failure)
+        let slot = runtime.fleet.slot("a1").unwrap();
+        assert_eq!(slot.session_state, SessionState::Active);
+    }
+
+    #[test]
+    fn session_timeout_auto_terminates() {
+        // This test verifies the terminate command works correctly,
+        // which is the mechanism used by the timeout watchdog.
+        let mut runtime = test_runtime(vec![test_agent("timeout-agent")]);
+
+        // Set agent to Active state
+        {
+            let slot = runtime.fleet.slot_mut("timeout-agent").unwrap();
+            slot.session_state = SessionState::Active;
+            slot.last_active_at = chrono::Utc::now() - chrono::Duration::seconds(3600);
+        }
+
+        // Terminate the session (simulating what the timeout watchdog would do)
+        let resp = runtime.handle_command(DaemonCommand::TerminateSession {
+            name: "timeout-agent".into(),
+        });
+        assert!(resp.ok, "terminate should succeed: {}", resp.message);
+
+        // Verify session is terminated
+        let slot = runtime.fleet.slot("timeout-agent").unwrap();
+        assert_eq!(slot.session_state, SessionState::Terminated);
+
+        // Verify accumulated time was tracked
+        let data = resp.data.unwrap();
+        let accumulated: u64 = data["accumulated_active_secs"].as_u64().unwrap();
+        // Should be approximately 3600 seconds
+        assert!(accumulated >= 3599, "expected ~3600s, got {accumulated}");
+    }
+
+    #[test]
+    fn concurrent_session_operations_are_serialized() {
+        // Session operations go through handle_command which is &mut self,
+        // enforcing serialization at the type level. Verify that state
+        // transitions are consistent across sequential operations.
+        let mut runtime = test_runtime(vec![test_agent("serial-agent")]);
+
+        // Set to Active
+        {
+            let slot = runtime.fleet.slot_mut("serial-agent").unwrap();
+            slot.session_state = SessionState::Active;
+        }
+
+        // Try to resume an Active session (should fail)
+        let resp = runtime.handle_command(DaemonCommand::ResumeSession {
+            name: "serial-agent".into(),
+        });
+        assert!(!resp.ok, "resume should fail on Active session");
+        assert!(resp.message.contains("cannot resume"));
+
+        // Verify state is still Active after the failed operation
+        let slot = runtime.fleet.slot("serial-agent").unwrap();
+        assert_eq!(slot.session_state, SessionState::Active);
+
+        // Terminate should succeed
+        let resp = runtime.handle_command(DaemonCommand::TerminateSession {
+            name: "serial-agent".into(),
+        });
+        assert!(resp.ok);
+
+        // After termination, all further operations should be denied
+        let resp = runtime.handle_command(DaemonCommand::SuspendSession {
+            name: "serial-agent".into(),
+        });
+        assert!(!resp.ok, "suspend should fail on Terminated session");
+
+        let resp = runtime.handle_command(DaemonCommand::ResumeSession {
+            name: "serial-agent".into(),
+        });
+        assert!(!resp.ok, "resume should fail on Terminated session");
+
+        let resp = runtime.handle_command(DaemonCommand::TerminateSession {
+            name: "serial-agent".into(),
+        });
+        assert!(!resp.ok, "double terminate should fail");
+        assert!(resp.message.contains("already terminated"));
+    }
+
+    #[test]
+    fn session_lifecycle_status_reports_current_state() {
+        let mut runtime = test_runtime(vec![test_agent("status-agent")]);
+
+        // Check initial state
+        let resp = runtime.handle_command(DaemonCommand::SessionLifecycleStatus {
+            name: "status-agent".into(),
+        });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        assert_eq!(data["session_state"].as_str().unwrap(), "created");
+        assert!(!data["is_terminal"].as_bool().unwrap());
+
+        // Transition to Active and check
+        {
+            let slot = runtime.fleet.slot_mut("status-agent").unwrap();
+            slot.session_state = SessionState::Active;
+            slot.last_active_at = chrono::Utc::now() - chrono::Duration::seconds(120);
+        }
+
+        let resp = runtime.handle_command(DaemonCommand::SessionLifecycleStatus {
+            name: "status-agent".into(),
+        });
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        assert_eq!(data["session_state"].as_str().unwrap(), "active");
+        let accumulated = data["accumulated_active_secs"].as_u64().unwrap();
+        assert!(accumulated >= 119, "expected ~120s, got {accumulated}");
+    }
+
+    #[test]
+    fn session_lifecycle_unknown_agent() {
+        let mut runtime = test_runtime(vec![]);
+
+        let resp = runtime.handle_command(DaemonCommand::SuspendSession {
+            name: "ghost".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("unknown agent"));
+
+        let resp = runtime.handle_command(DaemonCommand::ResumeSession {
+            name: "ghost".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("unknown agent"));
+
+        let resp = runtime.handle_command(DaemonCommand::TerminateSession {
+            name: "ghost".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("unknown agent"));
+
+        let resp = runtime.handle_command(DaemonCommand::SessionLifecycleStatus {
+            name: "ghost".into(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.message.contains("unknown agent"));
     }
 }

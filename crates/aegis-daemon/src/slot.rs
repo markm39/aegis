@@ -13,7 +13,9 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use aegis_control::daemon::ModelFallbackState;
+use chrono::{DateTime, Utc};
+
+use aegis_control::daemon::{ModelFallbackState, SessionState};
 use aegis_pilot::session::StreamKind;
 use aegis_pilot::supervisor::{PilotStats, PilotUpdate, SupervisorCommand};
 use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig};
@@ -122,6 +124,14 @@ pub struct AgentSlot {
     pub tool_session_id: Option<String>,
     /// Latest model fallback lifecycle status (OpenClaw parity).
     pub fallback_state: Arc<Mutex<Option<ModelFallbackState>>>,
+    /// Session lifecycle state.
+    pub session_state: SessionState,
+    /// When the session was last suspended.
+    pub suspended_at: Option<DateTime<Utc>>,
+    /// When the session was last actively executing.
+    pub last_active_at: DateTime<Utc>,
+    /// Accumulated active session time in seconds (excludes suspended periods).
+    pub accumulated_active_secs: u64,
 }
 
 impl AgentSlot {
@@ -157,6 +167,10 @@ impl AgentSlot {
             stream_kind: StreamKind::Plain,
             tool_session_id: None,
             fallback_state: Arc::new(Mutex::new(None)),
+            session_state: SessionState::Created,
+            suspended_at: None,
+            last_active_at: Utc::now(),
+            accumulated_active_secs: 0,
         }
     }
 
