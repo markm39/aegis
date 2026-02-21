@@ -1657,12 +1657,12 @@ impl FleetApp {
                                     Ok(report) => {
                                         if report.ok {
                                             self.set_result(format!(
-                                                "secure-runtime verification passed (features={})",
+                                                "compat verification passed (features={})",
                                                 report.checked_features
                                             ));
                                         } else {
                                             self.set_result(format!(
-                                                "secure-runtime verification failed ({} violations)",
+                                                "compat verify failed ({} violations)",
                                                 report.violations.len()
                                             ));
                                         }

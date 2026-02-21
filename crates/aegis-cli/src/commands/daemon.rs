@@ -11,6 +11,7 @@
 //! - `start-agent`/`stop-agent`/`restart-agent`: per-agent lifecycle
 //! - `install`/`uninstall`: launchd plist management
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -955,7 +956,7 @@ pub fn parity_diff() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Verify secure-runtime controls and fail-closed gates.
+/// Verify secure-runtime compatibility controls and fail-closed gates.
 pub fn parity_verify() -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
     if !client.is_running() {
@@ -973,7 +974,7 @@ pub fn parity_verify() -> anyhow::Result<()> {
     if let Some(data) = response.data {
         let report: ParityVerifyReport = serde_json::from_value(data)
             .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime verification: {e}"))?;
-        println!("Secure-runtime verification:");
+        println!("Secure-runtime compatibility verification:");
         println!(
             "  Result:            {}",
             if report.ok { "pass" } else { "fail" }
@@ -982,13 +983,25 @@ pub fn parity_verify() -> anyhow::Result<()> {
         if report.violations.is_empty() {
             println!("  Violations:        none");
         } else {
+            let mut grouped: BTreeMap<&str, usize> = BTreeMap::new();
+            for violation in &report.violations {
+                if let Some((rule_id, _)) = violation.split_once('|') {
+                    *grouped.entry(rule_id).or_insert(0) += 1;
+                } else {
+                    *grouped.entry("UNSTRUCTURED").or_insert(0) += 1;
+                }
+            }
+            println!("  Violation groups:");
+            for (rule_id, count) in grouped {
+                println!("    - {rule_id}: {count}");
+            }
             println!("  Violations:");
             for v in &report.violations {
                 println!("    - {v}");
             }
         }
         if !report.ok {
-            anyhow::bail!("secure-runtime verification failed");
+            anyhow::bail!("secure-runtime compatibility verification failed");
         }
     }
     Ok(())

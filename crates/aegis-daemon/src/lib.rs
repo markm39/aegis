@@ -36,14 +36,14 @@ use aegis_channel::ChannelInput;
 use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
-    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, PendingPromptSummary,
-    ParityDiffReport, ParityFeatureStatus, ParityStatusReport, ParityVerifyReport,
+    FramePayload, OrchestratorAgentView, OrchestratorSnapshot, ParityDiffReport,
+    ParityFeatureStatus, ParityStatusReport, ParityVerifyReport, PendingPromptSummary,
     RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, SessionHistory, SessionInfo,
     SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution, ToolActionOutcome,
     ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
-use aegis_control::hooks;
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
+use aegis_control::hooks;
 use aegis_ledger::AuditStore;
 use aegis_toolkit::contract::{CaptureRegion as ToolkitCaptureRegion, RiskTag, ToolAction};
 use aegis_toolkit::policy::map_tool_action;
@@ -385,6 +385,8 @@ struct ParityFeatureRow {
     risk_level: String,
     owner: String,
     required_controls: Vec<String>,
+    acceptance_tests: Vec<String>,
+    evidence_paths: Vec<String>,
 }
 
 fn parity_dir() -> std::path::PathBuf {
@@ -401,14 +403,25 @@ fn parity_dir() -> std::path::PathBuf {
 }
 
 fn strip_yaml_scalar(value: &str) -> String {
-    value.trim().trim_matches('"').trim_matches('\'').to_string()
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeatureListField {
+    RequiredControls,
+    AcceptanceTests,
+    EvidencePaths,
 }
 
 fn parse_features_yaml(raw: &str) -> (String, Vec<ParityFeatureRow>) {
     let mut updated_at_utc = String::new();
     let mut rows: Vec<ParityFeatureRow> = Vec::new();
     let mut current: Option<ParityFeatureRow> = None;
-    let mut in_required_controls = false;
+    let mut active_list_field: Option<FeatureListField> = None;
 
     for line in raw.lines() {
         let trimmed = line.trim();
@@ -432,7 +445,7 @@ fn parse_features_yaml(raw: &str) -> (String, Vec<ParityFeatureRow>) {
                 feature_id: strip_yaml_scalar(value),
                 ..ParityFeatureRow::default()
             });
-            in_required_controls = false;
+            active_list_field = None;
             continue;
         }
 
@@ -442,33 +455,45 @@ fn parse_features_yaml(raw: &str) -> (String, Vec<ParityFeatureRow>) {
 
         if let Some(value) = trimmed.strip_prefix("aegis_status:") {
             row.status = strip_yaml_scalar(value);
-            in_required_controls = false;
+            active_list_field = None;
             continue;
         }
         if let Some(value) = trimmed.strip_prefix("risk_level:") {
             row.risk_level = strip_yaml_scalar(value);
-            in_required_controls = false;
+            active_list_field = None;
             continue;
         }
         if let Some(value) = trimmed.strip_prefix("owner:") {
             row.owner = strip_yaml_scalar(value);
-            in_required_controls = false;
+            active_list_field = None;
             continue;
         }
         if trimmed.starts_with("required_controls:") {
-            in_required_controls = true;
+            active_list_field = Some(FeatureListField::RequiredControls);
             continue;
         }
-        if in_required_controls {
+        if trimmed.starts_with("acceptance_tests:") {
+            active_list_field = Some(FeatureListField::AcceptanceTests);
+            continue;
+        }
+        if trimmed.starts_with("evidence_paths:") {
+            active_list_field = Some(FeatureListField::EvidencePaths);
+            continue;
+        }
+        if let Some(field) = active_list_field {
             if let Some(value) = trimmed.strip_prefix("- ") {
-                let control = strip_yaml_scalar(value);
-                if !control.is_empty() {
-                    row.required_controls.push(control);
+                let item = strip_yaml_scalar(value);
+                if !item.is_empty() {
+                    match field {
+                        FeatureListField::RequiredControls => row.required_controls.push(item),
+                        FeatureListField::AcceptanceTests => row.acceptance_tests.push(item),
+                        FeatureListField::EvidencePaths => row.evidence_paths.push(item),
+                    }
                 }
                 continue;
             }
             if trimmed.contains(':') {
-                in_required_controls = false;
+                active_list_field = None;
             }
         }
     }
@@ -494,6 +519,14 @@ fn parse_security_controls_yaml(raw: &str) -> HashSet<String> {
         }
     }
     controls
+}
+
+fn parity_status_is_valid(status: &str) -> bool {
+    matches!(status, "complete" | "partial" | "missing" | "blocked")
+}
+
+fn parity_risk_level_is_valid(risk_level: &str) -> bool {
+    matches!(risk_level, "low" | "medium" | "high" | "critical")
 }
 
 fn parity_status_report_from_dir(dir: &std::path::Path) -> Result<ParityStatusReport, String> {
@@ -531,8 +564,9 @@ fn parity_status_report_from_dir(dir: &std::path::Path) -> Result<ParityStatusRe
             .cloned()
             .collect();
 
-        let is_high = row.risk_level.eq_ignore_ascii_case("high");
-        if is_high && (status != "complete" || !missing_controls.is_empty()) {
+        let is_high_risk = row.risk_level.eq_ignore_ascii_case("high")
+            || row.risk_level.eq_ignore_ascii_case("critical");
+        if is_high_risk && (status != "complete" || !missing_controls.is_empty()) {
             high_risk_blockers += 1;
         }
 
@@ -614,7 +648,9 @@ fn parity_diff_report_from_dir(dir: &std::path::Path) -> Result<ParityDiffReport
         .features
         .into_iter()
         .filter(|f| {
-            f.risk_level.eq_ignore_ascii_case("high") && (f.status != "complete")
+            (f.risk_level.eq_ignore_ascii_case("high")
+                || f.risk_level.eq_ignore_ascii_case("critical"))
+                && (f.status != "complete")
         })
         .map(|f| f.feature_id)
         .collect::<Vec<_>>();
@@ -633,26 +669,76 @@ fn parity_diff_report() -> Result<ParityDiffReport, String> {
 }
 
 fn parity_verify_report_from_dir(dir: &std::path::Path) -> Result<ParityVerifyReport, String> {
-    let status = parity_status_report_from_dir(dir)?;
+    let features_path = dir.join("matrix").join("features.yaml");
+    let controls_path = dir.join("matrix").join("security_controls.yaml");
+
+    let features_raw = std::fs::read_to_string(&features_path)
+        .map_err(|e| format!("failed to read {}: {e}", features_path.display()))?;
+    let controls_raw = std::fs::read_to_string(&controls_path)
+        .map_err(|e| format!("failed to read {}: {e}", controls_path.display()))?;
+
+    let (_, rows) = parse_features_yaml(&features_raw);
+    let known_controls = parse_security_controls_yaml(&controls_raw);
+
     let mut violations = Vec::new();
-    for feature in &status.features {
-        if feature.risk_level.eq_ignore_ascii_case("high") && feature.status != "complete" {
+    for row in &rows {
+        let status = row.status.trim().to_ascii_lowercase();
+        let risk_level = row.risk_level.trim().to_ascii_lowercase();
+
+        if !parity_status_is_valid(&status) {
             violations.push(format!(
-                "{} is high risk and not complete ({})",
-                feature.feature_id, feature.status
+                "R_STATUS_ENUM|{}|unsupported status '{}'",
+                row.feature_id, row.status
             ));
         }
-        if !feature.missing_controls.is_empty() {
+        if !parity_risk_level_is_valid(&risk_level) {
             violations.push(format!(
-                "{} has missing controls: {}",
-                feature.feature_id,
-                feature.missing_controls.join(", ")
+                "R_RISK_ENUM|{}|unsupported risk level '{}'",
+                row.feature_id, row.risk_level
+            ));
+        }
+
+        let is_complete = status == "complete";
+        let is_high_risk = matches!(risk_level.as_str(), "high" | "critical");
+
+        if is_high_risk && !is_complete {
+            violations.push(format!(
+                "R_HIGH_RISK_COMPLETE|{}|high/critical feature must be complete (status={})",
+                row.feature_id, row.status
+            ));
+        }
+
+        let missing_controls: Vec<&str> = row
+            .required_controls
+            .iter()
+            .map(String::as_str)
+            .filter(|control| !known_controls.contains(*control))
+            .collect();
+
+        if is_complete && !missing_controls.is_empty() {
+            violations.push(format!(
+                "R_COMPLETE_CONTROLS|{}|missing controls: {}",
+                row.feature_id,
+                missing_controls.join(", ")
+            ));
+        }
+        if is_complete && row.acceptance_tests.is_empty() {
+            violations.push(format!(
+                "R_COMPLETE_TESTS|{}|complete feature requires acceptance_tests",
+                row.feature_id
+            ));
+        }
+        if is_complete && row.evidence_paths.is_empty() {
+            violations.push(format!(
+                "R_COMPLETE_EVIDENCE|{}|complete feature requires evidence_paths",
+                row.feature_id
             ));
         }
     }
+
     Ok(ParityVerifyReport {
         ok: violations.is_empty(),
-        checked_features: status.features.len(),
+        checked_features: rows.len(),
         violations,
     })
 }
@@ -5010,7 +5096,137 @@ controls:
         let verify = parity_verify_report_from_dir(tmp.path()).expect("verify report");
         assert!(!verify.ok);
         assert_eq!(verify.checked_features, 1);
-        assert!(!verify.violations.is_empty());
+        assert!(verify
+            .violations
+            .iter()
+            .any(|v| v.starts_with("R_HIGH_RISK_COMPLETE|")));
+    }
+
+    #[test]
+    fn parity_verify_report_from_dir_fails_complete_gate_rules() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let matrix = tmp.path().join("matrix");
+        std::fs::create_dir_all(&matrix).expect("create matrix dir");
+
+        std::fs::write(
+            matrix.join("features.yaml"),
+            r#"
+version: 1
+updated_at_utc: "2026-02-21T00:00:00Z"
+features:
+  - feature_id: runtime.tools.exec
+    aegis_status: complete
+    risk_level: medium
+    required_controls:
+      - missing_control
+    owner: runtime
+"#,
+        )
+        .expect("write features");
+        std::fs::write(
+            matrix.join("security_controls.yaml"),
+            r#"
+controls:
+  - control_id: policy_gate_all_privileged_actions
+"#,
+        )
+        .expect("write controls");
+
+        let verify = parity_verify_report_from_dir(tmp.path()).expect("verify report");
+        assert!(!verify.ok);
+        assert!(verify
+            .violations
+            .iter()
+            .any(|v| v.starts_with("R_COMPLETE_CONTROLS|runtime.tools.exec|")));
+        assert!(verify
+            .violations
+            .iter()
+            .any(|v| v.starts_with("R_COMPLETE_TESTS|runtime.tools.exec|")));
+        assert!(verify
+            .violations
+            .iter()
+            .any(|v| v.starts_with("R_COMPLETE_EVIDENCE|runtime.tools.exec|")));
+    }
+
+    #[test]
+    fn parity_verify_report_from_dir_fails_unknown_status_and_risk() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let matrix = tmp.path().join("matrix");
+        std::fs::create_dir_all(&matrix).expect("create matrix dir");
+
+        std::fs::write(
+            matrix.join("features.yaml"),
+            r#"
+version: 1
+updated_at_utc: "2026-02-21T00:00:00Z"
+features:
+  - feature_id: runtime.tools.web_search
+    aegis_status: done
+    risk_level: severe
+    required_controls:
+      - policy_gate_all_privileged_actions
+    owner: runtime
+"#,
+        )
+        .expect("write features");
+        std::fs::write(
+            matrix.join("security_controls.yaml"),
+            r#"
+controls:
+  - control_id: policy_gate_all_privileged_actions
+"#,
+        )
+        .expect("write controls");
+
+        let verify = parity_verify_report_from_dir(tmp.path()).expect("verify report");
+        assert!(!verify.ok);
+        assert!(verify
+            .violations
+            .iter()
+            .any(|v| v.starts_with("R_STATUS_ENUM|runtime.tools.web_search|")));
+        assert!(verify
+            .violations
+            .iter()
+            .any(|v| v.starts_with("R_RISK_ENUM|runtime.tools.web_search|")));
+    }
+
+    #[test]
+    fn parity_verify_report_from_dir_passes_strict_complete() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let matrix = tmp.path().join("matrix");
+        std::fs::create_dir_all(&matrix).expect("create matrix dir");
+
+        std::fs::write(
+            matrix.join("features.yaml"),
+            r#"
+version: 1
+updated_at_utc: "2026-02-21T00:00:00Z"
+features:
+  - feature_id: orchestrator.computer_use.fast_loop
+    aegis_status: complete
+    risk_level: critical
+    required_controls:
+      - policy_gate_all_privileged_actions
+    owner: runtime
+    acceptance_tests:
+      - "tool actions are policy-gated"
+    evidence_paths:
+      - "crates/aegis-daemon/src/lib.rs"
+"#,
+        )
+        .expect("write features");
+        std::fs::write(
+            matrix.join("security_controls.yaml"),
+            r#"
+controls:
+  - control_id: policy_gate_all_privileged_actions
+"#,
+        )
+        .expect("write controls");
+
+        let verify = parity_verify_report_from_dir(tmp.path()).expect("verify report");
+        assert!(verify.ok, "violations: {:?}", verify.violations);
+        assert!(verify.violations.is_empty());
     }
 
     #[test]
