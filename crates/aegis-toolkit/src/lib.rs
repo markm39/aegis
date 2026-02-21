@@ -6,6 +6,7 @@
 pub mod browser_discovery;
 pub mod capture;
 pub mod contract;
+pub mod download_manager;
 pub mod element_screenshot;
 pub mod input;
 #[cfg(target_os = "macos")]
