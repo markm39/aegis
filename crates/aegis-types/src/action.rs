@@ -315,6 +315,29 @@ pub enum ActionKind {
         /// Daemon endpoint URL encoded in the setup code.
         endpoint: String,
     },
+    /// Send a command to a paired device (phone control).
+    ///
+    /// Gated by Cedar policy. Classified as ActionRisk::High because it
+    /// controls a physical device. Commands are queued (not pushed) and
+    /// the device polls for them.
+    DeviceCommand {
+        /// Target device identifier.
+        device_id: String,
+        /// Type of command (e.g., "CameraSnap", "GetLocation", "Vibrate").
+        command_type: String,
+    },
+    /// Manage a device in the gateway device registry.
+    ///
+    /// Gated by Cedar policy. Logged when a device management operation
+    /// (register, update status, remove, heartbeat, update capabilities)
+    /// is performed. The device_id is validated as a proper UUID.
+    ManageDevice {
+        /// Device UUID being managed.
+        device_id: String,
+        /// Operation being performed (e.g., "register", "update_status",
+        /// "remove", "heartbeat", "update_capabilities").
+        operation: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -526,6 +549,18 @@ impl std::fmt::Display for ActionKind {
             ActionKind::GenerateSetupCode { endpoint } => {
                 write!(f, "GenerateSetupCode {endpoint}")
             }
+            ActionKind::DeviceCommand {
+                device_id,
+                command_type,
+            } => {
+                write!(f, "DeviceCommand {device_id} ({command_type})")
+            }
+            ActionKind::ManageDevice {
+                device_id,
+                operation,
+            } => {
+                write!(f, "ManageDevice {device_id} ({operation})")
+            }
         }
     }
 }
@@ -680,6 +715,14 @@ mod tests {
             ActionKind::RenderA2UI {
                 spec_id: "00000000-0000-0000-0000-000000000003".into(),
                 component_count: 5,
+            },
+            ActionKind::DeviceCommand {
+                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
+                command_type: "GetBatteryStatus".into(),
+            },
+            ActionKind::ManageDevice {
+                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
+                operation: "register".into(),
             },
         ];
         for v in variants {

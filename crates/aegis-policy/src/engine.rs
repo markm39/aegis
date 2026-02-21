@@ -220,6 +220,14 @@ impl PolicyEngine {
                 "GenerateSetupCode" => ActionKind::GenerateSetupCode {
                     endpoint: "__probe__".into(),
                 },
+                "DeviceCommand" => ActionKind::DeviceCommand {
+                    device_id: "__probe__".into(),
+                    command_type: "__probe__".into(),
+                },
+                "ManageDevice" => ActionKind::ManageDevice {
+                    device_id: "__probe__".into(),
+                    operation: "__probe__".into(),
+                },
                 _ => return false,
             },
         );
@@ -403,6 +411,8 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::LlmComplete { endpoint, .. } => Ok(("LlmComplete", endpoint.as_str())),
         ActionKind::RenderA2UI { spec_id, .. } => Ok(("RenderA2UI", spec_id.as_str())),
         ActionKind::GenerateSetupCode { endpoint, .. } => Ok(("GenerateSetupCode", endpoint.as_str())),
+        ActionKind::DeviceCommand { device_id, .. } => Ok(("DeviceCommand", device_id.as_str())),
+        ActionKind::ManageDevice { device_id, .. } => Ok(("ManageDevice", device_id.as_str())),
     }
 }
 

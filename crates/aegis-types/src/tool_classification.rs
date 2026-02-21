@@ -149,6 +149,14 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // Classified as Medium because the code expires quickly and still
         // requires verification before granting persistent access.
         ActionKind::GenerateSetupCode { .. } => ActionRisk::Medium,
+        // Device commands control physical device hardware (camera, screen,
+        // vibration, location). Classified as High because they affect a
+        // real device and could be used for surveillance or harassment.
+        ActionKind::DeviceCommand { .. } => ActionRisk::High,
+        // Device management operations modify the device registry.
+        // Classified as Medium because they have side effects (adding/removing
+        // devices, updating status) but are recoverable and policy-gated.
+        ActionKind::ManageDevice { .. } => ActionRisk::Medium,
     }
 }
 

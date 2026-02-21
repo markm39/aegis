@@ -159,6 +159,14 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "DeviceCommand" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "ManageDevice" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -250,6 +258,8 @@ mod tests {
             "DeviceAuth",
             "LlmComplete",
             "RenderA2UI",
+            "DeviceCommand",
+            "ManageDevice",
         ];
 
         let schema_text = AEGIS_SCHEMA;

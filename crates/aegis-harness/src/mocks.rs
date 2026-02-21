@@ -388,6 +388,8 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::LlmComplete { .. } => "LlmComplete",
         ActionKind::RenderA2UI { .. } => "RenderA2UI",
         ActionKind::GenerateSetupCode { .. } => "GenerateSetupCode",
+        ActionKind::DeviceCommand { .. } => "DeviceCommand",
+        ActionKind::ManageDevice { .. } => "ManageDevice",
     }
 }
 

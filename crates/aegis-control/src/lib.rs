@@ -17,6 +17,7 @@ pub mod acp_websocket;
 pub mod alias;
 pub mod command;
 pub mod daemon;
+pub mod device_management;
 pub mod event;
 pub mod hooks;
 pub mod message_routing;

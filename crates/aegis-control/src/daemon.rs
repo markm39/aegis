@@ -773,6 +773,31 @@ pub enum DaemonCommand {
         /// Device ID to query.
         device_id: String,
     },
+    /// Update the status of a registered device.
+    ///
+    /// Status must be one of: "online", "offline", "paired", "revoked".
+    /// Cedar policy gate: `daemon:update_device_status`.
+    UpdateDeviceStatus {
+        /// Device UUID string.
+        device_id: String,
+        /// New status value.
+        status: String,
+    },
+    /// Remove a device from the registry entirely.
+    ///
+    /// This is a destructive operation logged to the audit trail.
+    /// Cedar policy gate: `daemon:remove_device`.
+    RemoveDevice {
+        /// Device UUID string.
+        device_id: String,
+    },
+    /// Heartbeat from a device, updating its last_seen timestamp.
+    ///
+    /// Cedar policy gate: `daemon:device_heartbeat`.
+    DeviceHeartbeat {
+        /// Device UUID string.
+        device_id: String,
+    },
 
     // -- LLM completion command --
     /// Send a completion request through the LLM provider abstraction.
@@ -809,6 +834,38 @@ pub enum DaemonCommand {
     GenerateSetupCode {
         /// Daemon endpoint URL to encode in the QR code.
         endpoint: String,
+    },
+
+    // -- Phone control commands --
+    /// Queue a command for a paired device (polled by the device).
+    ///
+    /// The device_id must refer to a registered, non-revoked device.
+    /// Commands are queued (not pushed) for security -- the device polls.
+    /// Cedar policy gate: `daemon:queue_device_command`.
+    QueueDeviceCommand {
+        /// Target device identifier.
+        device_id: String,
+        /// Command payload as JSON (maps to `DeviceCommand` enum).
+        command: serde_json::Value,
+    },
+    /// Poll pending commands for a device.
+    ///
+    /// Returns and removes all pending commands from the device's queue.
+    /// Timed-out commands are automatically expired before returning.
+    /// Cedar policy gate: `daemon:poll_device_commands`.
+    PollDeviceCommands {
+        /// Device identifier to poll commands for.
+        device_id: String,
+    },
+    /// Report the result of a previously polled device command.
+    ///
+    /// The command_id must refer to a previously polled command.
+    /// Cedar policy gate: `daemon:report_device_command_result`.
+    ReportDeviceCommandResult {
+        /// Command UUID returned when the command was queued.
+        command_id: String,
+        /// Result data from the device as JSON.
+        result: serde_json::Value,
     },
 }
 
@@ -939,8 +996,14 @@ impl DaemonCommand {
             DaemonCommand::ListDevices { .. } => "daemon:list_devices",
             DaemonCommand::RevokeDevice { .. } => "daemon:revoke_device",
             DaemonCommand::DeviceStatus { .. } => "daemon:device_status",
+            DaemonCommand::UpdateDeviceStatus { .. } => "daemon:update_device_status",
+            DaemonCommand::RemoveDevice { .. } => "daemon:remove_device",
+            DaemonCommand::DeviceHeartbeat { .. } => "daemon:device_heartbeat",
             DaemonCommand::LlmComplete { .. } => "daemon:llm_complete",
             DaemonCommand::GenerateSetupCode { .. } => "daemon:generate_setup_code",
+            DaemonCommand::QueueDeviceCommand { .. } => "daemon:queue_device_command",
+            DaemonCommand::PollDeviceCommands { .. } => "daemon:poll_device_commands",
+            DaemonCommand::ReportDeviceCommandResult { .. } => "daemon:report_device_command_result",
         }
     }
 }
