@@ -3471,6 +3471,9 @@ impl DaemonRuntime {
             DaemonCommand::ListModels => {
                 DaemonResponse::error("model listing not yet implemented")
             }
+            DaemonCommand::ModelAllowlist { .. } => {
+                DaemonResponse::error("model allowlist not yet implemented")
+            }
             DaemonCommand::AddAlias { alias, command, args } => {
                 match self.alias_registry.add(alias, command, args) {
                     Ok(()) => {

@@ -254,6 +254,11 @@ pub enum DaemonCommand {
     },
     /// List all models seen by the usage proxy across the fleet.
     ListModels,
+    /// Set the fleet-wide model allowlist.
+    ///
+    /// Patterns use glob syntax (e.g. `"claude-*"`, `"gpt-4o*"`).
+    /// An empty pattern list rejects all models (fail-closed).
+    ModelAllowlist { patterns: Vec<String> },
 
     // -- Command framework --
     /// Execute a registered command through the command processing framework.
@@ -1147,6 +1152,9 @@ mod tests {
                 exclude_agents: vec![],
             },
             DaemonCommand::ListModels,
+            DaemonCommand::ModelAllowlist {
+                patterns: vec!["claude-*".into(), "gpt-4o*".into()],
+            },
         ];
 
         for cmd in commands {

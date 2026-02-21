@@ -90,6 +90,7 @@ dependencies = [
  "aegis-types",
  "axum",
  "chrono",
+ "glob",
  "serde",
  "serde_json",
  "tempfile",
@@ -278,6 +279,7 @@ version = "0.1.0"
 dependencies = [
  "aegis-policy",
  "aegis-types",
+ "base64",
  "regex",
  "tempfile",
  "thiserror 2.0.18",
