@@ -22,7 +22,7 @@ use crate::fs_audit::FsAuditEntry;
 /// Middleware runs synchronously after the database insert. A panicking
 /// middleware will propagate the panic; implementations should catch errors
 /// internally and log them rather than panicking.
-pub trait AuditMiddleware: Send {
+pub trait AuditMiddleware: Send + Sync {
     /// Called after a standard audit entry is inserted.
     fn on_action(&self, entry: &AuditEntry);
 
