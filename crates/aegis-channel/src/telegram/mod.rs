@@ -15,7 +15,7 @@ use tracing::info;
 
 use aegis_types::TelegramConfig;
 
-use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage};
+use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, OutboundPhoto};
 
 use self::api::{build_keyboard, TelegramApi};
 
@@ -105,6 +105,19 @@ impl Channel for TelegramChannel {
 
     fn name(&self) -> &str {
         "Telegram"
+    }
+
+    async fn send_photo(&self, photo: OutboundPhoto) -> Result<(), ChannelError> {
+        self.api
+            .send_photo(
+                self.config.chat_id,
+                &photo.filename,
+                &photo.bytes,
+                photo.caption.as_deref(),
+                photo.silent,
+            )
+            .await?;
+        Ok(())
     }
 }
 

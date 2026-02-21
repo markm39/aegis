@@ -15,6 +15,7 @@
 pub mod active_hours;
 pub mod channel;
 pub mod format;
+pub mod hooks;
 pub mod runner;
 pub mod slack;
 pub mod telegram;

@@ -9,7 +9,7 @@ license.workspace = true
 aegis-types = { workspace = true }
 aegis-alert = { workspace = true }
 aegis-control = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

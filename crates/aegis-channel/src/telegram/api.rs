@@ -9,9 +9,7 @@ use tracing::{debug, warn};
 
 use crate::channel::ChannelError;
 
-use super::types::{
-    ApiResponse, InlineKeyboardButton, InlineKeyboardMarkup, SentMessage, Update,
-};
+use super::types::{ApiResponse, InlineKeyboardButton, InlineKeyboardMarkup, SentMessage, Update};
 
 /// Low-level Telegram Bot API client.
 pub struct TelegramApi {
@@ -192,6 +190,52 @@ impl TelegramApi {
         }
 
         Ok(())
+    }
+
+    /// Send a photo to a chat using multipart/form-data.
+    pub async fn send_photo(
+        &self,
+        chat_id: i64,
+        filename: &str,
+        bytes: &[u8],
+        caption: Option<&str>,
+        disable_notification: bool,
+    ) -> Result<i64, ChannelError> {
+        use reqwest::multipart;
+
+        let photo_part = multipart::Part::bytes(bytes.to_vec())
+            .file_name(filename.to_string())
+            .mime_str("image/png")
+            .map_err(|e| ChannelError::Other(format!("mime error: {e}")))?;
+
+        let mut form = multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("photo", photo_part);
+
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+        if disable_notification {
+            form = form.text("disable_notification", "true".to_string());
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/sendPhoto", self.base_url))
+            .multipart(form)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<SentMessage> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            return Err(ChannelError::Api(desc));
+        }
+
+        api_resp
+            .result
+            .map(|m| m.message_id)
+            .ok_or_else(|| ChannelError::Api("sendPhoto returned ok but no result".into()))
     }
 
     /// Remove inline keyboard buttons from a message (prevents double-tap).

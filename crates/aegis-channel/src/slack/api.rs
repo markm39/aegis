@@ -144,6 +144,39 @@ impl SlackApi {
         ensure_ok(&parsed)
     }
 
+    /// Upload a file to a Slack channel using files.upload (v1) API.
+    pub async fn upload_file(
+        &self,
+        channel: &str,
+        filename: &str,
+        bytes: &[u8],
+        title: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        use reqwest::multipart;
+
+        let file_part =
+            multipart::Part::bytes(bytes.to_vec()).file_name(filename.to_string());
+
+        let mut form = multipart::Form::new()
+            .text("channels", channel.to_string())
+            .part("file", file_part);
+
+        if let Some(t) = title {
+            form = form.text("title", t.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(format!("{API_BASE}/files.upload"))
+            .bearer_auth(&self.token)
+            .multipart(form)
+            .send()
+            .await?;
+
+        let parsed: SlackResponse = resp.json().await?;
+        ensure_ok(&parsed)
+    }
+
     pub async fn stop_stream(
         &self,
         stream_ts: &str,

@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use tracing::{info, warn};
 
+use crate::hooks::MessageHook;
 use aegis_alert::AlertEvent;
 use aegis_control::daemon::DaemonCommand;
 use aegis_control::event::PilotWebhookEvent;
@@ -132,13 +133,21 @@ async fn run_slack(
                     continue;
                 }
 
-                if let Err(e) = channel.send(message).await {
-                    warn!("failed to send outbound message: {e}");
+                {
+                    let text_copy = message.text.clone();
+                    tracing::debug!(hook = ?MessageHook::pre_send(channel.name(), &text_copy), "message hook");
+                    let send_result = channel.send(message).await;
+                    let success = send_result.is_ok();
+                    tracing::debug!(hook = ?MessageHook::post_send(channel.name(), &text_copy, success), "message hook");
+                    if let Err(e) = send_result {
+                        warn!("failed to send outbound message: {e}");
+                    }
                 }
             }
             _ = interval.tick() => {
                 match channel.recv().await {
                     Ok(Some(action)) => {
+                        tracing::debug!(hook = ?MessageHook::received(channel.name(), &format!("{:?}", action)), "message hook");
                         handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
                     }
                     Ok(None) => {}
@@ -221,8 +230,15 @@ async fn run_telegram(
                     warn!("outbound message suppressed (inactive hours)");
                     continue;
                 }
-                if let Err(e) = channel.send(message).await {
-                    warn!("failed to send outbound message: {e}");
+                {
+                    let text_copy = message.text.clone();
+                    tracing::debug!(hook = ?MessageHook::pre_send(channel.name(), &text_copy), "message hook");
+                    let send_result = channel.send(message).await;
+                    let success = send_result.is_ok();
+                    tracing::debug!(hook = ?MessageHook::post_send(channel.name(), &text_copy, success), "message hook");
+                    if let Err(e) = send_result {
+                        warn!("failed to send outbound message: {e}");
+                    }
                 }
             }
 
@@ -230,6 +246,7 @@ async fn run_telegram(
                 // Poll for inbound actions
                 match channel.recv().await {
                     Ok(Some(action)) => {
+                        tracing::debug!(hook = ?MessageHook::received(channel.name(), &format!("{:?}", action)), "message hook");
                         handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
                     }
                     Ok(None) => {} // No pending action

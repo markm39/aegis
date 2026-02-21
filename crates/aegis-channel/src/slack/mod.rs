@@ -79,9 +79,14 @@ impl Channel for SlackChannel {
         "Slack"
     }
 
-    async fn send_photo(&self, _photo: OutboundPhoto) -> Result<(), ChannelError> {
-        Err(ChannelError::Other(
-            "photo messages not supported for Slack".into(),
-        ))
+    async fn send_photo(&self, photo: OutboundPhoto) -> Result<(), ChannelError> {
+        self.api
+            .upload_file(
+                &self.config.channel_id,
+                &photo.filename,
+                &photo.bytes,
+                photo.caption.as_deref(),
+            )
+            .await
     }
 }

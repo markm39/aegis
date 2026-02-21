@@ -189,6 +189,8 @@ async fn proxy_request(
         }
     };
 
+    let request_preview = extract_preview(&body_bytes, 200);
+
     // Build upstream request
     let mut req_builder = state.client.request(
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::POST),
@@ -255,11 +257,27 @@ async fn proxy_request(
     let endpoint = format!("/{path}");
 
     if is_streaming {
-        handle_streaming_response(state, provider, &endpoint, status, &response_headers, upstream_response)
-            .await
+        handle_streaming_response(
+            state,
+            provider,
+            &endpoint,
+            status,
+            &response_headers,
+            upstream_response,
+            &request_preview,
+        )
+        .await
     } else {
-        handle_non_streaming_response(state, provider, &endpoint, status, &response_headers, upstream_response)
-            .await
+        handle_non_streaming_response(
+            state,
+            provider,
+            &endpoint,
+            status,
+            &response_headers,
+            upstream_response,
+            &request_preview,
+        )
+        .await
     }
 }
 
@@ -271,6 +289,7 @@ async fn handle_non_streaming_response(
     status: reqwest::StatusCode,
     response_headers: &reqwest::header::HeaderMap,
     response: reqwest::Response,
+    request_preview: &str,
 ) -> Response {
     // Limit response body to 50 MB to prevent OOM from pathological responses
     let body_bytes = match response.bytes().await {
@@ -290,13 +309,15 @@ async fn handle_non_streaming_response(
         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
             let usage = extract_usage_from_json(provider, &json);
             if let Some(usage) = usage {
-                log_usage(state, provider, endpoint, &usage);
+                let response_preview = extract_preview(&body_bytes, 200);
+                log_usage(state, provider, endpoint, &usage, Some(request_preview), Some(&response_preview));
             }
         }
     }
 
     // Build axum response
-    let mut builder = Response::builder().status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK));
+    let mut builder =
+        Response::builder().status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK));
     for (name, value) in response_headers.iter() {
         let name_str = name.as_str().to_lowercase();
         if matches!(name_str.as_str(), "transfer-encoding" | "connection") {
@@ -308,7 +329,11 @@ async fn handle_non_streaming_response(
     }
 
     builder.body(Body::from(body_bytes)).unwrap_or_else(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, "failed to build response").into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to build response",
+        )
+            .into_response()
     })
 }
 
@@ -320,12 +345,15 @@ async fn handle_streaming_response(
     status: reqwest::StatusCode,
     response_headers: &reqwest::header::HeaderMap,
     response: reqwest::Response,
+    request_preview: &str,
 ) -> Response {
     let state = state.clone();
     let endpoint = endpoint.to_string();
+    let request_preview = request_preview.to_string();
 
     // Build response headers
-    let mut builder = Response::builder().status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK));
+    let mut builder =
+        Response::builder().status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK));
     for (name, value) in response_headers.iter() {
         let name_str = name.as_str().to_lowercase();
         if matches!(name_str.as_str(), "transfer-encoding" | "connection") {
@@ -373,14 +401,18 @@ async fn handle_streaming_response(
         // Log accumulated usage
         if accumulator.has_data() {
             let usage = accumulator.into_usage_data();
-            log_usage(&state, provider, &endpoint, &usage);
+            log_usage(&state, provider, &endpoint, &usage, Some(&request_preview), Some("[streaming response]"));
         }
     };
 
     let body = Body::from_stream(body_stream);
 
     builder.body(body).unwrap_or_else(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, "failed to build streaming response").into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to build streaming response",
+        )
+            .into_response()
     })
 }
 
@@ -541,14 +573,23 @@ fn process_sse_line(line: &str, acc: &mut UsageAccumulator) {
 
 /// Extract usage data from a non-streaming JSON response.
 fn extract_usage_from_json(provider: Provider, json: &serde_json::Value) -> Option<UsageData> {
-    let model = json.get("model").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let model = json
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     let usage = json.get("usage")?;
 
     match provider {
         Provider::Anthropic => Some(UsageData {
             model: model.to_string(),
-            input_tokens: usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            output_tokens: usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            input_tokens: usage
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            output_tokens: usage
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
             cache_creation_input_tokens: usage
                 .get("cache_creation_input_tokens")
                 .and_then(|v| v.as_u64())
@@ -560,16 +601,43 @@ fn extract_usage_from_json(provider: Provider, json: &serde_json::Value) -> Opti
         }),
         Provider::OpenAi => Some(UsageData {
             model: model.to_string(),
-            input_tokens: usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            output_tokens: usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            input_tokens: usage
+                .get("prompt_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            output_tokens: usage
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
         }),
     }
 }
 
+/// Extract a UTF-8 preview from raw bytes, truncated to `max_len` chars.
+fn extract_preview(bytes: &[u8], max_len: usize) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if text.len() <= max_len {
+        text.to_string()
+    } else {
+        let mut end = max_len;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &text[..end])
+    }
+}
+
 /// Log usage data to the audit ledger.
-fn log_usage(state: &ProxyState, provider: Provider, endpoint: &str, usage: &UsageData) {
+fn log_usage(
+    state: &ProxyState,
+    provider: Provider,
+    endpoint: &str,
+    usage: &UsageData,
+    request_preview: Option<&str>,
+    response_preview: Option<&str>,
+) {
     let action = Action::new(
         &state.principal,
         ActionKind::ApiUsage {
@@ -599,6 +667,8 @@ fn log_usage(state: &ProxyState, provider: Provider, endpoint: &str, usage: &Usa
                         model = usage.model,
                         input_tokens = usage.input_tokens,
                         output_tokens = usage.output_tokens,
+                        request_preview = request_preview.unwrap_or(""),
+                        response_preview = response_preview.unwrap_or(""),
                         "API usage logged"
                     );
                 }
@@ -772,7 +842,10 @@ mod tests {
 
     #[test]
     fn provider_upstream_urls() {
-        assert_eq!(Provider::Anthropic.upstream_base(), "https://api.anthropic.com");
+        assert_eq!(
+            Provider::Anthropic.upstream_base(),
+            "https://api.anthropic.com"
+        );
         assert_eq!(Provider::OpenAi.upstream_base(), "https://api.openai.com");
     }
 
