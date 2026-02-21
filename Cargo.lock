@@ -114,6 +114,7 @@ dependencies = [
  "aegis-toolkit",
  "aegis-types",
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "chrono",

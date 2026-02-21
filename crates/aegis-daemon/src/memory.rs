@@ -1,13 +1,15 @@
 //! SQLite-backed key-value memory store for agent context.
 //!
 //! Provides per-namespace key-value storage with full-text search (FTS5)
-//! for agent memory persistence. Reuses the existing rusqlite dependency
-//! from aegis-ledger.
+//! and optional vector embeddings for similarity search. Reuses the
+//! existing rusqlite dependency from aegis-ledger.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+
+use crate::embeddings::{blob_to_embedding, cosine_similarity, embedding_to_blob};
 
 /// SQLite-backed key-value store with FTS5 full-text search.
 pub struct MemoryStore {
@@ -47,6 +49,20 @@ impl MemoryStore {
                 content_rowid=rowid
             );",
         )?;
+
+        // Migration: add embedding column if it doesn't exist yet.
+        // SQLite's ALTER TABLE ADD COLUMN is idempotent-safe when we check
+        // for the column first.
+        let has_embedding: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'embedding'")?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .map(|count| count > 0)?;
+
+        if !has_embedding {
+            conn.execute_batch(
+                "ALTER TABLE agent_memory ADD COLUMN embedding BLOB;",
+            )?;
+        }
 
         Ok(Self { conn })
     }
@@ -191,6 +207,109 @@ impl MemoryStore {
             result.push(row?);
         }
         Ok(result)
+    }
+
+    /// Insert or update a key-value pair together with its embedding vector.
+    ///
+    /// The embedding is stored as a little-endian f32 BLOB alongside the
+    /// text value. Also updates the FTS index.
+    pub fn set_with_embedding(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &str,
+        embedding: &[f32],
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let blob = embedding_to_blob(embedding);
+
+        // Delete old FTS entry if the row already exists.
+        let old_rowid: Option<i64> = self
+            .conn
+            .prepare_cached(
+                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+            )?
+            .query_row(params![namespace, key], |row| row.get(0))
+            .ok();
+
+        if let Some(rowid) = old_rowid {
+            let (old_val,): (String,) = self
+                .conn
+                .prepare_cached(
+                    "SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+                )?
+                .query_row(params![namespace, key], |row| Ok((row.get(0)?,)))?;
+
+            self.conn.execute(
+                "INSERT INTO agent_memory_fts(agent_memory_fts, rowid, namespace, key, value) VALUES('delete', ?1, ?2, ?3, ?4)",
+                params![rowid, namespace, key, old_val],
+            )?;
+        }
+
+        // Upsert the main row with embedding.
+        self.conn.execute(
+            "INSERT INTO agent_memory (namespace, key, value, updated_at, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(namespace, key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at,
+                embedding = excluded.embedding",
+            params![namespace, key, value, now, blob],
+        )?;
+
+        // Insert new FTS entry.
+        let new_rowid: i64 = self
+            .conn
+            .prepare_cached(
+                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
+            )?
+            .query_row(params![namespace, key], |row| row.get(0))?;
+
+        self.conn.execute(
+            "INSERT INTO agent_memory_fts(rowid, namespace, key, value) VALUES(?1, ?2, ?3, ?4)",
+            params![new_rowid, namespace, key, value],
+        )?;
+
+        Ok(())
+    }
+
+    /// Search for entries whose embeddings are most similar to the query vector.
+    ///
+    /// Returns `(key, value, similarity_score)` tuples sorted by descending
+    /// cosine similarity. Only entries that have an embedding are considered.
+    pub fn search_similar(
+        &self,
+        namespace: &str,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(String, String, f32)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT key, value, embedding FROM agent_memory WHERE namespace = ?1 AND embedding IS NOT NULL",
+        )?;
+
+        let rows = stmt.query_map(params![namespace], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+
+        let mut scored: Vec<(String, String, f32)> = Vec::new();
+        for row in rows {
+            let (key, value, blob) = row?;
+            let emb = blob_to_embedding(&blob);
+            if emb.len() == query_embedding.len() {
+                let score = cosine_similarity(&emb, query_embedding);
+                scored.push((key, value, score));
+            }
+        }
+
+        // Sort by similarity descending.
+        scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored)
     }
 }
 
@@ -343,5 +462,63 @@ mod tests {
 
         let results = store.search("ns1", "searchable", 10).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_memory_store_embedding_storage() {
+        let (store, _dir) = test_store();
+
+        let embedding = vec![1.0_f32, 0.0, 0.0, 0.0];
+        store
+            .set_with_embedding("ns1", "vec_key", "vector value", &embedding)
+            .unwrap();
+
+        // The value should be retrievable via the normal get method.
+        assert_eq!(
+            store.get("ns1", "vec_key").unwrap(),
+            Some("vector value".into())
+        );
+
+        // Searching with the same embedding should return the entry with score ~1.0.
+        let results = store.search_similar("ns1", &embedding, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "vec_key");
+        assert_eq!(results[0].1, "vector value");
+        assert!((results[0].2 - 1.0).abs() < 1e-6, "exact match should have similarity ~1.0");
+    }
+
+    #[test]
+    fn test_memory_search_similar_ranking() {
+        let (store, _dir) = test_store();
+
+        // Three orthogonal-ish vectors in 4D space.
+        let emb_a = vec![1.0_f32, 0.0, 0.0, 0.0]; // points along x
+        let emb_b = vec![0.0_f32, 1.0, 0.0, 0.0]; // points along y (orthogonal to query)
+        let emb_c = vec![0.9_f32, 0.1, 0.0, 0.0]; // mostly along x (close to query)
+
+        store.set_with_embedding("ns1", "a", "item a", &emb_a).unwrap();
+        store.set_with_embedding("ns1", "b", "item b", &emb_b).unwrap();
+        store.set_with_embedding("ns1", "c", "item c", &emb_c).unwrap();
+
+        // Query along x axis -- should rank a first, then c, then b.
+        let query = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let results = store.search_similar("ns1", &query, 10).unwrap();
+        assert_eq!(results.len(), 3);
+
+        // "a" is an exact match (similarity 1.0), should be first.
+        assert_eq!(results[0].0, "a");
+        assert!((results[0].2 - 1.0).abs() < 1e-6);
+
+        // "c" is close to the query, should be second.
+        assert_eq!(results[1].0, "c");
+        assert!(results[1].2 > 0.9);
+
+        // "b" is orthogonal, should be last with similarity ~0.0.
+        assert_eq!(results[2].0, "b");
+        assert!(results[2].2.abs() < 1e-6);
+
+        // Verify descending order.
+        assert!(results[0].2 >= results[1].2);
+        assert!(results[1].2 >= results[2].2);
     }
 }

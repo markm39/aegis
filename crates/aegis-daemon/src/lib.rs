@@ -17,6 +17,7 @@ pub mod commands;
 pub mod control;
 pub mod cron;
 pub mod dashboard;
+pub mod embeddings;
 pub mod fleet;
 pub mod lifecycle;
 pub mod memory;

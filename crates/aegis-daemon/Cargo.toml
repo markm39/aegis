@@ -17,6 +17,7 @@ aegis-alert = { path = "../aegis-alert" }
 aegis-channel = { path = "../aegis-channel" }
 aegis-proxy = { workspace = true }
 
+async-trait = { workspace = true }
 rusqlite = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
