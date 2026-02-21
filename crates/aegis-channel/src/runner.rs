@@ -282,17 +282,12 @@ async fn run_generic_channel(
 
                         // Check auto-reply before fleet command parsing
                         if let InboundAction::Unknown(ref text) = action {
-                            if let Some(auto_action) = auto_reply.check(text, None) {
-                                if let crate::auto_reply::AutoAction::Reply(reply) = auto_action {
-                                    let msg = crate::channel::OutboundMessage::text(reply);
-                                    if let Err(e) = channel.send(msg).await {
-                                        warn!("failed to send auto-reply: {e}");
-                                    }
-                                    continue;
+                            if let Some(crate::auto_reply::AutoAction::Reply(ref reply)) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply.clone());
+                                if let Err(e) = channel.send(msg).await {
+                                    warn!("failed to send auto-reply: {e}");
                                 }
-                                // Approve/Deny/Forward actions would need daemon
-                                // integration; log for now.
-                                tracing::debug!(action = ?auto_action, "auto-reply action (not yet wired)");
+                                continue;
                             }
                         }
 
@@ -383,8 +378,8 @@ async fn run_slack(
 
                         // Check auto-reply before fleet command parsing
                         if let InboundAction::Unknown(ref text) = action {
-                            if let Some(crate::auto_reply::AutoAction::Reply(reply)) = auto_reply.check(text, None) {
-                                let msg = crate::channel::OutboundMessage::text(reply);
+                            if let Some(crate::auto_reply::AutoAction::Reply(ref reply)) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply.clone());
                                 if let Err(e) = channel.send(msg).await {
                                     warn!("failed to send auto-reply: {e}");
                                 }
@@ -496,8 +491,8 @@ async fn run_telegram(
 
                         // Check auto-reply before fleet command parsing
                         if let InboundAction::Unknown(ref text) = action {
-                            if let Some(crate::auto_reply::AutoAction::Reply(reply)) = auto_reply.check(text, None) {
-                                let msg = crate::channel::OutboundMessage::text(reply);
+                            if let Some(crate::auto_reply::AutoAction::Reply(ref reply)) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply.clone());
                                 if let Err(e) = channel.send(msg).await {
                                     warn!("failed to send auto-reply: {e}");
                                 }

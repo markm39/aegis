@@ -5,11 +5,111 @@
 //! the per-agent pilot [`Command`](crate::command::Command) types, which handle
 //! prompt approval and stall nudges within a single supervisor session.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use aegis_toolkit::contract::{RiskTag, ToolAction, ToolResult};
 use aegis_types::daemon::AgentSlotConfig;
 use aegis_types::AgentStatus;
+
+/// Session lifecycle state machine.
+///
+/// Valid transitions:
+/// - Created -> Active (agent starts executing)
+/// - Active -> Suspended (SIGSTOP sent, process paused)
+/// - Active -> Terminated (process killed or exited)
+/// - Suspended -> Resumed (SIGCONT sent, process unpaused)
+/// - Resumed -> Active (immediate, after SIGCONT)
+/// - Resumed -> Suspended (re-suspend)
+/// - Resumed -> Terminated (terminate from resumed state)
+///
+/// Invalid transitions are rejected by [`SessionState::can_transition_to`].
+/// On any validation failure the operation is denied (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionState {
+    /// Session has been created but the agent has not started executing yet.
+    Created,
+    /// Agent is actively executing.
+    Active,
+    /// Agent process is suspended (SIGSTOP). Accumulated time is preserved.
+    Suspended,
+    /// Agent process was resumed from suspension (SIGCONT). Transitions
+    /// immediately to Active in practice, but the distinct state allows
+    /// audit logging of resume events.
+    Resumed,
+    /// Session has been permanently terminated. This is a terminal state.
+    Terminated,
+}
+
+impl SessionState {
+    /// Check whether transitioning from `self` to `target` is valid.
+    ///
+    /// Returns `true` only for explicitly allowed transitions.
+    /// All other transitions are denied (fail-closed).
+    pub fn can_transition_to(self, target: SessionState) -> bool {
+        matches!(
+            (self, target),
+            (SessionState::Created, SessionState::Active)
+                | (SessionState::Active, SessionState::Suspended)
+                | (SessionState::Active, SessionState::Terminated)
+                | (SessionState::Suspended, SessionState::Resumed)
+                | (SessionState::Suspended, SessionState::Terminated)
+                | (SessionState::Resumed, SessionState::Active)
+                | (SessionState::Resumed, SessionState::Suspended)
+                | (SessionState::Resumed, SessionState::Terminated)
+        )
+    }
+
+    /// Validate and perform a transition, returning the new state or an error.
+    ///
+    /// This is the only sanctioned way to change session state. Callers must
+    /// use this method rather than setting state directly to ensure the
+    /// transition is validated.
+    pub fn transition_to(self, target: SessionState) -> Result<SessionState, String> {
+        if self.can_transition_to(target) {
+            Ok(target)
+        } else {
+            Err(format!(
+                "invalid session state transition: {self} -> {target}"
+            ))
+        }
+    }
+
+    /// Cedar policy action name for this state transition.
+    ///
+    /// Every state-changing operation must have a policy action name so it
+    /// can be evaluated by the Cedar policy engine.
+    pub fn policy_action_name(self, target: SessionState) -> &'static str {
+        match (self, target) {
+            (SessionState::Created, SessionState::Active) => "session:activate",
+            (SessionState::Active, SessionState::Suspended) => "session:suspend",
+            (SessionState::Suspended, SessionState::Resumed) => "session:resume",
+            (SessionState::Resumed, SessionState::Active) => "session:activate",
+            (SessionState::Resumed, SessionState::Suspended) => "session:suspend",
+            (_, SessionState::Terminated) => "session:terminate",
+            _ => "session:invalid",
+        }
+    }
+
+    /// Whether this state is terminal (no further transitions possible).
+    pub fn is_terminal(self) -> bool {
+        self == SessionState::Terminated
+    }
+}
+
+impl fmt::Display for SessionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionState::Created => write!(f, "created"),
+            SessionState::Active => write!(f, "active"),
+            SessionState::Suspended => write!(f, "suspended"),
+            SessionState::Resumed => write!(f, "resumed"),
+            SessionState::Terminated => write!(f, "terminated"),
+        }
+    }
+}
 
 /// A command sent to the daemon control plane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +376,49 @@ pub enum DaemonCommand {
         #[serde(default)]
         args: Vec<String>,
     },
+
+    // -- Session lifecycle commands --
+    /// Suspend a running agent session (sends SIGSTOP, preserves state).
+    ///
+    /// The agent process is paused but not terminated. Accumulated session
+    /// time is tracked. Only Active sessions can be suspended.
+    SuspendSession { name: String },
+    /// Resume a suspended agent session (sends SIGCONT, restores context).
+    ///
+    /// The agent process is unpaused and continues from where it left off.
+    /// Only Suspended sessions can be resumed.
+    ResumeSession { name: String },
+    /// Terminate an agent session permanently.
+    ///
+    /// The agent process is stopped and the session is marked as terminated.
+    /// This is a terminal state -- the session cannot be resumed after
+    /// termination.
+    TerminateSession { name: String },
+    /// Get the current session lifecycle state for an agent.
+    SessionLifecycleStatus { name: String },
+
+    // -- Auto-reply rule management commands --
+    /// Add a new auto-reply rule (pattern + response).
+    AddAutoReply {
+        /// Regex pattern to match against inbound messages.
+        pattern: String,
+        /// Response text to send when matched.
+        response: String,
+        /// Optional chat ID to scope the rule to.
+        #[serde(default)]
+        chat_id: Option<i64>,
+        /// Priority (higher = checked first, 0-255).
+        #[serde(default)]
+        priority: u8,
+    },
+    /// Remove an auto-reply rule by its ID.
+    RemoveAutoReply { id: String },
+    /// List all auto-reply rules.
+    ListAutoReplies,
+    /// Enable or disable an auto-reply rule.
+    ToggleAutoReply { id: String, enabled: bool },
+    /// Enable or disable auto-reply for a specific chat.
+    SetAutoReplyChat { chat_id: i64, enabled: bool },
 }
 
 fn default_true() -> bool {
@@ -1155,6 +1298,44 @@ mod tests {
             DaemonCommand::ModelAllowlist {
                 patterns: vec!["claude-*".into(), "gpt-4o*".into()],
             },
+            // Session lifecycle commands
+            DaemonCommand::SuspendSession {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::ResumeSession {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::TerminateSession {
+                name: "claude-1".into(),
+            },
+            DaemonCommand::SessionLifecycleStatus {
+                name: "claude-1".into(),
+            },
+            // Auto-reply commands
+            DaemonCommand::AddAutoReply {
+                pattern: r"^hello".into(),
+                response: "Hi there!".into(),
+                chat_id: None,
+                priority: 10,
+            },
+            DaemonCommand::AddAutoReply {
+                pattern: r"^ping$".into(),
+                response: "pong".into(),
+                chat_id: Some(42),
+                priority: 5,
+            },
+            DaemonCommand::RemoveAutoReply {
+                id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            },
+            DaemonCommand::ListAutoReplies,
+            DaemonCommand::ToggleAutoReply {
+                id: "550e8400-e29b-41d4-a716-446655440000".into(),
+                enabled: false,
+            },
+            DaemonCommand::SetAutoReplyChat {
+                chat_id: 12345,
+                enabled: true,
+            },
         ];
 
         for cmd in commands {
@@ -1469,5 +1650,108 @@ mod tests {
         assert_eq!(json, "\"urgent\"");
         let back: MessagePriority = serde_json::from_str(&json).unwrap();
         assert_eq!(back, MessagePriority::Urgent);
+    }
+
+    // -- SessionState tests --
+
+    #[test]
+    fn session_state_transitions_are_validated() {
+        // Valid transitions
+        assert!(SessionState::Created.can_transition_to(SessionState::Active));
+        assert!(SessionState::Active.can_transition_to(SessionState::Suspended));
+        assert!(SessionState::Active.can_transition_to(SessionState::Terminated));
+        assert!(SessionState::Suspended.can_transition_to(SessionState::Resumed));
+        assert!(SessionState::Suspended.can_transition_to(SessionState::Terminated));
+        assert!(SessionState::Resumed.can_transition_to(SessionState::Active));
+        assert!(SessionState::Resumed.can_transition_to(SessionState::Suspended));
+        assert!(SessionState::Resumed.can_transition_to(SessionState::Terminated));
+
+        // Invalid transitions (security: unauthorized state transitions denied)
+        assert!(!SessionState::Created.can_transition_to(SessionState::Suspended));
+        assert!(!SessionState::Created.can_transition_to(SessionState::Terminated));
+        assert!(!SessionState::Created.can_transition_to(SessionState::Resumed));
+        assert!(!SessionState::Suspended.can_transition_to(SessionState::Active));
+        assert!(!SessionState::Terminated.can_transition_to(SessionState::Active));
+        assert!(!SessionState::Terminated.can_transition_to(SessionState::Suspended));
+        assert!(!SessionState::Terminated.can_transition_to(SessionState::Resumed));
+        assert!(!SessionState::Terminated.can_transition_to(SessionState::Created));
+        assert!(!SessionState::Active.can_transition_to(SessionState::Created));
+        assert!(!SessionState::Active.can_transition_to(SessionState::Resumed));
+    }
+
+    #[test]
+    fn session_state_transition_to_returns_error_on_invalid() {
+        let result = SessionState::Created.transition_to(SessionState::Suspended);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid session state transition"));
+
+        let result = SessionState::Terminated.transition_to(SessionState::Active);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn session_state_transition_to_returns_ok_on_valid() {
+        let result = SessionState::Created.transition_to(SessionState::Active);
+        assert_eq!(result.unwrap(), SessionState::Active);
+
+        let result = SessionState::Active.transition_to(SessionState::Suspended);
+        assert_eq!(result.unwrap(), SessionState::Suspended);
+    }
+
+    #[test]
+    fn session_state_policy_action_names() {
+        assert_eq!(
+            SessionState::Created.policy_action_name(SessionState::Active),
+            "session:activate"
+        );
+        assert_eq!(
+            SessionState::Active.policy_action_name(SessionState::Suspended),
+            "session:suspend"
+        );
+        assert_eq!(
+            SessionState::Suspended.policy_action_name(SessionState::Resumed),
+            "session:resume"
+        );
+        assert_eq!(
+            SessionState::Active.policy_action_name(SessionState::Terminated),
+            "session:terminate"
+        );
+        assert_eq!(
+            SessionState::Suspended.policy_action_name(SessionState::Terminated),
+            "session:terminate"
+        );
+    }
+
+    #[test]
+    fn session_state_terminal() {
+        assert!(SessionState::Terminated.is_terminal());
+        assert!(!SessionState::Created.is_terminal());
+        assert!(!SessionState::Active.is_terminal());
+        assert!(!SessionState::Suspended.is_terminal());
+        assert!(!SessionState::Resumed.is_terminal());
+    }
+
+    #[test]
+    fn session_state_display() {
+        assert_eq!(SessionState::Created.to_string(), "created");
+        assert_eq!(SessionState::Active.to_string(), "active");
+        assert_eq!(SessionState::Suspended.to_string(), "suspended");
+        assert_eq!(SessionState::Resumed.to_string(), "resumed");
+        assert_eq!(SessionState::Terminated.to_string(), "terminated");
+    }
+
+    #[test]
+    fn session_state_serde_roundtrip() {
+        for state in [
+            SessionState::Created,
+            SessionState::Active,
+            SessionState::Suspended,
+            SessionState::Resumed,
+            SessionState::Terminated,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let back: SessionState = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, state);
+        }
     }
 }
