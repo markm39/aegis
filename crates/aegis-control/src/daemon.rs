@@ -165,6 +165,76 @@ pub enum DaemonCommand {
         #[serde(default)]
         output_lines: Option<usize>,
     },
+
+    // -- Memory store commands --
+    /// Get a value from the agent memory store.
+    MemoryGet {
+        namespace: String,
+        key: String,
+    },
+    /// Set a value in the agent memory store (upsert).
+    MemorySet {
+        namespace: String,
+        key: String,
+        value: String,
+    },
+    /// Delete a key from the agent memory store.
+    MemoryDelete {
+        namespace: String,
+        key: String,
+    },
+    /// List keys in a namespace.
+    MemoryList {
+        namespace: String,
+        limit: Option<usize>,
+    },
+    /// Full-text search across memory entries in a namespace.
+    MemorySearch {
+        namespace: String,
+        query: String,
+        limit: Option<usize>,
+    },
+
+    // -- Cron scheduler commands --
+    /// List all scheduled cron jobs.
+    CronList,
+    /// Add a new cron job.
+    CronAdd {
+        name: String,
+        schedule: String,
+        command: serde_json::Value,
+    },
+    /// Remove a cron job by name.
+    CronRemove {
+        name: String,
+    },
+    /// Manually trigger a cron job by name.
+    CronTrigger {
+        name: String,
+    },
+
+    // -- Plugin commands --
+    /// Load a plugin from a manifest path.
+    LoadPlugin {
+        path: String,
+    },
+    /// List all loaded plugins.
+    ListPlugins,
+    /// Unload a plugin by name.
+    UnloadPlugin {
+        name: String,
+    },
+
+    // -- ACP protocol commands --
+    /// Broadcast a message to all agents in the fleet.
+    BroadcastToFleet {
+        message: String,
+        /// Agent names to exclude from the broadcast.
+        #[serde(default)]
+        exclude_agents: Vec<String>,
+    },
+    /// List all models seen by the usage proxy across the fleet.
+    ListModels,
 }
 
 fn default_true() -> bool {
@@ -201,6 +271,31 @@ pub struct SpawnSubagentResult {
     pub depth: u8,
     pub working_dir: String,
     pub tool: String,
+}
+
+/// Structured inter-agent message for the ACP protocol.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentMessage {
+    /// Sending agent name.
+    pub from: String,
+    /// Receiving agent name.
+    pub to: String,
+    /// Message content.
+    pub content: String,
+    /// Message priority level.
+    pub priority: MessagePriority,
+    /// Timestamp when the message was created.
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Priority level for inter-agent messages.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePriority {
+    Low,
+    Normal,
+    High,
+    Urgent,
 }
 
 /// Response to a daemon command.
@@ -943,6 +1038,60 @@ mod tests {
                 agents: vec![],
                 output_lines: None,
             },
+            // Memory commands
+            DaemonCommand::MemoryGet {
+                namespace: "agent-1".into(),
+                key: "last_task".into(),
+            },
+            DaemonCommand::MemorySet {
+                namespace: "agent-1".into(),
+                key: "last_task".into(),
+                value: "implement login".into(),
+            },
+            DaemonCommand::MemoryDelete {
+                namespace: "agent-1".into(),
+                key: "last_task".into(),
+            },
+            DaemonCommand::MemoryList {
+                namespace: "agent-1".into(),
+                limit: Some(10),
+            },
+            DaemonCommand::MemorySearch {
+                namespace: "agent-1".into(),
+                query: "login".into(),
+                limit: Some(5),
+            },
+            // Cron commands
+            DaemonCommand::CronList,
+            DaemonCommand::CronAdd {
+                name: "health-check".into(),
+                schedule: "every 5m".into(),
+                command: serde_json::json!({"type": "ping"}),
+            },
+            DaemonCommand::CronRemove {
+                name: "health-check".into(),
+            },
+            DaemonCommand::CronTrigger {
+                name: "health-check".into(),
+            },
+            // Plugin commands
+            DaemonCommand::LoadPlugin {
+                path: "/home/user/.aegis/plugins/my-plugin/manifest.toml".into(),
+            },
+            DaemonCommand::ListPlugins,
+            DaemonCommand::UnloadPlugin {
+                name: "my-plugin".into(),
+            },
+            // ACP protocol commands
+            DaemonCommand::BroadcastToFleet {
+                message: "Deploy phase 2".into(),
+                exclude_agents: vec!["orchestrator".into()],
+            },
+            DaemonCommand::BroadcastToFleet {
+                message: "Stop all work".into(),
+                exclude_agents: vec![],
+            },
+            DaemonCommand::ListModels,
         ];
 
         for cmd in commands {
@@ -1225,5 +1374,37 @@ mod tests {
         let json = serde_json::to_string(&batch).unwrap();
         let back: ToolBatchOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(back, batch);
+    }
+
+    #[test]
+    fn agent_message_roundtrip() {
+        let msg = AgentMessage {
+            from: "orchestrator".into(),
+            to: "worker-1".into(),
+            content: "Please focus on the API module".into(),
+            priority: MessagePriority::High,
+            timestamp: chrono::Utc::now(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: AgentMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.from, "orchestrator");
+        assert_eq!(back.to, "worker-1");
+        assert_eq!(back.priority, MessagePriority::High);
+    }
+
+    #[test]
+    fn message_priority_ordering() {
+        assert!(MessagePriority::Low < MessagePriority::Normal);
+        assert!(MessagePriority::Normal < MessagePriority::High);
+        assert!(MessagePriority::High < MessagePriority::Urgent);
+    }
+
+    #[test]
+    fn message_priority_serde() {
+        let json = serde_json::to_string(&MessagePriority::Urgent).unwrap();
+        assert_eq!(json, "\"urgent\"");
+        let back: MessagePriority = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, MessagePriority::Urgent);
     }
 }

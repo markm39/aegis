@@ -67,6 +67,9 @@ pub fn run() -> anyhow::Result<()> {
         agents,
         channel: result.channel,
         toolkit: Default::default(),
+        memory: Default::default(),
+        cron: Default::default(),
+        plugins: Default::default(),
     };
 
     let config_path = daemon_config_path();
@@ -258,6 +261,9 @@ mod tests {
             }],
             channel: None,
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -304,6 +310,9 @@ mod tests {
                 active_hours: None,
             })),
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

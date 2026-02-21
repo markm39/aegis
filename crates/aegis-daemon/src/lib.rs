@@ -14,11 +14,15 @@
 //! - [`state`]: crash recovery via persistent state.json
 
 pub mod control;
+pub mod cron;
 pub mod dashboard;
 pub mod fleet;
 pub mod lifecycle;
+pub mod memory;
 pub mod ndjson_fmt;
 pub mod persistence;
+pub mod plugins;
+pub mod prompt_builder;
 pub mod slot;
 pub mod state;
 pub mod stream_fmt;
@@ -1268,6 +1272,9 @@ impl DaemonRuntime {
             }
             ToolAction::TuiSnapshot { .. } | ToolAction::TuiInput { .. } => {}
             ToolAction::ImageAnalyze { .. } => {}
+            ToolAction::TextToSpeech { .. }
+            | ToolAction::CanvasRender { .. }
+            | ToolAction::DeviceControl { .. } => {}
         }
         if let ToolAction::InputBatch { actions } = action {
             if actions.len() > toolkit.input.max_batch_actions as usize {
@@ -1413,6 +1420,8 @@ impl DaemonRuntime {
                 token.clone(),
                 cmd_tx.clone(),
                 Arc::clone(&self.shutdown),
+                self.config.dashboard.rate_limit_burst,
+                self.config.dashboard.rate_limit_per_sec,
             ) {
                 warn!(error = %e, "failed to start dashboard server");
             } else {
@@ -3415,6 +3424,32 @@ impl DaemonRuntime {
                 self.request_shutdown();
                 DaemonResponse::ok("shutdown initiated")
             }
+
+            // Wave 3 infrastructure stubs -- handled minimally until full implementation.
+            DaemonCommand::MemoryGet { .. }
+            | DaemonCommand::MemorySet { .. }
+            | DaemonCommand::MemoryDelete { .. }
+            | DaemonCommand::MemoryList { .. }
+            | DaemonCommand::MemorySearch { .. } => {
+                DaemonResponse::error("memory store not yet initialized")
+            }
+            DaemonCommand::CronList
+            | DaemonCommand::CronAdd { .. }
+            | DaemonCommand::CronRemove { .. }
+            | DaemonCommand::CronTrigger { .. } => {
+                DaemonResponse::error("cron scheduler not yet initialized")
+            }
+            DaemonCommand::LoadPlugin { .. }
+            | DaemonCommand::ListPlugins
+            | DaemonCommand::UnloadPlugin { .. } => {
+                DaemonResponse::error("plugin system not yet initialized")
+            }
+            DaemonCommand::BroadcastToFleet { .. } => {
+                DaemonResponse::error("broadcast not yet implemented")
+            }
+            DaemonCommand::ListModels => {
+                DaemonResponse::error("model listing not yet implemented")
+            }
         }
     }
 
@@ -3825,6 +3860,9 @@ mod tests {
             agents,
             channel: None,
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -4158,6 +4196,9 @@ mod tests {
             agents: vec![test_agent("orch")],
             channel: None,
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -4830,6 +4871,9 @@ mod tests {
             agents: vec![orchestrator],
             channel: None,
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -4914,6 +4958,9 @@ mod tests {
             agents: vec![orchestrator],
             channel: None,
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

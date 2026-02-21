@@ -665,6 +665,9 @@ impl FleetApp {
                 agents: vec![],
                 channel: None,
                 toolkit: Default::default(),
+                memory: Default::default(),
+                cron: Default::default(),
+                plugins: Default::default(),
             }
         };
 
@@ -1513,6 +1516,9 @@ impl FleetApp {
                                     "Telegram: disabled (Slack configured for channel {})",
                                     slack.channel_id
                                 )
+                            }
+                            Some(_) => {
+                                "Telegram: disabled (other channel type active)".to_string()
                             }
                             None => "Telegram: not configured. Run :telegram setup to configure."
                                 .to_string(),

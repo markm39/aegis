@@ -801,6 +801,9 @@ mod tests {
             agents,
             channel: None,
             toolkit: Default::default(),
+            memory: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
         }
     }
 

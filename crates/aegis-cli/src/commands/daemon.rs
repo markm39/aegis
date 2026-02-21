@@ -78,6 +78,9 @@ pub fn init() -> anyhow::Result<()> {
         }],
         channel: None,
         toolkit: Default::default(),
+        memory: Default::default(),
+        cron: Default::default(),
+        plugins: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -139,6 +142,9 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         }],
         channel: None,
         toolkit: Default::default(),
+        memory: Default::default(),
+        cron: Default::default(),
+        plugins: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -1490,6 +1496,9 @@ pub fn config_show() -> anyhow::Result<()> {
             }
             let token_preview = truncate_str(&slack.bot_token, 13);
             println!("  Bot token:   {token_preview}");
+        }
+        Some(other) => {
+            println!("Channel: {:?}", std::mem::discriminant(other));
         }
         None => {
             println!("Channel: not configured");

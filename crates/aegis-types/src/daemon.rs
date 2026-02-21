@@ -55,6 +55,15 @@ pub struct DaemonConfig {
     /// Computer-use runtime configuration (capture/input/browser/loop behavior).
     #[serde(default)]
     pub toolkit: ToolkitConfig,
+    /// Agent memory store settings.
+    #[serde(default)]
+    pub memory: MemoryConfig,
+    /// Cron job scheduler settings.
+    #[serde(default)]
+    pub cron: CronConfig,
+    /// Plugin system settings.
+    #[serde(default)]
+    pub plugins: PluginConfig,
 }
 
 /// Top-level configuration for orchestrator computer-use runtime behavior.
@@ -71,7 +80,7 @@ pub struct ToolkitConfig {
 }
 
 /// Local dashboard server settings for read-only monitoring.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DashboardConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -80,6 +89,15 @@ pub struct DashboardConfig {
     /// Optional static API token (empty = random per boot).
     #[serde(default)]
     pub api_key: String,
+    /// Optional token expiry in seconds. None means tokens never expire.
+    #[serde(default)]
+    pub token_expires_secs: Option<u64>,
+    /// Maximum burst size for per-IP rate limiting (token bucket capacity).
+    #[serde(default = "default_rate_limit_burst")]
+    pub rate_limit_burst: u32,
+    /// Sustained request rate per second for per-IP rate limiting.
+    #[serde(default = "default_rate_limit_per_sec")]
+    pub rate_limit_per_sec: f64,
 }
 
 impl Default for DashboardConfig {
@@ -88,12 +106,23 @@ impl Default for DashboardConfig {
             enabled: true,
             listen: default_dashboard_listen(),
             api_key: String::new(),
+            token_expires_secs: None,
+            rate_limit_burst: default_rate_limit_burst(),
+            rate_limit_per_sec: default_rate_limit_per_sec(),
         }
     }
 }
 
 fn default_dashboard_listen() -> String {
     "127.0.0.1:9845".to_string()
+}
+
+fn default_rate_limit_burst() -> u32 {
+    20
+}
+
+fn default_rate_limit_per_sec() -> f64 {
+    5.0
 }
 
 /// Screen capture runtime settings.
@@ -198,6 +227,55 @@ impl Default for ToolkitLoopExecutorConfig {
             halt_on_high_risk: true,
         }
     }
+}
+
+/// Configuration for the agent memory store.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryConfig {
+    /// Whether the memory store is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Custom path for the memory SQLite database.
+    /// Defaults to `~/.aegis/daemon/memory.db`.
+    #[serde(default)]
+    pub db_path: Option<String>,
+}
+
+/// Configuration for the cron job scheduler.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CronConfig {
+    /// Whether the cron scheduler is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Scheduled jobs.
+    #[serde(default)]
+    pub jobs: Vec<CronJobConfig>,
+}
+
+/// Configuration for a single cron job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CronJobConfig {
+    /// Unique name for this job.
+    pub name: String,
+    /// Schedule expression: "every 5m", "every 2h", "daily 09:30".
+    pub schedule: String,
+    /// Serialized DaemonCommand to execute when the job fires.
+    pub command: serde_json::Value,
+    /// Whether this job is active.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Configuration for the plugin system.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginConfig {
+    /// Whether plugin discovery and loading is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory to scan for plugin manifests.
+    /// Defaults to `~/.aegis/plugins/`.
+    #[serde(default)]
+    pub plugin_dir: Option<String>,
 }
 
 /// Configuration for a single agent slot in the fleet.
@@ -562,6 +640,9 @@ mod tests {
             alerts: vec![],
             channel: None,
             toolkit: ToolkitConfig::default(),
+            memory: MemoryConfig::default(),
+            cron: CronConfig::default(),
+            plugins: PluginConfig::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {
