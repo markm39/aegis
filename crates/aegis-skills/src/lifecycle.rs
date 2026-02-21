@@ -84,6 +84,10 @@ impl SkillInstance {
     }
 
     /// Transition from Validated to Loaded.
+    ///
+    /// This performs the state transition without security scanning.
+    /// Prefer [`load_with_scan`](Self::load_with_scan) for production use,
+    /// which runs the security scanner and fails closed on scan errors.
     pub fn load(&mut self) -> Result<()> {
         if self.state != SkillState::Validated {
             bail!(
@@ -95,6 +99,51 @@ impl SkillInstance {
         self.loaded_at = Some(Utc::now());
         self.state = SkillState::Loaded;
         Ok(())
+    }
+
+    /// Transition from Validated to Loaded, running the security scanner first.
+    ///
+    /// The scanner checks all files in the skill directory for dangerous
+    /// patterns. If any error-severity findings are detected, the skill
+    /// transitions to `Error` instead of `Loaded` (fail closed).
+    ///
+    /// Returns the [`ScanResult`](crate::scanner::ScanResult) on success
+    /// (scan completed, even if findings were present). Returns `Err` only
+    /// if the scanner itself failed (I/O error, timeout, path traversal).
+    pub fn load_with_scan(
+        &mut self,
+        scanner: &mut crate::scanner::SkillScanner,
+    ) -> Result<crate::scanner::ScanResult> {
+        if self.state != SkillState::Validated {
+            bail!(
+                "cannot load skill '{}': expected state Validated, got {}",
+                self.manifest.name,
+                self.state
+            );
+        }
+
+        // Run security scan -- fail closed on scanner errors
+        let scan_result = match scanner.scan(&self.path) {
+            Ok(result) => result,
+            Err(e) => {
+                let msg = format!("security scan failed: {e}");
+                self.state = SkillState::Error(msg.clone());
+                bail!("{msg}");
+            }
+        };
+
+        if !scan_result.passed {
+            let error_count = scan_result.errors.len();
+            let msg = format!(
+                "security scan blocked loading: {error_count} dangerous pattern(s) detected"
+            );
+            self.state = SkillState::Error(msg);
+            return Ok(scan_result);
+        }
+
+        self.loaded_at = Some(Utc::now());
+        self.state = SkillState::Loaded;
+        Ok(scan_result)
     }
 
     /// Transition from Loaded to Active.

@@ -91,6 +91,17 @@ pub enum ActionKind {
         /// Cache read input tokens (Anthropic-specific, 0 otherwise).
         cache_read_input_tokens: u64,
     },
+    /// Security scan of a skill directory for dangerous code patterns.
+    SkillScan {
+        /// Path to the skill directory that was scanned.
+        path: PathBuf,
+        /// Whether the scan passed (no error-severity findings).
+        passed: bool,
+        /// Number of warning-severity findings.
+        warning_count: usize,
+        /// Number of error-severity findings.
+        error_count: usize,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -162,6 +173,19 @@ impl std::fmt::Display for ActionKind {
                     "ApiUsage {provider}/{model} in={input_tokens} out={output_tokens}"
                 )
             }
+            ActionKind::SkillScan {
+                path,
+                passed,
+                warning_count,
+                error_count,
+            } => {
+                let status = if *passed { "passed" } else { "BLOCKED" };
+                write!(
+                    f,
+                    "SkillScan {} {status} (warnings={warning_count}, errors={error_count})",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -230,6 +254,12 @@ mod tests {
                 output_tokens: 50,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 10,
+            },
+            ActionKind::SkillScan {
+                path: PathBuf::from("/tmp/my-skill"),
+                passed: true,
+                warning_count: 1,
+                error_count: 0,
             },
         ];
         for v in variants {
@@ -352,6 +382,16 @@ mod tests {
             }
             .to_string(),
             "ApiUsage anthropic/claude-sonnet-4-5-20250929 in=100 out=50"
+        );
+        assert_eq!(
+            ActionKind::SkillScan {
+                path: PathBuf::from("/tmp/skill"),
+                passed: false,
+                warning_count: 2,
+                error_count: 1,
+            }
+            .to_string(),
+            "SkillScan /tmp/skill BLOCKED (warnings=2, errors=1)"
         );
     }
 }
