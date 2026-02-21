@@ -400,7 +400,7 @@ pub enum DaemonCommand {
     SessionLifecycleStatus { name: String },
 
     // -- Auto-reply rule management commands --
-    /// Add a new auto-reply rule (pattern + response).
+    /// Add a new auto-reply rule (pattern + response, optionally with media).
     AddAutoReply {
         /// Regex pattern to match against inbound messages.
         pattern: String,
@@ -412,6 +412,15 @@ pub enum DaemonCommand {
         /// Priority (higher = checked first, 0-255).
         #[serde(default)]
         priority: u8,
+        /// Response type as JSON string matching `MediaResponseType` in aegis-channel.
+        /// Examples: `{"type":"text"}`, `{"type":"image","path":"/tmp/logo.png"}`.
+        /// If None, defaults to text.
+        #[serde(default)]
+        response_type: Option<String>,
+        /// For image/file responses: absolute path to the media file.
+        /// Must pass path validation (no traversal, allowed types, size limit).
+        #[serde(default)]
+        media_path: Option<String>,
     },
     /// Remove an auto-reply rule by its ID.
     RemoveAutoReply { id: String },
@@ -465,6 +474,73 @@ pub enum DaemonCommand {
     /// (system file, user file, workspace file, env var, CLI flag)
     /// determined each field's value.
     GetEffectiveConfig,
+
+    // -- Agent job tracking commands --
+    /// Create a new job for an agent.
+    ///
+    /// The agent name is validated for traversal characters and the
+    /// description is sanitized (control chars stripped, max 1024 bytes).
+    /// Per-agent job limit of 100 is enforced.
+    CreateJob {
+        agent: String,
+        description: String,
+    },
+    /// List jobs, optionally filtered by agent name.
+    ///
+    /// If `agent` is None, returns all jobs across all agents.
+    ListJobs {
+        #[serde(default)]
+        agent: Option<String>,
+    },
+    /// Get the status of a single job by ID.
+    JobStatus {
+        job_id: uuid::Uuid,
+    },
+    /// Cancel a queued or running job.
+    ///
+    /// Transitions the job to Cancelled. Only Queued and Running jobs
+    /// can be cancelled; attempting to cancel a terminal job is rejected.
+    CancelJob {
+        job_id: uuid::Uuid,
+    },
+    /// Update the progress percentage of a running job.
+    ///
+    /// Progress must be in the range 0-100. Only Running jobs accept
+    /// progress updates.
+    UpdateJobProgress {
+        job_id: uuid::Uuid,
+        progress_pct: u8,
+    },
+
+    // -- Push notification commands --
+    /// Register a new Web Push subscription.
+    ///
+    /// The endpoint is validated for HTTPS, known push service origins,
+    /// and SSRF protection. Keys are validated for correct base64 encoding
+    /// and length.
+    RegisterPush {
+        /// Push service endpoint URL (must be HTTPS, known push origin).
+        endpoint: String,
+        /// Client P-256 public key (base64url, 65 bytes uncompressed).
+        p256dh: String,
+        /// Client auth secret (base64url, 16 bytes).
+        auth: String,
+        /// Optional human-readable label for the subscription.
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Remove a push subscription by its ID.
+    RemovePush {
+        /// Subscription UUID.
+        id: String,
+    },
+    /// List all registered push subscriptions.
+    ListPush,
+    /// Send a test push notification to a specific subscription.
+    TestPush {
+        /// Subscription UUID to test.
+        id: String,
+    },
 }
 
 fn default_true() -> bool {
@@ -555,6 +631,15 @@ impl DaemonCommand {
             DaemonCommand::ScheduleReplyList => "daemon:schedule_reply_list",
             DaemonCommand::ScheduleReplyTrigger { .. } => "daemon:schedule_reply_trigger",
             DaemonCommand::GetEffectiveConfig => "daemon:get_effective_config",
+            DaemonCommand::CreateJob { .. } => "daemon:create_job",
+            DaemonCommand::ListJobs { .. } => "daemon:list_jobs",
+            DaemonCommand::JobStatus { .. } => "daemon:job_status",
+            DaemonCommand::CancelJob { .. } => "daemon:cancel_job",
+            DaemonCommand::UpdateJobProgress { .. } => "daemon:update_job_progress",
+            DaemonCommand::RegisterPush { .. } => "daemon:register_push",
+            DaemonCommand::RemovePush { .. } => "daemon:remove_push",
+            DaemonCommand::ListPush => "daemon:list_push",
+            DaemonCommand::TestPush { .. } => "daemon:test_push",
         }
     }
 }
@@ -1451,12 +1536,16 @@ mod tests {
                 response: "Hi there!".into(),
                 chat_id: None,
                 priority: 10,
+                response_type: None,
+                media_path: None,
             },
             DaemonCommand::AddAutoReply {
                 pattern: r"^ping$".into(),
                 response: "pong".into(),
                 chat_id: Some(42),
                 priority: 5,
+                response_type: Some(r#"{"type":"image","path":"/tmp/logo.png"}"#.into()),
+                media_path: Some("/tmp/logo.png".into()),
             },
             DaemonCommand::RemoveAutoReply {
                 id: "550e8400-e29b-41d4-a716-446655440000".into(),
@@ -1500,6 +1589,45 @@ mod tests {
             },
             // Configuration introspection
             DaemonCommand::GetEffectiveConfig,
+            // Job tracking commands
+            DaemonCommand::CreateJob {
+                agent: "claude-1".into(),
+                description: "Build the login page".into(),
+            },
+            DaemonCommand::ListJobs { agent: None },
+            DaemonCommand::ListJobs {
+                agent: Some("claude-1".into()),
+            },
+            DaemonCommand::JobStatus {
+                job_id: uuid::Uuid::nil(),
+            },
+            DaemonCommand::CancelJob {
+                job_id: uuid::Uuid::nil(),
+            },
+            DaemonCommand::UpdateJobProgress {
+                job_id: uuid::Uuid::nil(),
+                progress_pct: 42,
+            },
+            // Push notification commands
+            DaemonCommand::RegisterPush {
+                endpoint: "https://fcm.googleapis.com/fcm/send/token".into(),
+                p256dh: "BAAAAAAA".into(),
+                auth: "CCCCCCCC".into(),
+                label: Some("Test Device".into()),
+            },
+            DaemonCommand::RegisterPush {
+                endpoint: "https://fcm.googleapis.com/fcm/send/token2".into(),
+                p256dh: "BAAAAAAA".into(),
+                auth: "CCCCCCCC".into(),
+                label: None,
+            },
+            DaemonCommand::RemovePush {
+                id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            },
+            DaemonCommand::ListPush,
+            DaemonCommand::TestPush {
+                id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            },
         ];
 
         for cmd in commands {

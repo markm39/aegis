@@ -24,6 +24,35 @@ pub enum ChannelError {
     Other(String),
 }
 
+/// Media payload that can be attached to an outbound message.
+///
+/// Carries pre-loaded binary data for images, files, or sticker references.
+/// Data must be validated (size, type, path safety) before constructing.
+#[derive(Debug, Clone)]
+pub enum MediaPayload {
+    /// An image (png, jpg, gif, webp, bmp).
+    Image {
+        /// Raw image bytes (already validated for size).
+        data: Vec<u8>,
+        /// Filename for the upload (e.g., "screenshot.png").
+        filename: String,
+    },
+    /// A document file (pdf, txt, csv, json, zip, tar.gz).
+    File {
+        /// Raw file bytes (already validated for size).
+        data: Vec<u8>,
+        /// Filename for the upload.
+        filename: String,
+        /// Optional caption text.
+        caption: Option<String>,
+    },
+    /// A Telegram sticker reference.
+    Sticker {
+        /// Sticker file_id (validated: alphanumeric + dash/underscore, max 256 chars).
+        file_id: String,
+    },
+}
+
 /// An outbound message to send through the channel.
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
@@ -33,6 +62,8 @@ pub struct OutboundMessage {
     pub buttons: Vec<(String, String)>,
     /// Whether to send silently (no notification sound).
     pub silent: bool,
+    /// Optional media attachment.
+    pub media: Option<MediaPayload>,
 }
 
 impl OutboundMessage {
@@ -42,6 +73,7 @@ impl OutboundMessage {
             text: text.into(),
             buttons: Vec::new(),
             silent: false,
+            media: None,
         }
     }
 
@@ -51,6 +83,17 @@ impl OutboundMessage {
             text: text.into(),
             buttons,
             silent: false,
+            media: None,
+        }
+    }
+
+    /// Create a message with a media attachment.
+    pub fn with_media(text: impl Into<String>, media: MediaPayload) -> Self {
+        Self {
+            text: text.into(),
+            buttons: Vec::new(),
+            silent: false,
+            media: Some(media),
         }
     }
 }

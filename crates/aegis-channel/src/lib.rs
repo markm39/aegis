@@ -37,5 +37,5 @@ pub mod voice_call;
 pub mod webhook;
 pub mod whatsapp;
 
-pub use channel::{Channel, ChannelError, InboundAction, OutboundMessage};
+pub use channel::{Channel, ChannelError, InboundAction, MediaPayload, OutboundMessage};
 pub use runner::{run, run_fleet, ChannelInput};

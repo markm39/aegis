@@ -150,6 +150,7 @@ pub fn format_pilot_event(event: &PilotWebhookEvent) -> OutboundMessage {
                 text,
                 buttons: Vec::new(),
                 silent: true,
+                media: None,
             }
         }
         PilotEventKind::PermissionApproved { action, reason } => {
@@ -164,6 +165,7 @@ pub fn format_pilot_event(event: &PilotWebhookEvent) -> OutboundMessage {
                 text,
                 buttons: Vec::new(),
                 silent: true,
+                media: None,
             }
         }
         PilotEventKind::PermissionDenied { action, reason } => {
