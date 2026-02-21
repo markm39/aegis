@@ -1,0 +1,29 @@
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ok {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.warn {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.error {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.neutral {
+  background-color: #e2e3e5;
+  color: #383d41;
+}

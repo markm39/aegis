@@ -1,0 +1,22 @@
+/**
+ * Application entry point.
+ *
+ * Mounts the React application into the #root element.
+ * Uses StrictMode for development-time checks.
+ */
+
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+
+import { App } from "./App";
+
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error("Root element #root not found in document");
+}
+
+createRoot(rootElement).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);
