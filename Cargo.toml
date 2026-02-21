@@ -87,6 +87,7 @@ aegis-skills = { path = "crates/aegis-skills" }
 async-trait = "0.1"
 
 axum = { version = "0.8", features = ["json", "ws"] }
+subtle = "2"
 nix = { version = "0.29", features = ["fs", "process", "term", "poll", "signal"] }
 libc = "0.2"
 regex = "1"

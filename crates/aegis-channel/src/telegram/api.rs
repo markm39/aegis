@@ -1,7 +1,9 @@
 //! Raw HTTP calls to the Telegram Bot API.
 //!
 //! Wraps reqwest for `sendMessage`, `getUpdates`, `answerCallbackQuery`,
-//! and `editMessageReplyMarkup`. All methods return typed responses.
+//! `answerInlineQuery`, `sendInvoice`, `answerPreCheckoutQuery`,
+//! `sendSticker`, `setWebhook`, `deleteWebhook`, and `editMessageReplyMarkup`.
+//! All methods return typed responses.
 
 use reqwest::Client;
 use serde_json::json;
@@ -9,7 +11,10 @@ use tracing::{debug, warn};
 
 use crate::channel::ChannelError;
 
-use super::types::{ApiResponse, InlineKeyboardButton, InlineKeyboardMarkup, SentMessage, Update};
+use super::types::{
+    ApiResponse, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResult, LabeledPrice,
+    SentMessage, Update,
+};
 
 /// Low-level Telegram Bot API client.
 pub struct TelegramApi {
@@ -266,6 +271,241 @@ impl TelegramApi {
 
         Ok(())
     }
+
+    // -- Inline query support --
+
+    /// Answer an inline query with a list of results.
+    ///
+    /// Telegram requires a response within 10 seconds of receiving the query.
+    /// The `cache_time` parameter controls how long results are cached on
+    /// Telegram's servers (in seconds, default 300).
+    pub async fn answer_inline_query(
+        &self,
+        inline_query_id: &str,
+        results: &[InlineQueryResult],
+        cache_time: Option<u64>,
+    ) -> Result<(), ChannelError> {
+        let results_json = serde_json::to_value(results)
+            .map_err(|e| ChannelError::Other(format!("serialize inline results: {e}")))?;
+
+        let mut body = json!({
+            "inline_query_id": inline_query_id,
+            "results": results_json,
+        });
+
+        if let Some(ct) = cache_time {
+            body["cache_time"] = json!(ct);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/answerInlineQuery", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("answerInlineQuery failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    // -- Payment support --
+
+    /// Send an invoice to a chat.
+    ///
+    /// The `provider_token` must come from configuration or environment -- never
+    /// hardcode payment tokens. Returns the sent message ID on success.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_invoice(
+        &self,
+        chat_id: i64,
+        title: &str,
+        description: &str,
+        payload: &str,
+        provider_token: &str,
+        currency: &str,
+        prices: &[LabeledPrice],
+    ) -> Result<i64, ChannelError> {
+        let prices_json = serde_json::to_value(prices)
+            .map_err(|e| ChannelError::Other(format!("serialize prices: {e}")))?;
+
+        let body = json!({
+            "chat_id": chat_id,
+            "title": title,
+            "description": description,
+            "payload": payload,
+            "provider_token": provider_token,
+            "currency": currency,
+            "prices": prices_json,
+        });
+
+        debug!("sendInvoice to chat_id={chat_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/sendInvoice", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<SentMessage> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("sendInvoice failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        api_resp
+            .result
+            .map(|m| m.message_id)
+            .ok_or_else(|| ChannelError::Api("sendInvoice returned ok but no result".into()))
+    }
+
+    /// Answer a pre-checkout query.
+    ///
+    /// Must be called within 10 seconds of receiving the query. Set `ok` to
+    /// `true` to proceed with the order, or `false` with an `error_message`
+    /// to reject it.
+    pub async fn answer_pre_checkout_query(
+        &self,
+        pre_checkout_query_id: &str,
+        ok: bool,
+        error_message: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let mut body = json!({
+            "pre_checkout_query_id": pre_checkout_query_id,
+            "ok": ok,
+        });
+
+        if let Some(msg) = error_message {
+            body["error_message"] = json!(msg);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/answerPreCheckoutQuery", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("answerPreCheckoutQuery failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    // -- Sticker support --
+
+    /// Send a sticker to a chat.
+    ///
+    /// The `sticker` parameter should be a validated file_id. Use
+    /// [`super::types::validate_sticker_file_id`] to validate before calling.
+    pub async fn send_sticker(
+        &self,
+        chat_id: i64,
+        sticker: &str,
+    ) -> Result<i64, ChannelError> {
+        // Validate the sticker file_id before sending
+        super::types::validate_sticker_file_id(sticker)
+            .map_err(|e| ChannelError::Other(format!("invalid sticker file_id: {e}")))?;
+
+        let body = json!({
+            "chat_id": chat_id,
+            "sticker": sticker,
+        });
+
+        debug!("sendSticker to chat_id={chat_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/sendSticker", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<SentMessage> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("sendSticker failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        api_resp
+            .result
+            .map(|m| m.message_id)
+            .ok_or_else(|| ChannelError::Api("sendSticker returned ok but no result".into()))
+    }
+
+    // -- Webhook management --
+
+    /// Register a webhook URL with Telegram.
+    ///
+    /// When a webhook is set, Telegram will POST updates to the given URL
+    /// instead of holding them for `getUpdates`. The `secret_token` is sent
+    /// in the `X-Telegram-Bot-Api-Secret-Token` header of each request.
+    ///
+    /// `allowed_updates` controls which update types Telegram delivers.
+    pub async fn set_webhook(
+        &self,
+        url: &str,
+        secret_token: Option<&str>,
+        allowed_updates: Option<&[&str]>,
+    ) -> Result<(), ChannelError> {
+        let mut body = json!({
+            "url": url,
+        });
+
+        if let Some(token) = secret_token {
+            body["secret_token"] = json!(token);
+        }
+
+        if let Some(updates) = allowed_updates {
+            body["allowed_updates"] = json!(updates);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/setWebhook", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("setWebhook failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    /// Remove the webhook, returning to `getUpdates` polling mode.
+    pub async fn delete_webhook(&self) -> Result<(), ChannelError> {
+        let resp = self
+            .client
+            .post(format!("{}/deleteWebhook", self.base_url))
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("deleteWebhook failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
 }
 
 /// Build an `InlineKeyboardMarkup` from button (label, callback_data) pairs.
@@ -285,9 +525,134 @@ pub fn build_keyboard(buttons: &[(String, String)]) -> InlineKeyboardMarkup {
     }
 }
 
+/// Escape text for safe inclusion in Telegram HTML messages.
+///
+/// Converts `&`, `<`, and `>` to their HTML entity equivalents. This prevents
+/// user-supplied text from being interpreted as HTML tags by Telegram's parser.
+///
+/// Telegram supports a limited subset of HTML tags: `<b>`, `<i>`, `<code>`,
+/// `<pre>`, `<a href="...">`, `<u>`, `<s>`, `<tg-spoiler>`.
+pub fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Format text with Telegram-safe HTML markup.
+///
+/// Accepts a closure that receives an [`HtmlBuilder`] for constructing
+/// messages with bold, italic, code, pre-formatted, and hyperlink elements.
+/// All text content is automatically HTML-escaped.
+///
+/// # Example
+///
+/// ```
+/// use aegis_channel::telegram::api::format_html;
+///
+/// let html = format_html(|b| {
+///     b.bold("Alert");
+///     b.text(": Agent ");
+///     b.code("claude-1");
+///     b.text(" exited.");
+/// });
+/// assert_eq!(html, "<b>Alert</b>: Agent <code>claude-1</code> exited.");
+/// ```
+pub fn format_html(f: impl FnOnce(&mut HtmlBuilder)) -> String {
+    let mut builder = HtmlBuilder::new();
+    f(&mut builder);
+    builder.finish()
+}
+
+/// Builder for constructing Telegram HTML messages.
+///
+/// All text methods automatically escape HTML entities in user-supplied content.
+/// Tag methods (`bold`, `italic`, `code`, `pre`, `link`) wrap content in the
+/// appropriate Telegram-supported HTML tags.
+pub struct HtmlBuilder {
+    buf: String,
+}
+
+impl HtmlBuilder {
+    fn new() -> Self {
+        Self {
+            buf: String::with_capacity(256),
+        }
+    }
+
+    /// Append plain text (HTML-escaped).
+    pub fn text(&mut self, s: &str) -> &mut Self {
+        self.buf.push_str(&escape_html(s));
+        self
+    }
+
+    /// Append bold text: `<b>text</b>`.
+    pub fn bold(&mut self, s: &str) -> &mut Self {
+        self.buf.push_str("<b>");
+        self.buf.push_str(&escape_html(s));
+        self.buf.push_str("</b>");
+        self
+    }
+
+    /// Append italic text: `<i>text</i>`.
+    pub fn italic(&mut self, s: &str) -> &mut Self {
+        self.buf.push_str("<i>");
+        self.buf.push_str(&escape_html(s));
+        self.buf.push_str("</i>");
+        self
+    }
+
+    /// Append inline code: `<code>text</code>`.
+    pub fn code(&mut self, s: &str) -> &mut Self {
+        self.buf.push_str("<code>");
+        self.buf.push_str(&escape_html(s));
+        self.buf.push_str("</code>");
+        self
+    }
+
+    /// Append a pre-formatted block: `<pre>text</pre>`.
+    pub fn pre(&mut self, s: &str) -> &mut Self {
+        self.buf.push_str("<pre>");
+        self.buf.push_str(&escape_html(s));
+        self.buf.push_str("</pre>");
+        self
+    }
+
+    /// Append a hyperlink: `<a href="url">text</a>`.
+    ///
+    /// Both the URL and text are HTML-escaped.
+    pub fn link(&mut self, url: &str, text: &str) -> &mut Self {
+        self.buf.push_str("<a href=\"");
+        self.buf.push_str(&escape_html(url));
+        self.buf.push_str("\">");
+        self.buf.push_str(&escape_html(text));
+        self.buf.push_str("</a>");
+        self
+    }
+
+    /// Append a raw string without escaping.
+    ///
+    /// Use with caution -- only for pre-validated content.
+    pub fn raw(&mut self, s: &str) -> &mut Self {
+        self.buf.push_str(s);
+        self
+    }
+
+    fn finish(self) -> String {
+        self.buf
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::types::{InputMessageContent, Invoice as InvoiceType};
 
     #[test]
     fn build_keyboard_from_buttons() {
@@ -300,5 +665,148 @@ mod tests {
         assert_eq!(kb.inline_keyboard[0].len(), 2);
         assert_eq!(kb.inline_keyboard[0][0].text, "Approve");
         assert_eq!(kb.inline_keyboard[0][1].callback_data, "deny:abc");
+    }
+
+    // -- HTML formatting tests --
+
+    #[test]
+    fn escape_html_entities() {
+        assert_eq!(escape_html("a & b"), "a &amp; b");
+        assert_eq!(escape_html("x < y > z"), "x &lt; y &gt; z");
+        assert_eq!(escape_html("no specials"), "no specials");
+        assert_eq!(escape_html(""), "");
+        assert_eq!(
+            escape_html("<script>alert('xss')</script>"),
+            "&lt;script&gt;alert('xss')&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn format_html_basic_tags() {
+        let result = format_html(|b| {
+            b.bold("Alert");
+            b.text(": ");
+            b.italic("warning");
+            b.text(" in ");
+            b.code("main.rs");
+        });
+        assert_eq!(
+            result,
+            "<b>Alert</b>: <i>warning</i> in <code>main.rs</code>"
+        );
+    }
+
+    #[test]
+    fn format_html_pre_block() {
+        let result = format_html(|b| {
+            b.pre("fn main() {\n    println!(\"hello\");\n}");
+        });
+        assert_eq!(
+            result,
+            "<pre>fn main() {\n    println!(\"hello\");\n}</pre>"
+        );
+    }
+
+    #[test]
+    fn format_html_link() {
+        let result = format_html(|b| {
+            b.text("Visit ");
+            b.link("https://example.com", "Example");
+        });
+        assert_eq!(
+            result,
+            "Visit <a href=\"https://example.com\">Example</a>"
+        );
+    }
+
+    #[test]
+    fn format_html_escapes_user_input() {
+        let result = format_html(|b| {
+            b.bold("<script>alert(1)</script>");
+        });
+        assert_eq!(
+            result,
+            "<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>"
+        );
+    }
+
+    #[test]
+    fn format_html_link_escapes_url() {
+        let result = format_html(|b| {
+            b.link("https://example.com?a=1&b=2", "test");
+        });
+        assert!(result.contains("a=1&amp;b=2"));
+    }
+
+    // -- Inline query request construction tests --
+
+    #[test]
+    fn test_inline_query_answer_article() {
+        let results = vec![
+            InlineQueryResult::Article {
+                id: "1".into(),
+                title: "Agent Status".into(),
+                description: "Current status of all agents".into(),
+                input_message_content: InputMessageContent {
+                    message_text: "/status".into(),
+                },
+            },
+            InlineQueryResult::Article {
+                id: "2".into(),
+                title: "Help".into(),
+                description: "Show available commands".into(),
+                input_message_content: InputMessageContent {
+                    message_text: "/help".into(),
+                },
+            },
+        ];
+
+        let json = serde_json::to_value(&results).unwrap();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "article");
+        assert_eq!(arr[0]["title"], "Agent Status");
+        assert_eq!(
+            arr[0]["input_message_content"]["message_text"],
+            "/status"
+        );
+    }
+
+    // -- Payment invoice construction tests --
+
+    #[test]
+    fn test_payment_invoice_creation() {
+        let invoice = InvoiceType {
+            chat_id: 12345,
+            title: "Aegis Pro".into(),
+            description: "Monthly agent supervision".into(),
+            payload: "aegis-pro-monthly-001".into(),
+            provider_token: "stripe_test_token".into(),
+            currency: "USD".into(),
+            prices: vec![
+                LabeledPrice {
+                    label: "Base plan".into(),
+                    amount: 999,
+                },
+                LabeledPrice {
+                    label: "Extra agents (3)".into(),
+                    amount: 300,
+                },
+            ],
+        };
+
+        let json = serde_json::to_value(&invoice).unwrap();
+        assert_eq!(json["chat_id"], 12345);
+        assert_eq!(json["title"], "Aegis Pro");
+        assert_eq!(json["currency"], "USD");
+        let prices = json["prices"].as_array().unwrap();
+        assert_eq!(prices.len(), 2);
+        assert_eq!(prices[0]["amount"], 999);
+        assert_eq!(prices[1]["label"], "Extra agents (3)");
+
+        // Provider token must come from config, never hardcoded -- this test
+        // just verifies the struct serializes correctly. In production, the
+        // token value would be read from TelegramConfig or env.
+        assert_eq!(json["provider_token"], "stripe_test_token");
     }
 }

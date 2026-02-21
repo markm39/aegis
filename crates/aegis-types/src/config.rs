@@ -423,6 +423,21 @@ pub struct TelegramConfig {
     /// Optional active hours window for outbound notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,
+    /// Use webhook mode instead of long-polling (default: false).
+    #[serde(default)]
+    pub webhook_mode: bool,
+    /// Port to listen on for incoming webhook requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_port: Option<u16>,
+    /// Public URL that Telegram will POST updates to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+    /// Secret token for webhook request validation (X-Telegram-Bot-Api-Secret-Token header).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_secret: Option<String>,
+    /// Enable inline query handling (default: false).
+    #[serde(default)]
+    pub inline_queries_enabled: bool,
 }
 
 /// Configuration for the Slack messaging channel.
@@ -640,6 +655,44 @@ pub struct VoiceCallChannelConfig {
     pub active_hours: Option<ActiveHoursConfig>,
 }
 
+/// Access control configuration for messaging channels.
+///
+/// Controls which chat identifiers have which roles, and optional
+/// rate limit overrides. Deserialized from the `[access_control]` section
+/// of channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccessControlConfig {
+    /// Default role for unknown users. Valid values: "admin", "user", "viewer".
+    /// Defaults to "viewer" (fail-closed).
+    #[serde(default = "default_access_control_role")]
+    pub default_role: String,
+    /// Chat identifiers automatically promoted to Admin role.
+    #[serde(default)]
+    pub admin_ids: Vec<String>,
+    /// Chat identifiers assigned the User role.
+    #[serde(default)]
+    pub user_ids: Vec<String>,
+    /// Optional rate limit override (commands per minute) applied to all users.
+    /// When `None`, role-specific defaults apply (Admin: 60, User: 30, Viewer: 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit_per_minute: Option<u32>,
+}
+
+fn default_access_control_role() -> String {
+    "viewer".to_string()
+}
+
+impl Default for AccessControlConfig {
+    fn default() -> Self {
+        Self {
+            default_role: default_access_control_role(),
+            admin_ids: Vec::new(),
+            user_ids: Vec::new(),
+            rate_limit_per_minute: None,
+        }
+    }
+}
+
 /// Active hours window for channel notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActiveHoursConfig {
@@ -650,6 +703,43 @@ pub struct ActiveHoursConfig {
     /// Timezone name (IANA), or "local"/"user" for host local time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
+}
+
+/// Per-channel command routing configuration.
+///
+/// Controls which commands are available on each messaging channel,
+/// with support for allowlists, blocklists, and aliases. Used by
+/// the channel routing module at runtime.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChannelRoutingConfig {
+    /// Global default allowlist. `None` means all non-blocked commands are allowed.
+    #[serde(default)]
+    pub default_allowed: Option<Vec<String>>,
+    /// Global default blocklist. These commands are always denied unless
+    /// overridden by a per-channel set.
+    #[serde(default)]
+    pub default_blocked: Vec<String>,
+    /// Per-channel command set overrides, keyed by channel type
+    /// (e.g., "telegram", "slack", "discord").
+    #[serde(default)]
+    pub channels: std::collections::HashMap<String, ChannelCommandSetConfig>,
+}
+
+/// Per-channel command set configuration (part of [`ChannelRoutingConfig`]).
+///
+/// All fields are optional to allow partial overrides. Missing fields
+/// inherit from the default set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChannelCommandSetConfig {
+    /// Commands allowed on this channel. `None` means all non-blocked.
+    #[serde(default)]
+    pub allowed: Option<Vec<String>>,
+    /// Commands blocked on this channel.
+    #[serde(default)]
+    pub blocked: Option<Vec<String>>,
+    /// Shorthand aliases (e.g., "s" -> "status").
+    #[serde(default)]
+    pub aliases: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Configuration for the API usage tracking proxy.

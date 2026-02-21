@@ -6,6 +6,7 @@
 pub mod api;
 pub mod poller;
 pub mod types;
+pub mod webhook;
 
 use std::sync::Arc;
 

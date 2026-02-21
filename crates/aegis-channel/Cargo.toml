@@ -22,6 +22,8 @@ rusqlite = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 async-trait = "0.1"
+subtle = { workspace = true }
+axum = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
