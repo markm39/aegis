@@ -894,7 +894,7 @@ pub fn capabilities(name: &str) -> anyhow::Result<()> {
 }
 
 /// Show secure-runtime compatibility status from internal matrix.
-pub fn parity_status() -> anyhow::Result<()> {
+pub fn parity_status(format: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
     if !client.is_running() {
         println!("Daemon is not running. Start it with `aegis daemon start`.");
@@ -911,6 +911,14 @@ pub fn parity_status() -> anyhow::Result<()> {
     if let Some(data) = response.data {
         let report: ParityStatusReport = serde_json::from_value(data)
             .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime status: {e}"))?;
+        if format == "json" {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .map_err(|e| anyhow::anyhow!("failed to format secure-runtime status: {e}"))?
+            );
+            return Ok(());
+        }
         println!("Secure-runtime status:");
         println!("  Source:            {}", report.source_dir);
         println!("  Updated:           {}", report.updated_at_utc);
@@ -923,7 +931,7 @@ pub fn parity_status() -> anyhow::Result<()> {
 }
 
 /// Show latest secure-runtime delta impact from internal reports.
-pub fn parity_diff() -> anyhow::Result<()> {
+pub fn parity_diff(format: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
     if !client.is_running() {
         println!("Daemon is not running. Start it with `aegis daemon start`.");
@@ -940,6 +948,14 @@ pub fn parity_diff() -> anyhow::Result<()> {
     if let Some(data) = response.data {
         let report: ParityDiffReport = serde_json::from_value(data)
             .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime diff: {e}"))?;
+        if format == "json" {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .map_err(|e| anyhow::anyhow!("failed to format secure-runtime diff: {e}"))?
+            );
+            return Ok(());
+        }
         println!("Secure-runtime diff:");
         println!("  Report:            {}", report.report_file);
         println!("  Upstream SHA:      {}", report.upstream_sha);
@@ -957,7 +973,7 @@ pub fn parity_diff() -> anyhow::Result<()> {
 }
 
 /// Verify secure-runtime compatibility controls and fail-closed gates.
-pub fn parity_verify() -> anyhow::Result<()> {
+pub fn parity_verify(format: &str) -> anyhow::Result<()> {
     let client = DaemonClient::default_path();
     if !client.is_running() {
         println!("Daemon is not running. Start it with `aegis daemon start`.");
@@ -974,6 +990,18 @@ pub fn parity_verify() -> anyhow::Result<()> {
     if let Some(data) = response.data {
         let report: ParityVerifyReport = serde_json::from_value(data)
             .map_err(|e| anyhow::anyhow!("failed to parse secure-runtime verification: {e}"))?;
+        if format == "json" {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|e| anyhow::anyhow!(
+                    "failed to format secure-runtime verification: {e}"
+                ))?
+            );
+            if !report.ok {
+                anyhow::bail!("secure-runtime compatibility verification failed");
+            }
+            return Ok(());
+        }
         println!("Secure-runtime compatibility verification:");
         println!(
             "  Result:            {}",
@@ -983,16 +1011,22 @@ pub fn parity_verify() -> anyhow::Result<()> {
         if report.violations.is_empty() {
             println!("  Violations:        none");
         } else {
-            let mut grouped: BTreeMap<&str, usize> = BTreeMap::new();
-            for violation in &report.violations {
-                if let Some((rule_id, _)) = violation.split_once('|') {
-                    *grouped.entry(rule_id).or_insert(0) += 1;
-                } else {
-                    *grouped.entry("UNSTRUCTURED").or_insert(0) += 1;
+            let mut grouped: BTreeMap<String, usize> = BTreeMap::new();
+            if !report.violations_struct.is_empty() {
+                for violation in &report.violations_struct {
+                    *grouped.entry(violation.rule_id.clone()).or_insert(0) += 1;
+                }
+            } else {
+                for violation in &report.violations {
+                    if let Some((rule_id, _)) = violation.split_once('|') {
+                        *grouped.entry(rule_id.to_string()).or_insert(0) += 1;
+                    } else {
+                        *grouped.entry("UNSTRUCTURED".to_string()).or_insert(0) += 1;
+                    }
                 }
             }
             println!("  Violation groups:");
-            for (rule_id, count) in grouped {
+            for (rule_id, count) in &grouped {
                 println!("    - {rule_id}: {count}");
             }
             println!("  Violations:");

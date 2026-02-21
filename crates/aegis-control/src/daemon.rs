@@ -477,6 +477,16 @@ pub struct ParityVerifyReport {
     pub ok: bool,
     pub checked_features: usize,
     pub violations: Vec<String>,
+    #[serde(default)]
+    pub violations_struct: Vec<ParityViolation>,
+}
+
+/// Structured violation entry for `ParityVerifyReport`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParityViolation {
+    pub rule_id: String,
+    pub feature_id: String,
+    pub message: String,
 }
 
 /// Parameters used to start a capture stream.

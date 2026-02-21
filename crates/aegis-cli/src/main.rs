@@ -715,15 +715,27 @@ enum DaemonCommands {
 
     /// Show secure-runtime compatibility status from the internal matrix
     #[command(name = "compat-status", alias = "parity-status")]
-    ParityStatus,
+    ParityStatus {
+        /// Output format (text or json)
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+    },
 
     /// Show latest secure-runtime compatibility delta impact
     #[command(name = "compat-diff", alias = "parity-diff")]
-    ParityDiff,
+    ParityDiff {
+        /// Output format (text or json)
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+    },
 
     /// Verify secure-runtime compatibility controls and fail-closed gates
     #[command(name = "compat-verify", alias = "parity-verify")]
-    ParityVerify,
+    ParityVerify {
+        /// Output format (text or json)
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+    },
 
     /// Execute a computer-use ToolAction JSON payload for an agent
     Tool {
@@ -1250,9 +1262,9 @@ fn main() -> anyhow::Result<()> {
             }
             DaemonCommands::Pending { name } => commands::daemon::pending(&name),
             DaemonCommands::Capabilities { name } => commands::daemon::capabilities(&name),
-            DaemonCommands::ParityStatus => commands::daemon::parity_status(),
-            DaemonCommands::ParityDiff => commands::daemon::parity_diff(),
-            DaemonCommands::ParityVerify => commands::daemon::parity_verify(),
+            DaemonCommands::ParityStatus { format } => commands::daemon::parity_status(&format),
+            DaemonCommands::ParityDiff { format } => commands::daemon::parity_diff(&format),
+            DaemonCommands::ParityVerify { format } => commands::daemon::parity_verify(&format),
             DaemonCommands::Tool { name, action_json } => {
                 commands::daemon::tool_action(&name, &action_json)
             }
@@ -2581,8 +2593,10 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Daemon {
-                action: DaemonCommands::ParityStatus,
-            } => {}
+                action: DaemonCommands::ParityStatus { format },
+            } => {
+                assert_eq!(format, "text");
+            }
             _ => panic!("expected Daemon ParityStatus command"),
         }
     }
@@ -2594,8 +2608,10 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Daemon {
-                action: DaemonCommands::ParityDiff,
-            } => {}
+                action: DaemonCommands::ParityDiff { format },
+            } => {
+                assert_eq!(format, "text");
+            }
             _ => panic!("expected Daemon ParityDiff command"),
         }
     }
@@ -2607,9 +2623,65 @@ mod tests {
         let cli = cli.unwrap();
         match cli.command.unwrap() {
             Commands::Daemon {
-                action: DaemonCommands::ParityVerify,
-            } => {}
+                action: DaemonCommands::ParityVerify { format },
+            } => {
+                assert_eq!(format, "text");
+            }
             _ => panic!("expected Daemon ParityVerify command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_compat_verify_json_format() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "compat-verify", "--format", "json"]);
+        assert!(
+            cli.is_ok(),
+            "should parse daemon compat-verify --format json: {cli:?}"
+        );
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::ParityVerify { format },
+            } => {
+                assert_eq!(format, "json");
+            }
+            _ => panic!("expected Daemon ParityVerify command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_compat_status_json_format() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "compat-status", "--format", "json"]);
+        assert!(
+            cli.is_ok(),
+            "should parse daemon compat-status --format json: {cli:?}"
+        );
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::ParityStatus { format },
+            } => {
+                assert_eq!(format, "json");
+            }
+            _ => panic!("expected Daemon ParityStatus command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_daemon_compat_diff_json_format() {
+        let cli = Cli::try_parse_from(["aegis", "daemon", "compat-diff", "--format", "json"]);
+        assert!(
+            cli.is_ok(),
+            "should parse daemon compat-diff --format json: {cli:?}"
+        );
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Daemon {
+                action: DaemonCommands::ParityDiff { format },
+            } => {
+                assert_eq!(format, "json");
+            }
+            _ => panic!("expected Daemon ParityDiff command"),
         }
     }
 

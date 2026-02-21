@@ -1661,9 +1661,28 @@ impl FleetApp {
                                                 report.checked_features
                                             ));
                                         } else {
+                                            let rule_count = if report.violations_struct.is_empty()
+                                            {
+                                                report
+                                                    .violations
+                                                    .iter()
+                                                    .filter_map(|v| {
+                                                        v.split_once('|').map(|(r, _)| r)
+                                                    })
+                                                    .collect::<std::collections::BTreeSet<_>>()
+                                                    .len()
+                                            } else {
+                                                report
+                                                    .violations_struct
+                                                    .iter()
+                                                    .map(|v| v.rule_id.as_str())
+                                                    .collect::<std::collections::BTreeSet<_>>()
+                                                    .len()
+                                            };
                                             self.set_result(format!(
-                                                "compat verify failed ({} violations)",
-                                                report.violations.len()
+                                                "compat verify failed ({} violations, {} rules)",
+                                                report.violations.len(),
+                                                rule_count
                                             ));
                                         }
                                     }

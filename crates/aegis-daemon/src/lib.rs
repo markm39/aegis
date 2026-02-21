@@ -37,10 +37,10 @@ use aegis_control::daemon::{
     AgentDetail, AgentSummary, BrowserToolData, CaptureSessionStarted, DaemonCommand, DaemonPing,
     DaemonResponse, DashboardAgent, DashboardPendingPrompt, DashboardSnapshot, DashboardStatus,
     FramePayload, OrchestratorAgentView, OrchestratorSnapshot, ParityDiffReport,
-    ParityFeatureStatus, ParityStatusReport, ParityVerifyReport, PendingPromptSummary,
-    RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation, SessionHistory, SessionInfo,
-    SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution, ToolActionOutcome,
-    ToolBatchOutcome, ToolUseVerdict, TuiToolData,
+    ParityFeatureStatus, ParityStatusReport, ParityVerifyReport, ParityViolation,
+    PendingPromptSummary, RuntimeAuditProvenance, RuntimeCapabilities, RuntimeOperation,
+    SessionHistory, SessionInfo, SpawnSubagentRequest, SpawnSubagentResult, ToolActionExecution,
+    ToolActionOutcome, ToolBatchOutcome, ToolUseVerdict, TuiToolData,
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_control::hooks;
@@ -186,65 +186,65 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
 
     let (tool, headless, policy_mediation, mediation_note, mediation_mode, hook_bridge, tool_coverage, compliance_mode) =
         match &config.tool {
-            AgentToolConfig::ClaudeCode { .. } => (
-                "ClaudeCode".to_string(),
-                true,
-                "enforced".to_string(),
-                "Cedar policy checks are enforced via PreToolUse hooks".to_string(),
-                "enforced".to_string(),
-                "connected".to_string(),
-                "covered".to_string(),
-                "blocking".to_string(),
-            ),
-            AgentToolConfig::Codex { .. } => (
-                "Codex".to_string(),
-                true,
-                "partial".to_string(),
-                "runtime mediation is limited until a secure bridge is available".to_string(),
-                "partial".to_string(),
-                "unavailable".to_string(),
-                "partial".to_string(),
-                "advisory".to_string(),
-            ),
-            AgentToolConfig::OpenClaw { .. } => {
-                let bridge_connected = hooks::openclaw_bridge_connected(&config.working_dir);
-                if bridge_connected {
-                    (
-                        "OpenClaw".to_string(),
-                        true,
-                        "enforced".to_string(),
-                        "secure runtime bridge connected; privileged actions are policy-gated"
-                            .to_string(),
-                        "enforced".to_string(),
-                        "connected".to_string(),
-                        "covered".to_string(),
-                        "blocking".to_string(),
-                    )
-                } else {
-                    (
-                        "OpenClaw".to_string(),
-                        true,
-                        "enforced".to_string(),
-                        "secure runtime bridge disconnected; privileged actions are fail-closed"
-                            .to_string(),
-                        "enforced".to_string(),
-                        "disconnected".to_string(),
-                        "restricted".to_string(),
-                        "blocking".to_string(),
-                    )
-                }
+        AgentToolConfig::ClaudeCode { .. } => (
+            "ClaudeCode".to_string(),
+            true,
+            "enforced".to_string(),
+            "Cedar policy checks are enforced via PreToolUse hooks".to_string(),
+            "enforced".to_string(),
+            "connected".to_string(),
+            "covered".to_string(),
+            "blocking".to_string(),
+        ),
+        AgentToolConfig::Codex { .. } => (
+            "Codex".to_string(),
+            true,
+            "partial".to_string(),
+            "runtime mediation is limited until a secure bridge is available".to_string(),
+            "partial".to_string(),
+            "unavailable".to_string(),
+            "partial".to_string(),
+            "advisory".to_string(),
+        ),
+        AgentToolConfig::OpenClaw { .. } => {
+            let bridge_connected = hooks::openclaw_bridge_connected(&config.working_dir);
+            if bridge_connected {
+                (
+                    "OpenClaw".to_string(),
+                    true,
+                    "enforced".to_string(),
+                    "secure runtime bridge connected; privileged actions are policy-gated"
+                        .to_string(),
+                    "enforced".to_string(),
+                    "connected".to_string(),
+                    "covered".to_string(),
+                    "blocking".to_string(),
+                )
+            } else {
+                (
+                    "OpenClaw".to_string(),
+                    true,
+                    "enforced".to_string(),
+                    "secure runtime bridge disconnected; privileged actions are fail-closed"
+                        .to_string(),
+                    "enforced".to_string(),
+                    "disconnected".to_string(),
+                    "restricted".to_string(),
+                    "blocking".to_string(),
+                )
             }
-            AgentToolConfig::Custom { .. } => (
-                "Custom".to_string(),
-                true,
-                "custom".to_string(),
-                "Custom runtime; policy mediation depends on external integration".to_string(),
-                "custom".to_string(),
-                "custom".to_string(),
-                "custom".to_string(),
-                "custom".to_string(),
-            ),
-        };
+        }
+        AgentToolConfig::Custom { .. } => (
+            "Custom".to_string(),
+            true,
+            "custom".to_string(),
+            "Custom runtime; policy mediation depends on external integration".to_string(),
+            "custom".to_string(),
+            "custom".to_string(),
+            "custom".to_string(),
+            "custom".to_string(),
+        ),
+    };
     let (auth_mode, auth_ready, auth_hint) = tool_auth_readiness(config);
 
     RuntimeCapabilities {
@@ -681,31 +681,47 @@ fn parity_verify_report_from_dir(dir: &std::path::Path) -> Result<ParityVerifyRe
     let known_controls = parse_security_controls_yaml(&controls_raw);
 
     let mut violations = Vec::new();
+    let mut violations_struct: Vec<ParityViolation> = Vec::new();
+    let mut push_violation = |rule_id: &str, feature_id: &str, message: String| {
+        violations.push(format!("{rule_id}|{feature_id}|{message}"));
+        violations_struct.push(ParityViolation {
+            rule_id: rule_id.to_string(),
+            feature_id: feature_id.to_string(),
+            message,
+        });
+    };
+
     for row in &rows {
         let status = row.status.trim().to_ascii_lowercase();
         let risk_level = row.risk_level.trim().to_ascii_lowercase();
 
         if !parity_status_is_valid(&status) {
-            violations.push(format!(
-                "R_STATUS_ENUM|{}|unsupported status '{}'",
-                row.feature_id, row.status
-            ));
+            push_violation(
+                "R_STATUS_ENUM",
+                &row.feature_id,
+                format!("unsupported status '{}'", row.status),
+            );
         }
         if !parity_risk_level_is_valid(&risk_level) {
-            violations.push(format!(
-                "R_RISK_ENUM|{}|unsupported risk level '{}'",
-                row.feature_id, row.risk_level
-            ));
+            push_violation(
+                "R_RISK_ENUM",
+                &row.feature_id,
+                format!("unsupported risk level '{}'", row.risk_level),
+            );
         }
 
         let is_complete = status == "complete";
         let is_high_risk = matches!(risk_level.as_str(), "high" | "critical");
 
         if is_high_risk && !is_complete {
-            violations.push(format!(
-                "R_HIGH_RISK_COMPLETE|{}|high/critical feature must be complete (status={})",
-                row.feature_id, row.status
-            ));
+            push_violation(
+                "R_HIGH_RISK_COMPLETE",
+                &row.feature_id,
+                format!(
+                    "high/critical feature must be complete (status={})",
+                    row.status
+                ),
+            );
         }
 
         let missing_controls: Vec<&str> = row
@@ -716,23 +732,25 @@ fn parity_verify_report_from_dir(dir: &std::path::Path) -> Result<ParityVerifyRe
             .collect();
 
         if is_complete && !missing_controls.is_empty() {
-            violations.push(format!(
-                "R_COMPLETE_CONTROLS|{}|missing controls: {}",
-                row.feature_id,
-                missing_controls.join(", ")
-            ));
+            push_violation(
+                "R_COMPLETE_CONTROLS",
+                &row.feature_id,
+                format!("missing controls: {}", missing_controls.join(", ")),
+            );
         }
         if is_complete && row.acceptance_tests.is_empty() {
-            violations.push(format!(
-                "R_COMPLETE_TESTS|{}|complete feature requires acceptance_tests",
-                row.feature_id
-            ));
+            push_violation(
+                "R_COMPLETE_TESTS",
+                &row.feature_id,
+                "complete feature requires acceptance_tests".to_string(),
+            );
         }
         if is_complete && row.evidence_paths.is_empty() {
-            violations.push(format!(
-                "R_COMPLETE_EVIDENCE|{}|complete feature requires evidence_paths",
-                row.feature_id
-            ));
+            push_violation(
+                "R_COMPLETE_EVIDENCE",
+                &row.feature_id,
+                "complete feature requires evidence_paths".to_string(),
+            );
         }
     }
 
@@ -740,6 +758,7 @@ fn parity_verify_report_from_dir(dir: &std::path::Path) -> Result<ParityVerifyRe
         ok: violations.is_empty(),
         checked_features: rows.len(),
         violations,
+        violations_struct,
     })
 }
 
@@ -5100,6 +5119,11 @@ controls:
             .violations
             .iter()
             .any(|v| v.starts_with("R_HIGH_RISK_COMPLETE|")));
+        assert_eq!(verify.violations_struct.len(), verify.violations.len());
+        assert!(verify
+            .violations_struct
+            .iter()
+            .any(|v| v.rule_id == "R_HIGH_RISK_COMPLETE"));
     }
 
     #[test]
@@ -5227,6 +5251,7 @@ controls:
         let verify = parity_verify_report_from_dir(tmp.path()).expect("verify report");
         assert!(verify.ok, "violations: {:?}", verify.violations);
         assert!(verify.violations.is_empty());
+        assert!(verify.violations_struct.is_empty());
     }
 
     #[test]
