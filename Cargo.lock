@@ -161,11 +161,18 @@ dependencies = [
 name = "aegis-harness"
 version = "0.1.0"
 dependencies = [
+ "aegis-control",
+ "aegis-ledger",
  "aegis-pilot",
+ "aegis-policy",
  "aegis-types",
  "libc",
  "regex",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
+ "toml",
+ "uuid",
  "vt100",
 ]
 
@@ -301,6 +308,8 @@ dependencies = [
  "aegis-types",
  "base64",
  "regex",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

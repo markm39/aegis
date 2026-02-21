@@ -16,6 +16,7 @@ pub mod sanitizer;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 pub mod skill_scanner;
+pub mod windows_acl;
 
 pub use backend::SandboxBackend;
 #[cfg(target_os = "macos")]

@@ -32,4 +32,17 @@ pub trait SandboxBackend: Send + Sync {
     ) -> Result<(u32, std::process::ExitStatus), AegisError> {
         self.exec(command, args, config).map(|s| (0, s))
     }
+
+    /// Validate file permissions at `path` and return any security warnings.
+    ///
+    /// The default implementation returns an empty list (no-op) so that
+    /// backends without ACL support compile and run without error. Backends
+    /// that support file permission validation should override this with a
+    /// real implementation using [`crate::windows_acl::FileSecurityChecker`].
+    fn validate_file_permissions(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<Vec<crate::windows_acl::AclWarning>, AegisError> {
+        Ok(vec![])
+    }
 }
