@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Aegis</string>
+    <key>CFBundleDisplayName</key>
+    <string>Aegis Fleet Manager</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.aegis.ios</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>AegisIOS</string>
+    <!-- Minimum iOS version -->
+    <key>MinimumOSVersion</key>
+    <string>16.0</string>
+    <!-- Face ID usage description (required by Apple for LAContext) -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>Aegis uses Face ID to protect access to your agent fleet</string>
+    <!-- Camera usage (for agent vision analysis) -->
+    <key>NSCameraUsageDescription</key>
+    <string>Aegis can capture images for agent vision analysis</string>
+    <!-- Location usage (for agent context) -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Aegis can share your location with agents when requested</string>
+    <!-- ATS: App Transport Security - enforce HTTPS by default -->
+    <!-- localhost exception for development daemon connections -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>localhost</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <false/>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>
