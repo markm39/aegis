@@ -10,6 +10,7 @@
 
 pub mod definition;
 pub mod executor;
+pub mod mcp_server;
 pub mod registry;
 
 pub use definition::{ToolDefinition, ToolInfo, ToolOutput, ToolOutputMetadata};
@@ -17,4 +18,5 @@ pub use executor::{
     AuditSink, ExecutionError, ExecutorConfig, PolicyDecision, PolicyGate, ToolAuditRecord,
     ToolExecutor,
 };
+pub use mcp_server::McpServer;
 pub use registry::ToolRegistry;

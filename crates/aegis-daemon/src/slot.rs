@@ -20,6 +20,21 @@ use aegis_types::daemon::{AgentSlotConfig, AgentStatus, AgentToolConfig};
 
 use crate::lifecycle::SlotResult;
 
+/// Build the `CLAUDE_MCP_SERVERS` JSON for an agent with MCP tools enabled.
+///
+/// Returns a JSON string suitable for the `CLAUDE_MCP_SERVERS` environment
+/// variable. The actual MCP server binary will be wired when the
+/// `aegis mcp-serve` CLI command is added.
+pub fn mcp_server_env_value() -> String {
+    serde_json::json!({
+        "aegis-tools": {
+            "command": "aegis",
+            "args": ["mcp-serve"]
+        }
+    })
+    .to_string()
+}
+
 /// Information about a pending permission prompt awaiting human decision.
 #[derive(Debug, Clone)]
 pub struct PendingPromptInfo {
