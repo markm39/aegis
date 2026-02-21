@@ -562,6 +562,100 @@ impl MemoryStore {
 
         Ok(())
     }
+
+    /// Full-text search that skips quarantined entries and returns timestamps.
+    ///
+    /// Returns `(key, value, score, updated_at)` tuples ordered by relevance.
+    /// Quarantined entries are excluded from results to prevent injection
+    /// of flagged content into agent context.
+    pub fn search_safe(
+        &self,
+        namespace: &str,
+        query: &str,
+        limit: usize,
+        half_life_hours: Option<f64>,
+    ) -> Result<Vec<(String, String, f64, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT m.key, m.value, f.rank, m.updated_at
+             FROM agent_memory_fts f
+             JOIN agent_memory m ON m.rowid = f.rowid
+             WHERE agent_memory_fts MATCH ?1
+               AND m.namespace = ?2
+               AND (m.quarantined IS NULL OR m.quarantined = 0)",
+        )?;
+
+        let rows = stmt.query_map(params![query, namespace], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+
+        let mut scored: Vec<(String, String, f64, String)> = Vec::new();
+        for row in rows {
+            let (key, value, rank, updated_at) = row?;
+            let raw_score = -rank;
+            let final_score = match half_life_hours {
+                Some(hl) => raw_score * compute_decay(&updated_at, hl),
+                None => raw_score,
+            };
+            scored.push((key, value, final_score, updated_at));
+        }
+
+        scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored)
+    }
+
+    /// Vector similarity search that skips quarantined entries and returns timestamps.
+    ///
+    /// Returns `(key, value, similarity, updated_at)` tuples sorted by descending
+    /// cosine similarity. Quarantined entries are excluded.
+    pub fn search_similar_safe(
+        &self,
+        namespace: &str,
+        query_embedding: &[f32],
+        limit: usize,
+        half_life_hours: Option<f64>,
+    ) -> Result<Vec<(String, String, f32, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT key, value, embedding, updated_at FROM agent_memory
+             WHERE namespace = ?1
+               AND embedding IS NOT NULL
+               AND (quarantined IS NULL OR quarantined = 0)",
+        )?;
+
+        let rows = stmt.query_map(params![namespace], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+
+        let mut scored: Vec<(String, String, f32, String)> = Vec::new();
+        for row in rows {
+            let (key, value, blob, updated_at) = row?;
+            let emb = blob_to_embedding(&blob);
+            if emb.len() == query_embedding.len() {
+                let raw_score = cosine_similarity(&emb, query_embedding);
+                let final_score = match half_life_hours {
+                    Some(hl) => raw_score * compute_decay(&updated_at, hl) as f32,
+                    None => raw_score,
+                };
+                scored.push((key, value, final_score, updated_at));
+            }
+        }
+
+        scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored)
+    }
 }
 
 #[cfg(test)]
