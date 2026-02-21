@@ -506,6 +506,21 @@ pub struct DiscordChannelConfig {
     /// Optional channel ID for inbound polling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
+    /// Guild (server) ID for slash command registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<String>,
+    /// Application ID for slash command registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<String>,
+    /// Public key for interaction signature verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+    /// User IDs authorized to issue commands. Empty = no commands processed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authorized_user_ids: Vec<String>,
+    /// Dedicated channel ID for command input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_channel_id: Option<String>,
     /// Optional active hours window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,

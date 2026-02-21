@@ -99,6 +99,11 @@ pub fn run_fleet(
                         webhook_url: cfg.webhook_url,
                         bot_token: cfg.bot_token,
                         channel_id: cfg.channel_id,
+                        guild_id: cfg.guild_id,
+                        application_id: cfg.application_id,
+                        public_key: cfg.public_key,
+                        authorized_user_ids: cfg.authorized_user_ids,
+                        command_channel_id: cfg.command_channel_id,
                     },
                 );
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
