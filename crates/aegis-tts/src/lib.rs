@@ -1,17 +1,25 @@
 //! Text-to-speech engine for Aegis with Cedar policy enforcement.
 //!
-//! Provides a [`TtsProvider`] trait for pluggable TTS backends, with an
-//! [`OpenAiTtsProvider`] implementation. All synthesis requests are gated
-//! by Cedar policy (via [`ActionKind::TtsSynthesize`]) and text inputs
-//! are sanitized before reaching any external API.
+//! Provides a [`TtsProvider`] trait for pluggable TTS backends, with
+//! [`OpenAiTtsProvider`] and [`ElevenLabsProvider`] implementations. All
+//! synthesis requests are gated by Cedar policy (via
+//! [`ActionKind::TtsSynthesize`]) and text inputs are sanitized before
+//! reaching any external API.
+//!
+//! The [`TtsManager`] routes requests to the configured provider and
+//! enforces rate limiting.
 //!
 //! # Security
 //!
 //! - API keys come from environment variables, never config files.
 //! - Text input is sanitized: control characters stripped, max 4096 chars.
 //! - SSRF protection: API endpoint URLs are validated against private IP ranges.
+//! - Voice IDs are validated against path traversal attacks.
+//! - Rate limiting prevents abuse and runaway costs.
 //! - Every TTS request is logged with a text hash (not raw text) for auditability.
 
+pub mod elevenlabs;
+pub mod manager;
 pub mod openai;
 
 use async_trait::async_trait;
@@ -112,6 +120,93 @@ impl AudioFormat {
 impl std::fmt::Display for AudioFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.api_format_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio format detection via magic bytes
+// ---------------------------------------------------------------------------
+
+/// Detect the audio format of raw bytes by inspecting magic bytes.
+///
+/// Returns `None` if the format cannot be determined from the header.
+///
+/// Recognized signatures:
+/// - **MP3**: `FF FB` (MPEG sync word) or `ID3` (ID3v2 tag header)
+/// - **WAV**: `RIFF` (RIFF container header)
+/// - **OGG**: `OggS` (Ogg container magic)
+pub fn detect_audio_format(data: &[u8]) -> Option<AudioFormat> {
+    if data.len() < 4 {
+        return None;
+    }
+
+    // MP3: MPEG audio frame sync word (0xFF 0xFB) or ID3v2 tag header.
+    if (data[0] == 0xFF && data[1] == 0xFB)
+        || (data[0] == b'I' && data[1] == b'D' && data[2] == b'3')
+    {
+        return Some(AudioFormat::Mp3);
+    }
+
+    // WAV: RIFF container.
+    if data[0] == b'R' && data[1] == b'I' && data[2] == b'F' && data[3] == b'F' {
+        return Some(AudioFormat::Wav);
+    }
+
+    // OGG: Ogg container.
+    if data[0] == b'O' && data[1] == b'g' && data[2] == b'g' && data[3] == b'S' {
+        return Some(AudioFormat::Ogg);
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Voice gender and style enums
+// ---------------------------------------------------------------------------
+
+/// Voice gender classification.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceGender {
+    /// Male voice.
+    Male,
+    /// Female voice.
+    Female,
+    /// Gender-neutral or unspecified voice.
+    #[default]
+    Neutral,
+}
+
+impl std::fmt::Display for VoiceGender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VoiceGender::Male => write!(f, "male"),
+            VoiceGender::Female => write!(f, "female"),
+            VoiceGender::Neutral => write!(f, "neutral"),
+        }
+    }
+}
+
+/// Voice style classification.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceStyle {
+    /// Standard / general-purpose voice.
+    #[default]
+    Standard,
+    /// Conversational / casual tone.
+    Conversational,
+    /// Narrative / storytelling tone.
+    Narrative,
+}
+
+impl std::fmt::Display for VoiceStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VoiceStyle::Standard => write!(f, "standard"),
+            VoiceStyle::Conversational => write!(f, "conversational"),
+            VoiceStyle::Narrative => write!(f, "narrative"),
+        }
     }
 }
 
@@ -644,6 +739,89 @@ mod tests {
         let json = serde_json::to_string(&voice).unwrap();
         let back: VoiceInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(back, voice);
+    }
+
+    // -- Audio format detection tests --
+
+    #[test]
+    fn audio_format_detection_magic_bytes() {
+        // MP3 with MPEG sync word (FF FB).
+        assert_eq!(
+            detect_audio_format(&[0xFF, 0xFB, 0x90, 0x00]),
+            Some(AudioFormat::Mp3)
+        );
+
+        // MP3 with ID3v2 tag header.
+        assert_eq!(
+            detect_audio_format(&[b'I', b'D', b'3', 0x04, 0x00]),
+            Some(AudioFormat::Mp3)
+        );
+
+        // WAV (RIFF header).
+        assert_eq!(
+            detect_audio_format(&[b'R', b'I', b'F', b'F', 0x00, 0x00]),
+            Some(AudioFormat::Wav)
+        );
+
+        // OGG (OggS magic).
+        assert_eq!(
+            detect_audio_format(&[b'O', b'g', b'g', b'S', 0x00]),
+            Some(AudioFormat::Ogg)
+        );
+
+        // Unknown format.
+        assert_eq!(detect_audio_format(&[0x00, 0x00, 0x00, 0x00]), None);
+
+        // Too short to detect.
+        assert_eq!(detect_audio_format(&[0xFF]), None);
+        assert_eq!(detect_audio_format(&[]), None);
+    }
+
+    // -- Voice gender and style tests --
+
+    #[test]
+    fn voice_gender_and_style_serialization() {
+        // VoiceGender roundtrip.
+        for gender in [VoiceGender::Male, VoiceGender::Female, VoiceGender::Neutral] {
+            let json = serde_json::to_string(&gender).unwrap();
+            let back: VoiceGender = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, gender);
+        }
+
+        // VoiceStyle roundtrip.
+        for style in [
+            VoiceStyle::Standard,
+            VoiceStyle::Conversational,
+            VoiceStyle::Narrative,
+        ] {
+            let json = serde_json::to_string(&style).unwrap();
+            let back: VoiceStyle = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, style);
+        }
+    }
+
+    #[test]
+    fn voice_gender_default() {
+        assert_eq!(VoiceGender::default(), VoiceGender::Neutral);
+    }
+
+    #[test]
+    fn voice_style_default() {
+        assert_eq!(VoiceStyle::default(), VoiceStyle::Standard);
+    }
+
+    #[test]
+    fn voice_gender_display() {
+        assert_eq!(VoiceGender::Male.to_string(), "male");
+        assert_eq!(VoiceGender::Female.to_string(), "female");
+        assert_eq!(VoiceGender::Neutral.to_string(), "neutral");
+    }
+
+    #[test]
+    fn voice_style_display() {
+        assert_eq!(VoiceStyle::Standard.to_string(), "standard");
+        assert_eq!(VoiceStyle::Conversational.to_string(), "conversational");
+        assert_eq!(VoiceStyle::Narrative.to_string(), "narrative");
     }
 
     // -- Security test: Cedar policy integration --

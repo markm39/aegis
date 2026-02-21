@@ -45,6 +45,7 @@ pub mod scheduled_reply;
 pub mod audio_transcription;
 pub mod image_understanding;
 pub mod link_understanding;
+pub mod video_processing;
 pub mod web_tools;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -3854,6 +3855,16 @@ impl DaemonRuntime {
             | DaemonCommand::SessionFilePut { .. }
             | DaemonCommand::SessionFileSync { .. } => {
                 DaemonResponse::error("session file storage not yet wired to daemon fleet".to_string())
+            }
+
+            // -- TTS commands --
+            DaemonCommand::Tts { text, voice, format } => {
+                DaemonResponse::error(format!(
+                    "TTS synthesis not yet wired to daemon fleet (text_len={}, voice={}, format={})",
+                    text.len(),
+                    voice.as_deref().unwrap_or("default"),
+                    format.as_deref().unwrap_or("default"),
+                ))
             }
         }
     }

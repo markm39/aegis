@@ -708,6 +708,24 @@ pub enum DaemonCommand {
         source_session_id: String,
         filenames: Vec<String>,
     },
+
+    // -- TTS commands --
+    /// Synthesize text to speech using the configured TTS provider.
+    ///
+    /// The text is sanitized and rate-limited by the TtsManager before
+    /// being sent to the active provider. Voice IDs are validated against
+    /// path traversal (alphanumeric + hyphens only).
+    /// Cedar policy gate: `daemon:tts_synthesize`.
+    Tts {
+        /// Text to synthesize (will be sanitized; max 4096 chars).
+        text: String,
+        /// Voice ID to use (provider-specific). If None, uses the default.
+        #[serde(default)]
+        voice: Option<String>,
+        /// Output audio format ("mp3", "wav", "ogg"). If None, uses the default.
+        #[serde(default)]
+        format: Option<String>,
+    },
 }
 
 fn default_true() -> bool {
@@ -831,6 +849,7 @@ impl DaemonCommand {
             DaemonCommand::SessionFileGet { .. } => "daemon:session_file_get",
             DaemonCommand::SessionFilePut { .. } => "daemon:session_file_put",
             DaemonCommand::SessionFileSync { .. } => "daemon:session_file_sync",
+            DaemonCommand::Tts { .. } => "daemon:tts_synthesize",
         }
     }
 }
@@ -1874,6 +1893,17 @@ mod tests {
             DaemonCommand::DeleteBrowserProfile {
                 agent_id: "agent-1".into(),
             },
+            // TTS commands
+            DaemonCommand::Tts {
+                text: "Hello, world!".into(),
+                voice: Some("alloy".into()),
+                format: Some("mp3".into()),
+            },
+            DaemonCommand::Tts {
+                text: "No voice or format".into(),
+                voice: None,
+                format: None,
+            },
         ];
 
         for cmd in commands {
@@ -1905,6 +1935,38 @@ mod tests {
     fn get_effective_config_policy_name() {
         let cmd = DaemonCommand::GetEffectiveConfig;
         assert_eq!(cmd.policy_action_name(), "daemon:get_effective_config");
+    }
+
+    #[test]
+    fn daemon_command_tts_variant() {
+        // Verify Tts variant serializes, deserializes, and has correct policy name.
+        let cmd_full = DaemonCommand::Tts {
+            text: "Synthesize this text.".into(),
+            voice: Some("nova".into()),
+            format: Some("wav".into()),
+        };
+        let json = serde_json::to_string(&cmd_full).unwrap();
+        assert!(json.contains("Synthesize this text."));
+        assert!(json.contains("nova"));
+        assert!(json.contains("wav"));
+        let back: DaemonCommand = serde_json::from_str(&json).unwrap();
+        let json2 = serde_json::to_string(&back).unwrap();
+        assert_eq!(json, json2);
+
+        // Policy action name must be correct.
+        assert_eq!(cmd_full.policy_action_name(), "daemon:tts_synthesize");
+
+        // Tts with defaults (no voice, no format).
+        let cmd_defaults = DaemonCommand::Tts {
+            text: "Hello".into(),
+            voice: None,
+            format: None,
+        };
+        assert_eq!(cmd_defaults.policy_action_name(), "daemon:tts_synthesize");
+        let json_defaults = serde_json::to_string(&cmd_defaults).unwrap();
+        let back_defaults: DaemonCommand = serde_json::from_str(&json_defaults).unwrap();
+        let json_defaults2 = serde_json::to_string(&back_defaults).unwrap();
+        assert_eq!(json_defaults, json_defaults2);
     }
 
     #[test]
