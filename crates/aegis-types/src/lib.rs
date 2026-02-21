@@ -10,6 +10,7 @@ pub mod copilot;
 pub mod daemon;
 pub mod error;
 pub mod google_ai;
+pub mod llm;
 pub mod oauth;
 pub mod tool_classification;
 pub mod verdict;

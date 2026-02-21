@@ -380,6 +380,12 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::CopilotAuth { .. } => "CopilotAuth",
         ActionKind::GeminiApiCall { .. } => "GeminiApiCall",
         ActionKind::ProcessAttachment { .. } => "ProcessAttachment",
+        ActionKind::CanvasCreate { .. } => "CanvasCreate",
+        ActionKind::CanvasUpdate { .. } => "CanvasUpdate",
+        ActionKind::DevicePair { .. } => "DevicePair",
+        ActionKind::DeviceRevoke { .. } => "DeviceRevoke",
+        ActionKind::DeviceAuth { .. } => "DeviceAuth",
+        ActionKind::LlmComplete { .. } => "LlmComplete",
     }
 }
 

@@ -732,6 +732,72 @@ pub enum DaemonCommand {
         #[serde(default)]
         format: Option<String>,
     },
+
+    // -- Device registry commands --
+    /// Register (pair) a new device with the daemon.
+    ///
+    /// Initiates the pairing flow by generating a 6-digit code, or completes
+    /// pairing if a code and device info are provided. When `code` is None,
+    /// generates a new pairing code. When `code` and `device_info` are provided,
+    /// completes the pairing.
+    RegisterDevice {
+        /// Pairing code to complete registration (None = generate new code).
+        #[serde(default)]
+        code: Option<String>,
+        /// Device information for completing pairing.
+        #[serde(default)]
+        device_name: Option<String>,
+        /// Device type description.
+        #[serde(default)]
+        device_type: Option<String>,
+        /// Device platform.
+        #[serde(default)]
+        platform: Option<String>,
+        /// Device capabilities as JSON array.
+        #[serde(default)]
+        capabilities: Option<Vec<String>>,
+    },
+    /// List all registered devices, optionally filtered by status.
+    ListDevices {
+        /// Filter by status: "paired", "active", "revoked", or None for all.
+        #[serde(default)]
+        status: Option<String>,
+    },
+    /// Revoke a registered device, invalidating its auth token.
+    RevokeDevice {
+        /// Device ID to revoke.
+        device_id: String,
+    },
+    /// Query the status of a specific device.
+    DeviceStatus {
+        /// Device ID to query.
+        device_id: String,
+    },
+
+    // -- LLM completion command --
+    /// Send a completion request through the LLM provider abstraction.
+    ///
+    /// Routes the request to the appropriate provider (Anthropic, OpenAI)
+    /// based on the model identifier. Gated by Cedar policy.
+    /// Cedar policy gate: `daemon:llm_complete`.
+    LlmComplete {
+        /// Model identifier (e.g., "claude-sonnet-4-20250514", "gpt-4o").
+        model: String,
+        /// Conversation messages as JSON (serialized Vec<LlmMessage>).
+        messages: serde_json::Value,
+        /// Sampling temperature (0.0 to 2.0).
+        #[serde(default)]
+        temperature: Option<f64>,
+        /// Maximum tokens to generate.
+        #[serde(default)]
+        max_tokens: Option<u32>,
+        /// System prompt.
+        #[serde(default)]
+        system_prompt: Option<String>,
+        /// Tool definitions as JSON (serialized Vec<LlmToolDefinition>).
+        #[serde(default)]
+        tools: Option<serde_json::Value>,
+    },
 }
 
 fn default_true() -> bool {
@@ -857,6 +923,11 @@ impl DaemonCommand {
             DaemonCommand::SessionFilePut { .. } => "daemon:session_file_put",
             DaemonCommand::SessionFileSync { .. } => "daemon:session_file_sync",
             DaemonCommand::Tts { .. } => "daemon:tts_synthesize",
+            DaemonCommand::RegisterDevice { .. } => "daemon:register_device",
+            DaemonCommand::ListDevices { .. } => "daemon:list_devices",
+            DaemonCommand::RevokeDevice { .. } => "daemon:revoke_device",
+            DaemonCommand::DeviceStatus { .. } => "daemon:device_status",
+            DaemonCommand::LlmComplete { .. } => "daemon:llm_complete",
         }
     }
 }

@@ -629,6 +629,17 @@ mod tests {
             ActionKind::CanvasUpdate {
                 canvas_id: "00000000-0000-0000-0000-000000000002".into(),
             },
+            ActionKind::DevicePair {
+                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
+                device_name: "Test Phone".into(),
+                platform: "iOS".into(),
+            },
+            ActionKind::DeviceRevoke {
+                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
+            },
+            ActionKind::DeviceAuth {
+                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
+            },
             ActionKind::LlmComplete {
                 provider: "anthropic".into(),
                 model: "claude-sonnet-4-20250514".into(),

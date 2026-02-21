@@ -48,6 +48,7 @@ pub mod link_understanding;
 pub mod video_processing;
 pub mod web_tools;
 pub mod attachment_handler;
+pub mod device_registry;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -840,6 +841,8 @@ pub struct DaemonRuntime {
     job_tracker: crate::jobs::JobTracker,
     /// Priority command queue with concurrency control and DLQ.
     command_queue: crate::command_queue::CommandQueue,
+    /// Device registry for paired devices.
+    device_store: Option<crate::device_registry::DeviceStore>,
 }
 
 impl DaemonRuntime {
@@ -890,6 +893,25 @@ impl DaemonRuntime {
             Box::new(|_action, _principal| true),
         );
 
+        // Initialize device registry alongside the audit ledger.
+        let device_store = {
+            let db_path = aegis_config
+                .ledger_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("devices.db");
+            match crate::device_registry::DeviceStore::open(&db_path) {
+                Ok(store) => {
+                    info!(db_path = %db_path.display(), "device registry initialized");
+                    Some(store)
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to initialize device registry, pairing disabled");
+                    None
+                }
+            }
+        };
+
         Self {
             fleet,
             config,
@@ -914,6 +936,7 @@ impl DaemonRuntime {
             message_router: crate::message_routing::MessageRouter::new(),
             job_tracker: crate::jobs::JobTracker::new(),
             command_queue: crate::command_queue::CommandQueue::new(),
+            device_store,
         }
     }
 
@@ -3878,6 +3901,159 @@ impl DaemonRuntime {
                     text.len(),
                     voice.as_deref().unwrap_or("default"),
                     format.as_deref().unwrap_or("default"),
+                ))
+            }
+
+            DaemonCommand::RegisterDevice {
+                code,
+                device_name,
+                device_type,
+                platform,
+                capabilities,
+            } => {
+                let store = match self.device_store.as_mut() {
+                    Some(s) => s,
+                    None => return DaemonResponse::error("device registry not initialized"),
+                };
+                match code {
+                    None => {
+                        // Generate a new pairing code
+                        let (pairing_code, expiry) = store.generate_pairing_code();
+                        let remaining_secs = expiry
+                            .saturating_duration_since(std::time::Instant::now())
+                            .as_secs();
+                        let data = serde_json::json!({
+                            "pairing_code": pairing_code,
+                            "expires_in_secs": remaining_secs,
+                        });
+                        DaemonResponse::ok_with_data("pairing code generated", data)
+                    }
+                    Some(pairing_code) => {
+                        // Complete pairing
+                        let name = device_name.unwrap_or_else(|| "Unknown Device".into());
+                        let dtype = device_type.unwrap_or_else(|| "Unknown".into());
+                        let plat = match platform.as_deref() {
+                            Some("ios") => crate::device_registry::DevicePlatform::Ios,
+                            Some("android") => crate::device_registry::DevicePlatform::Android,
+                            Some("macos") => crate::device_registry::DevicePlatform::MacOs,
+                            Some("linux") => crate::device_registry::DevicePlatform::Linux,
+                            Some("windows") => crate::device_registry::DevicePlatform::Windows,
+                            _ => crate::device_registry::DevicePlatform::Web,
+                        };
+                        let caps = capabilities
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|c| match c.as_str() {
+                                "push_notifications" => Some(crate::device_registry::DeviceCapability::PushNotifications),
+                                "remote_control" => Some(crate::device_registry::DeviceCapability::RemoteControl),
+                                "audio_capture" => Some(crate::device_registry::DeviceCapability::AudioCapture),
+                                "video_capture" => Some(crate::device_registry::DeviceCapability::VideoCapture),
+                                _ => None,
+                            })
+                            .collect();
+                        let info = crate::device_registry::DeviceInfo {
+                            name,
+                            device_type: dtype,
+                            platform: plat,
+                            capabilities: caps,
+                        };
+                        match store.complete_pairing(&pairing_code, info) {
+                            Ok((device, auth_token)) => {
+                                let data = serde_json::json!({
+                                    "device_id": device.id.to_string(),
+                                    "device_name": device.name,
+                                    "auth_token": auth_token,
+                                });
+                                DaemonResponse::ok_with_data("device paired", data)
+                            }
+                            Err(e) => DaemonResponse::error(format!("pairing failed: {e}")),
+                        }
+                    }
+                }
+            }
+
+            DaemonCommand::ListDevices { status } => {
+                let store = match self.device_store.as_ref() {
+                    Some(s) => s,
+                    None => return DaemonResponse::error("device registry not initialized"),
+                };
+                let filter = status.as_deref().and_then(|s| match s {
+                    "paired" => Some(crate::device_registry::DeviceStatus::Paired),
+                    "active" => Some(crate::device_registry::DeviceStatus::Active),
+                    "revoked" => Some(crate::device_registry::DeviceStatus::Revoked),
+                    _ => None,
+                });
+                match store.list_devices(filter) {
+                    Ok(devices) => {
+                        let data: Vec<serde_json::Value> = devices
+                            .iter()
+                            .map(|d| {
+                                serde_json::json!({
+                                    "id": d.id.to_string(),
+                                    "name": d.name,
+                                    "device_type": d.device_type,
+                                    "platform": d.platform.to_string(),
+                                    "status": d.status.to_string(),
+                                    "paired_at": d.paired_at.to_rfc3339(),
+                                    "last_seen": d.last_seen.to_rfc3339(),
+                                })
+                            })
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("{} device(s)", data.len()),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(format!("failed to list devices: {e}")),
+                }
+            }
+
+            DaemonCommand::RevokeDevice { ref device_id } => {
+                let store = match self.device_store.as_mut() {
+                    Some(s) => s,
+                    None => return DaemonResponse::error("device registry not initialized"),
+                };
+                let uid = match uuid::Uuid::parse_str(device_id) {
+                    Ok(u) => u,
+                    Err(e) => return DaemonResponse::error(format!("invalid device ID: {e}")),
+                };
+                match store.revoke(&crate::device_registry::DeviceId(uid)) {
+                    Ok(()) => DaemonResponse::ok(format!("device {device_id} revoked")),
+                    Err(e) => DaemonResponse::error(format!("revocation failed: {e}")),
+                }
+            }
+
+            DaemonCommand::DeviceStatus { ref device_id } => {
+                let store = match self.device_store.as_ref() {
+                    Some(s) => s,
+                    None => return DaemonResponse::error("device registry not initialized"),
+                };
+                let uid = match uuid::Uuid::parse_str(device_id) {
+                    Ok(u) => u,
+                    Err(e) => return DaemonResponse::error(format!("invalid device ID: {e}")),
+                };
+                match store.get_device(&crate::device_registry::DeviceId(uid)) {
+                    Ok(Some(device)) => {
+                        let data = serde_json::json!({
+                            "id": device.id.to_string(),
+                            "name": device.name,
+                            "device_type": device.device_type,
+                            "platform": device.platform.to_string(),
+                            "status": device.status.to_string(),
+                            "paired_at": device.paired_at.to_rfc3339(),
+                            "last_seen": device.last_seen.to_rfc3339(),
+                            "capabilities": device.capabilities.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
+                        });
+                        DaemonResponse::ok_with_data("device found", data)
+                    }
+                    Ok(None) => DaemonResponse::error(format!("device not found: {device_id}")),
+                    Err(e) => DaemonResponse::error(format!("query failed: {e}")),
+                }
+            }
+
+            DaemonCommand::LlmComplete { model, .. } => {
+                DaemonResponse::error(format!(
+                    "LLM completion not yet wired to daemon fleet (model={model})"
                 ))
             }
         }
