@@ -246,6 +246,12 @@ enum Commands {
         action: HookCommands,
     },
 
+    /// Feature parity matrix: track OpenClaw feature coverage
+    Parity {
+        #[command(subcommand)]
+        action: ParityCommands,
+    },
+
     /// Watch a directory for filesystem changes (background daemon mode)
     Watch {
         /// Directory to watch (defaults to current directory)
@@ -566,6 +572,30 @@ enum HookCommands {
         /// Project directory (defaults to current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ParityCommands {
+    /// Show parity status summary by domain (complete/partial/missing)
+    Status {
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
+    /// Show features not yet at parity, grouped by implementation wave
+    Diff {
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
+    /// Verify that completed features meet security and evidence requirements
+    Verify {
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -1334,6 +1364,11 @@ fn main() -> anyhow::Result<()> {
             HookCommands::PreToolUse => commands::hook::pre_tool_use(),
             HookCommands::ShowSettings => commands::hook::show_settings(),
             HookCommands::Install { dir } => commands::hook::install_settings(dir.as_deref()),
+        },
+        Commands::Parity { action } => match action {
+            ParityCommands::Status { format } => commands::parity::status(&format),
+            ParityCommands::Diff { format } => commands::parity::diff(&format),
+            ParityCommands::Verify { format } => commands::parity::verify(&format),
         },
         Commands::Watch {
             dir,

@@ -51,6 +51,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 anyhow = "1"
 toml = "0.8"
+serde_yaml = "0.9"
 hex = "0.4"
 notify = { version = "7", features = ["macos_fsevent"] }
 tempfile = "3"

@@ -160,6 +160,12 @@ pub enum FleetCommand {
     Export { format: Option<String> },
     /// Show orchestrator overview (bulk fleet status for review).
     OrchestratorStatus,
+    /// Show parity matrix status from features.yaml (standalone, no daemon).
+    MatrixStatus,
+    /// Show parity matrix diff from features.yaml (standalone, no daemon).
+    MatrixDiff,
+    /// Verify parity matrix from features.yaml (standalone, no daemon).
+    MatrixVerify,
     /// List configured model/provider auth profiles.
     AuthList,
     /// Add a provider auth profile.
@@ -204,6 +210,7 @@ const COMMAND_NAMES: &[&str] = &[
     "list",
     "log",
     "logs",
+    "matrix",
     "monitor",
     "dashboard",
     "nudge",
@@ -569,6 +576,17 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         "parity-status" => Ok(Some(FleetCommand::ParityStatus)),
         "parity-diff" => Ok(Some(FleetCommand::ParityDiff)),
         "parity-verify" => Ok(Some(FleetCommand::ParityVerify)),
+        "matrix" => match arg1 {
+            "" | "status" => Ok(Some(FleetCommand::MatrixStatus)),
+            "diff" => Ok(Some(FleetCommand::MatrixDiff)),
+            "verify" => Ok(Some(FleetCommand::MatrixVerify)),
+            other => Err(format!(
+                "unknown matrix subcommand: {other}. Use: status, diff, verify"
+            )),
+        },
+        "matrix-status" => Ok(Some(FleetCommand::MatrixStatus)),
+        "matrix-diff" => Ok(Some(FleetCommand::MatrixDiff)),
+        "matrix-verify" => Ok(Some(FleetCommand::MatrixVerify)),
         "pop" => {
             if arg1.is_empty() {
                 Err("usage: pop <agent>".into())
@@ -789,6 +807,7 @@ const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
 const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
 const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
 const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
+const MATRIX_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -930,6 +949,13 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "matrix" {
+            return MATRIX_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
         if cmd == "session" {
             return SESSION_SUBCOMMANDS
                 .iter()
@@ -1021,6 +1047,9 @@ pub fn help_text() -> &'static str {
      :init                    Create project aegis config\n\
      :list                    List all aegis configs\n\
      :log                     Recent audit entries\n\
+     :matrix status           Feature parity matrix summary\n\
+     :matrix diff             Incomplete features by wave\n\
+     :matrix verify           Verify completed features\n\
      :logs                    Daemon log output\n\
      :monitor                 Open monitor in new terminal\n\
      :dashboard               Open web dashboard\n\

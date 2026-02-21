@@ -1891,6 +1891,24 @@ impl FleetApp {
             FleetCommand::Report => {
                 self.spawn_terminal("aegis report", "Opened compliance report in new terminal");
             }
+            FleetCommand::MatrixStatus => {
+                self.spawn_terminal(
+                    "aegis parity status",
+                    "Opened parity matrix status in new terminal",
+                );
+            }
+            FleetCommand::MatrixDiff => {
+                self.spawn_terminal(
+                    "aegis parity diff",
+                    "Opened parity matrix diff in new terminal",
+                );
+            }
+            FleetCommand::MatrixVerify => {
+                self.spawn_terminal(
+                    "aegis parity verify",
+                    "Running parity verification in new terminal",
+                );
+            }
             FleetCommand::List => {
                 self.spawn_terminal("aegis list", "Opened config list in new terminal");
             }

@@ -42,6 +42,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
+serde_yaml = { workspace = true }
 cedar-policy = { workspace = true }
 tempfile = { workspace = true }
 dialoguer = { workspace = true }

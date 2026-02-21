@@ -52,6 +52,7 @@ pub mod init;
 pub mod list;
 pub mod monitor;
 pub mod onboard;
+pub mod parity;
 pub mod pilot;
 pub mod pipeline;
 pub mod policy;
