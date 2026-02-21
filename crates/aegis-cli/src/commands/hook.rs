@@ -175,16 +175,13 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
 ///
 /// Contains the tool name, input, and the tool's output after execution.
 /// PostToolUse is purely observational -- it never blocks execution.
-#[allow(dead_code)]
 struct PostToolUseInput {
     tool_name: String,
     tool_input: serde_json::Value,
-    #[allow(dead_code)]
-    tool_output: serde_json::Value,
+    _tool_output: serde_json::Value,
 }
 
 /// Parse a PostToolUse payload from stdin.
-#[allow(dead_code)]
 fn parse_post_tool_use_input(payload: &serde_json::Value) -> PostToolUseInput {
     let tool_name = payload
         .get("tool_name")
@@ -202,14 +199,13 @@ fn parse_post_tool_use_input(payload: &serde_json::Value) -> PostToolUseInput {
     PostToolUseInput {
         tool_name,
         tool_input,
-        tool_output,
+        _tool_output: tool_output,
     }
 }
 
 /// Format the PostToolUse response JSON.
 ///
 /// PostToolUse hooks are observational -- the response simply acknowledges receipt.
-#[allow(dead_code)]
 fn format_post_tool_use_response() -> serde_json::Value {
     serde_json::json!({
         "hookSpecificOutput": {
@@ -223,7 +219,6 @@ fn format_post_tool_use_response() -> serde_json::Value {
 /// Reads the hook payload from stdin, records the tool result for
 /// observability, and outputs an acknowledgement. PostToolUse is purely
 /// observational -- it never blocks execution and always exits successfully.
-#[allow(dead_code)]
 pub fn post_tool_use() -> anyhow::Result<()> {
     // Read the hook payload from stdin (capped at 10 MB)
     let mut input = String::new();
@@ -477,7 +472,7 @@ mod tests {
         let input = parse_post_tool_use_input(&payload);
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.tool_input["command"], "ls -la");
-        assert_eq!(input.tool_output, "file1.txt\nfile2.txt");
+        assert_eq!(input._tool_output, "file1.txt\nfile2.txt");
     }
 
     #[test]
@@ -488,7 +483,7 @@ mod tests {
         let input = parse_post_tool_use_input(&payload);
         assert_eq!(input.tool_name, "unknown");
         assert_eq!(input.tool_input, serde_json::json!({}));
-        assert!(input.tool_output.is_null());
+        assert!(input._tool_output.is_null());
     }
 
     #[test]

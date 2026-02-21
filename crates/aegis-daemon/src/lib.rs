@@ -22,8 +22,10 @@ pub mod persistence;
 pub mod slot;
 pub mod state;
 pub mod stream_fmt;
+pub mod session_tools;
 pub mod tool_contract;
 pub mod toolkit_runtime;
+pub mod web_tools;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
