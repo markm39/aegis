@@ -127,6 +127,11 @@ impl PolicyEngine {
                     warning_count: 0,
                     error_count: 0,
                 },
+                "MemoryCapture" => ActionKind::MemoryCapture {
+                    agent_id: "__probe__".into(),
+                    category: String::new(),
+                    key: String::new(),
+                },
                 _ => return false,
             },
         );
@@ -289,6 +294,7 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::ProcessExit { command, .. } => Ok(("ProcessExit", command.as_str())),
         ActionKind::ApiUsage { provider, .. } => Ok(("ApiUsage", provider.as_str())),
         ActionKind::SkillScan { path, .. } => Ok(("SkillScan", require_utf8(path)?)),
+        ActionKind::MemoryCapture { agent_id, .. } => Ok(("MemoryCapture", agent_id.as_str())),
     }
 }
 

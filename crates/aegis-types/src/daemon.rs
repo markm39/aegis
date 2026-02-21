@@ -326,6 +326,9 @@ pub struct MemoryConfig {
     /// Automatic memory recall settings.
     #[serde(default)]
     pub auto_recall: AutoRecallConfig,
+    /// Automatic memory capture settings.
+    #[serde(default)]
+    pub auto_capture: AutoCaptureConfig,
 }
 
 fn default_half_life_hours() -> f64 {
@@ -373,6 +376,59 @@ fn default_auto_recall_max_tokens() -> usize {
 
 fn default_auto_recall_threshold() -> f32 {
     0.65
+}
+
+/// Configuration for automatic memory capture from agent conversations.
+///
+/// When enabled, the daemon extracts structured information (preferences,
+/// decisions, facts, entities, instructions) from agent conversation text
+/// and stores them in the memory store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoCaptureConfig {
+    /// Whether automatic capture is enabled. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Which extraction categories to capture. Default: all categories.
+    /// Valid values: "preference", "decision", "fact", "entity", "instruction".
+    #[serde(default = "default_auto_capture_categories")]
+    pub categories: Vec<String>,
+    /// Minimum confidence score for extracted entries. Default: 0.7.
+    /// Entries below this threshold are discarded.
+    #[serde(default = "default_auto_capture_confidence_threshold")]
+    pub confidence_threshold: f32,
+    /// Maximum number of memory writes per turn. Default: 5.
+    /// Prevents runaway extraction from flooding the store.
+    #[serde(default = "default_auto_capture_max_per_turn")]
+    pub max_per_turn: usize,
+}
+
+impl Default for AutoCaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            categories: default_auto_capture_categories(),
+            confidence_threshold: default_auto_capture_confidence_threshold(),
+            max_per_turn: default_auto_capture_max_per_turn(),
+        }
+    }
+}
+
+fn default_auto_capture_categories() -> Vec<String> {
+    vec![
+        "preference".into(),
+        "decision".into(),
+        "fact".into(),
+        "entity".into(),
+        "instruction".into(),
+    ]
+}
+
+fn default_auto_capture_confidence_threshold() -> f32 {
+    0.7
+}
+
+fn default_auto_capture_max_per_turn() -> usize {
+    5
 }
 
 /// Configuration for session-scoped file storage.

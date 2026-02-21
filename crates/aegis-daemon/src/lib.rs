@@ -25,6 +25,7 @@ pub mod fleet;
 pub mod jobs;
 pub mod lifecycle;
 pub mod memory;
+pub mod memory_capture;
 pub mod memory_guard;
 pub mod memory_recall;
 pub mod ndjson_fmt;

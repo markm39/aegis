@@ -102,6 +102,15 @@ pub enum ActionKind {
         /// Number of error-severity findings.
         error_count: usize,
     },
+    /// Automatic capture of a memory entry from agent conversation.
+    MemoryCapture {
+        /// The agent performing the capture.
+        agent_id: String,
+        /// Extraction category (e.g., "preference", "decision", "fact").
+        category: String,
+        /// The memory key being stored.
+        key: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -186,6 +195,13 @@ impl std::fmt::Display for ActionKind {
                     path.display()
                 )
             }
+            ActionKind::MemoryCapture {
+                agent_id,
+                category,
+                key,
+            } => {
+                write!(f, "MemoryCapture {agent_id}/{category}:{key}")
+            }
         }
     }
 }
@@ -260,6 +276,11 @@ mod tests {
                 passed: true,
                 warning_count: 1,
                 error_count: 0,
+            },
+            ActionKind::MemoryCapture {
+                agent_id: "agent-1".into(),
+                category: "preference".into(),
+                key: "editor".into(),
             },
         ];
         for v in variants {
@@ -392,6 +413,15 @@ mod tests {
             }
             .to_string(),
             "SkillScan /tmp/skill BLOCKED (warnings=2, errors=1)"
+        );
+        assert_eq!(
+            ActionKind::MemoryCapture {
+                agent_id: "agent-1".into(),
+                category: "preference".into(),
+                key: "editor".into(),
+            }
+            .to_string(),
+            "MemoryCapture agent-1/preference:editor"
         );
     }
 }

@@ -100,6 +100,7 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         ActionKind::ProcessExit { .. } => ActionRisk::Informational,
         ActionKind::ApiUsage { .. } => ActionRisk::Low,
         ActionKind::SkillScan { .. } => ActionRisk::Informational,
+        ActionKind::MemoryCapture { .. } => ActionRisk::Medium,
     }
 }
 
