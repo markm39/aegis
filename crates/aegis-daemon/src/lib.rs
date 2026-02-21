@@ -51,8 +51,10 @@ pub mod attachment_handler;
 pub mod device_registry;
 pub mod phone_control;
 pub mod setup_codes;
+pub mod llm_client;
 pub mod speech;
 pub mod voice;
+pub mod voice_gateway;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -855,6 +857,10 @@ pub struct DaemonRuntime {
     voice_manager: Option<crate::voice::VoiceManager>,
     /// Speech recognition manager (Deepgram/Whisper), initialized if STT API key is set.
     speech_manager: Option<crate::speech::SpeechRecognitionManager>,
+    /// Voice gateway for WebSocket-based voice session management.
+    voice_gateway: crate::voice_gateway::VoiceGateway,
+    /// LLM HTTP client for Anthropic and OpenAI completions.
+    llm_client: Option<crate::llm_client::LlmClient>,
 }
 
 impl DaemonRuntime {
@@ -955,6 +961,23 @@ impl DaemonRuntime {
             phone_controller: crate::phone_control::PhoneController::new(),
             voice_manager: None, // Initialized lazily if TWILIO_AUTH_TOKEN is set
             speech_manager: None, // Initialized lazily if DEEPGRAM_API_KEY or OPENAI_API_KEY is set
+            voice_gateway: crate::voice_gateway::VoiceGateway::new(),
+            llm_client: match crate::llm_client::build_registry_from_env() {
+                Ok(registry) => match crate::llm_client::LlmClient::new(registry) {
+                    Ok(client) => {
+                        info!("LLM client initialized (Anthropic + OpenAI providers)");
+                        Some(client)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to initialize LLM client");
+                        None
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "failed to build LLM provider registry");
+                    None
+                }
+            },
         }
     }
 
@@ -4069,10 +4092,92 @@ impl DaemonRuntime {
                 }
             }
 
-            DaemonCommand::LlmComplete { model, .. } => {
-                DaemonResponse::error(format!(
-                    "LLM completion not yet wired to daemon fleet (model={model})"
-                ))
+            DaemonCommand::LlmComplete {
+                model,
+                messages,
+                temperature,
+                max_tokens,
+                system_prompt,
+                tools,
+            } => {
+                let Some(ref client) = self.llm_client else {
+                    return DaemonResponse::error(
+                        "LLM client not initialized (check provider registry configuration)"
+                    );
+                };
+
+                // Deserialize messages from JSON value.
+                let parsed_messages: Vec<aegis_types::llm::LlmMessage> =
+                    match serde_json::from_value(messages) {
+                        Ok(msgs) => msgs,
+                        Err(e) => {
+                            return DaemonResponse::error(format!(
+                                "invalid messages format: {e}"
+                            ));
+                        }
+                    };
+
+                // Deserialize tool definitions if provided.
+                let parsed_tools: Vec<aegis_types::llm::LlmToolDefinition> =
+                    match tools {
+                        Some(t) => match serde_json::from_value(t) {
+                            Ok(td) => td,
+                            Err(e) => {
+                                return DaemonResponse::error(format!(
+                                    "invalid tools format: {e}"
+                                ));
+                            }
+                        },
+                        None => Vec::new(),
+                    };
+
+                let request = aegis_types::llm::LlmRequest {
+                    model: model.clone(),
+                    messages: parsed_messages,
+                    temperature,
+                    max_tokens,
+                    system_prompt,
+                    tools: parsed_tools,
+                };
+
+                match client.complete(&request) {
+                    Ok(response) => {
+                        // Log to audit trail (model + token counts, NOT content).
+                        let action = Action::new(
+                            "daemon".to_string(),
+                            ActionKind::LlmComplete {
+                                provider: client
+                                    .registry()
+                                    .resolve_provider(&model)
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                model: response.model.clone(),
+                                endpoint: String::new(),
+                                input_tokens: response.usage.input_tokens,
+                                output_tokens: response.usage.output_tokens,
+                            },
+                        );
+                        let verdict = Verdict::allow(
+                            action.id,
+                            format!(
+                                "LLM completion: {} in={} out={}",
+                                response.model,
+                                response.usage.input_tokens,
+                                response.usage.output_tokens
+                            ),
+                            None,
+                        );
+                        self.append_audit_entry(&action, &verdict);
+
+                        match serde_json::to_value(&response) {
+                            Ok(data) => DaemonResponse::ok_with_data("llm completion ok", data),
+                            Err(e) => DaemonResponse::error(format!(
+                                "failed to serialize LLM response: {e}"
+                            )),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(format!("LLM completion failed: {e}")),
+                }
             }
 
             DaemonCommand::GenerateSetupCode { ref endpoint } => {
@@ -4319,6 +4424,50 @@ impl DaemonRuntime {
                     "speech recognition not configured (set DEEPGRAM_API_KEY or OPENAI_API_KEY)",
                 ),
             },
+
+            // -- Voice gateway session commands --
+            DaemonCommand::StartVoiceSession {
+                ref agent_id,
+                ref config,
+            } => {
+                let session_config: crate::voice_gateway::VoiceSessionConfig =
+                    match serde_json::from_value(config.clone()) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return DaemonResponse::error(format!(
+                                "invalid voice session config: {e}"
+                            ))
+                        }
+                    };
+                match self.voice_gateway.start_session(agent_id, session_config) {
+                    Ok(session) => match serde_json::to_value(&session) {
+                        Ok(data) => DaemonResponse::ok_with_data("voice session started", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(format!("start_voice_session failed: {e}")),
+                }
+            }
+            DaemonCommand::StopVoiceSession { ref session_id } => {
+                match self.voice_gateway.stop_session(session_id) {
+                    Ok(()) => DaemonResponse::ok("voice session stopped"),
+                    Err(e) => DaemonResponse::error(format!("stop_voice_session failed: {e}")),
+                }
+            }
+            DaemonCommand::ListVoiceSessions => {
+                let sessions: Vec<_> = self
+                    .voice_gateway
+                    .list_sessions()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                match serde_json::to_value(&sessions) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} voice session(s)", sessions.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
         }
     }
 

@@ -361,6 +361,18 @@ pub enum ActionKind {
         /// Audio format (e.g., "pcm_16khz", "mp3", "wav").
         format: String,
     },
+    /// Voice session lifecycle operation via the voice gateway.
+    ///
+    /// Gated by Cedar policy. Classified as ActionRisk::Medium because it
+    /// manages real-time audio streaming sessions that bridge external STT/TTS
+    /// providers. No raw audio data is logged; only session metadata (agent,
+    /// operation) is recorded in the audit trail.
+    VoiceSession {
+        /// Agent associated with the voice session.
+        agent_id: String,
+        /// Operation being performed (e.g., "start", "stop", "pause", "resume", "list").
+        operation: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -596,6 +608,12 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "SpeechRecognition {provider} ({format})")
             }
+            ActionKind::VoiceSession {
+                agent_id,
+                operation,
+            } => {
+                write!(f, "VoiceSession {agent_id} ({operation})")
+            }
         }
     }
 }
@@ -762,6 +780,10 @@ mod tests {
             ActionKind::MakeVoiceCall {
                 to_number: "+15551234567".into(),
                 agent_id: "agent-1".into(),
+            },
+            ActionKind::VoiceSession {
+                agent_id: "agent-1".into(),
+                operation: "start".into(),
             },
         ];
         for v in variants {

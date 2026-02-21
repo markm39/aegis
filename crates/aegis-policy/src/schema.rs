@@ -175,6 +175,10 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "VoiceSession" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 

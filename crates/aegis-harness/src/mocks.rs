@@ -392,6 +392,7 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::ManageDevice { .. } => "ManageDevice",
         ActionKind::MakeVoiceCall { .. } => "MakeVoiceCall",
         ActionKind::SpeechRecognition { .. } => "SpeechRecognition",
+        ActionKind::VoiceSession { .. } => "VoiceSession",
     }
 }
 

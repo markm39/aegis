@@ -165,6 +165,10 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // Classified as Medium because it involves external API communication
         // and audio data transfer, but is recoverable and read-oriented.
         ActionKind::SpeechRecognition { .. } => ActionRisk::Medium,
+        // Voice session management controls real-time audio streaming that
+        // bridges STT/TTS providers. Classified as Medium because it manages
+        // sessions with external API implications but is recoverable.
+        ActionKind::VoiceSession { .. } => ActionRisk::Medium,
     }
 }
 

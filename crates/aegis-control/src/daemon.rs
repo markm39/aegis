@@ -932,6 +932,31 @@ pub enum DaemonCommand {
         /// Audio format (e.g., "pcm_16khz", "mp3", "wav").
         format: String,
     },
+
+    // -- Voice gateway session commands --
+    /// Start a new voice session for an agent via the voice gateway.
+    ///
+    /// Creates a WebSocket-backed session with optional STT/TTS.
+    /// Maximum 10 concurrent voice sessions are enforced.
+    /// Cedar policy gate: `daemon:start_voice_session`.
+    StartVoiceSession {
+        /// Agent to associate with the voice session.
+        agent_id: String,
+        /// Session configuration as JSON (VoiceSessionConfig fields).
+        config: serde_json::Value,
+    },
+    /// Stop an active voice session.
+    ///
+    /// Transitions the session to Ending then Ended.
+    /// Cedar policy gate: `daemon:stop_voice_session`.
+    StopVoiceSession {
+        /// Session identifier returned by StartVoiceSession.
+        session_id: String,
+    },
+    /// List all voice sessions (active and ended).
+    ///
+    /// Cedar policy gate: `daemon:list_voice_sessions`.
+    ListVoiceSessions,
 }
 
 fn default_true() -> bool {
@@ -1076,6 +1101,9 @@ impl DaemonCommand {
             DaemonCommand::StartSpeechSession { .. } => "daemon:start_speech_session",
             DaemonCommand::StopSpeechSession { .. } => "daemon:stop_speech_session",
             DaemonCommand::TranscribeAudio { .. } => "daemon:transcribe_audio",
+            DaemonCommand::StartVoiceSession { .. } => "daemon:start_voice_session",
+            DaemonCommand::StopVoiceSession { .. } => "daemon:stop_voice_session",
+            DaemonCommand::ListVoiceSessions => "daemon:list_voice_sessions",
         }
     }
 }
