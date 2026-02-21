@@ -121,6 +121,12 @@ impl PolicyEngine {
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
                 },
+                "SkillScan" => ActionKind::SkillScan {
+                    path: std::path::PathBuf::from("__probe__"),
+                    passed: true,
+                    warning_count: 0,
+                    error_count: 0,
+                },
                 _ => return false,
             },
         );
@@ -282,6 +288,7 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::ProcessSpawn { command, .. } => Ok(("ProcessSpawn", command.as_str())),
         ActionKind::ProcessExit { command, .. } => Ok(("ProcessExit", command.as_str())),
         ActionKind::ApiUsage { provider, .. } => Ok(("ApiUsage", provider.as_str())),
+        ActionKind::SkillScan { path, .. } => Ok(("SkillScan", require_utf8(path)?)),
     }
 }
 

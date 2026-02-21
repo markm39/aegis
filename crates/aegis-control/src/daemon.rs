@@ -642,6 +642,38 @@ pub enum DaemonCommand {
     /// Removes the profile directory and all associated data.
     /// Cedar policy gate: `daemon:delete_browser_profile`.
     DeleteBrowserProfile { agent_id: String },
+
+    // -- User-extensible hook commands --
+    /// Install a user hook from a directory path.
+    ///
+    /// The path must point to a directory containing a `manifest.toml`.
+    /// The hook is copied into `~/.aegis/hooks/` and loaded into the registry.
+    /// Cedar policy gate: `daemon:install_hook`.
+    InstallHook { path: std::path::PathBuf },
+    /// List all installed user hooks with their status.
+    ///
+    /// Cedar policy gate: `daemon:list_hooks`.
+    ListHooks,
+    /// Enable a user hook by name (transitions to Active).
+    ///
+    /// Cedar policy gate: `daemon:enable_hook`.
+    EnableHook { name: String },
+    /// Disable a user hook by name (transitions to Disabled).
+    ///
+    /// Cedar policy gate: `daemon:disable_hook`.
+    DisableHook { name: String },
+    /// Get the status of a specific user hook.
+    ///
+    /// Cedar policy gate: `daemon:hook_status`.
+    HookStatus { name: String },
+
+    // -- Skill security scanning --
+    /// Scan a skill directory for dangerous code patterns before loading.
+    ///
+    /// Returns the full scan result including warnings and errors.
+    /// The skill is NOT loaded -- this is an inspection-only command.
+    /// Cedar policy gate: `daemon:scan_skill`.
+    ScanSkill { path: String },
 }
 
 fn default_true() -> bool {
@@ -755,6 +787,12 @@ impl DaemonCommand {
             DaemonCommand::LaneUtilization { .. } => "daemon:lane_utilization",
             DaemonCommand::ListBrowserProfiles => "daemon:list_browser_profiles",
             DaemonCommand::DeleteBrowserProfile { .. } => "daemon:delete_browser_profile",
+            DaemonCommand::InstallHook { .. } => "daemon:install_hook",
+            DaemonCommand::ListHooks => "daemon:list_hooks",
+            DaemonCommand::EnableHook { .. } => "daemon:enable_hook",
+            DaemonCommand::DisableHook { .. } => "daemon:disable_hook",
+            DaemonCommand::HookStatus { .. } => "daemon:hook_status",
+            DaemonCommand::ScanSkill { .. } => "daemon:scan_skill",
         }
     }
 }

@@ -3838,6 +3838,10 @@ impl DaemonRuntime {
             | DaemonCommand::HookStatus { .. } => {
                 DaemonResponse::error("hook management not yet wired to daemon fleet".to_string())
             }
+
+            DaemonCommand::ScanSkill { .. } => {
+                DaemonResponse::error("skill scanning not yet wired to daemon fleet".to_string())
+            }
         }
     }
 
