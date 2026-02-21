@@ -22,6 +22,7 @@ pub mod fleet;
 pub mod lifecycle;
 pub mod memory;
 pub mod ndjson_fmt;
+pub mod semantic_search;
 pub mod persistence;
 pub mod plugins;
 pub mod prompt_builder;
@@ -3534,6 +3535,14 @@ impl DaemonRuntime {
                     }
                     Err(e) => DaemonResponse::error(format!("command execution failed: {e}")),
                 }
+            }
+            DaemonCommand::DelegateApproval {
+                request_id,
+                delegate_to,
+            } => {
+                DaemonResponse::error(format!(
+                    "delegate approval not yet implemented (request={request_id}, to={delegate_to})"
+                ))
             }
         }
     }
