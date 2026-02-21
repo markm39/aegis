@@ -13,6 +13,7 @@
 //! - [`persistence`]: launchd integration, PID files, caffeinate
 //! - [`state`]: crash recovery via persistent state.json
 
+pub mod commands;
 pub mod control;
 pub mod cron;
 pub mod dashboard;
@@ -812,6 +813,8 @@ pub struct DaemonRuntime {
     heartbeat_last_sent: HashMap<String, Instant>,
     /// Command alias registry.
     alias_registry: AliasRegistry,
+    /// Command processing framework router.
+    command_router: crate::commands::CommandRouter,
 }
 
 impl DaemonRuntime {
@@ -853,6 +856,15 @@ impl DaemonRuntime {
 
         let alias_registry = AliasRegistry::from_config(&config.aliases);
 
+        let mut cmd_registry = crate::commands::CommandRegistry::new();
+        crate::commands::register_builtins(&mut cmd_registry);
+        let command_router = crate::commands::CommandRouter::new(
+            cmd_registry,
+            // Default permission checker: allow all commands.
+            // In production, this would delegate to Cedar policy evaluation.
+            Box::new(|_action, _principal| true),
+        );
+
         Self {
             fleet,
             config,
@@ -872,6 +884,7 @@ impl DaemonRuntime {
             dashboard_token: None,
             heartbeat_last_sent: HashMap::new(),
             alias_registry,
+            command_router,
         }
     }
 
@@ -3488,6 +3501,37 @@ impl DaemonRuntime {
                         data,
                     ),
                     Err(e) => DaemonResponse::error(format!("failed to serialize aliases: {e}")),
+                }
+            }
+            DaemonCommand::ExecuteCommand {
+                agent_id,
+                command,
+                args,
+            } => {
+                let raw_input = if args.is_empty() {
+                    command.clone()
+                } else {
+                    format!("{} {}", command, args.join(" "))
+                };
+                let ctx = crate::commands::CommandContext {
+                    agent_id: agent_id.unwrap_or_default(),
+                    principal: "daemon".into(),
+                    channel: "daemon".into(),
+                    args,
+                    raw_input,
+                };
+                match self.command_router.route(&command, &ctx) {
+                    Ok(result) => {
+                        if result.success {
+                            match result.data {
+                                Some(data) => DaemonResponse::ok_with_data(result.message, data),
+                                None => DaemonResponse::ok(result.message),
+                            }
+                        } else {
+                            DaemonResponse::error(result.message)
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(format!("command execution failed: {e}")),
                 }
             }
         }

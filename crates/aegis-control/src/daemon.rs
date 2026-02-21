@@ -249,6 +249,23 @@ pub enum DaemonCommand {
     },
     /// List all models seen by the usage proxy across the fleet.
     ListModels,
+
+    // -- Command framework --
+    /// Execute a registered command through the command processing framework.
+    ///
+    /// Allows programmatic command execution from the control plane, TUI,
+    /// or external channels. The command is looked up in the daemon's
+    /// `CommandRegistry` and executed with permission checks.
+    ExecuteCommand {
+        /// Target agent (None for fleet-level commands).
+        #[serde(default)]
+        agent_id: Option<String>,
+        /// Command name (e.g., "status", "help").
+        command: String,
+        /// Arguments to pass to the command handler.
+        #[serde(default)]
+        args: Vec<String>,
+    },
 }
 
 fn default_true() -> bool {
