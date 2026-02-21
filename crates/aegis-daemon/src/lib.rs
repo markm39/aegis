@@ -13,6 +13,7 @@
 //! - [`persistence`]: launchd integration, PID files, caffeinate
 //! - [`state`]: crash recovery via persistent state.json
 
+pub mod command_queue;
 pub mod commands;
 pub mod control;
 pub mod cron;
@@ -827,6 +828,8 @@ pub struct DaemonRuntime {
     message_router: crate::message_routing::MessageRouter,
     /// Job tracker for agent long-running task lifecycle.
     job_tracker: crate::jobs::JobTracker,
+    /// Priority command queue with concurrency control and DLQ.
+    command_queue: crate::command_queue::CommandQueue,
 }
 
 impl DaemonRuntime {
@@ -900,6 +903,7 @@ impl DaemonRuntime {
             scheduled_reply_mgr: crate::scheduled_reply::ScheduledReplyManager::new(),
             message_router: crate::message_routing::MessageRouter::new(),
             job_tracker: crate::jobs::JobTracker::new(),
+            command_queue: crate::command_queue::CommandQueue::new(),
         }
     }
 
@@ -3749,6 +3753,48 @@ impl DaemonRuntime {
             | DaemonCommand::ListPush
             | DaemonCommand::TestPush { .. } => {
                 DaemonResponse::error("push notification commands not yet wired to daemon")
+            }
+
+            // -- Poll commands (stubs, added by another agent) --
+            DaemonCommand::CreatePoll { .. }
+            | DaemonCommand::VotePoll { .. }
+            | DaemonCommand::ClosePoll { .. }
+            | DaemonCommand::PollResults { .. }
+            | DaemonCommand::ListPolls => {
+                DaemonResponse::error("poll commands not yet wired to daemon")
+            }
+
+            // -- Command queue commands --
+            DaemonCommand::QueueCommand { command, priority } => {
+                match self.command_queue.enqueue(command, priority) {
+                    Ok(id) => DaemonResponse::ok_with_data(
+                        format!("command queued with id {id}"),
+                        serde_json::json!({ "id": id.to_string() }),
+                    ),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::QueueStatus => {
+                let metrics = self.command_queue.queue_status();
+                match serde_json::to_value(&metrics) {
+                    Ok(data) => DaemonResponse::ok_with_data("queue metrics", data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+            DaemonCommand::QueueFlush => {
+                self.command_queue.flush();
+                DaemonResponse::ok("pending queue flushed")
+            }
+            DaemonCommand::QueueInspect => {
+                let dlq = self.command_queue.dead_letter_queue();
+                let dlq_len = dlq.len();
+                match serde_json::to_value(dlq) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{dlq_len} dead-lettered commands"),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
             }
         }
     }
