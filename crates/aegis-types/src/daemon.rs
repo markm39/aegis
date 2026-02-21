@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AdapterConfig, AlertRule, ChannelConfig, IsolationConfig, PilotConfig};
+use crate::config::{
+    AdapterConfig, AlertRule, ChannelConfig, ChannelRoutingConfig, IsolationConfig, PilotConfig,
+};
 
 /// Security preset applied during onboarding.
 ///
@@ -52,6 +54,9 @@ pub struct DaemonConfig {
     /// Bidirectional messaging channel (Telegram, Slack, etc.).
     #[serde(default)]
     pub channel: Option<ChannelConfig>,
+    /// Per-channel command routing (allowlists, blocklists, aliases).
+    #[serde(default)]
+    pub channel_routing: Option<ChannelRoutingConfig>,
     /// Computer-use runtime configuration (capture/input/browser/loop behavior).
     #[serde(default)]
     pub toolkit: ToolkitConfig,
@@ -730,6 +735,7 @@ mod tests {
             dashboard: DashboardConfig::default(),
             alerts: vec![],
             channel: None,
+            channel_routing: None,
             toolkit: ToolkitConfig::default(),
             memory: MemoryConfig::default(),
             cron: CronConfig::default(),

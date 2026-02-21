@@ -668,6 +668,7 @@ impl FleetApp {
                 alerts: vec![],
                 agents: vec![],
                 channel: None,
+                channel_routing: None,
                 toolkit: Default::default(),
                 memory: Default::default(),
                 cron: Default::default(),

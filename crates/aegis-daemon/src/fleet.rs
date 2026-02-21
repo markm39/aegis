@@ -800,6 +800,7 @@ mod tests {
             alerts: vec![],
             agents,
             channel: None,
+            channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
             cron: Default::default(),
