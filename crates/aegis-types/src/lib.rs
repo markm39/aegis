@@ -5,6 +5,7 @@
 
 pub mod action;
 pub mod config;
+pub mod config_loader;
 pub mod daemon;
 pub mod error;
 pub mod tool_classification;
@@ -20,6 +21,9 @@ pub use config::{
     SignalChannelConfig, SlackConfig, StallConfig, TelegramConfig, UncertainAction,
     UsageProxyConfig, VoiceCallChannelConfig, WebhookChannelConfig, WhatsappChannelConfig,
     CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
+};
+pub use config_loader::{
+    mask_sensitive, is_sensitive_field, ConfigLoader, ConfigSource, EffectiveConfig,
 };
 pub use daemon::{
     AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, DaemonControlConfig,

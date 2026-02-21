@@ -13,6 +13,8 @@ use aegis_toolkit::contract::{RiskTag, ToolAction, ToolResult};
 use aegis_types::daemon::AgentSlotConfig;
 use aegis_types::AgentStatus;
 
+use crate::message_routing::MessageEnvelope;
+
 /// Session lifecycle state machine.
 ///
 /// Valid transitions:
@@ -419,10 +421,142 @@ pub enum DaemonCommand {
     ToggleAutoReply { id: String, enabled: bool },
     /// Enable or disable auto-reply for a specific chat.
     SetAutoReplyChat { chat_id: i64, enabled: bool },
+
+    // -- Message routing commands --
+    /// Route a message envelope to an agent or channel.
+    ///
+    /// The daemon validates the target exists, evaluates Cedar policy
+    /// (`RouteMessage` or `RouteSystemMessage` for system envelopes),
+    /// sanitizes content, and enqueues for delivery.
+    RouteMessage { envelope: MessageEnvelope },
+    /// Retrieve all messages in a thread (sharing the same parent_id).
+    GetMessageThread { message_id: uuid::Uuid },
+    /// Inject a system message into an agent's input (no user attribution).
+    ///
+    /// Creates a system envelope and writes directly to the agent's PTY stdin.
+    /// Requires elevated Cedar policy action (`RouteSystemMessage`).
+    InjectSystemMessage { agent_name: String, content: String },
+
+    // -- Scheduled reply commands --
+    /// Add a new scheduled auto-reply (template rendered on cron schedule).
+    ScheduleReplyAdd {
+        /// Human-readable name (e.g., "daily-digest").
+        name: String,
+        /// Schedule expression (e.g., "every 5m", "daily 09:00").
+        schedule_expr: String,
+        /// Target channel name (e.g., "telegram").
+        channel: String,
+        /// Template text with {{variable}} placeholders.
+        template: String,
+        /// Data source kind (e.g., "fleet_status", "session_summary").
+        data_source: String,
+    },
+    /// Remove a scheduled auto-reply by name.
+    ScheduleReplyRemove { name: String },
+    /// List all scheduled auto-replies.
+    ScheduleReplyList,
+    /// Manually trigger a scheduled auto-reply (render template with current data).
+    ScheduleReplyTrigger { name: String },
+
+    // -- Configuration introspection --
+    /// Get the effective merged configuration with source annotations.
+    ///
+    /// Returns the hierarchically merged config showing which source
+    /// (system file, user file, workspace file, env var, CLI flag)
+    /// determined each field's value.
+    GetEffectiveConfig,
 }
 
 fn default_true() -> bool {
     true
+}
+
+impl DaemonCommand {
+    /// Cedar policy action name for this command.
+    ///
+    /// Every daemon command must have a policy action name so it can be
+    /// evaluated by the Cedar policy engine before execution.
+    pub fn policy_action_name(&self) -> &'static str {
+        match self {
+            DaemonCommand::Ping => "daemon:ping",
+            DaemonCommand::ListAgents => "daemon:list_agents",
+            DaemonCommand::AgentStatus { .. } => "daemon:agent_status",
+            DaemonCommand::AgentOutput { .. } => "daemon:agent_output",
+            DaemonCommand::SessionList => "daemon:session_list",
+            DaemonCommand::SessionHistory { .. } => "daemon:session_history",
+            DaemonCommand::SessionSend { .. } => "daemon:session_send",
+            DaemonCommand::SendToAgent { .. } => "daemon:send_to_agent",
+            DaemonCommand::StartAgent { .. } => "daemon:start_agent",
+            DaemonCommand::StopAgent { .. } => "daemon:stop_agent",
+            DaemonCommand::RestartAgent { .. } => "daemon:restart_agent",
+            DaemonCommand::AddAgent { .. } => "daemon:add_agent",
+            DaemonCommand::SpawnSubagent { .. } => "daemon:spawn_subagent",
+            DaemonCommand::RemoveAgent { .. } => "daemon:remove_agent",
+            DaemonCommand::ApproveRequest { .. } => "daemon:approve_request",
+            DaemonCommand::DenyRequest { .. } => "daemon:deny_request",
+            DaemonCommand::NudgeAgent { .. } => "daemon:nudge_agent",
+            DaemonCommand::ListPending { .. } => "daemon:list_pending",
+            DaemonCommand::DelegateApproval { .. } => "daemon:delegate_approval",
+            DaemonCommand::EvaluateToolUse { .. } => "daemon:evaluate_tool_use",
+            DaemonCommand::RuntimeCapabilities { .. } => "daemon:runtime_capabilities",
+            DaemonCommand::ParityStatus => "daemon:parity_status",
+            DaemonCommand::ParityDiff => "daemon:parity_diff",
+            DaemonCommand::ParityVerify => "daemon:parity_verify",
+            DaemonCommand::ExecuteToolAction { .. } => "daemon:execute_tool_action",
+            DaemonCommand::ExecuteToolBatch { .. } => "daemon:execute_tool_batch",
+            DaemonCommand::StopBrowserProfile { .. } => "daemon:stop_browser_profile",
+            DaemonCommand::StartCaptureSession { .. } => "daemon:start_capture_session",
+            DaemonCommand::StopCaptureSession { .. } => "daemon:stop_capture_session",
+            DaemonCommand::LatestCaptureFrame { .. } => "daemon:latest_capture_frame",
+            DaemonCommand::DashboardStatus => "daemon:dashboard_status",
+            DaemonCommand::DashboardSnapshot => "daemon:dashboard_snapshot",
+            DaemonCommand::TelegramSnapshot { .. } => "daemon:telegram_snapshot",
+            DaemonCommand::FleetGoal { .. } => "daemon:fleet_goal",
+            DaemonCommand::UpdateAgentContext { .. } => "daemon:update_agent_context",
+            DaemonCommand::GetAgentContext { .. } => "daemon:get_agent_context",
+            DaemonCommand::EnableAgent { .. } => "daemon:enable_agent",
+            DaemonCommand::DisableAgent { .. } => "daemon:disable_agent",
+            DaemonCommand::ReloadConfig => "daemon:reload_config",
+            DaemonCommand::Shutdown => "daemon:shutdown",
+            DaemonCommand::OrchestratorContext { .. } => "daemon:orchestrator_context",
+            DaemonCommand::MemoryGet { .. } => "daemon:memory_get",
+            DaemonCommand::MemorySet { .. } => "daemon:memory_set",
+            DaemonCommand::MemoryDelete { .. } => "daemon:memory_delete",
+            DaemonCommand::MemoryList { .. } => "daemon:memory_list",
+            DaemonCommand::MemorySearch { .. } => "daemon:memory_search",
+            DaemonCommand::CronList => "daemon:cron_list",
+            DaemonCommand::CronAdd { .. } => "daemon:cron_add",
+            DaemonCommand::CronRemove { .. } => "daemon:cron_remove",
+            DaemonCommand::CronTrigger { .. } => "daemon:cron_trigger",
+            DaemonCommand::LoadPlugin { .. } => "daemon:load_plugin",
+            DaemonCommand::ListPlugins => "daemon:list_plugins",
+            DaemonCommand::UnloadPlugin { .. } => "daemon:unload_plugin",
+            DaemonCommand::AddAlias { .. } => "daemon:add_alias",
+            DaemonCommand::RemoveAlias { .. } => "daemon:remove_alias",
+            DaemonCommand::ListAliases => "daemon:list_aliases",
+            DaemonCommand::BroadcastToFleet { .. } => "daemon:broadcast_to_fleet",
+            DaemonCommand::ListModels => "daemon:list_models",
+            DaemonCommand::ModelAllowlist { .. } => "daemon:model_allowlist",
+            DaemonCommand::ExecuteCommand { .. } => "daemon:execute_command",
+            DaemonCommand::SuspendSession { .. } => "daemon:suspend_session",
+            DaemonCommand::ResumeSession { .. } => "daemon:resume_session",
+            DaemonCommand::TerminateSession { .. } => "daemon:terminate_session",
+            DaemonCommand::SessionLifecycleStatus { .. } => "daemon:session_lifecycle_status",
+            DaemonCommand::AddAutoReply { .. } => "daemon:add_auto_reply",
+            DaemonCommand::RemoveAutoReply { .. } => "daemon:remove_auto_reply",
+            DaemonCommand::ListAutoReplies => "daemon:list_auto_replies",
+            DaemonCommand::ToggleAutoReply { .. } => "daemon:toggle_auto_reply",
+            DaemonCommand::SetAutoReplyChat { .. } => "daemon:set_auto_reply_chat",
+            DaemonCommand::RouteMessage { .. } => "daemon:route_message",
+            DaemonCommand::GetMessageThread { .. } => "daemon:get_message_thread",
+            DaemonCommand::InjectSystemMessage { .. } => "daemon:inject_system_message",
+            DaemonCommand::ScheduleReplyAdd { .. } => "daemon:schedule_reply_add",
+            DaemonCommand::ScheduleReplyRemove { .. } => "daemon:schedule_reply_remove",
+            DaemonCommand::ScheduleReplyList => "daemon:schedule_reply_list",
+            DaemonCommand::ScheduleReplyTrigger { .. } => "daemon:schedule_reply_trigger",
+            DaemonCommand::GetEffectiveConfig => "daemon:get_effective_config",
+        }
+    }
 }
 
 /// Request payload for runtime subagent spawning.
@@ -1336,6 +1470,36 @@ mod tests {
                 chat_id: 12345,
                 enabled: true,
             },
+            // Message routing commands
+            DaemonCommand::RouteMessage {
+                envelope: crate::message_routing::MessageEnvelope::new(
+                    "agent-1", "agent-2", "direct", "hello there",
+                ),
+            },
+            DaemonCommand::GetMessageThread {
+                message_id: uuid::Uuid::nil(),
+            },
+            DaemonCommand::InjectSystemMessage {
+                agent_name: "claude-1".into(),
+                content: "focus on the API module".into(),
+            },
+            // Scheduled reply commands
+            DaemonCommand::ScheduleReplyAdd {
+                name: "daily-digest".into(),
+                schedule_expr: "daily 09:00".into(),
+                channel: "telegram".into(),
+                template: "Fleet: {{agent_count}} agents".into(),
+                data_source: "fleet_status".into(),
+            },
+            DaemonCommand::ScheduleReplyRemove {
+                name: "daily-digest".into(),
+            },
+            DaemonCommand::ScheduleReplyList,
+            DaemonCommand::ScheduleReplyTrigger {
+                name: "daily-digest".into(),
+            },
+            // Configuration introspection
+            DaemonCommand::GetEffectiveConfig,
         ];
 
         for cmd in commands {
@@ -1344,6 +1508,29 @@ mod tests {
             let json2 = serde_json::to_string(&back).unwrap();
             assert_eq!(json, json2);
         }
+    }
+
+    #[test]
+    fn policy_action_name_coverage() {
+        // Verify that every variant returns a non-empty action name.
+        let commands = vec![
+            DaemonCommand::Ping,
+            DaemonCommand::ListAgents,
+            DaemonCommand::GetEffectiveConfig,
+            DaemonCommand::Shutdown,
+            DaemonCommand::ReloadConfig,
+        ];
+        for cmd in commands {
+            let name = cmd.policy_action_name();
+            assert!(!name.is_empty());
+            assert!(name.starts_with("daemon:"));
+        }
+    }
+
+    #[test]
+    fn get_effective_config_policy_name() {
+        let cmd = DaemonCommand::GetEffectiveConfig;
+        assert_eq!(cmd.policy_action_name(), "daemon:get_effective_config");
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod command;
 pub mod daemon;
 pub mod event;
 pub mod hooks;
+pub mod message_routing;
 pub mod models;
 pub mod pending;
 pub mod server;
