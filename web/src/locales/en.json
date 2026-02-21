@@ -1,0 +1,67 @@
+{
+  "common": {
+    "approve": "Approve",
+    "deny": "Deny",
+    "loading": "Loading...",
+    "error": "Error",
+    "send": "Send",
+    "start": "Start",
+    "stop": "Stop",
+    "restart": "Restart",
+    "back": "Back",
+    "pending": "pending",
+    "noData": "N/A"
+  },
+  "dashboard": {
+    "title": "Aegis Fleet Dashboard",
+    "agents": "Agents",
+    "status": "Status",
+    "driver": "Driver",
+    "uptime": "Uptime",
+    "pendingCount": "Pending",
+    "noAgents": "No agents configured. Add agents via the Aegis TUI or daemon.toml.",
+    "loadingAgents": "Loading agents...",
+    "connectionError": "Connection error:",
+    "connectionHint": "Ensure the Aegis daemon is running and the API URL is correct.",
+    "pendingApprovals_one": "{{count}} pending approval",
+    "pendingApprovals_other": "{{count}} pending approvals",
+    "agentCount_one": "{{count}} agent",
+    "agentCount_other": "{{count}} agents",
+    "autoRefresh": "Auto-refresh: 5s"
+  },
+  "agent": {
+    "detail": "Agent Detail",
+    "noName": "No agent name specified.",
+    "backToDashboard": "Back to dashboard",
+    "breadcrumbDashboard": "Dashboard",
+    "pid": "PID",
+    "uptime": "Uptime",
+    "driver": "Driver",
+    "status": "Status",
+    "context": "Context",
+    "role": "Role",
+    "goal": "Goal",
+    "task": "Task",
+    "pendingApprovals": "Pending Approvals ({{count}})",
+    "output": "Output",
+    "noOutput": "No output available.",
+    "sendInput": "Send Input",
+    "inputPlaceholder": "Type a message to send to the agent...",
+    "sendFailed": "Failed to send: {{message}}"
+  },
+  "pending": {
+    "title": "Pending Approvals",
+    "breadcrumbDashboard": "Dashboard",
+    "breadcrumbPending": "Pending Approvals",
+    "count": "{{count}} pending",
+    "loadingRequests": "Loading pending requests...",
+    "noRequests": "No pending approval requests. All clear.",
+    "riskLevel": "Risk Level",
+    "delegatedTo": "Delegated to: {{name}}",
+    "approvalCount": "Approvals: {{current}}/{{required}}"
+  },
+  "settings": {
+    "language": "Language",
+    "theme": "Theme"
+  }
+}

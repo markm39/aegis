@@ -8,6 +8,7 @@
  * ensuring agent names and other user-provided strings are safe from XSS.
  */
 
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import type { AgentInfo } from "../api/types";
@@ -28,12 +29,13 @@ function formatUptime(secs: number): string {
 }
 
 export function AgentTable({ agents }: AgentTableProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   if (agents.length === 0) {
     return (
       <div className={styles.empty}>
-        No agents configured. Add agents via the Aegis TUI or daemon.toml.
+        {t("dashboard.noAgents")}
       </div>
     );
   }
@@ -42,11 +44,11 @@ export function AgentTable({ agents }: AgentTableProps) {
     <table className={styles.table}>
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Status</th>
-          <th>Driver</th>
-          <th>Pending</th>
-          <th>Uptime</th>
+          <th>{t("dashboard.agents")}</th>
+          <th>{t("dashboard.status")}</th>
+          <th>{t("dashboard.driver")}</th>
+          <th>{t("dashboard.pendingCount")}</th>
+          <th>{t("dashboard.uptime")}</th>
         </tr>
       </thead>
       <tbody>

@@ -1,0 +1,67 @@
+{
+  "common": {
+    "approve": "\u6279\u51c6",
+    "deny": "\u62d2\u7edd",
+    "loading": "\u52a0\u8f7d\u4e2d...",
+    "error": "\u9519\u8bef",
+    "send": "\u53d1\u9001",
+    "start": "\u542f\u52a8",
+    "stop": "\u505c\u6b62",
+    "restart": "\u91cd\u542f",
+    "back": "\u8fd4\u56de",
+    "pending": "\u5f85\u5904\u7406",
+    "noData": "\u65e0\u6570\u636e"
+  },
+  "dashboard": {
+    "title": "Aegis \u8239\u961f\u4eea\u8868\u76d8",
+    "agents": "\u4ee3\u7406",
+    "status": "\u72b6\u6001",
+    "driver": "\u9a71\u52a8",
+    "uptime": "\u8fd0\u884c\u65f6\u95f4",
+    "pendingCount": "\u5f85\u5904\u7406",
+    "noAgents": "\u672a\u914d\u7f6e\u4ee3\u7406\u3002\u8bf7\u901a\u8fc7 Aegis TUI \u6216 daemon.toml \u6dfb\u52a0\u4ee3\u7406\u3002",
+    "loadingAgents": "\u6b63\u5728\u52a0\u8f7d\u4ee3\u7406...",
+    "connectionError": "\u8fde\u63a5\u9519\u8bef:",
+    "connectionHint": "\u8bf7\u786e\u4fdd Aegis \u5b88\u62a4\u8fdb\u7a0b\u6b63\u5728\u8fd0\u884c\u4e14 API URL \u6b63\u786e\u3002",
+    "pendingApprovals_one": "{{count}} \u9879\u5f85\u5ba1\u6279",
+    "pendingApprovals_other": "{{count}} \u9879\u5f85\u5ba1\u6279",
+    "agentCount_one": "{{count}} \u4e2a\u4ee3\u7406",
+    "agentCount_other": "{{count}} \u4e2a\u4ee3\u7406",
+    "autoRefresh": "\u81ea\u52a8\u5237\u65b0: 5\u79d2"
+  },
+  "agent": {
+    "detail": "\u4ee3\u7406\u8be6\u60c5",
+    "noName": "\u672a\u6307\u5b9a\u4ee3\u7406\u540d\u79f0\u3002",
+    "backToDashboard": "\u8fd4\u56de\u4eea\u8868\u76d8",
+    "breadcrumbDashboard": "\u4eea\u8868\u76d8",
+    "pid": "PID",
+    "uptime": "\u8fd0\u884c\u65f6\u95f4",
+    "driver": "\u9a71\u52a8",
+    "status": "\u72b6\u6001",
+    "context": "\u4e0a\u4e0b\u6587",
+    "role": "\u89d2\u8272",
+    "goal": "\u76ee\u6807",
+    "task": "\u4efb\u52a1",
+    "pendingApprovals": "\u5f85\u5ba1\u6279 ({{count}})",
+    "output": "\u8f93\u51fa",
+    "noOutput": "\u65e0\u53ef\u7528\u8f93\u51fa\u3002",
+    "sendInput": "\u53d1\u9001\u8f93\u5165",
+    "inputPlaceholder": "\u8f93\u5165\u8981\u53d1\u9001\u7ed9\u4ee3\u7406\u7684\u6d88\u606f...",
+    "sendFailed": "\u53d1\u9001\u5931\u8d25: {{message}}"
+  },
+  "pending": {
+    "title": "\u5f85\u5ba1\u6279",
+    "breadcrumbDashboard": "\u4eea\u8868\u76d8",
+    "breadcrumbPending": "\u5f85\u5ba1\u6279",
+    "count": "{{count}} \u9879\u5f85\u5904\u7406",
+    "loadingRequests": "\u6b63\u5728\u52a0\u8f7d\u5f85\u5904\u7406\u8bf7\u6c42...",
+    "noRequests": "\u6ca1\u6709\u5f85\u5ba1\u6279\u7684\u8bf7\u6c42\u3002\u4e00\u5207\u6b63\u5e38\u3002",
+    "riskLevel": "\u98ce\u9669\u7b49\u7ea7",
+    "delegatedTo": "\u59d4\u6d3e\u7ed9: {{name}}",
+    "approvalCount": "\u5ba1\u6279: {{current}}/{{required}}"
+  },
+  "settings": {
+    "language": "\u8bed\u8a00",
+    "theme": "\u4e3b\u9898"
+  }
+}

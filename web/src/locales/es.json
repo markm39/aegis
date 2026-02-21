@@ -1,0 +1,67 @@
+{
+  "common": {
+    "approve": "Aprobar",
+    "deny": "Denegar",
+    "loading": "Cargando...",
+    "error": "Error",
+    "send": "Enviar",
+    "start": "Iniciar",
+    "stop": "Detener",
+    "restart": "Reiniciar",
+    "back": "Volver",
+    "pending": "pendiente",
+    "noData": "N/D"
+  },
+  "dashboard": {
+    "title": "Panel de Flota Aegis",
+    "agents": "Agentes",
+    "status": "Estado",
+    "driver": "Controlador",
+    "uptime": "Tiempo activo",
+    "pendingCount": "Pendientes",
+    "noAgents": "No hay agentes configurados. Agregue agentes a traves del TUI de Aegis o daemon.toml.",
+    "loadingAgents": "Cargando agentes...",
+    "connectionError": "Error de conexion:",
+    "connectionHint": "Asegurese de que el daemon de Aegis este en ejecucion y que la URL de la API sea correcta.",
+    "pendingApprovals_one": "{{count}} aprobacion pendiente",
+    "pendingApprovals_other": "{{count}} aprobaciones pendientes",
+    "agentCount_one": "{{count}} agente",
+    "agentCount_other": "{{count}} agentes",
+    "autoRefresh": "Auto-actualizacion: 5s"
+  },
+  "agent": {
+    "detail": "Detalle del Agente",
+    "noName": "No se especifico nombre del agente.",
+    "backToDashboard": "Volver al panel",
+    "breadcrumbDashboard": "Panel",
+    "pid": "PID",
+    "uptime": "Tiempo activo",
+    "driver": "Controlador",
+    "status": "Estado",
+    "context": "Contexto",
+    "role": "Rol",
+    "goal": "Objetivo",
+    "task": "Tarea",
+    "pendingApprovals": "Aprobaciones Pendientes ({{count}})",
+    "output": "Salida",
+    "noOutput": "No hay salida disponible.",
+    "sendInput": "Enviar Entrada",
+    "inputPlaceholder": "Escriba un mensaje para enviar al agente...",
+    "sendFailed": "Error al enviar: {{message}}"
+  },
+  "pending": {
+    "title": "Aprobaciones Pendientes",
+    "breadcrumbDashboard": "Panel",
+    "breadcrumbPending": "Aprobaciones Pendientes",
+    "count": "{{count}} pendientes",
+    "loadingRequests": "Cargando solicitudes pendientes...",
+    "noRequests": "No hay solicitudes de aprobacion pendientes. Todo despejado.",
+    "riskLevel": "Nivel de Riesgo",
+    "delegatedTo": "Delegado a: {{name}}",
+    "approvalCount": "Aprobaciones: {{current}}/{{required}}"
+  },
+  "settings": {
+    "language": "Idioma",
+    "theme": "Tema"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "common": {
+    "approve": "Genehmigen",
+    "deny": "Ablehnen",
+    "loading": "Laden...",
+    "error": "Fehler",
+    "send": "Senden",
+    "start": "Starten",
+    "stop": "Stoppen",
+    "restart": "Neustart",
+    "back": "Zuruck",
+    "pending": "ausstehend",
+    "noData": "K.A."
+  },
+  "dashboard": {
+    "title": "Aegis Flottenubersicht",
+    "agents": "Agenten",
+    "status": "Status",
+    "driver": "Treiber",
+    "uptime": "Laufzeit",
+    "pendingCount": "Ausstehend",
+    "noAgents": "Keine Agenten konfiguriert. Fugen Sie Agenten uber das Aegis-TUI oder daemon.toml hinzu.",
+    "loadingAgents": "Agenten werden geladen...",
+    "connectionError": "Verbindungsfehler:",
+    "connectionHint": "Stellen Sie sicher, dass der Aegis-Daemon lauft und die API-URL korrekt ist.",
+    "pendingApprovals_one": "{{count}} ausstehende Genehmigung",
+    "pendingApprovals_other": "{{count}} ausstehende Genehmigungen",
+    "agentCount_one": "{{count}} Agent",
+    "agentCount_other": "{{count}} Agenten",
+    "autoRefresh": "Auto-Aktualisierung: 5s"
+  },
+  "agent": {
+    "detail": "Agentendetail",
+    "noName": "Kein Agentenname angegeben.",
+    "backToDashboard": "Zuruck zur Ubersicht",
+    "breadcrumbDashboard": "Ubersicht",
+    "pid": "PID",
+    "uptime": "Laufzeit",
+    "driver": "Treiber",
+    "status": "Status",
+    "context": "Kontext",
+    "role": "Rolle",
+    "goal": "Ziel",
+    "task": "Aufgabe",
+    "pendingApprovals": "Ausstehende Genehmigungen ({{count}})",
+    "output": "Ausgabe",
+    "noOutput": "Keine Ausgabe verfugbar.",
+    "sendInput": "Eingabe Senden",
+    "inputPlaceholder": "Nachricht an den Agenten eingeben...",
+    "sendFailed": "Senden fehlgeschlagen: {{message}}"
+  },
+  "pending": {
+    "title": "Ausstehende Genehmigungen",
+    "breadcrumbDashboard": "Ubersicht",
+    "breadcrumbPending": "Ausstehende Genehmigungen",
+    "count": "{{count}} ausstehend",
+    "loadingRequests": "Ausstehende Anfragen werden geladen...",
+    "noRequests": "Keine ausstehenden Genehmigungsanfragen. Alles in Ordnung.",
+    "riskLevel": "Risikostufe",
+    "delegatedTo": "Delegiert an: {{name}}",
+    "approvalCount": "Genehmigungen: {{current}}/{{required}}"
+  },
+  "settings": {
+    "language": "Sprache",
+    "theme": "Design"
+  }
+}

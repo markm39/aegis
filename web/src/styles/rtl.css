@@ -1,0 +1,112 @@
+/**
+ * RTL (Right-to-Left) support styles.
+ *
+ * Uses CSS logical properties for bidirectional layout support.
+ * These properties automatically adapt to the document's text direction
+ * (set via document.documentElement.dir).
+ *
+ * Import this file in App.tsx alongside App.css.
+ */
+
+/* Logical property overrides for common layout patterns */
+
+[dir="rtl"] {
+  text-align: right;
+}
+
+[dir="ltr"] {
+  text-align: left;
+}
+
+/* Flex direction reversal for RTL */
+[dir="rtl"] .flex-row {
+  flex-direction: row-reverse;
+}
+
+/* Breadcrumb separator direction */
+[dir="rtl"] .breadcrumb-separator {
+  transform: scaleX(-1);
+}
+
+/* Margin and padding using logical properties */
+.margin-inline-start-sm {
+  margin-inline-start: 0.5rem;
+}
+
+.margin-inline-end-sm {
+  margin-inline-end: 0.5rem;
+}
+
+.margin-inline-start-md {
+  margin-inline-start: 1rem;
+}
+
+.margin-inline-end-md {
+  margin-inline-end: 1rem;
+}
+
+.padding-inline-start-sm {
+  padding-inline-start: 0.5rem;
+}
+
+.padding-inline-end-sm {
+  padding-inline-end: 0.5rem;
+}
+
+.padding-inline-start-md {
+  padding-inline-start: 1rem;
+}
+
+.padding-inline-end-md {
+  padding-inline-end: 1rem;
+}
+
+/* Border logical properties */
+.border-inline-start {
+  border-inline-start: 1px solid #e0e0e0;
+}
+
+.border-inline-end {
+  border-inline-end: 1px solid #e0e0e0;
+}
+
+/* Table text alignment */
+[dir="rtl"] table {
+  text-align: right;
+}
+
+[dir="rtl"] th {
+  text-align: right;
+}
+
+/* Input fields */
+[dir="rtl"] input[type="text"],
+[dir="rtl"] textarea,
+[dir="rtl"] select {
+  text-align: right;
+}
+
+/* Badge and status indicators -- use logical properties for spacing */
+[dir="rtl"] .badge {
+  margin-inline-start: 0.25rem;
+  margin-inline-end: 0;
+}
+
+/* Action button groups */
+[dir="rtl"] .action-group {
+  flex-direction: row-reverse;
+}
+
+/* Scrollbar position for RTL */
+[dir="rtl"] .output-area {
+  direction: rtl;
+}
+
+/* Float logical equivalents */
+.float-inline-start {
+  float: inline-start;
+}
+
+.float-inline-end {
+  float: inline-end;
+}

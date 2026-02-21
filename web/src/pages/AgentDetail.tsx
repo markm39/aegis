@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 
 import { AgentStatus } from "../components/AgentStatus";
@@ -33,6 +34,7 @@ import { escapeHtml } from "../sanitize";
 import styles from "./AgentDetail.module.css";
 
 export function AgentDetail() {
+  const { t } = useTranslation();
   const { name } = useParams<{ name: string }>();
   const decodedName = name ? decodeURIComponent(name) : "";
 
@@ -74,8 +76,8 @@ export function AgentDetail() {
   if (!decodedName) {
     return (
       <div className={styles.page}>
-        <p>No agent name specified.</p>
-        <Link to="/">Back to dashboard</Link>
+        <p>{t("agent.noName")}</p>
+        <Link to="/">{t("agent.backToDashboard")}</Link>
       </div>
     );
   }
@@ -83,7 +85,7 @@ export function AgentDetail() {
   return (
     <div className={styles.page}>
       <nav className={styles.breadcrumb}>
-        <Link to="/">Dashboard</Link>
+        <Link to="/">{t("agent.breadcrumbDashboard")}</Link>
         <span className={styles.separator}>/</span>
         <span>{decodedName}</span>
       </nav>
@@ -98,16 +100,16 @@ export function AgentDetail() {
           {agent && (
             <>
               <span className={styles.meta}>
-                PID: {statusPid(agent.status) ?? "N/A"}
+                {t("agent.pid")}: {statusPid(agent.status) ?? t("common.noData")}
               </span>
               <span className={styles.meta}>
-                Uptime: {formatUptime(agent.uptime_secs)}
+                {t("agent.uptime")}: {formatUptime(agent.uptime_secs)}
               </span>
               <span className={styles.meta}>
-                Driver: {agent.driver}
+                {t("agent.driver")}: {agent.driver}
               </span>
               <span className={styles.meta}>
-                Status: {statusLabel(agent.status)}
+                {t("agent.status")}: {statusLabel(agent.status)}
               </span>
             </>
           )}
@@ -118,21 +120,21 @@ export function AgentDetail() {
             onClick={() => startMutation.mutate(decodedName)}
             disabled={startMutation.isPending}
           >
-            Start
+            {t("common.start")}
           </button>
           <button
             className={styles.actionBtn}
             onClick={() => stopMutation.mutate(decodedName)}
             disabled={stopMutation.isPending}
           >
-            Stop
+            {t("common.stop")}
           </button>
           <button
             className={styles.actionBtn}
             onClick={() => restartMutation.mutate(decodedName)}
             disabled={restartMutation.isPending}
           >
-            Restart
+            {t("common.restart")}
           </button>
         </div>
       </header>
@@ -140,23 +142,23 @@ export function AgentDetail() {
       {/* Agent context */}
       {context && (context.role || context.goal || context.task) && (
         <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Context</h2>
+          <h2 className={styles.sectionTitle}>{t("agent.context")}</h2>
           <dl className={styles.contextList}>
             {context.role && (
               <>
-                <dt>Role</dt>
+                <dt>{t("agent.role")}</dt>
                 <dd>{context.role}</dd>
               </>
             )}
             {context.goal && (
               <>
-                <dt>Goal</dt>
+                <dt>{t("agent.goal")}</dt>
                 <dd>{context.goal}</dd>
               </>
             )}
             {context.task && (
               <>
-                <dt>Task</dt>
+                <dt>{t("agent.task")}</dt>
                 <dd>{context.task}</dd>
               </>
             )}
@@ -168,7 +170,7 @@ export function AgentDetail() {
       {agentPending.length > 0 && (
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>
-            Pending Approvals ({agentPending.length})
+            {t("agent.pendingApprovals", { count: agentPending.length })}
           </h2>
           <ul className={styles.pendingList}>
             {agentPending.map((req) => (
@@ -190,7 +192,7 @@ export function AgentDetail() {
                     onClick={() => approveMutation.mutate(req.id)}
                     disabled={approveMutation.isPending}
                   >
-                    Approve
+                    {t("common.approve")}
                   </button>
                   <button
                     className={`${styles.actionBtn} ${styles.denyBtn}`}
@@ -199,7 +201,7 @@ export function AgentDetail() {
                     }
                     disabled={denyMutation.isPending}
                   >
-                    Deny
+                    {t("common.deny")}
                   </button>
                 </div>
               </li>
@@ -210,7 +212,7 @@ export function AgentDetail() {
 
       {/* Output log */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Output</h2>
+        <h2 className={styles.sectionTitle}>{t("agent.output")}</h2>
         <div className={styles.outputArea}>
           {outputLines && outputLines.length > 0 ? (
             outputLines.map((line, i) => (
@@ -219,7 +221,7 @@ export function AgentDetail() {
               </div>
             ))
           ) : (
-            <div className={styles.outputEmpty}>No output available.</div>
+            <div className={styles.outputEmpty}>{t("agent.noOutput")}</div>
           )}
           <div ref={outputEndRef} />
         </div>
@@ -227,7 +229,7 @@ export function AgentDetail() {
 
       {/* Input form */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Send Input</h2>
+        <h2 className={styles.sectionTitle}>{t("agent.sendInput")}</h2>
         <div className={styles.inputForm}>
           <input
             type="text"
@@ -235,7 +237,7 @@ export function AgentDetail() {
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message to send to the agent..."
+            placeholder={t("agent.inputPlaceholder")}
             disabled={sendInputMutation.isPending}
           />
           <button
@@ -243,12 +245,12 @@ export function AgentDetail() {
             onClick={handleSendInput}
             disabled={!inputText.trim() || sendInputMutation.isPending}
           >
-            Send
+            {t("common.send")}
           </button>
         </div>
         {sendInputMutation.isError && (
           <div className={styles.inputError}>
-            Failed to send: {sendInputMutation.error.message}
+            {t("agent.sendFailed", { message: sendInputMutation.error.message })}
           </div>
         )}
       </section>

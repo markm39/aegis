@@ -1,0 +1,67 @@
+{
+  "common": {
+    "approve": "\u627f\u8a8d",
+    "deny": "\u62d2\u5426",
+    "loading": "\u8aad\u307f\u8fbc\u307f\u4e2d...",
+    "error": "\u30a8\u30e9\u30fc",
+    "send": "\u9001\u4fe1",
+    "start": "\u958b\u59cb",
+    "stop": "\u505c\u6b62",
+    "restart": "\u518d\u8d77\u52d5",
+    "back": "\u623b\u308b",
+    "pending": "\u4fdd\u7559\u4e2d",
+    "noData": "\u8a72\u5f53\u306a\u3057"
+  },
+  "dashboard": {
+    "title": "Aegis \u30d5\u30ea\u30fc\u30c8\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9",
+    "agents": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8",
+    "status": "\u30b9\u30c6\u30fc\u30bf\u30b9",
+    "driver": "\u30c9\u30e9\u30a4\u30d0\u30fc",
+    "uptime": "\u7a3c\u50cd\u6642\u9593",
+    "pendingCount": "\u4fdd\u7559\u4e2d",
+    "noAgents": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002Aegis TUI\u307e\u305f\u306fdaemon.toml\u304b\u3089\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u3092\u8ffd\u52a0\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "loadingAgents": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u3092\u8aad\u307f\u8fbc\u307f\u4e2d...",
+    "connectionError": "\u63a5\u7d9a\u30a8\u30e9\u30fc:",
+    "connectionHint": "Aegis\u30c7\u30fc\u30e2\u30f3\u304c\u5b9f\u884c\u4e2d\u3067\u3001API URL\u304c\u6b63\u3057\u3044\u3053\u3068\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "pendingApprovals_one": "{{count}}\u4ef6\u306e\u627f\u8a8d\u5f85\u3061",
+    "pendingApprovals_other": "{{count}}\u4ef6\u306e\u627f\u8a8d\u5f85\u3061",
+    "agentCount_one": "{{count}}\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8",
+    "agentCount_other": "{{count}}\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8",
+    "autoRefresh": "\u81ea\u52d5\u66f4\u65b0: 5\u79d2"
+  },
+  "agent": {
+    "detail": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u8a73\u7d30",
+    "noName": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u540d\u304c\u6307\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002",
+    "backToDashboard": "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9\u306b\u623b\u308b",
+    "breadcrumbDashboard": "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9",
+    "pid": "PID",
+    "uptime": "\u7a3c\u50cd\u6642\u9593",
+    "driver": "\u30c9\u30e9\u30a4\u30d0\u30fc",
+    "status": "\u30b9\u30c6\u30fc\u30bf\u30b9",
+    "context": "\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8",
+    "role": "\u5f79\u5272",
+    "goal": "\u76ee\u6a19",
+    "task": "\u30bf\u30b9\u30af",
+    "pendingApprovals": "\u627f\u8a8d\u5f85\u3061 ({{count}})",
+    "output": "\u51fa\u529b",
+    "noOutput": "\u51fa\u529b\u304c\u3042\u308a\u307e\u305b\u3093\u3002",
+    "sendInput": "\u5165\u529b\u9001\u4fe1",
+    "inputPlaceholder": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u306b\u9001\u4fe1\u3059\u308b\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u5165\u529b...",
+    "sendFailed": "\u9001\u4fe1\u5931\u6557: {{message}}"
+  },
+  "pending": {
+    "title": "\u627f\u8a8d\u5f85\u3061",
+    "breadcrumbDashboard": "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9",
+    "breadcrumbPending": "\u627f\u8a8d\u5f85\u3061",
+    "count": "{{count}}\u4ef6\u4fdd\u7559\u4e2d",
+    "loadingRequests": "\u4fdd\u7559\u4e2d\u306e\u30ea\u30af\u30a8\u30b9\u30c8\u3092\u8aad\u307f\u8fbc\u307f\u4e2d...",
+    "noRequests": "\u4fdd\u7559\u4e2d\u306e\u627f\u8a8d\u30ea\u30af\u30a8\u30b9\u30c8\u306f\u3042\u308a\u307e\u305b\u3093\u3002",
+    "riskLevel": "\u30ea\u30b9\u30af\u30ec\u30d9\u30eb",
+    "delegatedTo": "\u59d4\u4efb\u5148: {{name}}",
+    "approvalCount": "\u627f\u8a8d: {{current}}/{{required}}"
+  },
+  "settings": {
+    "language": "\u8a00\u8a9e",
+    "theme": "\u30c6\u30fc\u30de"
+  }
+}

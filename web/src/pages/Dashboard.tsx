@@ -5,6 +5,7 @@
  * Auto-refreshes every 5 seconds via React Query polling.
  */
 
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { AgentTable } from "../components/AgentTable";
@@ -12,6 +13,7 @@ import { useAgents, usePending } from "../hooks/useAgents";
 import styles from "./Dashboard.module.css";
 
 export function Dashboard() {
+  const { t } = useTranslation();
   const { data: agents, isLoading, error } = useAgents();
   const { data: pending } = usePending();
 
@@ -20,25 +22,25 @@ export function Dashboard() {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <h1 className={styles.title}>Aegis Fleet Dashboard</h1>
+        <h1 className={styles.title}>{t("dashboard.title")}</h1>
         <div className={styles.headerActions}>
           {pendingCount > 0 && (
             <Link to="/pending" className={styles.pendingLink}>
-              {pendingCount} pending approval{pendingCount !== 1 ? "s" : ""}
+              {t("dashboard.pendingApprovals", { count: pendingCount })}
             </Link>
           )}
         </div>
       </header>
 
       {isLoading && (
-        <div className={styles.loading}>Loading agents...</div>
+        <div className={styles.loading}>{t("dashboard.loadingAgents")}</div>
       )}
 
       {error && (
         <div className={styles.error}>
-          <strong>Connection error:</strong> {error.message}
+          <strong>{t("dashboard.connectionError")}</strong> {error.message}
           <p className={styles.errorHint}>
-            Ensure the Aegis daemon is running and the API URL is correct.
+            {t("dashboard.connectionHint")}
           </p>
         </div>
       )}
@@ -47,9 +49,9 @@ export function Dashboard() {
 
       <footer className={styles.footer}>
         <span className={styles.footerLabel}>
-          {agents ? `${agents.length} agent${agents.length !== 1 ? "s" : ""}` : ""}
+          {agents ? t("dashboard.agentCount", { count: agents.length }) : ""}
         </span>
-        <span className={styles.footerLabel}>Auto-refresh: 5s</span>
+        <span className={styles.footerLabel}>{t("dashboard.autoRefresh")}</span>
       </footer>
     </div>
   );

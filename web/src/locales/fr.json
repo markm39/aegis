@@ -1,0 +1,67 @@
+{
+  "common": {
+    "approve": "Approuver",
+    "deny": "Refuser",
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "send": "Envoyer",
+    "start": "Demarrer",
+    "stop": "Arreter",
+    "restart": "Redemarrer",
+    "back": "Retour",
+    "pending": "en attente",
+    "noData": "N/D"
+  },
+  "dashboard": {
+    "title": "Tableau de Bord de Flotte Aegis",
+    "agents": "Agents",
+    "status": "Statut",
+    "driver": "Pilote",
+    "uptime": "Temps de fonctionnement",
+    "pendingCount": "En attente",
+    "noAgents": "Aucun agent configure. Ajoutez des agents via le TUI Aegis ou daemon.toml.",
+    "loadingAgents": "Chargement des agents...",
+    "connectionError": "Erreur de connexion :",
+    "connectionHint": "Assurez-vous que le daemon Aegis est en cours d'execution et que l'URL de l'API est correcte.",
+    "pendingApprovals_one": "{{count}} approbation en attente",
+    "pendingApprovals_other": "{{count}} approbations en attente",
+    "agentCount_one": "{{count}} agent",
+    "agentCount_other": "{{count}} agents",
+    "autoRefresh": "Rafraichissement auto : 5s"
+  },
+  "agent": {
+    "detail": "Detail de l'Agent",
+    "noName": "Aucun nom d'agent specifie.",
+    "backToDashboard": "Retour au tableau de bord",
+    "breadcrumbDashboard": "Tableau de bord",
+    "pid": "PID",
+    "uptime": "Temps de fonctionnement",
+    "driver": "Pilote",
+    "status": "Statut",
+    "context": "Contexte",
+    "role": "Role",
+    "goal": "Objectif",
+    "task": "Tache",
+    "pendingApprovals": "Approbations en attente ({{count}})",
+    "output": "Sortie",
+    "noOutput": "Aucune sortie disponible.",
+    "sendInput": "Envoyer une Entree",
+    "inputPlaceholder": "Tapez un message a envoyer a l'agent...",
+    "sendFailed": "Echec de l'envoi : {{message}}"
+  },
+  "pending": {
+    "title": "Approbations en Attente",
+    "breadcrumbDashboard": "Tableau de bord",
+    "breadcrumbPending": "Approbations en Attente",
+    "count": "{{count}} en attente",
+    "loadingRequests": "Chargement des demandes en attente...",
+    "noRequests": "Aucune demande d'approbation en attente. Tout est en ordre.",
+    "riskLevel": "Niveau de Risque",
+    "delegatedTo": "Delegue a : {{name}}",
+    "approvalCount": "Approbations : {{current}}/{{required}}"
+  },
+  "settings": {
+    "language": "Langue",
+    "theme": "Theme"
+  }
+}
