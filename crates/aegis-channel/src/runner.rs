@@ -118,13 +118,22 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Signal(cfg) => {
-                let channel = crate::signal::SignalChannel::new(
+                let channel = match crate::signal::SignalChannel::new(
                     crate::signal::SignalConfig {
                         api_url: cfg.api_url,
                         phone_number: cfg.phone_number,
                         recipients: cfg.recipients,
+                        poll_interval_secs: 5,
+                        group_ids: Vec::new(),
+                        trust_mode: "trust_all".to_string(),
                     },
-                );
+                ) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create Signal channel: {e}");
+                        return;
+                    }
+                };
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Matrix(cfg) => {
