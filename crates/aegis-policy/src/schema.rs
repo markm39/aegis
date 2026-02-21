@@ -107,6 +107,14 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "VideoProcess" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "AcpTranslate" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -186,6 +194,8 @@ mod tests {
             "AcpServerReceive",
             "TtsSynthesize",
             "TranscribeAudio",
+            "VideoProcess",
+            "AcpTranslate",
         ];
 
         let schema_text = AEGIS_SCHEMA;

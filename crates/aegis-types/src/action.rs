@@ -173,6 +173,28 @@ pub enum ActionKind {
         /// Size of the raw audio data in bytes.
         size_bytes: u64,
     },
+    /// Process a video file with format detection and frame extraction.
+    VideoProcess {
+        /// SHA-256 hex digest of the raw video data (for audit trail).
+        content_hash: String,
+        /// Detected video format (e.g., "mp4", "webm", "avi", "mkv", "mov").
+        format: String,
+        /// Size of the raw video data in bytes.
+        size_bytes: u64,
+    },
+    /// Translate an ACP message to/from a DaemonCommand.
+    ///
+    /// Logged when the ACP translator processes an inbound or outbound
+    /// message. The method name is recorded but message content is never
+    /// stored in the audit trail.
+    AcpTranslate {
+        /// ACP session identifier.
+        session_id: String,
+        /// ACP method being translated (e.g., "send", "status", "approve").
+        method: String,
+        /// Translation direction: "inbound" (ACP -> Daemon) or "outbound" (Daemon -> ACP).
+        direction: String,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -309,6 +331,20 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "TranscribeAudio {format} ({size_bytes} bytes, hash={content_hash})")
             }
+            ActionKind::VideoProcess {
+                content_hash,
+                format,
+                size_bytes,
+            } => {
+                write!(f, "VideoProcess {format} ({size_bytes} bytes, hash={content_hash})")
+            }
+            ActionKind::AcpTranslate {
+                session_id,
+                method,
+                direction,
+            } => {
+                write!(f, "AcpTranslate {direction} {method} (session={session_id})")
+            }
         }
     }
 }
@@ -416,6 +452,11 @@ mod tests {
                 voice: "alloy".into(),
                 format: "mp3".into(),
                 text_length: 42,
+            },
+            ActionKind::VideoProcess {
+                content_hash: "deadbeef".into(),
+                format: "mp4".into(),
+                size_bytes: 4096,
             },
         ];
         for v in variants {

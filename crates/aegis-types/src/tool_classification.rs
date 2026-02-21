@@ -108,6 +108,10 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         ActionKind::AcpServerReceive { .. } => ActionRisk::High,
         ActionKind::TtsSynthesize { .. } => ActionRisk::Medium,
         ActionKind::TranscribeAudio { .. } => ActionRisk::Medium,
+        ActionKind::VideoProcess { .. } => ActionRisk::High,
+        // ACP translation is a protocol-level operation that can trigger daemon commands.
+        // Classified as High because it bridges external ACP messages to internal commands.
+        ActionKind::AcpTranslate { .. } => ActionRisk::High,
     }
 }
 

@@ -165,6 +165,16 @@ impl PolicyEngine {
                     format: "unknown".into(),
                     size_bytes: 0,
                 },
+                "VideoProcess" => ActionKind::VideoProcess {
+                    content_hash: "__probe__".into(),
+                    format: "unknown".into(),
+                    size_bytes: 0,
+                },
+                "AcpTranslate" => ActionKind::AcpTranslate {
+                    session_id: "__probe__".into(),
+                    method: "__probe__".into(),
+                    direction: "inbound".into(),
+                },
                 _ => return false,
             },
         );
@@ -335,6 +345,8 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::AcpServerReceive { source, .. } => Ok(("AcpServerReceive", source.as_str())),
         ActionKind::TtsSynthesize { provider, .. } => Ok(("TtsSynthesize", provider.as_str())),
         ActionKind::TranscribeAudio { content_hash, .. } => Ok(("TranscribeAudio", content_hash.as_str())),
+        ActionKind::VideoProcess { content_hash, .. } => Ok(("VideoProcess", content_hash.as_str())),
+        ActionKind::AcpTranslate { session_id, .. } => Ok(("AcpTranslate", session_id.as_str())),
     }
 }
 
