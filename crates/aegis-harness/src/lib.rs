@@ -33,6 +33,7 @@ pub mod error;
 pub mod expect;
 pub mod fixtures;
 pub mod key;
+pub mod mocks;
 pub mod session;
 pub mod snapshot;
 
