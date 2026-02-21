@@ -4,6 +4,7 @@
 //! to the previous entry's hash, forming a tamper-evident chain. Supports
 //! sessions, filtered queries, policy snapshots, and compliance statistics.
 
+pub mod async_pipeline;
 pub mod channel_audit;
 pub mod entry;
 pub mod filter;
@@ -18,6 +19,7 @@ pub mod siem_export;
 pub mod stats;
 pub mod store;
 
+pub use async_pipeline::{AsyncAuditConfig, AsyncAuditWriter, AuditCommand};
 pub use channel_audit::{ChannelAuditEntry, ChannelDirection};
 pub use entry::AuditEntry;
 pub use filter::AuditFilter;
