@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -11,8 +12,11 @@ use uuid::Uuid;
 use aegis_alert::AlertEvent;
 use aegis_types::{Action, AegisError, Verdict};
 
+use crate::channel_audit::ChannelAuditEntry;
 use crate::entry::AuditEntry;
+use crate::fs_audit::FsAuditEntry;
 use crate::integrity::IntegrityReport;
+use crate::middleware::AuditMiddleware;
 use crate::query::row_to_entry;
 
 /// The sentinel value used as prev_hash for the very first entry.
@@ -87,6 +91,38 @@ const MIGRATIONS: &[&str] = &[
         error       TEXT,
         created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );",
+    // Migration 4: Create channel_audit_log table for messaging channel audit
+    "CREATE TABLE IF NOT EXISTS channel_audit_log (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id        TEXT NOT NULL UNIQUE,
+        channel_name    TEXT NOT NULL,
+        direction       TEXT NOT NULL,
+        message_hash    TEXT NOT NULL,
+        recipient_count INTEGER NOT NULL DEFAULT 0,
+        has_buttons     INTEGER NOT NULL DEFAULT 0,
+        timestamp       TEXT NOT NULL,
+        prev_hash       TEXT NOT NULL,
+        entry_hash      TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_audit_timestamp ON channel_audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_channel_audit_channel ON channel_audit_log(channel_name);
+    CREATE INDEX IF NOT EXISTS idx_channel_audit_direction ON channel_audit_log(direction);",
+    // Migration 5: Create fs_audit_log table for filesystem change audit
+    "CREATE TABLE IF NOT EXISTS fs_audit_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id    TEXT NOT NULL UNIQUE,
+        path        TEXT NOT NULL,
+        before_hash TEXT,
+        after_hash  TEXT,
+        size_delta  INTEGER NOT NULL DEFAULT 0,
+        operation   TEXT NOT NULL,
+        timestamp   TEXT NOT NULL,
+        prev_hash   TEXT NOT NULL,
+        entry_hash  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_fs_audit_timestamp ON fs_audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_fs_audit_path ON fs_audit_log(path);
+    CREATE INDEX IF NOT EXISTS idx_fs_audit_operation ON fs_audit_log(operation);",
 ];
 
 /// An append-only, hash-chained audit store backed by SQLite.
@@ -94,6 +130,7 @@ pub struct AuditStore {
     conn: Connection,
     latest_hash: String,
     alert_tx: Option<SyncSender<AlertEvent>>,
+    middleware: Vec<Arc<dyn AuditMiddleware>>,
 }
 
 impl AuditStore {
@@ -149,6 +186,7 @@ impl AuditStore {
             conn,
             latest_hash,
             alert_tx: None,
+            middleware: Vec::new(),
         })
     }
 
@@ -159,6 +197,36 @@ impl AuditStore {
     /// the event is silently dropped (the audit record is still persisted).
     pub fn set_alert_sender(&mut self, tx: SyncSender<AlertEvent>) {
         self.alert_tx = Some(tx);
+    }
+
+    /// Register an audit middleware.
+    ///
+    /// Middleware hooks are called synchronously after each insert. Multiple
+    /// middleware are invoked in registration order. Each receives an immutable
+    /// reference to the entry -- middleware cannot alter the audit trail.
+    pub fn add_middleware(&mut self, mw: Arc<dyn AuditMiddleware>) {
+        self.middleware.push(mw);
+    }
+
+    /// Notify all registered middleware about a standard audit entry.
+    pub(crate) fn notify_action_middleware(&self, entry: &AuditEntry) {
+        for mw in &self.middleware {
+            mw.on_action(entry);
+        }
+    }
+
+    /// Notify all registered middleware about a channel audit entry.
+    pub(crate) fn notify_channel_middleware(&self, entry: &ChannelAuditEntry) {
+        for mw in &self.middleware {
+            mw.on_channel_action(entry);
+        }
+    }
+
+    /// Notify all registered middleware about a filesystem audit entry.
+    pub(crate) fn notify_fs_middleware(&self, entry: &FsAuditEntry) {
+        for mw in &self.middleware {
+            mw.on_fs_action(entry);
+        }
     }
 
     /// Append a new entry to the ledger recording the given action and verdict.
@@ -317,6 +385,9 @@ impl AuditStore {
                 warn!("alert channel full or disconnected, dropping alert event");
             }
         }
+
+        // Notify registered middleware (synchronous, after persist).
+        self.notify_action_middleware(&entry);
 
         Ok(entry)
     }

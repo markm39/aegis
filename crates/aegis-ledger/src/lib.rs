@@ -4,22 +4,30 @@
 //! to the previous entry's hash, forming a tamper-evident chain. Supports
 //! sessions, filtered queries, policy snapshots, and compliance statistics.
 
+pub mod channel_audit;
 pub mod entry;
 pub mod filter;
+pub mod fs_audit;
 pub mod integrity;
+pub mod middleware;
 pub(crate) mod parse_helpers;
 pub mod policy_snapshot;
 pub mod query;
 pub mod session;
+pub mod siem_export;
 pub mod stats;
 pub mod store;
 
+pub use channel_audit::{ChannelAuditEntry, ChannelDirection};
 pub use entry::AuditEntry;
 pub use filter::AuditFilter;
+pub use fs_audit::{FsAuditEntry, FsOperation};
 pub use integrity::IntegrityReport;
+pub use middleware::AuditMiddleware;
 pub use policy_snapshot::PolicySnapshot;
 pub use query::row_to_entry;
 pub use session::Session;
+pub use siem_export::SiemFormat;
 pub use stats::AuditStats;
 pub use store::AuditStore;
 
