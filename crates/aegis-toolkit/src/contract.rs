@@ -82,6 +82,12 @@ pub enum ToolAction {
         session_id: String,
         text: String,
     },
+    /// Navigate to a URL in the browser.
+    ///
+    /// Integration point: callers MUST validate `url` through
+    /// [`crate::navigation_guard::NavigationGuard::validate_url`] before executing
+    /// this action. The guard enforces scheme restrictions, host deny/allowlists,
+    /// private-network blocking, and DNS rebinding protection.
     BrowserNavigate {
         session_id: String,
         url: String,

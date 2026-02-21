@@ -9,7 +9,9 @@ pub mod contract;
 pub mod input;
 #[cfg(target_os = "macos")]
 pub mod macos_helper;
+pub mod navigation_guard;
 pub mod policy;
+pub mod tab_manager;
 pub mod tui;
 pub mod vision;
 pub mod window;
