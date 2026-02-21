@@ -47,6 +47,7 @@ pub mod image_understanding;
 pub mod link_understanding;
 pub mod video_processing;
 pub mod web_tools;
+pub mod attachment_handler;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -3497,6 +3498,19 @@ impl DaemonRuntime {
             }
             DaemonCommand::ListModels => {
                 DaemonResponse::error("model listing not yet implemented")
+            }
+            DaemonCommand::CopilotModels => {
+                let catalog = aegis_types::copilot::CopilotModelCatalog::with_defaults();
+                let models = catalog.list_models();
+                match serde_json::to_value(models) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} Copilot models available", models.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!(
+                        "failed to serialize Copilot model catalog: {e}"
+                    )),
+                }
             }
             DaemonCommand::ModelAllowlist { .. } => {
                 DaemonResponse::error("model allowlist not yet implemented")

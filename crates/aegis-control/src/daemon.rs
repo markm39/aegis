@@ -356,6 +356,12 @@ pub enum DaemonCommand {
     },
     /// List all models seen by the usage proxy across the fleet.
     ListModels,
+    /// List available Copilot models from the built-in catalog.
+    ///
+    /// Returns the model catalog with IDs, names, versions, token limits,
+    /// and capabilities for each model available through the Copilot provider.
+    /// Cedar policy gate: `daemon:copilot_models`.
+    CopilotModels,
     /// Set the fleet-wide model allowlist.
     ///
     /// Patterns use glob syntax (e.g. `"claude-*"`, `"gpt-4o*"`).
@@ -797,6 +803,7 @@ impl DaemonCommand {
             DaemonCommand::ListAliases => "daemon:list_aliases",
             DaemonCommand::BroadcastToFleet { .. } => "daemon:broadcast_to_fleet",
             DaemonCommand::ListModels => "daemon:list_models",
+            DaemonCommand::CopilotModels => "daemon:copilot_models",
             DaemonCommand::ModelAllowlist { .. } => "daemon:model_allowlist",
             DaemonCommand::ExecuteCommand { .. } => "daemon:execute_command",
             DaemonCommand::SuspendSession { .. } => "daemon:suspend_session",
@@ -1725,6 +1732,7 @@ mod tests {
                 exclude_agents: vec![],
             },
             DaemonCommand::ListModels,
+            DaemonCommand::CopilotModels,
             DaemonCommand::ModelAllowlist {
                 patterns: vec!["claude-*".into(), "gpt-4o*".into()],
             },
@@ -2376,5 +2384,17 @@ mod tests {
             let back: SessionState = serde_json::from_str(&json).unwrap();
             assert_eq!(back, state);
         }
+    }
+
+    #[test]
+    fn copilot_models_command_variant() {
+        // Verify that CopilotModels serializes/deserializes and has a
+        // policy action name.
+        let cmd = DaemonCommand::CopilotModels;
+        assert_eq!(cmd.policy_action_name(), "daemon:copilot_models");
+
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.policy_action_name(), "daemon:copilot_models");
     }
 }

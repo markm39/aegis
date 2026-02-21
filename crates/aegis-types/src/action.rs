@@ -218,6 +218,19 @@ pub enum ActionKind {
         /// Output/completion tokens consumed.
         output_tokens: u64,
     },
+    /// Process a file attachment through the attachment pipeline.
+    ///
+    /// Gated by Cedar policy. Logged when an attachment is received through
+    /// a messaging channel and processed for content extraction or validation.
+    /// MIME type is detected from magic bytes, never from file extensions.
+    ProcessAttachment {
+        /// SHA-256 hex digest of the raw attachment data (for audit trail).
+        content_hash: String,
+        /// Detected MIME type (e.g., "image/png", "audio/mpeg", "application/pdf").
+        mime_type: String,
+        /// Size of the raw attachment data in bytes.
+        size_bytes: u64,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -382,6 +395,13 @@ impl std::fmt::Display for ActionKind {
                     "GeminiApiCall {model} {endpoint} in={input_tokens} out={output_tokens}"
                 )
             }
+            ActionKind::ProcessAttachment {
+                content_hash,
+                mime_type,
+                size_bytes,
+            } => {
+                write!(f, "ProcessAttachment {mime_type} ({size_bytes} bytes, hash={content_hash})")
+            }
         }
     }
 }
@@ -503,6 +523,11 @@ mod tests {
                 endpoint: "https://generativelanguage.googleapis.com".into(),
                 input_tokens: 100,
                 output_tokens: 50,
+            },
+            ActionKind::ProcessAttachment {
+                content_hash: "abc123".into(),
+                mime_type: "image/png".into(),
+                size_bytes: 2048,
             },
         ];
         for v in variants {

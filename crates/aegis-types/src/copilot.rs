@@ -31,6 +31,9 @@ pub const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 /// Default GitHub token endpoint.
 pub const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 
+/// Default Copilot API upstream URL.
+pub const DEFAULT_COPILOT_UPSTREAM_URL: &str = "https://api.githubcopilot.com";
+
 /// Default token storage path relative to home directory.
 const DEFAULT_TOKEN_SUBPATH: &str = ".aegis/providers/copilot/tokens.json";
 
@@ -39,6 +42,12 @@ const TOKEN_EXPIRY_MARGIN_SECS: i64 = 60;
 
 /// Allowed GitHub endpoint hosts for SSRF protection.
 const ALLOWED_GITHUB_HOSTS: &[&str] = &["github.com", "api.github.com"];
+
+/// Allowed upstream hosts for Copilot proxy SSRF protection.
+const ALLOWED_COPILOT_UPSTREAM_HOSTS: &[&str] = &[
+    "api.githubcopilot.com",
+    "copilot-proxy.githubusercontent.com",
+];
 
 // ---------------------------------------------------------------------------
 // CopilotConfig
@@ -61,6 +70,15 @@ pub struct CopilotConfig {
     /// Defaults to `~/.aegis/providers/copilot/tokens.json`.
     #[serde(default)]
     pub token_path: Option<PathBuf>,
+
+    /// Proxy routing configuration for Copilot API requests.
+    #[serde(default)]
+    pub proxy: Option<CopilotProxyConfig>,
+
+    /// Model override: force a specific model for all Copilot requests.
+    /// Validated against the model ID format (alphanumeric, hyphens, dots).
+    #[serde(default)]
+    pub model_override: Option<String>,
 }
 
 fn default_enabled() -> bool {
@@ -73,6 +91,8 @@ impl fmt::Debug for CopilotConfig {
             .field("client_id", &self.client_id)
             .field("enabled", &self.enabled)
             .field("token_path", &self.token_path)
+            .field("proxy", &self.proxy)
+            .field("model_override", &self.model_override)
             .finish()
     }
 }
@@ -83,6 +103,8 @@ impl Default for CopilotConfig {
             client_id: String::new(),
             enabled: true,
             token_path: None,
+            proxy: None,
+            model_override: None,
         }
     }
 }
@@ -103,6 +125,267 @@ impl CopilotConfig {
             }
         }
     }
+
+    /// Validate model_override if set. Returns error if the model ID
+    /// contains invalid characters.
+    pub fn validate(&self) -> Result<(), AegisError> {
+        if let Some(ref model_id) = self.model_override {
+            validate_model_id(model_id)?;
+        }
+        if let Some(ref proxy) = self.proxy {
+            proxy.validate()?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CopilotProxyConfig
+// ---------------------------------------------------------------------------
+
+/// Proxy routing configuration for Copilot API requests.
+///
+/// Controls how Aegis routes requests to the Copilot upstream API. The
+/// upstream URL is validated against an allowlist of known Copilot hosts
+/// to prevent SSRF attacks.
+///
+/// # Security
+///
+/// - `upstream_url` must use HTTPS and point to an allowed Copilot host.
+/// - Model overrides are validated for safe characters only.
+/// - No secrets are stored in this configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CopilotProxyConfig {
+    /// Upstream Copilot API URL.
+    /// Defaults to `https://api.githubcopilot.com`.
+    #[serde(default = "default_upstream_url")]
+    pub upstream_url: String,
+
+    /// Force a specific model for all proxied requests.
+    /// When set, overrides the model requested by the client.
+    #[serde(default)]
+    pub model_override: Option<String>,
+
+    /// Whether to track token usage for proxied requests.
+    #[serde(default = "default_usage_tracking")]
+    pub usage_tracking: bool,
+}
+
+fn default_upstream_url() -> String {
+    DEFAULT_COPILOT_UPSTREAM_URL.to_string()
+}
+
+fn default_usage_tracking() -> bool {
+    true
+}
+
+impl Default for CopilotProxyConfig {
+    fn default() -> Self {
+        Self {
+            upstream_url: DEFAULT_COPILOT_UPSTREAM_URL.to_string(),
+            model_override: None,
+            usage_tracking: true,
+        }
+    }
+}
+
+impl CopilotProxyConfig {
+    /// Validate the proxy configuration.
+    ///
+    /// Checks that `upstream_url` uses HTTPS and points to a known Copilot
+    /// host (SSRF protection). Validates `model_override` if set.
+    pub fn validate(&self) -> Result<(), AegisError> {
+        validate_copilot_upstream_url(&self.upstream_url)?;
+        if let Some(ref model_id) = self.model_override {
+            validate_model_id(model_id)?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CopilotModel
+// ---------------------------------------------------------------------------
+
+/// Metadata about a Copilot-available model.
+///
+/// Describes the capabilities, token limits, and identity of a model
+/// accessible through the GitHub Copilot API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CopilotModel {
+    /// Canonical model identifier (e.g., "gpt-4o", "claude-3.5-sonnet").
+    pub id: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// Model version string.
+    pub version: String,
+    /// Maximum token limit for completions.
+    pub max_tokens: u32,
+    /// List of capabilities (e.g., "chat", "function_calling", "vision").
+    pub capabilities: Vec<String>,
+}
+
+impl CopilotModel {
+    /// Check whether this model supports a given capability.
+    pub fn has_capability(&self, capability: &str) -> bool {
+        self.capabilities.iter().any(|c| c == capability)
+    }
+
+    /// Validate that a requested token count does not exceed this model's limit.
+    ///
+    /// Returns `Ok(())` if `requested` is within the model's `max_tokens`.
+    /// Returns an error describing the violation otherwise.
+    pub fn validate_max_tokens(&self, requested: u32) -> Result<(), AegisError> {
+        if requested > self.max_tokens {
+            return Err(AegisError::ConfigError(format!(
+                "requested {} tokens exceeds model '{}' limit of {}",
+                requested, self.id, self.max_tokens
+            )));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CopilotModelCatalog
+// ---------------------------------------------------------------------------
+
+/// Registry of models available through GitHub Copilot.
+///
+/// Provides lookup and enumeration of known Copilot models. The built-in
+/// catalog includes commonly available models; it can be extended at runtime.
+pub struct CopilotModelCatalog {
+    models: Vec<CopilotModel>,
+}
+
+impl CopilotModelCatalog {
+    /// Create an empty catalog.
+    pub fn new() -> Self {
+        Self { models: Vec::new() }
+    }
+
+    /// Create a catalog pre-populated with commonly available Copilot models.
+    pub fn with_defaults() -> Self {
+        let models = vec![
+            CopilotModel {
+                id: "gpt-4o".into(),
+                name: "GPT-4o".into(),
+                version: "2024-05-13".into(),
+                max_tokens: 16384,
+                capabilities: vec![
+                    "chat".into(),
+                    "function_calling".into(),
+                    "vision".into(),
+                ],
+            },
+            CopilotModel {
+                id: "gpt-4".into(),
+                name: "GPT-4".into(),
+                version: "0613".into(),
+                max_tokens: 8192,
+                capabilities: vec!["chat".into(), "function_calling".into()],
+            },
+            CopilotModel {
+                id: "gpt-3.5-turbo".into(),
+                name: "GPT-3.5 Turbo".into(),
+                version: "0125".into(),
+                max_tokens: 4096,
+                capabilities: vec!["chat".into(), "function_calling".into()],
+            },
+            CopilotModel {
+                id: "claude-3.5-sonnet".into(),
+                name: "Claude 3.5 Sonnet".into(),
+                version: "20241022".into(),
+                max_tokens: 8192,
+                capabilities: vec![
+                    "chat".into(),
+                    "function_calling".into(),
+                    "vision".into(),
+                ],
+            },
+        ];
+        Self { models }
+    }
+
+    /// Find a model by its identifier.
+    pub fn find_model(&self, id: &str) -> Option<&CopilotModel> {
+        self.models.iter().find(|m| m.id == id)
+    }
+
+    /// List all models in the catalog.
+    pub fn list_models(&self) -> &[CopilotModel] {
+        &self.models
+    }
+
+    /// Add a model to the catalog. Replaces any existing model with the same ID.
+    pub fn add_model(&mut self, model: CopilotModel) -> Result<(), AegisError> {
+        validate_model_id(&model.id)?;
+        if let Some(existing) = self.models.iter_mut().find(|m| m.id == model.id) {
+            *existing = model;
+        } else {
+            self.models.push(model);
+        }
+        Ok(())
+    }
+}
+
+impl Default for CopilotModelCatalog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Validate that a model ID contains only safe characters.
+///
+/// Model IDs may contain alphanumeric characters, hyphens, and dots.
+/// This prevents injection attacks through model identifiers.
+fn validate_model_id(model_id: &str) -> Result<(), AegisError> {
+    if model_id.is_empty() {
+        return Err(AegisError::ConfigError(
+            "model ID must not be empty".into(),
+        ));
+    }
+    if model_id.len() > 128 {
+        return Err(AegisError::ConfigError(format!(
+            "model ID too long ({} chars, max 128): {}",
+            model_id.len(),
+            model_id
+        )));
+    }
+    if !model_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
+        return Err(AegisError::ConfigError(format!(
+            "model ID contains invalid characters (allowed: alphanumeric, hyphens, dots): {model_id:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that a URL points to a known Copilot upstream host (SSRF protection).
+///
+/// The URL must use HTTPS and resolve to an allowed Copilot host.
+fn validate_copilot_upstream_url(url: &str) -> Result<(), AegisError> {
+    if !url.starts_with("https://") {
+        return Err(AegisError::ConfigError(format!(
+            "Copilot upstream URL must use HTTPS, got: {url}"
+        )));
+    }
+
+    let host = extract_host(url).ok_or_else(|| {
+        AegisError::ConfigError(format!(
+            "cannot parse host from Copilot upstream URL: {url}"
+        ))
+    })?;
+
+    if !ALLOWED_COPILOT_UPSTREAM_HOSTS.contains(&host.as_str()) {
+        return Err(AegisError::ConfigError(format!(
+            "Copilot upstream URL host not in allowlist: {host} (allowed: {ALLOWED_COPILOT_UPSTREAM_HOSTS:?})"
+        )));
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -893,6 +1176,8 @@ mod tests {
         assert!(config.client_id.is_empty());
         assert!(config.enabled);
         assert!(config.token_path.is_none());
+        assert!(config.proxy.is_none());
+        assert!(config.model_override.is_none());
 
         // Default resolved path should end with the expected subpath
         let resolved = config.resolved_token_path().unwrap();
@@ -908,6 +1193,8 @@ mod tests {
         assert_eq!(deserialized.client_id, "test-id");
         assert!(deserialized.enabled);
         assert!(deserialized.token_path.is_none());
+        assert!(deserialized.proxy.is_none());
+        assert!(deserialized.model_override.is_none());
     }
 
     #[test]
@@ -917,6 +1204,8 @@ mod tests {
             client_id: "test".into(),
             enabled: true,
             token_path: Some(PathBuf::from("/home/user/../../../etc/passwd")),
+            proxy: None,
+            model_override: None,
         };
         assert!(
             config.resolved_token_path().is_err(),
@@ -928,6 +1217,8 @@ mod tests {
             client_id: "test".into(),
             enabled: true,
             token_path: Some(PathBuf::from("../secret/tokens.json")),
+            proxy: None,
+            model_override: None,
         };
         assert!(
             config2.resolved_token_path().is_err(),
@@ -939,6 +1230,8 @@ mod tests {
             client_id: "test".into(),
             enabled: true,
             token_path: Some(PathBuf::from("/home/user/.aegis/copilot/tokens.json")),
+            proxy: None,
+            model_override: None,
         };
         assert!(config3.resolved_token_path().is_ok());
     }
@@ -997,5 +1290,302 @@ mod tests {
             extract_host("https://GITHUB.COM/path"),
             Some("github.com".into())
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Model catalog tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn model_catalog_lookup() {
+        let catalog = CopilotModelCatalog::with_defaults();
+
+        let gpt4o = catalog.find_model("gpt-4o").expect("should find gpt-4o");
+        assert_eq!(gpt4o.name, "GPT-4o");
+        assert_eq!(gpt4o.max_tokens, 16384);
+
+        let claude = catalog
+            .find_model("claude-3.5-sonnet")
+            .expect("should find claude-3.5-sonnet");
+        assert_eq!(claude.name, "Claude 3.5 Sonnet");
+
+        // Unknown model returns None
+        assert!(catalog.find_model("nonexistent-model").is_none());
+    }
+
+    #[test]
+    fn model_catalog_list_all() {
+        let catalog = CopilotModelCatalog::with_defaults();
+        let models = catalog.list_models();
+
+        assert_eq!(models.len(), 4, "default catalog should have 4 models");
+
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"gpt-4o"));
+        assert!(ids.contains(&"gpt-4"));
+        assert!(ids.contains(&"gpt-3.5-turbo"));
+        assert!(ids.contains(&"claude-3.5-sonnet"));
+    }
+
+    #[test]
+    fn model_max_tokens_validation() {
+        let model = CopilotModel {
+            id: "gpt-4".into(),
+            name: "GPT-4".into(),
+            version: "0613".into(),
+            max_tokens: 8192,
+            capabilities: vec!["chat".into()],
+        };
+
+        // Within limit
+        assert!(model.validate_max_tokens(4096).is_ok());
+        assert!(model.validate_max_tokens(8192).is_ok());
+
+        // Exceeds limit
+        let err = model.validate_max_tokens(8193).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("8193") && msg.contains("8192"),
+            "error should mention requested and limit: {msg}"
+        );
+    }
+
+    #[test]
+    fn model_capability_check() {
+        let model = CopilotModel {
+            id: "gpt-4o".into(),
+            name: "GPT-4o".into(),
+            version: "2024-05-13".into(),
+            max_tokens: 16384,
+            capabilities: vec![
+                "chat".into(),
+                "function_calling".into(),
+                "vision".into(),
+            ],
+        };
+
+        assert!(model.has_capability("chat"));
+        assert!(model.has_capability("function_calling"));
+        assert!(model.has_capability("vision"));
+        assert!(!model.has_capability("audio"));
+        assert!(!model.has_capability(""));
+    }
+
+    // -----------------------------------------------------------------------
+    // Proxy config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn proxy_config_defaults() {
+        let config = CopilotProxyConfig::default();
+        assert_eq!(config.upstream_url, DEFAULT_COPILOT_UPSTREAM_URL);
+        assert!(config.model_override.is_none());
+        assert!(config.usage_tracking);
+
+        // Defaults should validate
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn proxy_config_serialization() {
+        let config = CopilotProxyConfig {
+            upstream_url: DEFAULT_COPILOT_UPSTREAM_URL.to_string(),
+            model_override: Some("gpt-4o".into()),
+            usage_tracking: false,
+        };
+
+        let json = serde_json::to_string(&config).expect("should serialize");
+        let back: CopilotProxyConfig =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(config, back);
+
+        // Deserialize with defaults
+        let minimal = r#"{"upstream_url":"https://api.githubcopilot.com"}"#;
+        let deserialized: CopilotProxyConfig =
+            serde_json::from_str(minimal).expect("should deserialize minimal");
+        assert!(deserialized.model_override.is_none());
+        assert!(deserialized.usage_tracking);
+    }
+
+    // -----------------------------------------------------------------------
+    // Security tests
+    // -----------------------------------------------------------------------
+
+    /// SECURITY: Upstream URL must be validated against SSRF attacks.
+    /// Private IPs, non-HTTPS, and non-allowlisted hosts must be rejected.
+    #[test]
+    fn upstream_url_ssrf_protection() {
+        // Valid Copilot upstream URLs
+        assert!(
+            validate_copilot_upstream_url(DEFAULT_COPILOT_UPSTREAM_URL).is_ok(),
+            "default URL must be accepted"
+        );
+        assert!(
+            validate_copilot_upstream_url(
+                "https://copilot-proxy.githubusercontent.com/v1/completions"
+            )
+            .is_ok(),
+            "known proxy URL must be accepted"
+        );
+
+        // HTTP rejected (must use HTTPS)
+        assert!(
+            validate_copilot_upstream_url("http://api.githubcopilot.com").is_err(),
+            "HTTP must be rejected"
+        );
+
+        // Non-allowlisted hosts rejected (SSRF protection)
+        assert!(
+            validate_copilot_upstream_url("https://evil.com/api").is_err(),
+            "unknown host must be rejected"
+        );
+        assert!(
+            validate_copilot_upstream_url("https://localhost/api").is_err(),
+            "localhost must be rejected"
+        );
+        assert!(
+            validate_copilot_upstream_url("https://127.0.0.1/api").is_err(),
+            "loopback IP must be rejected"
+        );
+        assert!(
+            validate_copilot_upstream_url("https://169.254.169.254/metadata").is_err(),
+            "link-local IP must be rejected (cloud metadata SSRF)"
+        );
+        assert!(
+            validate_copilot_upstream_url("https://10.0.0.1/internal").is_err(),
+            "private IP must be rejected"
+        );
+
+        // Subdomain spoofing rejected
+        assert!(
+            validate_copilot_upstream_url(
+                "https://api.githubcopilot.com.evil.com/api"
+            )
+            .is_err(),
+            "subdomain spoofing must be rejected"
+        );
+    }
+
+    #[test]
+    fn model_id_validation() {
+        // Valid model IDs
+        assert!(validate_model_id("gpt-4o").is_ok());
+        assert!(validate_model_id("gpt-3.5-turbo").is_ok());
+        assert!(validate_model_id("claude-3.5-sonnet").is_ok());
+        assert!(validate_model_id("model123").is_ok());
+
+        // Invalid model IDs
+        assert!(validate_model_id("").is_err(), "empty must be rejected");
+        assert!(
+            validate_model_id("model with spaces").is_err(),
+            "spaces must be rejected"
+        );
+        assert!(
+            validate_model_id("model;drop").is_err(),
+            "semicolons must be rejected"
+        );
+        assert!(
+            validate_model_id("model/path").is_err(),
+            "slashes must be rejected"
+        );
+        assert!(
+            validate_model_id("model\ninjection").is_err(),
+            "newlines must be rejected"
+        );
+        assert!(
+            validate_model_id("model&param=1").is_err(),
+            "URL parameter injection must be rejected"
+        );
+
+        // Too long
+        let long_id = "a".repeat(129);
+        assert!(
+            validate_model_id(&long_id).is_err(),
+            "model ID exceeding 128 chars must be rejected"
+        );
+    }
+
+    #[test]
+    fn copilot_config_with_proxy_validation() {
+        // Valid config with proxy
+        let config = CopilotConfig {
+            client_id: "test-client".into(),
+            enabled: true,
+            token_path: None,
+            proxy: Some(CopilotProxyConfig::default()),
+            model_override: Some("gpt-4o".into()),
+        };
+        assert!(config.validate().is_ok());
+
+        // Invalid model override
+        let bad_config = CopilotConfig {
+            client_id: "test-client".into(),
+            enabled: true,
+            token_path: None,
+            proxy: None,
+            model_override: Some("model;injection".into()),
+        };
+        assert!(
+            bad_config.validate().is_err(),
+            "invalid model override must be rejected"
+        );
+
+        // Invalid proxy upstream URL
+        let bad_proxy = CopilotConfig {
+            client_id: "test-client".into(),
+            enabled: true,
+            token_path: None,
+            proxy: Some(CopilotProxyConfig {
+                upstream_url: "https://evil.com/api".into(),
+                model_override: None,
+                usage_tracking: true,
+            }),
+            model_override: None,
+        };
+        assert!(
+            bad_proxy.validate().is_err(),
+            "proxy with bad upstream URL must be rejected"
+        );
+    }
+
+    #[test]
+    fn model_catalog_add_validates_id() {
+        let mut catalog = CopilotModelCatalog::new();
+
+        // Valid add
+        let result = catalog.add_model(CopilotModel {
+            id: "custom-model-v1".into(),
+            name: "Custom".into(),
+            version: "1.0".into(),
+            max_tokens: 4096,
+            capabilities: vec!["chat".into()],
+        });
+        assert!(result.is_ok());
+        assert!(catalog.find_model("custom-model-v1").is_some());
+
+        // Invalid add (bad chars in ID)
+        let result = catalog.add_model(CopilotModel {
+            id: "bad model/id".into(),
+            name: "Bad".into(),
+            version: "1.0".into(),
+            max_tokens: 4096,
+            capabilities: vec![],
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_serialization_roundtrip() {
+        let model = CopilotModel {
+            id: "gpt-4o".into(),
+            name: "GPT-4o".into(),
+            version: "2024-05-13".into(),
+            max_tokens: 16384,
+            capabilities: vec!["chat".into(), "function_calling".into()],
+        };
+
+        let json = serde_json::to_string(&model).expect("should serialize");
+        let back: CopilotModel = serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(model, back);
     }
 }

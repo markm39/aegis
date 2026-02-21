@@ -184,6 +184,11 @@ impl PolicyEngine {
                     input_tokens: 0,
                     output_tokens: 0,
                 },
+                "ProcessAttachment" => ActionKind::ProcessAttachment {
+                    content_hash: "__probe__".into(),
+                    mime_type: "application/octet-stream".into(),
+                    size_bytes: 0,
+                },
                 _ => return false,
             },
         );
@@ -358,6 +363,7 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::AcpTranslate { session_id, .. } => Ok(("AcpTranslate", session_id.as_str())),
         ActionKind::CopilotAuth { grant_type, .. } => Ok(("CopilotAuth", grant_type.as_str())),
         ActionKind::GeminiApiCall { endpoint, .. } => Ok(("GeminiApiCall", endpoint.as_str())),
+        ActionKind::ProcessAttachment { content_hash, .. } => Ok(("ProcessAttachment", content_hash.as_str())),
     }
 }
 
