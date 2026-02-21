@@ -42,6 +42,7 @@ pub mod tool_contract;
 pub mod toolkit_runtime;
 pub mod message_routing;
 pub mod scheduled_reply;
+pub mod audio_transcription;
 pub mod image_understanding;
 pub mod link_understanding;
 pub mod web_tools;
@@ -4758,6 +4759,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -5100,6 +5102,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -5781,6 +5784,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -5873,6 +5877,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

@@ -95,6 +95,18 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
+    action "AcpServerReceive" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "TtsSynthesize" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
+    action "TranscribeAudio" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+    };
 }
 "#;
 
@@ -171,6 +183,9 @@ mod tests {
             "AcpConnect",
             "AcpSend",
             "OAuthExchange",
+            "AcpServerReceive",
+            "TtsSynthesize",
+            "TranscribeAudio",
         ];
 
         let schema_text = AEGIS_SCHEMA;

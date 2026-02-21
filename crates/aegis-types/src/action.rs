@@ -139,6 +139,40 @@ pub enum ActionKind {
         /// OAuth2 grant type (e.g., "authorization_code", "refresh_token").
         grant_type: String,
     },
+    /// Receive an incoming ACP message on the server side.
+    ///
+    /// Logged when the ACP server accepts and processes an inbound message
+    /// from a remote agent. The source is the authenticated sender identity.
+    AcpServerReceive {
+        /// Authenticated sender identity (derived from the bearer token).
+        source: String,
+        /// ACP request method or message type.
+        method: String,
+        /// Size of the message payload in bytes.
+        payload_size: usize,
+    },
+    /// Synthesize text to speech via an external TTS provider.
+    TtsSynthesize {
+        /// TTS provider name (e.g., "openai", "elevenlabs").
+        provider: String,
+        /// SHA-256 hex digest of the input text (raw text is never stored).
+        text_hash: String,
+        /// Voice ID used for synthesis.
+        voice: String,
+        /// Output audio format (e.g., "mp3", "wav", "ogg").
+        format: String,
+        /// Length of the input text in characters.
+        text_length: usize,
+    },
+    /// Transcribe audio via OpenAI Whisper.
+    TranscribeAudio {
+        /// SHA-256 hex digest of the raw audio data (for audit trail).
+        content_hash: String,
+        /// Detected audio format (e.g., "mp3", "wav", "ogg").
+        format: String,
+        /// Size of the raw audio data in bytes.
+        size_bytes: u64,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -252,6 +286,29 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "OAuthExchange {provider} ({grant_type})")
             }
+            ActionKind::AcpServerReceive {
+                source,
+                method,
+                payload_size,
+            } => {
+                write!(f, "AcpServerReceive {source} {method} ({payload_size} bytes)")
+            }
+            ActionKind::TtsSynthesize {
+                provider,
+                voice,
+                format,
+                text_length,
+                ..
+            } => {
+                write!(f, "TtsSynthesize {provider}/{voice} {format} ({text_length} chars)")
+            }
+            ActionKind::TranscribeAudio {
+                content_hash,
+                format,
+                size_bytes,
+            } => {
+                write!(f, "TranscribeAudio {format} ({size_bytes} bytes, hash={content_hash})")
+            }
         }
     }
 }
@@ -347,6 +404,18 @@ mod tests {
             ActionKind::OAuthExchange {
                 provider: "google".into(),
                 grant_type: "authorization_code".into(),
+            },
+            ActionKind::AcpServerReceive {
+                source: "remote-agent".into(),
+                method: "execute".into(),
+                payload_size: 512,
+            },
+            ActionKind::TtsSynthesize {
+                provider: "openai".into(),
+                text_hash: "abc123".into(),
+                voice: "alloy".into(),
+                format: "mp3".into(),
+                text_length: 42,
             },
         ];
         for v in variants {

@@ -809,6 +809,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: Default::default(),
+            acp_server: None,
         }
     }
 

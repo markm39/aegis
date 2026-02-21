@@ -348,6 +348,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-tts"
+version = "0.1.0"
+dependencies = [
+ "aegis-policy",
+ "aegis-types",
+ "async-trait",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "aegis-types"
 version = "0.1.0"
 dependencies = [

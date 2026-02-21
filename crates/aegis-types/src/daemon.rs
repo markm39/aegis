@@ -81,6 +81,9 @@ pub struct DaemonConfig {
     /// Per-workspace hook configuration.
     #[serde(default)]
     pub workspace_hooks: WorkspaceHooksConfig,
+    /// ACP (Agent Communication Protocol) server configuration.
+    #[serde(default)]
+    pub acp_server: Option<AcpServerConfig>,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -745,6 +748,48 @@ fn default_socket_path() -> PathBuf {
         .join("daemon.sock")
 }
 
+/// Server-side configuration for the ACP (Agent Communication Protocol) endpoint.
+///
+/// Controls the listen address, authentication tokens, and rate limiting for
+/// incoming ACP connections. Auth tokens are stored as SHA-256 hashes in the
+/// config file -- never as plaintext. At runtime, incoming bearer tokens are
+/// hashed and compared against the allowlist using constant-time comparison.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcpServerConfig {
+    /// Listen address for the ACP HTTP endpoint (e.g., "127.0.0.1:9100").
+    pub listen: String,
+    /// Allowlist of SHA-256 hex-encoded token hashes. Incoming bearer tokens
+    /// are hashed and compared against this list using constant-time equality.
+    /// Generate a hash with: `echo -n "your-token" | sha256sum`
+    #[serde(default)]
+    pub token_hashes: Vec<String>,
+    /// Maximum messages per minute per connection (default: 100).
+    #[serde(default = "default_acp_rate_limit")]
+    pub rate_limit_per_minute: u32,
+    /// Maximum request body size in bytes (default: 1 MB).
+    #[serde(default = "default_acp_max_body_size")]
+    pub max_body_size: usize,
+}
+
+fn default_acp_rate_limit() -> u32 {
+    100
+}
+
+fn default_acp_max_body_size() -> usize {
+    1_048_576
+}
+
+impl Default for AcpServerConfig {
+    fn default() -> Self {
+        Self {
+            listen: "127.0.0.1:9100".to_string(),
+            token_hashes: Vec::new(),
+            rate_limit_per_minute: default_acp_rate_limit(),
+            max_body_size: default_acp_max_body_size(),
+        }
+    }
+}
+
 /// Runtime status of a single agent slot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -936,6 +981,7 @@ mod tests {
             aliases: Default::default(),
             lanes: vec![],
             workspace_hooks: WorkspaceHooksConfig::default(),
+            acp_server: None,
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

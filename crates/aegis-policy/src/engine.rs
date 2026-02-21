@@ -148,6 +148,23 @@ impl PolicyEngine {
                     provider: "__probe__".into(),
                     grant_type: "authorization_code".into(),
                 },
+                "AcpServerReceive" => ActionKind::AcpServerReceive {
+                    source: "__probe__".into(),
+                    method: "__probe__".into(),
+                    payload_size: 0,
+                },
+                "TtsSynthesize" => ActionKind::TtsSynthesize {
+                    provider: "__probe__".into(),
+                    text_hash: "__probe__".into(),
+                    voice: "__probe__".into(),
+                    format: "mp3".into(),
+                    text_length: 0,
+                },
+                "TranscribeAudio" => ActionKind::TranscribeAudio {
+                    content_hash: "__probe__".into(),
+                    format: "unknown".into(),
+                    size_bytes: 0,
+                },
                 _ => return false,
             },
         );
@@ -315,6 +332,9 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::AcpSend { endpoint, .. } => Ok(("AcpSend", endpoint.as_str())),
         ActionKind::ImageProcess { content_hash, .. } => Ok(("ImageProcess", content_hash.as_str())),
         ActionKind::OAuthExchange { provider, .. } => Ok(("OAuthExchange", provider.as_str())),
+        ActionKind::AcpServerReceive { source, .. } => Ok(("AcpServerReceive", source.as_str())),
+        ActionKind::TtsSynthesize { provider, .. } => Ok(("TtsSynthesize", provider.as_str())),
+        ActionKind::TranscribeAudio { content_hash, .. } => Ok(("TranscribeAudio", content_hash.as_str())),
     }
 }
 

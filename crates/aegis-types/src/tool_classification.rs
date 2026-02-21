@@ -105,6 +105,9 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         ActionKind::AcpSend { .. } => ActionRisk::High,
         ActionKind::ImageProcess { .. } => ActionRisk::Medium,
         ActionKind::OAuthExchange { .. } => ActionRisk::High,
+        ActionKind::AcpServerReceive { .. } => ActionRisk::High,
+        ActionKind::TtsSynthesize { .. } => ActionRisk::Medium,
+        ActionKind::TranscribeAudio { .. } => ActionRisk::Medium,
     }
 }
 
