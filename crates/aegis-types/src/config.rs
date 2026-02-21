@@ -405,6 +405,16 @@ pub enum ChannelConfig {
     Mattermost(MattermostChannelConfig),
     /// Voice call channel (via telephony API).
     VoiceCall(VoiceCallChannelConfig),
+    /// Twitch IRC channel.
+    Twitch(TwitchChannelConfig),
+    /// Nextcloud Talk (Spreed) channel.
+    Nextcloud(NextcloudChannelConfig),
+    /// Zalo Official Account channel.
+    Zalo(ZaloChannelConfig),
+    /// Tlon (Urbit) channel.
+    Tlon(TlonChannelConfig),
+    /// Lobster channel.
+    Lobster(LobsterChannelConfig),
 }
 
 /// Configuration for the Telegram messaging channel.
@@ -674,6 +684,79 @@ pub struct VoiceCallChannelConfig {
     pub from_number: String,
     /// Recipient phone number.
     pub to_number: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Twitch IRC channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TwitchChannelConfig {
+    /// OAuth token for Twitch IRC (oauth: prefix + alphanumeric).
+    /// Sensitive: never log this value.
+    pub oauth_token: String,
+    /// Twitch channel name (alphanumeric + underscore, max 25 chars).
+    pub channel_name: String,
+    /// Bot username (alphanumeric + underscore, max 25 chars).
+    pub bot_username: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Nextcloud Talk channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NextcloudChannelConfig {
+    /// Nextcloud server URL (must be HTTPS; private IPs blocked for SSRF prevention).
+    pub server_url: String,
+    /// Nextcloud username (alphanumeric + dash/underscore/dot, max 64 chars).
+    pub username: String,
+    /// Nextcloud app password for Basic auth.
+    /// Sensitive: never log this value.
+    pub app_password: String,
+    /// Room token for the Talk conversation (alphanumeric, max 32 chars).
+    pub room_token: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Zalo Official Account channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZaloChannelConfig {
+    /// Zalo Official Account ID.
+    pub oa_id: String,
+    /// Access token for the Zalo OA API.
+    /// Sensitive: never log this value.
+    pub access_token: String,
+    /// Secret key for webhook HMAC-SHA256 signature verification.
+    /// Sensitive: never log this value.
+    pub secret_key: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Tlon (Urbit) channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TlonChannelConfig {
+    /// Urbit ship API endpoint URL.
+    pub ship_url: String,
+    /// Urbit ship name (e.g., `~zod`).
+    pub ship_name: String,
+    /// Optional active hours window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursConfig>,
+}
+
+/// Configuration for the Lobster channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LobsterChannelConfig {
+    /// Lobster API base URL.
+    pub api_url: String,
+    /// API key for authentication.
+    /// Sensitive: never log this value.
+    pub api_key: String,
     /// Optional active hours window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursConfig>,

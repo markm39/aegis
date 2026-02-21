@@ -240,6 +240,81 @@ pub fn run_fleet(
                 );
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
+            ChannelConfig::Twitch(cfg) => {
+                let channel = match crate::twitch::TwitchChannel::new(
+                    crate::twitch::TwitchConfig {
+                        oauth_token: cfg.oauth_token,
+                        channel_name: cfg.channel_name,
+                        bot_username: cfg.bot_username,
+                    },
+                ) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create Twitch channel: {e}");
+                        return;
+                    }
+                };
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Nextcloud(cfg) => {
+                let channel = match crate::nextcloud::NextcloudChannel::new(
+                    crate::nextcloud::NextcloudConfig {
+                        server_url: cfg.server_url,
+                        username: cfg.username,
+                        app_password: cfg.app_password,
+                        room_token: cfg.room_token,
+                    },
+                ) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create Nextcloud Talk channel: {e}");
+                        return;
+                    }
+                };
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Zalo(cfg) => {
+                let channel = match crate::zalo::ZaloChannel::new(crate::zalo::ZaloConfig {
+                    oa_id: cfg.oa_id,
+                    access_token: cfg.access_token,
+                    secret_key: cfg.secret_key,
+                }) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create Zalo channel: {e}");
+                        return;
+                    }
+                };
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Tlon(cfg) => {
+                let channel = match crate::tlon::TlonChannel::new(crate::tlon::TlonConfig {
+                    ship_url: cfg.ship_url,
+                    ship_name: cfg.ship_name,
+                }) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create Tlon channel: {e}");
+                        return;
+                    }
+                };
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
+            ChannelConfig::Lobster(cfg) => {
+                let channel = match crate::lobster::LobsterChannel::new(
+                    crate::lobster::LobsterConfig {
+                        api_url: cfg.api_url,
+                        api_key: cfg.api_key,
+                    },
+                ) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        tracing::error!("failed to create Lobster channel: {e}");
+                        return;
+                    }
+                };
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+            }
         }
     });
 }
