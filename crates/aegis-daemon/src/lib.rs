@@ -42,6 +42,7 @@ pub mod tool_contract;
 pub mod toolkit_runtime;
 pub mod message_routing;
 pub mod scheduled_reply;
+pub mod image_understanding;
 pub mod link_understanding;
 pub mod web_tools;
 
