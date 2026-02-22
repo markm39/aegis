@@ -15,8 +15,10 @@ use base64::Engine as _;
 use aegis_control::daemon::{BrowserToolData, FramePayload, ToolActionExecution, TuiToolData};
 use aegis_toolkit::capture::CaptureRequest;
 use aegis_toolkit::contract::{MouseButton as ContractMouseButton, ToolAction, ToolResult};
+#[cfg(target_os = "macos")]
 use aegis_toolkit::input::{InputProvider, KeyPress, MouseButton, MouseClick, MouseMove, TypeText};
 use aegis_toolkit::policy::map_tool_action;
+#[cfg(target_os = "macos")]
 use aegis_toolkit::window::{WindowProvider, WindowRef};
 use aegis_toolkit::{CaptureFrame, ToolkitError};
 use aegis_types::daemon::ToolkitConfig;
