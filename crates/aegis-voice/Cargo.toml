@@ -1,0 +1,22 @@
+[package]
+name = "aegis-voice"
+description = "Voice wake word detection, talk mode, audio capture, and STT for Aegis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-tts = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "macros"] }
+wiremock = { workspace = true }

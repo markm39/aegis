@@ -212,6 +212,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-hooks"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "glob",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "aegis-integration-tests"
 version = "0.1.0"
 dependencies = [
@@ -431,6 +446,22 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "aegis-voice"
+version = "0.1.0"
+dependencies = [
+ "aegis-tts",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

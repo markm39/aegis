@@ -19,8 +19,10 @@ members = [
     "crates/aegis-tools",
     "crates/aegis-skills",
     "crates/aegis-tts",
+    "crates/aegis-voice",
     "crates/aegis-canvas",
     "crates/aegis-browser",
+    "crates/aegis-hooks",
     "tests",
 ]
 
@@ -89,8 +91,10 @@ aegis-toolkit = { path = "crates/aegis-toolkit" }
 aegis-tools = { path = "crates/aegis-tools" }
 aegis-skills = { path = "crates/aegis-skills" }
 aegis-tts = { path = "crates/aegis-tts" }
+aegis-voice = { path = "crates/aegis-voice" }
 aegis-canvas = { path = "crates/aegis-canvas" }
 aegis-browser = { path = "crates/aegis-browser" }
+aegis-hooks = { path = "crates/aegis-hooks" }
 
 async-trait = "0.1"
 tokio-tungstenite = "0.26"
