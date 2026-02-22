@@ -354,6 +354,64 @@ impl SlackApi {
         let parsed: SlackResponse = resp.json().await?;
         ensure_ok(&parsed)
     }
+
+    /// Update an existing message using `chat.update`.
+    ///
+    /// The `timestamp` is the message's `ts` value (its unique ID in Slack).
+    pub async fn update_message(
+        &self,
+        channel: &str,
+        timestamp: &str,
+        text: &str,
+    ) -> Result<(), ChannelError> {
+        validate_channel(channel)?;
+        validate_timestamp(timestamp)?;
+
+        let body = serde_json::json!({
+            "channel": channel,
+            "ts": timestamp,
+            "text": text,
+        });
+
+        let resp = self
+            .client
+            .post(format!("{API_BASE}/chat.update"))
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await?;
+
+        let parsed: SlackResponse = resp.json().await?;
+        ensure_ok(&parsed)
+    }
+
+    /// Delete a message using `chat.delete`.
+    ///
+    /// The `timestamp` is the message's `ts` value (its unique ID in Slack).
+    pub async fn delete_message(
+        &self,
+        channel: &str,
+        timestamp: &str,
+    ) -> Result<(), ChannelError> {
+        validate_channel(channel)?;
+        validate_timestamp(timestamp)?;
+
+        let body = serde_json::json!({
+            "channel": channel,
+            "ts": timestamp,
+        });
+
+        let resp = self
+            .client
+            .post(format!("{API_BASE}/chat.delete"))
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await?;
+
+        let parsed: SlackResponse = resp.json().await?;
+        ensure_ok(&parsed)
+    }
 }
 
 /// Validate a Slack emoji name.
@@ -506,5 +564,41 @@ mod tests {
         // Bad timestamp should fail
         let result = rt.block_on(api.add_reaction("C123", "not-a-ts", "thumbsup"));
         assert!(result.is_err());
+    }
+
+    // -- update_message validation --
+
+    #[test]
+    fn test_update_message_validates_inputs() {
+        let api = SlackApi::new("xoxb-test-token".to_string());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Bad channel should fail before HTTP
+        let result = rt.block_on(api.update_message("bad channel!", "1234.5678", "text"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid channel"));
+
+        // Bad timestamp should fail before HTTP
+        let result = rt.block_on(api.update_message("C123", "not-a-ts", "text"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid timestamp"));
+    }
+
+    // -- delete_message validation --
+
+    #[test]
+    fn test_delete_message_validates_inputs() {
+        let api = SlackApi::new("xoxb-test-token".to_string());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Bad channel should fail before HTTP
+        let result = rt.block_on(api.delete_message("bad channel!", "1234.5678"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid channel"));
+
+        // Bad timestamp should fail before HTTP
+        let result = rt.block_on(api.delete_message("C123", "not-a-ts"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid timestamp"));
     }
 }

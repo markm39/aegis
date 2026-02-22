@@ -27,7 +27,9 @@ use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, OutboundPhoto};
+use crate::channel::{
+    Channel, ChannelCapabilities, ChannelError, InboundAction, OutboundMessage, OutboundPhoto,
+};
 use crate::format;
 
 // ---------------------------------------------------------------------------
@@ -1015,6 +1017,81 @@ impl DiscordApi {
         Ok(())
     }
 
+    /// Trigger a typing indicator in a channel.
+    ///
+    /// POST /channels/{channel_id}/typing
+    ///
+    /// The typing indicator automatically expires after ~10 seconds.
+    pub async fn trigger_typing(
+        &self,
+        channel_id: &str,
+    ) -> Result<(), ChannelError> {
+        validate_snowflake(channel_id)?;
+
+        let route = format!("POST /channels/{channel_id}/typing");
+        let request = self
+            .client
+            .post(format!("{API_BASE}/channels/{channel_id}/typing"))
+            .headers(self.auth_headers()?);
+
+        let response = self.execute_with_rate_limit(&route, request).await?;
+
+        // 204 No Content is the expected success response.
+        if !response.status().is_success() && response.status() != StatusCode::NO_CONTENT {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ChannelError::Api(format!(
+                "trigger_typing failed ({status}): {text}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Create a message in a thread (replies).
+    ///
+    /// POST /channels/{channel_id}/messages with message_reference.
+    pub async fn send_message_in_thread(
+        &self,
+        channel_id: &str,
+        content: &str,
+        thread_id: &str,
+        components: &[ActionRow],
+    ) -> Result<serde_json::Value, ChannelError> {
+        validate_snowflake(channel_id)?;
+        validate_snowflake(thread_id)?;
+
+        let route = format!("POST /channels/{thread_id}/messages");
+        let mut body = serde_json::json!({
+            "content": content,
+        });
+        if !components.is_empty() {
+            body["components"] = serde_json::to_value(components)
+                .map_err(|e| ChannelError::Api(format!("failed to serialize components: {e}")))?;
+        }
+
+        let request = self
+            .client
+            .post(format!("{API_BASE}/channels/{thread_id}/messages"))
+            .headers(self.auth_headers()?)
+            .json(&body);
+
+        let response = self.execute_with_rate_limit(&route, request).await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ChannelError::Api(format!(
+                "send_message_in_thread failed ({status}): {text}"
+            )));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| ChannelError::Api(format!("failed to parse response: {e}")))
+    }
+
     /// Access the rate limiter (for testing/inspection).
     pub fn rate_limiter(&self) -> &RateLimiter {
         &self.rate_limiter
@@ -1229,6 +1306,72 @@ impl Channel for DiscordChannel {
         }
 
         Ok(())
+    }
+
+    async fn send_typing(&self) -> Result<(), ChannelError> {
+        let channel_id = self.send_channel_id()?;
+        self.api.trigger_typing(channel_id).await
+    }
+
+    async fn send_with_id(
+        &self,
+        message: OutboundMessage,
+    ) -> Result<Option<String>, ChannelError> {
+        let channel_id = self.send_channel_id()?;
+        let components = buttons_to_components(&message.buttons);
+
+        let resp = self
+            .api
+            .send_message(channel_id, &message.text, &components)
+            .await?;
+
+        let msg_id = resp.get("id").and_then(|v| v.as_str()).map(String::from);
+        Ok(msg_id)
+    }
+
+    async fn edit_message(&self, message_id: &str, new_text: &str) -> Result<(), ChannelError> {
+        let channel_id = self.send_channel_id()?;
+        self.api
+            .edit_message(channel_id, message_id, new_text, &[])
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_message(&self, message_id: &str) -> Result<(), ChannelError> {
+        let channel_id = self.send_channel_id()?;
+        self.api.delete_message(channel_id, message_id).await
+    }
+
+    async fn react(&self, message_id: &str, emoji: &str) -> Result<(), ChannelError> {
+        let channel_id = self.send_channel_id()?;
+        self.api.add_reaction(channel_id, message_id, emoji).await
+    }
+
+    async fn send_to_thread(
+        &self,
+        thread_id: &str,
+        message: OutboundMessage,
+    ) -> Result<(), ChannelError> {
+        let channel_id = self.send_channel_id()?;
+        let components = buttons_to_components(&message.buttons);
+
+        self.api
+            .send_message_in_thread(channel_id, &message.text, thread_id, &components)
+            .await?;
+
+        Ok(())
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        ChannelCapabilities {
+            typing_indicators: true,
+            message_editing: true,
+            message_deletion: true,
+            reactions: true,
+            threads: true,
+            presence: false,
+            rich_media: true,
+        }
     }
 }
 
@@ -1788,5 +1931,94 @@ mod tests {
             }
             _ => panic!("expected SlashCommand"),
         }
+    }
+
+    // -- Channel capabilities --
+
+    #[test]
+    fn test_discord_capabilities() {
+        let channel = DiscordChannel::new(DiscordConfig {
+            webhook_url: String::new(),
+            bot_token: Some("token".to_string()),
+            channel_id: Some("123456789".to_string()),
+            guild_id: None,
+            application_id: None,
+            public_key: None,
+            authorized_user_ids: vec![],
+            command_channel_id: None,
+        });
+        let caps = channel.capabilities();
+
+        assert!(caps.typing_indicators);
+        assert!(caps.message_editing);
+        assert!(caps.message_deletion);
+        assert!(caps.reactions);
+        assert!(caps.threads);
+        assert!(!caps.presence);
+        assert!(caps.rich_media);
+    }
+
+    // -- send_channel_id resolution --
+
+    #[test]
+    fn test_send_channel_id_missing() {
+        let channel = DiscordChannel::new(DiscordConfig {
+            webhook_url: String::new(),
+            bot_token: Some("token".to_string()),
+            channel_id: None,
+            guild_id: None,
+            application_id: None,
+            public_key: None,
+            authorized_user_ids: vec![],
+            command_channel_id: None,
+        });
+        assert!(channel.send_channel_id().is_err());
+    }
+
+    #[test]
+    fn test_send_channel_id_present() {
+        let channel = DiscordChannel::new(DiscordConfig {
+            webhook_url: String::new(),
+            bot_token: Some("token".to_string()),
+            channel_id: Some("123456789".to_string()),
+            guild_id: None,
+            application_id: None,
+            public_key: None,
+            authorized_user_ids: vec![],
+            command_channel_id: None,
+        });
+        assert_eq!(channel.send_channel_id().unwrap(), "123456789");
+    }
+
+    // -- command_channel_id falls back to channel_id --
+
+    #[test]
+    fn test_command_channel_id_fallback() {
+        let channel = DiscordChannel::new(DiscordConfig {
+            webhook_url: String::new(),
+            bot_token: Some("token".to_string()),
+            channel_id: Some("111".to_string()),
+            guild_id: None,
+            application_id: None,
+            public_key: None,
+            authorized_user_ids: vec![],
+            command_channel_id: None,
+        });
+        assert_eq!(channel.command_channel_id().unwrap(), "111");
+    }
+
+    #[test]
+    fn test_command_channel_id_override() {
+        let channel = DiscordChannel::new(DiscordConfig {
+            webhook_url: String::new(),
+            bot_token: Some("token".to_string()),
+            channel_id: Some("111".to_string()),
+            guild_id: None,
+            application_id: None,
+            public_key: None,
+            authorized_user_ids: vec![],
+            command_channel_id: Some("222".to_string()),
+        });
+        assert_eq!(channel.command_channel_id().unwrap(), "222");
     }
 }

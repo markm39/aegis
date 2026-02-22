@@ -24,7 +24,9 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
-use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, OutboundPhoto};
+use crate::channel::{
+    Channel, ChannelCapabilities, ChannelError, InboundAction, OutboundMessage, OutboundPhoto,
+};
 use crate::format;
 
 // ---------------------------------------------------------------------------
@@ -499,11 +501,12 @@ impl WhatsappApi {
     }
 
     /// Send a text message to a recipient.
+    /// Returns the message ID (wamid) on success.
     pub async fn send_text(
         &self,
         recipient: &str,
         text: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         let body = json!({
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -518,13 +521,14 @@ impl WhatsappApi {
     }
 
     /// Send a template message to a recipient.
+    /// Returns the message ID (wamid) on success.
     ///
     /// All template parameters are sanitized before sending.
     pub async fn send_template(
         &self,
         recipient: &str,
         template: &WhatsappTemplate,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         // Validate all parameters before sending.
         for component in &template.components {
             for param in &component.parameters {
@@ -555,12 +559,13 @@ impl WhatsappApi {
     }
 
     /// Send an interactive button message (max 3 buttons).
+    /// Returns the message ID (wamid) on success.
     pub async fn send_interactive_buttons(
         &self,
         recipient: &str,
         body_text: &str,
         buttons: &[(String, String)],
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         if buttons.len() > MAX_INTERACTIVE_BUTTONS {
             return Err(ChannelError::Other(format!(
                 "interactive button messages support at most {} buttons, got {}",
@@ -607,13 +612,14 @@ impl WhatsappApi {
     }
 
     /// Send an interactive list message.
+    /// Returns the message ID (wamid) on success.
     pub async fn send_interactive_list(
         &self,
         recipient: &str,
         body_text: &str,
         button_text: &str,
         sections: &[ListSection],
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         if sections.is_empty() {
             return Err(ChannelError::Other(
                 "interactive list messages require at least 1 section".into(),
@@ -692,10 +698,11 @@ impl WhatsappApi {
     }
 
     /// POST to the /messages endpoint with the given body.
+    /// Returns the message ID (wamid) on success.
     async fn post_messages(
         &self,
         body: &serde_json::Value,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         debug!("WhatsApp API POST /messages");
 
         let resp = self
@@ -723,12 +730,34 @@ impl WhatsappApi {
             )));
         }
 
-        // We don't need the message ID for the Channel trait, but deserialize
-        // to validate the response structure.
-        let _: MessagesResponse = resp.json().await.map_err(|e| {
+        let messages_resp: MessagesResponse = resp.json().await.map_err(|e| {
             ChannelError::Other(format!("parse messages response: {e}"))
         })?;
 
+        // Extract the message ID from the response.
+        let msg_id = messages_resp
+            .messages
+            .as_ref()
+            .and_then(|msgs| msgs.first())
+            .map(|m| m.id.clone());
+
+        Ok(msg_id)
+    }
+
+    /// Mark a message as read.
+    ///
+    /// POST /messages with status "read" and the message_id.
+    pub async fn mark_as_read(
+        &self,
+        message_id: &str,
+    ) -> Result<(), ChannelError> {
+        let body = json!({
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id
+        });
+
+        let _ = self.post_messages(&body).await?;
         Ok(())
     }
 }
@@ -804,13 +833,14 @@ impl Channel for WhatsappChannel {
 
             self.api
                 .send_interactive_buttons("recipient", &message.text, &buttons)
-                .await
+                .await?;
         } else {
             // Plain text message. The recipient is not part of OutboundMessage,
             // so the caller must use the API directly for targeted sends.
             // This trait implementation is a best-effort dispatch.
-            self.api.send_text("recipient", &message.text).await
+            self.api.send_text("recipient", &message.text).await?;
         }
+        Ok(())
     }
 
     async fn recv(&mut self) -> Result<Option<InboundAction>, ChannelError> {
@@ -852,7 +882,53 @@ impl Channel for WhatsappChannel {
             }
         });
 
-        self.api.post_messages(&body).await
+        self.api.post_messages(&body).await?;
+        Ok(())
+    }
+
+    async fn send_typing(&self) -> Result<(), ChannelError> {
+        // WhatsApp does not have a typing indicator API.
+        // The closest equivalent is marking a message as read, but that
+        // requires a message_id context we do not have here. No-op.
+        Ok(())
+    }
+
+    async fn send_with_id(
+        &self,
+        message: OutboundMessage,
+    ) -> Result<Option<String>, ChannelError> {
+        if !message.buttons.is_empty() {
+            let buttons: Vec<(String, String)> = message
+                .buttons
+                .iter()
+                .take(MAX_INTERACTIVE_BUTTONS)
+                .map(|(label, data)| (data.clone(), label.clone()))
+                .collect();
+
+            self.api
+                .send_interactive_buttons("recipient", &message.text, &buttons)
+                .await
+        } else {
+            self.api.send_text("recipient", &message.text).await
+        }
+    }
+
+    async fn edit_message(&self, message_id: &str, _new_text: &str) -> Result<(), ChannelError> {
+        // WhatsApp does not support editing sent messages.
+        // The best we can do is mark the original as read.
+        self.api.mark_as_read(message_id).await
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        ChannelCapabilities {
+            typing_indicators: false,
+            message_editing: false, // WhatsApp does not support message editing
+            message_deletion: false, // WhatsApp does not support message deletion via API
+            reactions: false,
+            threads: false,
+            presence: false,
+            rich_media: true,
+        }
     }
 }
 
@@ -1390,5 +1466,113 @@ mod tests {
         assert_eq!(rows[0]["description"], "Check agent status");
         // description should be absent (not null) when None.
         assert!(rows[1].get("description").is_none());
+    }
+
+    // -- Channel capabilities --
+
+    #[test]
+    fn whatsapp_capabilities_reports_features() {
+        let channel = WhatsappChannel::new(WhatsappConfig {
+            api_url: "https://graph.facebook.com/v17.0".to_string(),
+            access_token: "token".to_string(),
+            phone_number_id: "123".to_string(),
+            app_secret: None,
+            verify_token: None,
+            webhook_port: None,
+            template_namespace: None,
+        });
+        let caps = channel.capabilities();
+
+        assert!(!caps.typing_indicators);
+        assert!(!caps.message_editing);
+        assert!(!caps.message_deletion);
+        assert!(!caps.reactions);
+        assert!(!caps.threads);
+        assert!(!caps.presence);
+        assert!(caps.rich_media);
+    }
+
+    // -- send_typing is no-op --
+
+    #[tokio::test]
+    async fn whatsapp_send_typing_succeeds() {
+        let channel = WhatsappChannel::new(WhatsappConfig {
+            api_url: "https://graph.facebook.com/v17.0".to_string(),
+            access_token: "token".to_string(),
+            phone_number_id: "123".to_string(),
+            app_secret: None,
+            verify_token: None,
+            webhook_port: None,
+            template_namespace: None,
+        });
+        assert!(channel.send_typing().await.is_ok());
+    }
+
+    // -- recv returns buffered actions --
+
+    #[tokio::test]
+    async fn whatsapp_recv_returns_buffered_actions() {
+        let mut channel = WhatsappChannel::new(WhatsappConfig {
+            api_url: "https://graph.facebook.com/v17.0".to_string(),
+            access_token: "token".to_string(),
+            phone_number_id: "123".to_string(),
+            app_secret: None,
+            verify_token: None,
+            webhook_port: None,
+            template_namespace: None,
+        });
+
+        // Empty buffer returns None
+        assert!(channel.recv().await.unwrap().is_none());
+
+        // After processing a webhook payload, buffer should have actions
+        let payload = r#"{
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "from": "15559876543",
+                            "id": "wamid.abc",
+                            "timestamp": "1700000000",
+                            "text": { "body": "/status" },
+                            "type": "text"
+                        }]
+                    }
+                }]
+            }]
+        }"#;
+        channel.handle_webhook_payload(payload).unwrap();
+        let action = channel.recv().await.unwrap();
+        assert!(action.is_some());
+        assert!(matches!(
+            action.unwrap(),
+            InboundAction::Command(aegis_control::command::Command::Status)
+        ));
+
+        // Buffer should be empty again
+        assert!(channel.recv().await.unwrap().is_none());
+    }
+
+    // -- WhatsApp API send_text returns message ID via wiremock --
+
+    #[tokio::test]
+    async fn whatsapp_api_send_text_returns_message_id() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r".*/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messaging_product": "whatsapp",
+                "contacts": [{"input": "15551234567", "wa_id": "15551234567"}],
+                "messages": [{"id": "wamid.HBgLMTU1NTEyMzQ1Njc"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let api = WhatsappApi::with_base_url(&server.uri(), "test-token");
+        let result = api.send_text("15551234567", "Hello").await.unwrap();
+        assert_eq!(result, Some("wamid.HBgLMTU1NTEyMzQ1Njc".to_string()));
     }
 }
