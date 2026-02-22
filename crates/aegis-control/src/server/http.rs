@@ -67,7 +67,7 @@ pub async fn serve(
 
     let state = Arc::new(AppState {
         command_tx,
-        api_key,
+        api_key: api_key.clone(),
         daemon_tx: daemon_tx.clone(),
     });
 
@@ -87,14 +87,15 @@ pub async fn serve(
         .route("/v1/agents/{name}/restart", post(fleet_restart_agent))
         .route("/v1/agents/{name}/context", get(fleet_agent_context))
         .route("/v1/config/reload", post(fleet_config_reload))
-        .with_state(state);
+        .with_state(state.clone());
 
     // Mount ACP routes if configured and daemon is available
     if let (Some(acp_cfg), Some(dtx)) = (acp_config, daemon_tx) {
         let rate_limiter = Arc::new(IpRateLimiter::new(acp_cfg.rate_limit_per_minute));
+        let token_hashes = acp_cfg.token_hashes.clone();
 
         let acp_state = Arc::new(AcpState {
-            token_hashes: acp_cfg.token_hashes.clone(),
+            token_hashes: token_hashes.clone(),
             rate_limiter: rate_limiter.clone(),
             max_body_size: acp_cfg.max_body_size,
             daemon_tx: dtx.clone(),
@@ -103,19 +104,50 @@ pub async fn serve(
 
         // Mount ACP WebSocket endpoint alongside HTTP routes
         let acp_ws_state = Arc::new(crate::acp_websocket::AcpWsState {
-            token_hashes: acp_cfg.token_hashes,
+            token_hashes: token_hashes.clone(),
             rate_limiter,
             max_body_size: acp_cfg.max_body_size,
             rate_limit_per_minute: acp_cfg.rate_limit_per_minute,
-            daemon_tx: dtx,
+            daemon_tx: dtx.clone(),
             shutdown: shutdown.clone(),
         });
         let acp_ws_router = crate::acp_websocket::acp_ws_routes(acp_ws_state);
 
+        // Enhanced ACP protocol endpoints (handshake, discovery, sessions)
+        let session_store = std::sync::Arc::new(crate::acp_enhanced::SessionStore::new());
+        let acp_enhanced_state = std::sync::Arc::new(crate::acp_enhanced::AcpEnhancedState {
+            token_hashes: token_hashes.clone(),
+            sessions: session_store,
+            max_body_size: acp_cfg.max_body_size,
+            daemon_tx: dtx.clone(),
+        });
+        let acp_enhanced_router = crate::acp_enhanced::acp_enhanced_routes(acp_enhanced_state);
+
         app = app
             .nest("/acp/v1", acp_router)
-            .nest("/acp/v1", acp_ws_router);
-        info!("ACP server routes mounted at /acp/v1 (HTTP + WebSocket)");
+            .nest("/acp/v1", acp_ws_router)
+            .nest("/acp/v1", acp_enhanced_router);
+        info!("ACP server routes mounted at /acp/v1 (HTTP + WebSocket + Enhanced)");
+
+        // OpenAI-compatible endpoint
+        let openai_state = std::sync::Arc::new(crate::openai_compat::OpenAiState {
+            api_key,
+            daemon_tx: dtx.clone(),
+        });
+        let openai_router = crate::openai_compat::openai_routes(openai_state);
+        app = app.merge(openai_router);
+        info!("OpenAI-compatible routes mounted at /v1/chat/completions, /v1/models");
+
+        // OpenResponses tool API
+        let tool_api_state = std::sync::Arc::new(crate::open_responses::ToolApiState {
+            api_key: state.api_key.clone(),
+            tools: crate::open_responses::default_tool_catalog(),
+            invocations: std::sync::Arc::new(crate::open_responses::InvocationStore::new()),
+            daemon_tx: dtx,
+        });
+        let tool_api_router = crate::open_responses::tool_api_routes(tool_api_state);
+        app = app.merge(tool_api_router);
+        info!("OpenResponses tool API routes mounted at /v1/tools");
     }
 
     info!(addr = %addr, "starting HTTP control server");

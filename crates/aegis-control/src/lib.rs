@@ -11,6 +11,7 @@
 //! - Hot-reload Cedar policies
 
 pub mod acp_client;
+pub mod acp_enhanced;
 pub mod acp_server;
 pub mod acp_translator;
 pub mod acp_websocket;
@@ -22,5 +23,7 @@ pub mod event;
 pub mod hooks;
 pub mod message_routing;
 pub mod models;
+pub mod open_responses;
+pub mod openai_compat;
 pub mod pending;
 pub mod server;

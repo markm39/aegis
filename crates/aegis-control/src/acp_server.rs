@@ -59,7 +59,8 @@ pub struct AcpErrorResponse {
 }
 
 impl AcpErrorResponse {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    /// Create a new error response with code and message.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -67,7 +68,8 @@ impl AcpErrorResponse {
         }
     }
 
-    fn with_request_id(mut self, id: Uuid) -> Self {
+    /// Attach a request ID for correlation.
+    pub fn with_request_id(mut self, id: Uuid) -> Self {
         self.request_id = Some(id);
         self
     }
