@@ -15,6 +15,9 @@ struct AegisMacApp: App {
         // Menu bar icon with dropdown
         MenuBarExtra("Aegis", systemImage: menuBarIcon) {
             MenuBarView(fleetState: fleetState, gatewayManager: gatewayManager)
+                .task {
+                    notificationManager.setup()
+                }
         }
         .menuBarExtraStyle(.window)
 

@@ -45,8 +45,18 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     static let approveAllAction = "AEGIS_APPROVE_ALL"
     static let denyAllAction = "AEGIS_DENY_ALL"
 
+    private var isSetUp = false
+
     override init() {
         super.init()
+    }
+
+    /// Call once after the SwiftUI app graph is ready (from a .task modifier).
+    /// Sets this object as the notification center delegate, registers action
+    /// categories, and requests user authorization.
+    func setup() {
+        guard !isSetUp else { return }
+        isSetUp = true
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         registerCategories()
