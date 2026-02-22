@@ -56,6 +56,13 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     /// categories, and requests user authorization.
     func setup() {
         guard !isSetUp else { return }
+        // UNUserNotificationCenter hard-asserts on a bundle identifier.
+        // When running via `swift run` (bare binary, no .app bundle),
+        // Bundle.main.bundleIdentifier is nil and the call aborts.
+        guard Bundle.main.bundleIdentifier != nil else {
+            print("[Aegis] Notifications unavailable: no app bundle (run as .app for notifications)")
+            return
+        }
         isSetUp = true
         let center = UNUserNotificationCenter.current()
         center.delegate = self
