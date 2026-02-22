@@ -23,18 +23,13 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
 
 /// Execution mode for running a skill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExecutionMode {
     /// Run the skill as an external subprocess.
+    #[default]
     Subprocess,
     // Future: Native dynamic library loading.
-}
-
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        Self::Subprocess
-    }
 }
 
 /// Configuration for the skill executor.
