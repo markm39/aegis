@@ -456,6 +456,14 @@ impl LlmClient {
             body["tools"] = Value::Array(tools);
         }
 
+        // Add extended thinking if configured.
+        if let Some(budget) = request.thinking_budget {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            });
+        }
+
         // Validate request body size.
         let body_bytes = serde_json::to_vec(&body).map_err(|e| {
             format!("failed to serialize Anthropic request body: {e}")
@@ -1453,6 +1461,7 @@ mod tests {
             max_tokens: None,
             system_prompt: None,
             tools: vec![],
+            thinking_budget: None,
         }
     }
 
@@ -1586,6 +1595,7 @@ mod tests {
                 description: "Search the web".into(),
                 input_schema: serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}}),
             }],
+            thinking_budget: None,
         };
 
         // Convert messages to Anthropic format.
@@ -1670,6 +1680,7 @@ mod tests {
                 description: "Get weather data".into(),
                 input_schema: serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
             }],
+            thinking_budget: None,
         };
 
         // Build body as the client would.
@@ -2256,6 +2267,7 @@ mod tests {
                 description: "Search the web".into(),
                 input_schema: serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}}),
             }],
+            thinking_budget: None,
         };
 
         // Build the body as complete_gemini would.

@@ -4,9 +4,11 @@
 //! `DaemonCommand::LlmComplete`, with a minimal command bar for system
 //! commands. This is the default interface when `aegis` is invoked.
 
+pub mod compaction;
 pub mod event;
 pub mod markdown;
 pub mod message;
+pub mod persistence;
 pub mod render;
 pub mod streaming;
 pub mod system_prompt;
@@ -93,6 +95,10 @@ pub struct ChatApp {
     /// Scroll offset into the message history (0 = bottom).
     pub scroll_offset: usize,
 
+    // -- Session persistence --
+    /// Unique identifier for this conversation session.
+    pub session_id: String,
+
     // -- LLM conversation --
     /// Full LLM conversation history (sent with each request).
     pub conversation: Vec<LlmMessage>,
@@ -110,6 +116,8 @@ pub struct ChatApp {
     pub pending_tool_desc: Option<String>,
     /// Whether to auto-approve all remaining tools in this turn.
     pub auto_approve_turn: bool,
+    /// Extended thinking budget in tokens (Anthropic only). None = disabled.
+    pub thinking_budget: Option<u32>,
 
     // -- Input --
     /// Text buffer for chat input.
@@ -166,7 +174,9 @@ pub struct ChatApp {
 
 /// Commands recognized by the minimal command bar.
 const COMMANDS: &[&str] = &[
-    "quit", "q", "clear", "model", "help", "usage",
+    "quit", "q", "clear", "new", "compact", "model", "help", "usage",
+    "think", "think off", "think low", "think medium", "think high",
+    "save", "resume", "sessions",
     "daemon start", "daemon stop", "daemon status",
     "daemon restart", "daemon reload", "daemon init",
 ];
@@ -181,6 +191,8 @@ impl ChatApp {
             messages: Vec::new(),
             scroll_offset: 0,
 
+            session_id: persistence::generate_conversation_id(),
+
             conversation: Vec::new(),
             model,
             awaiting_response: false,
@@ -189,6 +201,7 @@ impl ChatApp {
             awaiting_approval: false,
             pending_tool_desc: None,
             auto_approve_turn: false,
+            thinking_budget: None,
 
             input_buffer: String::new(),
             input_cursor: 0,
@@ -405,6 +418,7 @@ impl ChatApp {
         let conv = self.conversation.clone();
         let model = self.model.clone();
         let auto_approve = self.auto_approve_turn;
+        let thinking_budget = self.thinking_budget;
 
         // Build tool descriptions for the system prompt.
         let tool_descs = get_tool_descriptions();
@@ -429,6 +443,7 @@ impl ChatApp {
                     sys_prompt,
                     tool_defs,
                     auto_approve,
+                    thinking_budget,
                 },
                 event_tx,
                 approval_rx,
@@ -486,6 +501,14 @@ impl ChatApp {
                     self.input_mode = InputMode::Chat;
                 }
                 _ => {
+                    // Auto-save on quit if conversation is non-empty.
+                    if !self.conversation.is_empty() {
+                        let _ = persistence::save_conversation(
+                            &self.session_id,
+                            &self.conversation,
+                            &self.model,
+                        );
+                    }
                     self.running = false;
                 }
             }
@@ -875,6 +898,31 @@ impl ChatApp {
         }
     }
 
+    /// Rebuild display messages from the LLM conversation history.
+    ///
+    /// Used after loading a saved conversation to populate the chat view.
+    fn rebuild_display_messages(&mut self) {
+        self.messages.clear();
+        for msg in &self.conversation {
+            match msg.role {
+                aegis_types::llm::LlmRole::User => {
+                    self.messages.push(ChatMessage::new(
+                        MessageRole::User,
+                        msg.content.clone(),
+                    ));
+                }
+                aegis_types::llm::LlmRole::Assistant => {
+                    self.messages.push(ChatMessage::new(
+                        MessageRole::Assistant,
+                        msg.content.clone(),
+                    ));
+                }
+                _ => {} // Skip tool results and system for now
+            }
+        }
+        self.scroll_offset = 0;
+    }
+
     /// Execute a command string.
     fn execute_command(&mut self, input: &str) {
         let trimmed = input.trim();
@@ -884,6 +932,14 @@ impl ChatApp {
 
         match trimmed {
             "quit" | "q" => {
+                // Auto-save conversation if non-empty.
+                if !self.conversation.is_empty() {
+                    let _ = persistence::save_conversation(
+                        &self.session_id,
+                        &self.conversation,
+                        &self.model,
+                    );
+                }
                 self.running = false;
             }
             "clear" => {
@@ -892,9 +948,56 @@ impl ChatApp {
                 self.scroll_offset = 0;
                 self.set_result("Conversation cleared");
             }
+            "save" => {
+                if self.conversation.is_empty() {
+                    self.set_result("Nothing to save (conversation is empty).");
+                } else {
+                    match persistence::save_conversation(
+                        &self.session_id,
+                        &self.conversation,
+                        &self.model,
+                    ) {
+                        Ok(()) => {
+                            self.set_result(format!("Saved as {}", self.session_id));
+                        }
+                        Err(e) => {
+                            self.set_result(format!("Failed to save: {e}"));
+                        }
+                    }
+                }
+            }
+            "sessions" | "list" => {
+                match persistence::list_conversations() {
+                    Ok(metas) if metas.is_empty() => {
+                        self.set_result("No saved conversations.");
+                    }
+                    Ok(metas) => {
+                        let shown: Vec<String> = metas
+                            .iter()
+                            .take(5)
+                            .map(|m| {
+                                format!(
+                                    "{} ({}, {} msgs, {})",
+                                    m.id, m.model, m.message_count, m.timestamp
+                                )
+                            })
+                            .collect();
+                        let total = metas.len();
+                        let suffix = if total > 5 {
+                            format!(" ... and {} more", total - 5)
+                        } else {
+                            String::new()
+                        };
+                        self.set_result(format!("{}{}", shown.join(" | "), suffix));
+                    }
+                    Err(e) => {
+                        self.set_result(format!("Failed to list sessions: {e}"));
+                    }
+                }
+            }
             "help" | "h" => {
                 self.set_result(
-                    ":quit  :clear  :model <name>  :usage  :daemon start|stop|status|restart|reload|init",
+                    ":quit  :clear  :new  :compact  :model <name>  :usage  :think off|low|medium|high|<n>  :save  :resume <id>  :sessions  :daemon ...",
                 );
             }
             "usage" => {
@@ -918,6 +1021,31 @@ impl ChatApp {
             }
             "model" => {
                 self.set_result(format!("Current model: {}", self.model));
+            }
+            "resume" => {
+                self.set_result("Usage: :resume <id>  (use :sessions to list saved conversations)");
+            }
+            _ if trimmed.starts_with("resume ") => {
+                let resume_id = trimmed.strip_prefix("resume ").unwrap().trim();
+                if resume_id.is_empty() {
+                    self.set_result("Usage: :resume <id>");
+                } else {
+                    match persistence::load_conversation(resume_id) {
+                        Ok((messages, meta)) => {
+                            self.conversation = messages;
+                            self.model = meta.model.clone();
+                            self.session_id = meta.id.clone();
+                            self.rebuild_display_messages();
+                            self.set_result(format!(
+                                "Resumed {} ({}, {} messages)",
+                                meta.id, meta.model, meta.message_count
+                            ));
+                        }
+                        Err(e) => {
+                            self.set_result(format!("Failed to resume '{resume_id}': {e}"));
+                        }
+                    }
+                }
             }
             "daemon start" => match crate::commands::daemon::start_quiet() {
                 Ok(msg) => {
@@ -980,6 +1108,49 @@ impl ChatApp {
                     self.last_error = Some(format!("{e}"));
                 }
             },
+            "new" => {
+                self.messages.clear();
+                self.conversation.clear();
+                self.scroll_offset = 0;
+                self.session_id = persistence::generate_conversation_id();
+                self.set_result("New conversation started");
+            }
+            "compact" => {
+                self.set_result("Compaction not yet available");
+            }
+            "think off" | "think" => {
+                self.thinking_budget = None;
+                self.set_result("Extended thinking disabled");
+            }
+            "think low" => {
+                self.thinking_budget = Some(1024);
+                self.set_result("Thinking budget: 1024 tokens");
+            }
+            "think medium" => {
+                self.thinking_budget = Some(4096);
+                self.set_result("Thinking budget: 4096 tokens");
+            }
+            "think high" => {
+                self.thinking_budget = Some(16384);
+                self.set_result("Thinking budget: 16384 tokens");
+            }
+            _ if trimmed.starts_with("think ") => {
+                let arg = trimmed.strip_prefix("think ").unwrap().trim();
+                match arg.parse::<u32>() {
+                    Ok(budget) if budget > 0 => {
+                        self.thinking_budget = Some(budget);
+                        self.set_result(format!("Thinking budget: {budget} tokens"));
+                    }
+                    Ok(_) => {
+                        self.set_result("Thinking budget must be greater than 0");
+                    }
+                    Err(_) => {
+                        self.set_result(format!(
+                            "Invalid thinking budget: '{arg}'. Use a number or: off, low, medium, high"
+                        ));
+                    }
+                }
+            }
             other => {
                 self.set_result(format!("Unknown command: '{other}'. Type :help for commands."));
             }
@@ -1261,6 +1432,7 @@ struct AgentLoopParams {
     sys_prompt: String,
     tool_defs: Option<serde_json::Value>,
     auto_approve: bool,
+    thinking_budget: Option<u32>,
 }
 
 /// Run the agentic loop in a background thread.
@@ -1400,6 +1572,7 @@ fn try_streaming_call(
         tools: params.tool_defs.clone(),
         temperature: None,
         max_tokens: None,
+        thinking_budget: params.thinking_budget,
     };
 
     let result = streaming::stream_llm_call(&stream_params, event_tx)?;

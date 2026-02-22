@@ -32,6 +32,7 @@ pub struct StreamingCallParams {
     pub tools: Option<Value>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
+    pub thinking_budget: Option<u32>,
 }
 
 /// Result of a completed streaming call.
@@ -121,6 +122,14 @@ fn stream_anthropic(
                 body["tools"] = tools.clone();
             }
         }
+    }
+
+    // Add extended thinking if configured.
+    if let Some(budget) = params.thinking_budget {
+        body["thinking"] = serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": budget,
+        });
     }
 
     let client = reqwest::blocking::Client::builder()
@@ -556,6 +565,7 @@ mod tests {
             tools: None,
             temperature: None,
             max_tokens: None,
+            thinking_budget: None,
         };
         let result = stream_llm_call(&params, &tx);
         assert!(result.is_err());

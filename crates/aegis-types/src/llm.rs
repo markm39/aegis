@@ -207,6 +207,10 @@ pub struct LlmRequest {
     /// Tool definitions available to the model.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<LlmToolDefinition>,
+    /// Extended thinking budget in tokens (Anthropic only).
+    /// When set, enables extended thinking with the given token budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
 }
 
 /// Why the model stopped generating.
@@ -1510,6 +1514,7 @@ mod tests {
                     "required": ["query"]
                 }),
             }],
+            thinking_budget: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

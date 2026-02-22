@@ -4171,6 +4171,7 @@ impl DaemonRuntime {
                     max_tokens,
                     system_prompt,
                     tools: parsed_tools,
+                    thinking_budget: None,
                 };
 
                 match client.complete(&request) {
