@@ -17,11 +17,12 @@ use std::time::Instant;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use aegis_control::daemon::{DaemonClient, DaemonCommand};
-use aegis_types::llm::{LlmMessage, LlmResponse};
+use aegis_control::daemon::{DaemonClient, DaemonCommand, DaemonResponse};
+use aegis_types::llm::{LlmMessage, LlmResponse, LlmToolCall, StopReason};
 
 use self::event::{AppEvent, EventHandler};
 use self::message::{ChatMessage, MessageRole};
+use self::system_prompt::ToolDescription;
 use crate::tui_utils::delete_word_backward_pos;
 
 /// How often to poll crossterm for events (milliseconds).
@@ -46,10 +47,34 @@ pub enum InputMode {
     Command,
 }
 
-/// Result of an LLM completion request from a background thread.
-enum LlmChatResult {
+/// Incremental events from the agentic loop running in a background thread.
+enum AgentLoopEvent {
+    /// LLM returned a text response (final -- loop ended).
     Response(LlmResponse),
+    /// LLM wants to call tools -- display them to the user.
+    ToolCalls(Vec<LlmToolCall>),
+    /// A tool finished executing -- display the result.
+    ToolResult {
+        tool_call_id: String,
+        tool_name: String,
+        result: String,
+    },
+    /// LLM needs approval for a tool before executing it.
+    ToolApprovalNeeded {
+        tool_call: LlmToolCall,
+    },
+    /// An error occurred in the loop.
     Error(String),
+    /// The agentic loop finished (all tool calls done, final response received).
+    Done,
+}
+
+/// Tools that are auto-approved (read-only, safe operations).
+const SAFE_TOOLS: &[&str] = &["read_file", "glob_search", "grep_search"];
+
+/// Check whether a tool should be auto-approved.
+fn is_safe_tool(name: &str) -> bool {
+    SAFE_TOOLS.contains(&name)
 }
 
 /// Top-level application state for the chat TUI.
@@ -70,10 +95,18 @@ pub struct ChatApp {
     pub conversation: Vec<LlmMessage>,
     /// Model identifier (from daemon config or environment detection).
     pub model: String,
-    /// Whether we're waiting for an LLM response.
+    /// Whether we're waiting for an LLM response or tool execution.
     pub awaiting_response: bool,
-    /// Channel for receiving LLM responses from background thread.
-    llm_rx: Option<mpsc::Receiver<LlmChatResult>>,
+    /// Channel for receiving agentic loop events from background thread.
+    agent_rx: Option<mpsc::Receiver<AgentLoopEvent>>,
+    /// Channel for sending approval decisions to the background thread.
+    approval_tx: Option<mpsc::Sender<bool>>,
+    /// Whether we're waiting for user approval on a tool.
+    pub awaiting_approval: bool,
+    /// Description of the tool awaiting approval (for display).
+    pub pending_tool_desc: Option<String>,
+    /// Whether to auto-approve all remaining tools in this turn.
+    pub auto_approve_turn: bool,
 
     // -- Input --
     /// Text buffer for chat input.
@@ -136,7 +169,11 @@ impl ChatApp {
             conversation: Vec::new(),
             model,
             awaiting_response: false,
-            llm_rx: None,
+            agent_rx: None,
+            approval_tx: None,
+            awaiting_approval: false,
+            pending_tool_desc: None,
+            auto_approve_turn: false,
 
             input_buffer: String::new(),
             input_cursor: 0,
@@ -207,111 +244,161 @@ impl ChatApp {
         }
     }
 
-    /// Check for completed LLM responses from background threads.
+    /// Check for events from the agentic loop running in a background thread.
     fn poll_llm(&mut self) {
-        let result = self
-            .llm_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok());
+        // Drain all available events from the channel.
+        loop {
+            let event = self.agent_rx.as_ref().and_then(|rx| rx.try_recv().ok());
 
-        if let Some(result) = result {
-            match result {
-                LlmChatResult::Response(resp) => {
-                    self.conversation
-                        .push(LlmMessage::assistant(resp.content.clone()));
-                    self.messages.push(ChatMessage::new(
-                        MessageRole::Assistant,
-                        resp.content,
-                    ));
-                    self.awaiting_response = false;
+            let Some(event) = event else {
+                break;
+            };
+
+            match event {
+                AgentLoopEvent::Response(resp) => {
+                    // Build assistant message with tool calls if present.
+                    let mut assistant_msg = LlmMessage::assistant(resp.content.clone());
+                    assistant_msg.tool_calls = resp.tool_calls.clone();
+                    self.conversation.push(assistant_msg);
+
+                    if !resp.content.is_empty() {
+                        self.messages.push(ChatMessage::new(
+                            MessageRole::Assistant,
+                            resp.content,
+                        ));
+                    }
                     self.scroll_offset = 0;
                 }
-                LlmChatResult::Error(msg) => {
+                AgentLoopEvent::ToolCalls(tool_calls) => {
+                    for tc in &tool_calls {
+                        let summary = summarize_tool_input(&tc.name, &tc.input);
+                        self.messages.push(ChatMessage::new(
+                            MessageRole::ToolCall {
+                                tool_name: tc.name.clone(),
+                                summary,
+                            },
+                            format_tool_call_content(&tc.name, &tc.input),
+                        ));
+                    }
+                    self.scroll_offset = 0;
+                }
+                AgentLoopEvent::ToolResult {
+                    tool_call_id,
+                    tool_name,
+                    result,
+                } => {
+                    // Add tool result to conversation.
+                    self.conversation
+                        .push(LlmMessage::tool_result(tool_call_id, result.clone()));
+                    // Show abbreviated result in UI.
+                    let display = if result.len() > 500 {
+                        format!("{}...[truncated]", &result[..500])
+                    } else {
+                        result
+                    };
+                    self.messages.push(ChatMessage::new(
+                        MessageRole::System,
+                        format!("[{tool_name}] {display}"),
+                    ));
+                    self.scroll_offset = 0;
+                }
+                AgentLoopEvent::ToolApprovalNeeded { tool_call, .. } => {
+                    let desc = format!(
+                        "{}: {}",
+                        tool_call.name,
+                        summarize_tool_input(&tool_call.name, &tool_call.input)
+                    );
+                    self.messages.push(ChatMessage::new(
+                        MessageRole::Permission {
+                            prompt: desc.clone(),
+                            resolved: None,
+                        },
+                        format!("Allow {}? [y]es / [n]o / [a]ll", tool_call.name),
+                    ));
+                    self.pending_tool_desc = Some(desc);
+                    self.awaiting_approval = true;
+                    self.scroll_offset = 0;
+                }
+                AgentLoopEvent::Error(msg) => {
                     self.messages.push(ChatMessage::new(
                         MessageRole::System,
                         format!("Error: {msg}"),
                     ));
                     self.awaiting_response = false;
+                    self.auto_approve_turn = false;
+                }
+                AgentLoopEvent::Done => {
+                    self.awaiting_response = false;
+                    self.auto_approve_turn = false;
                 }
             }
         }
     }
 
-    /// Send the current conversation to the LLM in a background thread.
+    /// Send the current conversation to the LLM and run the agentic loop.
+    ///
+    /// The loop runs in a background thread. It sends the conversation + tool
+    /// definitions to the LLM, and if the LLM returns `StopReason::ToolUse`,
+    /// it executes each tool and loops. Tool approvals are handled via a
+    /// separate mpsc channel that the UI thread sends decisions through.
     fn send_llm_request(&mut self) {
         let conv = self.conversation.clone();
         let model = self.model.clone();
+        let auto_approve = self.auto_approve_turn;
 
-        // Build the system prompt on the calling thread (it reads files and
-        // runs git commands, which is fine since we're about to spawn a
-        // background thread for the network call anyway).
-        let sys_prompt = system_prompt::build_system_prompt(&[]);
+        // Build tool descriptions for the system prompt.
+        let tool_descs = get_tool_descriptions();
+        let sys_prompt = system_prompt::build_system_prompt(&tool_descs);
 
-        // Build a new DaemonClient for the background thread (the existing
-        // one does not implement Clone). We need a longer timeout for LLM
-        // requests than the default 5-second ping timeout.
+        // Get LLM tool definitions via the daemon.
+        let tool_defs = get_tool_definitions_json();
+
         let socket_path = aegis_types::daemon::daemon_dir().join("daemon.sock");
 
-        let (tx, rx) = mpsc::channel();
-        self.llm_rx = Some(rx);
+        let (event_tx, event_rx) = mpsc::channel();
+        let (approval_tx, approval_rx) = mpsc::channel();
+        self.agent_rx = Some(event_rx);
+        self.approval_tx = Some(approval_tx);
 
         std::thread::spawn(move || {
-            let client = DaemonClient::new(socket_path);
-
-            let messages = match serde_json::to_value(&conv) {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = tx.send(LlmChatResult::Error(format!(
-                        "failed to serialize conversation: {e}"
-                    )));
-                    return;
-                }
-            };
-
-            let cmd = DaemonCommand::LlmComplete {
-                model,
-                messages,
-                temperature: None,
-                max_tokens: None,
-                system_prompt: Some(sys_prompt),
-                tools: None,
-            };
-
-            // Use a custom send with longer timeout via the standard client.
-            // The DaemonClient::send has a 5-second timeout which is fine
-            // for the initial send, but the daemon itself may take a while
-            // to respond. We rely on the daemon's own timeout handling.
-            // If the daemon returns within the socket timeout, great.
-            // Otherwise we'll get a timeout error which we surface.
-            let result = send_with_timeout(&client, &cmd, LLM_TIMEOUT_SECS);
-
-            match result {
-                Ok(resp) if resp.ok => {
-                    if let Some(data) = resp.data {
-                        match serde_json::from_value::<LlmResponse>(data) {
-                            Ok(llm_resp) => {
-                                let _ = tx.send(LlmChatResult::Response(llm_resp));
-                            }
-                            Err(e) => {
-                                let _ = tx.send(LlmChatResult::Error(format!(
-                                    "failed to parse LLM response: {e}"
-                                )));
-                            }
-                        }
-                    } else {
-                        let _ = tx.send(LlmChatResult::Error(
-                            "daemon returned ok but no response data".into(),
-                        ));
-                    }
-                }
-                Ok(resp) => {
-                    let _ = tx.send(LlmChatResult::Error(resp.message));
-                }
-                Err(e) => {
-                    let _ = tx.send(LlmChatResult::Error(e));
-                }
-            }
+            run_agent_loop(
+                AgentLoopParams {
+                    socket_path,
+                    conversation: conv,
+                    model,
+                    sys_prompt,
+                    tool_defs,
+                    auto_approve,
+                },
+                event_tx,
+                approval_rx,
+            );
         });
+    }
+
+    /// Handle an approval keypress (y/n/a) when waiting for tool approval.
+    fn handle_approval_key(&mut self, approved: bool, approve_all: bool) {
+        if approve_all {
+            self.auto_approve_turn = true;
+        }
+
+        // Update the last permission message to show resolved state.
+        if let Some(msg) = self.messages.last_mut() {
+            if let MessageRole::Permission { ref prompt, .. } = msg.role {
+                msg.role = MessageRole::Permission {
+                    prompt: prompt.clone(),
+                    resolved: Some(approved),
+                };
+            }
+        }
+
+        // Send decision to the background thread.
+        if let Some(ref tx) = self.approval_tx {
+            let _ = tx.send(approved);
+        }
+
+        self.awaiting_approval = false;
+        self.pending_tool_desc = None;
     }
 
     /// Handle a key event.
@@ -356,6 +443,23 @@ impl ChatApp {
 
     /// Handle keys in Chat mode (default, input focused).
     fn handle_chat_key(&mut self, key: KeyEvent) {
+        // Handle approval keys when waiting for tool approval.
+        if self.awaiting_approval {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.handle_approval_key(true, false);
+                }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    self.handle_approval_key(true, true);
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.handle_approval_key(false, false);
+                }
+                _ => {} // Ignore other keys during approval
+            }
+            return;
+        }
+
         match key.code {
             KeyCode::Enter => {
                 if self.awaiting_response {
@@ -866,6 +970,399 @@ impl ChatApp {
     }
 }
 
+/// Get tool descriptions for the system prompt.
+///
+/// Queries the daemon for registered tools. Falls back to hardcoded
+/// descriptions if the daemon is not available.
+fn get_tool_descriptions() -> Vec<ToolDescription> {
+    vec![
+        ToolDescription {
+            name: "bash".into(),
+            description: "Execute a shell command and return stdout/stderr".into(),
+        },
+        ToolDescription {
+            name: "read_file".into(),
+            description: "Read file contents from disk (max 500KB)".into(),
+        },
+        ToolDescription {
+            name: "write_file".into(),
+            description: "Write content to a file, creating parent directories if needed".into(),
+        },
+        ToolDescription {
+            name: "edit_file".into(),
+            description: "Replace the first occurrence of old_string with new_string in a file"
+                .into(),
+        },
+        ToolDescription {
+            name: "glob_search".into(),
+            description: "Find files matching a glob pattern".into(),
+        },
+        ToolDescription {
+            name: "grep_search".into(),
+            description: "Search file contents for a regex pattern".into(),
+        },
+    ]
+}
+
+/// Get tool definitions as JSON for the LLM request.
+///
+/// Returns the serialized tool definitions that will be passed to
+/// `DaemonCommand::LlmComplete { tools }`.
+fn get_tool_definitions_json() -> Option<serde_json::Value> {
+    use aegis_types::llm::LlmToolDefinition;
+
+    let defs: Vec<LlmToolDefinition> = get_tool_descriptions()
+        .into_iter()
+        .map(|td| {
+            let schema = match td.name.as_str() {
+                "bash" => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to execute"
+                        }
+                    },
+                    "required": ["command"]
+                }),
+                "read_file" => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to read"
+                        }
+                    },
+                    "required": ["file_path"]
+                }),
+                "write_file" => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to write"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Content to write to the file"
+                        }
+                    },
+                    "required": ["file_path", "content"]
+                }),
+                "edit_file" => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to edit"
+                        },
+                        "old_string": {
+                            "type": "string",
+                            "description": "The exact string to find and replace"
+                        },
+                        "new_string": {
+                            "type": "string",
+                            "description": "The replacement string"
+                        }
+                    },
+                    "required": ["file_path", "old_string", "new_string"]
+                }),
+                "glob_search" => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob pattern to match files (e.g., \"**/*.rs\")"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Base directory to search in (defaults to current directory)"
+                        }
+                    },
+                    "required": ["pattern"]
+                }),
+                "grep_search" => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regular expression pattern to search for"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory or file to search in (defaults to current directory)"
+                        },
+                        "include": {
+                            "type": "string",
+                            "description": "Glob pattern to filter files (e.g., \"*.rs\")"
+                        }
+                    },
+                    "required": ["pattern"]
+                }),
+                _ => serde_json::json!({"type": "object", "properties": {}}),
+            };
+            LlmToolDefinition {
+                name: td.name,
+                description: td.description,
+                input_schema: schema,
+            }
+        })
+        .collect();
+
+    serde_json::to_value(&defs).ok()
+}
+
+/// Create a short summary of a tool call's input for display.
+fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "bash" => input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                if s.len() > 80 {
+                    format!("{}...", &s[..80])
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_default(),
+        "read_file" => input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        "write_file" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let len = input
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+            format!("{path} ({len} bytes)")
+        }
+        "edit_file" => input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        "glob_search" => input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        "grep_search" => input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        _ => serde_json::to_string(input)
+            .unwrap_or_default()
+            .chars()
+            .take(100)
+            .collect(),
+    }
+}
+
+/// Format a tool call's full content for display in the chat.
+fn format_tool_call_content(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "bash" => input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "read_file" | "edit_file" => input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => serde_json::to_string_pretty(input).unwrap_or_default(),
+    }
+}
+
+/// Parameters for `run_agent_loop`, grouped to stay under clippy's argument limit.
+struct AgentLoopParams {
+    socket_path: std::path::PathBuf,
+    conversation: Vec<LlmMessage>,
+    model: String,
+    sys_prompt: String,
+    tool_defs: Option<serde_json::Value>,
+    auto_approve: bool,
+}
+
+/// Run the agentic loop in a background thread.
+///
+/// Sends the conversation + tools to the LLM, and if the LLM returns tool
+/// calls, executes them and loops. Safe tools are auto-approved; dangerous
+/// tools require user approval via the `approval_rx` channel.
+fn run_agent_loop(
+    params: AgentLoopParams,
+    event_tx: mpsc::Sender<AgentLoopEvent>,
+    approval_rx: mpsc::Receiver<bool>,
+) {
+    let client = DaemonClient::new(params.socket_path.clone());
+    let auto_approve_all = params.auto_approve;
+    let mut conversation = params.conversation;
+
+    // Maximum iterations to prevent infinite loops.
+    const MAX_ITERATIONS: usize = 50;
+
+    for _iteration in 0..MAX_ITERATIONS {
+        // Serialize conversation.
+        let messages = match serde_json::to_value(&conversation) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = event_tx.send(AgentLoopEvent::Error(format!(
+                    "failed to serialize conversation: {e}"
+                )));
+                let _ = event_tx.send(AgentLoopEvent::Done);
+                return;
+            }
+        };
+
+        let cmd = DaemonCommand::LlmComplete {
+            model: params.model.clone(),
+            messages,
+            temperature: None,
+            max_tokens: None,
+            system_prompt: Some(params.sys_prompt.clone()),
+            tools: params.tool_defs.clone(),
+        };
+
+        // Send LLM request with long timeout.
+        let result = send_with_timeout(&client, &cmd, LLM_TIMEOUT_SECS);
+
+        let resp = match parse_llm_response(result) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = event_tx.send(AgentLoopEvent::Error(e));
+                let _ = event_tx.send(AgentLoopEvent::Done);
+                return;
+            }
+        };
+
+        // Check if the LLM wants to call tools.
+        let wants_tools = resp.stop_reason == Some(StopReason::ToolUse) && !resp.tool_calls.is_empty();
+
+        if !wants_tools {
+            // Final response -- send it and finish.
+            let _ = event_tx.send(AgentLoopEvent::Response(resp));
+            let _ = event_tx.send(AgentLoopEvent::Done);
+            return;
+        }
+
+        // LLM wants to call tools. Send the response first (may contain text).
+        let _ = event_tx.send(AgentLoopEvent::Response(resp.clone()));
+
+        // Display all tool calls.
+        let _ = event_tx.send(AgentLoopEvent::ToolCalls(resp.tool_calls.clone()));
+
+        // Execute each tool call.
+        for tc in &resp.tool_calls {
+            let tool_result = if is_safe_tool(&tc.name) || auto_approve_all {
+                // Auto-approved -- execute directly.
+                execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input)
+            } else {
+                // Need user approval.
+                let _ = event_tx.send(AgentLoopEvent::ToolApprovalNeeded {
+                    tool_call: tc.clone(),
+                });
+
+                // Wait for approval decision (blocks this thread).
+                match approval_rx.recv() {
+                    Ok(true) => execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input),
+                    Ok(false) => {
+                        // Tool denied by user.
+                        Ok("Tool execution denied by user.".to_string())
+                    }
+                    Err(_) => {
+                        // Channel closed -- UI exited.
+                        let _ = event_tx.send(AgentLoopEvent::Done);
+                        return;
+                    }
+                }
+            };
+
+            let result_text = match tool_result {
+                Ok(text) => text,
+                Err(e) => format!("Error executing {}: {e}", tc.name),
+            };
+
+            // Send result event for UI display.
+            let _ = event_tx.send(AgentLoopEvent::ToolResult {
+                tool_call_id: tc.id.clone(),
+                tool_name: tc.name.clone(),
+                result: result_text.clone(),
+            });
+
+            // Add tool result to conversation for next LLM call.
+            conversation.push(LlmMessage::tool_result(&tc.id, result_text));
+        }
+
+        // Loop back to send the updated conversation to the LLM.
+    }
+
+    // If we reach here, we hit the max iteration limit.
+    let _ = event_tx.send(AgentLoopEvent::Error(
+        "Agentic loop exceeded maximum iterations (50). Stopping.".into(),
+    ));
+    let _ = event_tx.send(AgentLoopEvent::Done);
+}
+
+/// Parse an LLM response from a daemon response.
+fn parse_llm_response(
+    result: Result<DaemonResponse, String>,
+) -> Result<LlmResponse, String> {
+    match result {
+        Ok(resp) if resp.ok => {
+            if let Some(data) = resp.data {
+                serde_json::from_value::<LlmResponse>(data)
+                    .map_err(|e| format!("failed to parse LLM response: {e}"))
+            } else {
+                Err("daemon returned ok but no response data".into())
+            }
+        }
+        Ok(resp) => Err(resp.message),
+        Err(e) => Err(e),
+    }
+}
+
+/// Execute a tool via the daemon's ExecuteTool command.
+fn execute_tool_via_daemon(
+    socket_path: &std::path::Path,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+) -> Result<String, String> {
+    let client = DaemonClient::new(socket_path.to_path_buf());
+
+    let cmd = DaemonCommand::ExecuteTool {
+        name: tool_name.to_string(),
+        input: tool_input.clone(),
+    };
+
+    let result = send_with_timeout(&client, &cmd, 60);
+
+    match result {
+        Ok(resp) if resp.ok => {
+            if let Some(data) = resp.data {
+                // Try to extract the result field from ToolOutput.
+                if let Some(result_val) = data.get("result") {
+                    Ok(serde_json::to_string_pretty(result_val).unwrap_or_default())
+                } else {
+                    Ok(serde_json::to_string_pretty(&data).unwrap_or_default())
+                }
+            } else {
+                Ok(resp.message)
+            }
+        }
+        Ok(resp) => Err(resp.message),
+        Err(e) => Err(e),
+    }
+}
+
 /// Send a command to the daemon with a custom read timeout.
 ///
 /// Creates a new Unix socket connection with the specified timeout.
@@ -1352,11 +1849,11 @@ mod tests {
     fn poll_llm_handles_response() {
         let mut app = make_app();
         let (tx, rx) = mpsc::channel();
-        app.llm_rx = Some(rx);
+        app.agent_rx = Some(rx);
         app.awaiting_response = true;
 
-        // Simulate a response
-        tx.send(LlmChatResult::Response(LlmResponse {
+        // Simulate a response + done event
+        tx.send(AgentLoopEvent::Response(LlmResponse {
             content: "Hello! How can I help?".into(),
             model: "claude-sonnet-4-20250514".into(),
             usage: aegis_types::llm::LlmUsage {
@@ -1367,6 +1864,7 @@ mod tests {
             stop_reason: None,
         }))
         .unwrap();
+        tx.send(AgentLoopEvent::Done).unwrap();
 
         app.poll_llm();
 
@@ -1382,10 +1880,10 @@ mod tests {
     fn poll_llm_handles_error() {
         let mut app = make_app();
         let (tx, rx) = mpsc::channel();
-        app.llm_rx = Some(rx);
+        app.agent_rx = Some(rx);
         app.awaiting_response = true;
 
-        tx.send(LlmChatResult::Error("API key not set".into()))
+        tx.send(AgentLoopEvent::Error("API key not set".into()))
             .unwrap();
 
         app.poll_llm();
@@ -1394,6 +1892,131 @@ mod tests {
         assert_eq!(app.messages.len(), 1);
         assert!(matches!(app.messages[0].role, MessageRole::System));
         assert!(app.messages[0].content.contains("API key not set"));
+    }
+
+    #[test]
+    fn poll_llm_handles_tool_calls() {
+        let mut app = make_app();
+        let (tx, rx) = mpsc::channel();
+        app.agent_rx = Some(rx);
+        app.awaiting_response = true;
+
+        let tool_calls = vec![LlmToolCall {
+            id: "call_1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({"file_path": "/tmp/test.txt"}),
+        }];
+        tx.send(AgentLoopEvent::ToolCalls(tool_calls)).unwrap();
+
+        app.poll_llm();
+
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            app.messages[0].role,
+            MessageRole::ToolCall { .. }
+        ));
+    }
+
+    #[test]
+    fn poll_llm_handles_tool_result() {
+        let mut app = make_app();
+        let (tx, rx) = mpsc::channel();
+        app.agent_rx = Some(rx);
+        app.awaiting_response = true;
+
+        tx.send(AgentLoopEvent::ToolResult {
+            tool_call_id: "call_1".into(),
+            tool_name: "read_file".into(),
+            result: "file contents here".into(),
+        })
+        .unwrap();
+
+        app.poll_llm();
+
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(app.messages[0].role, MessageRole::System));
+        assert!(app.messages[0].content.contains("file contents here"));
+        // Tool result should be added to conversation
+        assert_eq!(app.conversation.len(), 1);
+        assert_eq!(app.conversation[0].role, aegis_types::llm::LlmRole::Tool);
+    }
+
+    #[test]
+    fn approval_keys_work() {
+        let mut app = make_app();
+        let (_, event_rx) = mpsc::channel();
+        let (approval_tx, _approval_rx) = mpsc::channel();
+        app.agent_rx = Some(event_rx);
+        app.approval_tx = Some(approval_tx);
+        app.awaiting_approval = true;
+        app.pending_tool_desc = Some("bash: ls -la".into());
+        app.messages.push(ChatMessage::new(
+            MessageRole::Permission {
+                prompt: "bash: ls -la".into(),
+                resolved: None,
+            },
+            "Allow bash? [y]es / [n]o / [a]ll".into(),
+        ));
+
+        app.handle_key(press(KeyCode::Char('y')));
+
+        assert!(!app.awaiting_approval);
+        assert!(app.pending_tool_desc.is_none());
+        // Permission message should be resolved
+        if let MessageRole::Permission { resolved, .. } = &app.messages[0].role {
+            assert_eq!(*resolved, Some(true));
+        } else {
+            panic!("expected Permission role");
+        }
+    }
+
+    #[test]
+    fn approval_a_sets_auto_approve() {
+        let mut app = make_app();
+        let (_, event_rx) = mpsc::channel();
+        let (approval_tx, _approval_rx) = mpsc::channel();
+        app.agent_rx = Some(event_rx);
+        app.approval_tx = Some(approval_tx);
+        app.awaiting_approval = true;
+        app.pending_tool_desc = Some("bash: ls -la".into());
+        app.messages.push(ChatMessage::new(
+            MessageRole::Permission {
+                prompt: "bash: ls -la".into(),
+                resolved: None,
+            },
+            "Allow bash?".into(),
+        ));
+
+        app.handle_key(press(KeyCode::Char('a')));
+
+        assert!(!app.awaiting_approval);
+        assert!(app.auto_approve_turn);
+    }
+
+    #[test]
+    fn safe_tools_identified_correctly() {
+        assert!(is_safe_tool("read_file"));
+        assert!(is_safe_tool("glob_search"));
+        assert!(is_safe_tool("grep_search"));
+        assert!(!is_safe_tool("bash"));
+        assert!(!is_safe_tool("write_file"));
+        assert!(!is_safe_tool("edit_file"));
+    }
+
+    #[test]
+    fn summarize_tool_input_formats_correctly() {
+        assert_eq!(
+            summarize_tool_input("bash", &serde_json::json!({"command": "ls -la"})),
+            "ls -la"
+        );
+        assert_eq!(
+            summarize_tool_input("read_file", &serde_json::json!({"file_path": "/tmp/test.txt"})),
+            "/tmp/test.txt"
+        );
+        assert_eq!(
+            summarize_tool_input("glob_search", &serde_json::json!({"pattern": "**/*.rs"})),
+            "**/*.rs"
+        );
     }
 
     #[test]
