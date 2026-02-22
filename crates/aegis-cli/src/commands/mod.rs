@@ -62,6 +62,7 @@ pub mod report;
 pub mod run;
 pub mod sessions;
 pub mod setup;
+pub mod skills;
 pub mod status;
 pub mod telegram;
 pub mod use_config;

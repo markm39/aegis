@@ -2366,6 +2366,43 @@ impl FleetApp {
             FleetCommand::Lanes => {
                 self.send_and_show_result(DaemonCommand::ListLanes);
             }
+            FleetCommand::SkillsList => {
+                self.spawn_terminal(
+                    "aegis skills list",
+                    "Opened skills list in new terminal",
+                );
+            }
+            FleetCommand::SkillsSearch { query } => {
+                self.spawn_terminal(
+                    &format!("aegis skills search {query}"),
+                    "Searching skills in new terminal",
+                );
+            }
+            FleetCommand::SkillsInstall { name } => {
+                self.spawn_terminal(
+                    &format!("aegis skills install {name}"),
+                    &format!("Installing skill '{name}' in new terminal"),
+                );
+            }
+            FleetCommand::SkillsUpdate { name } => {
+                let cmd = match name {
+                    Some(ref n) => format!("aegis skills update {n}"),
+                    None => "aegis skills update".to_string(),
+                };
+                self.spawn_terminal(&cmd, "Updating skills in new terminal");
+            }
+            FleetCommand::SkillsUninstall { name } => {
+                self.spawn_terminal(
+                    &format!("aegis skills uninstall {name}"),
+                    &format!("Uninstalling skill '{name}' in new terminal"),
+                );
+            }
+            FleetCommand::SkillsInfo { name } => {
+                self.spawn_terminal(
+                    &format!("aegis skills info {name}"),
+                    &format!("Showing info for skill '{name}' in new terminal"),
+                );
+            }
         }
     }
 

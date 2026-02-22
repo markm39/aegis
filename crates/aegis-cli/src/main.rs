@@ -270,6 +270,12 @@ enum Commands {
         action: ParityCommands,
     },
 
+    /// Manage skill plugins (install, update, search, remove)
+    Skills {
+        #[command(subcommand)]
+        action: SkillsCommands,
+    },
+
     /// Watch a directory for filesystem changes (background daemon mode)
     Watch {
         /// Directory to watch (defaults to current directory)
@@ -679,6 +685,74 @@ enum ParityCommands {
         /// Output format (text or json)
         #[arg(long, default_value = "text")]
         format: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillsCommands {
+    /// List installed skills
+    List {
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// Search the skill registry
+    Search {
+        /// Search query
+        query: String,
+
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// Install a skill from the registry or a local path
+    Install {
+        /// Skill name
+        name: String,
+
+        /// Specific version to install
+        #[arg(long)]
+        version: Option<String>,
+
+        /// Install from a local directory instead of the registry
+        #[arg(long)]
+        from: Option<PathBuf>,
+
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// Update installed skill(s) to the latest version
+    Update {
+        /// Skill name (omit to update all)
+        name: Option<String>,
+
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// Uninstall a skill
+    Uninstall {
+        /// Skill name
+        name: String,
+
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// Show detailed information about an installed skill
+    Info {
+        /// Skill name
+        name: String,
+
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
     },
 }
 
@@ -1484,6 +1558,38 @@ fn main() -> anyhow::Result<()> {
             ParityCommands::Diff { format } => commands::parity::diff(&format),
             ParityCommands::Verify { format } => commands::parity::verify(&format),
         },
+        Commands::Skills { action } => {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| anyhow::anyhow!("failed to create async runtime: {e}"))?;
+            match action {
+                SkillsCommands::List { cache_dir } => {
+                    rt.block_on(commands::skills::list_skills(cache_dir))
+                }
+                SkillsCommands::Search { query, cache_dir } => {
+                    rt.block_on(commands::skills::search_skills(&query, cache_dir))
+                }
+                SkillsCommands::Install {
+                    name,
+                    version,
+                    from,
+                    cache_dir,
+                } => rt.block_on(commands::skills::install_skill(
+                    &name,
+                    version.as_deref(),
+                    from,
+                    cache_dir,
+                )),
+                SkillsCommands::Update { name, cache_dir } => {
+                    rt.block_on(commands::skills::update_skills(name.as_deref(), cache_dir))
+                }
+                SkillsCommands::Uninstall { name, cache_dir } => {
+                    rt.block_on(commands::skills::uninstall_skill(&name, cache_dir))
+                }
+                SkillsCommands::Info { name, cache_dir } => {
+                    rt.block_on(commands::skills::skill_info(&name, cache_dir))
+                }
+            }
+        }
         Commands::Watch {
             dir,
             policy,

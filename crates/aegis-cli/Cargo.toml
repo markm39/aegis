@@ -29,6 +29,7 @@ aegis-control = { workspace = true }
 aegis-channel = { workspace = true }
 aegis-daemon = { workspace = true }
 aegis-toolkit = { workspace = true }
+aegis-skills = { workspace = true }
 rusqlite = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

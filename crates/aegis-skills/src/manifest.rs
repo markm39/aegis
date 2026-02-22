@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Maximum allowed length for a skill name.
 const MAX_NAME_LEN: usize = 64;
@@ -15,7 +15,7 @@ const MAX_NAME_LEN: usize = 64;
 /// A parsed skill manifest.
 ///
 /// Deserialized from a `manifest.toml` file inside a skill directory.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillManifest {
     /// Unique skill name (alphanumeric + hyphens, 1-64 chars).
     pub name: String,

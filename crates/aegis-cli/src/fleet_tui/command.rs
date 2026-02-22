@@ -255,6 +255,18 @@ pub enum FleetCommand {
     Fetch { url: String },
     /// List all execution lanes with utilization.
     Lanes,
+    /// List installed skills.
+    SkillsList,
+    /// Search the skill registry.
+    SkillsSearch { query: String },
+    /// Install a skill from the registry.
+    SkillsInstall { name: String },
+    /// Update a skill (or all skills).
+    SkillsUpdate { name: Option<String> },
+    /// Uninstall a skill.
+    SkillsUninstall { name: String },
+    /// Show detailed info about a skill.
+    SkillsInfo { name: String },
 }
 
 /// All known command names for completion.
@@ -319,6 +331,7 @@ const COMMAND_NAMES: &[&str] = &[
     "session-resume",
     "sessions",
     "setup",
+    "skills",
     "start",
     "status",
     "stop",
@@ -1217,6 +1230,58 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "unknown schedule subcommand: {other}. Use: add, remove, list, trigger"
             )),
         },
+        "skills" => match arg1 {
+            "" | "list" => Ok(Some(FleetCommand::SkillsList)),
+            "search" => {
+                if arg2.is_empty() {
+                    return Err("usage: skills search <query>".into());
+                }
+                Ok(Some(FleetCommand::SkillsSearch {
+                    query: arg2.to_string(),
+                }))
+            }
+            "install" => {
+                if arg2.is_empty() {
+                    return Err("usage: skills install <name>".into());
+                }
+                let name = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if name.is_empty() {
+                    return Err("usage: skills install <name>".into());
+                }
+                Ok(Some(FleetCommand::SkillsInstall { name }))
+            }
+            "update" => {
+                let name = if arg2.is_empty() {
+                    None
+                } else {
+                    Some(arg2.split_whitespace().next().unwrap_or("").to_string())
+                };
+                Ok(Some(FleetCommand::SkillsUpdate { name }))
+            }
+            "uninstall" => {
+                if arg2.is_empty() {
+                    return Err("usage: skills uninstall <name>".into());
+                }
+                let name = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if name.is_empty() {
+                    return Err("usage: skills uninstall <name>".into());
+                }
+                Ok(Some(FleetCommand::SkillsUninstall { name }))
+            }
+            "info" => {
+                if arg2.is_empty() {
+                    return Err("usage: skills info <name>".into());
+                }
+                let name = arg2.split_whitespace().next().unwrap_or("").to_string();
+                if name.is_empty() {
+                    return Err("usage: skills info <name>".into());
+                }
+                Ok(Some(FleetCommand::SkillsInfo { name }))
+            }
+            other => Err(format!(
+                "unknown skills subcommand: {other}. Use: list, search, install, update, uninstall, info"
+            )),
+        },
         _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
     }
 }
@@ -1252,6 +1317,8 @@ const QUEUE_SUBCOMMANDS: &[&str] = &["flush", "inspect", "status"];
 const POLL_SUBCOMMANDS: &[&str] = &["close", "create", "results"];
 /// Subcommands for `:schedule`.
 const SCHEDULE_SUBCOMMANDS: &[&str] = &["add", "list", "remove", "trigger"];
+/// Subcommands for `:skills`.
+const SKILLS_SUBCOMMANDS: &[&str] = &["info", "install", "list", "search", "uninstall", "update"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -1457,6 +1524,13 @@ pub fn completions(buffer: &str, agent_names: &[String]) -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect();
         }
+        if cmd == "skills" {
+            return SKILLS_SUBCOMMANDS
+                .iter()
+                .filter(|s| s.starts_with(sub))
+                .map(|s| s.to_string())
+                .collect();
+        }
 
         // Third token: context field completion
         if cmd == "context" && parts.len() == 3 {
@@ -1598,6 +1672,12 @@ pub fn help_text() -> &'static str {
      :session send <k> <txt>  Send text to a session key\n\
      :sessions                List recent audit sessions\n\
      :setup                   Verify system requirements\n\
+     :skills list             List installed skills\n\
+     :skills search <q>       Search skill registry\n\
+     :skills install <name>   Install a skill\n\
+     :skills update [name]    Update skill(s)\n\
+     :skills uninstall <name> Uninstall a skill\n\
+     :skills info <name>      Show skill details\n\
      :start <agent>           Start agent\n\
      :status                  Daemon status summary\n\
      :stop <agent>            Stop agent\n\
@@ -2879,5 +2959,124 @@ mod tests {
         let agents = vec![];
         let c = completions("do", &agents);
         assert!(c.contains(&"doctor".to_string()));
+    }
+
+    #[test]
+    fn parse_skills_list() {
+        assert_eq!(
+            parse("skills").unwrap(),
+            Some(FleetCommand::SkillsList)
+        );
+        assert_eq!(
+            parse("skills list").unwrap(),
+            Some(FleetCommand::SkillsList)
+        );
+    }
+
+    #[test]
+    fn parse_skills_search() {
+        assert_eq!(
+            parse("skills search git").unwrap(),
+            Some(FleetCommand::SkillsSearch {
+                query: "git".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_skills_search_missing_query() {
+        assert!(parse("skills search").is_err());
+    }
+
+    #[test]
+    fn parse_skills_install() {
+        assert_eq!(
+            parse("skills install code-review").unwrap(),
+            Some(FleetCommand::SkillsInstall {
+                name: "code-review".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_skills_install_missing_name() {
+        assert!(parse("skills install").is_err());
+    }
+
+    #[test]
+    fn parse_skills_update() {
+        assert_eq!(
+            parse("skills update").unwrap(),
+            Some(FleetCommand::SkillsUpdate { name: None })
+        );
+        assert_eq!(
+            parse("skills update calculator").unwrap(),
+            Some(FleetCommand::SkillsUpdate {
+                name: Some("calculator".into())
+            })
+        );
+    }
+
+    #[test]
+    fn parse_skills_uninstall() {
+        assert_eq!(
+            parse("skills uninstall old-skill").unwrap(),
+            Some(FleetCommand::SkillsUninstall {
+                name: "old-skill".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_skills_uninstall_missing_name() {
+        assert!(parse("skills uninstall").is_err());
+    }
+
+    #[test]
+    fn parse_skills_info() {
+        assert_eq!(
+            parse("skills info calculator").unwrap(),
+            Some(FleetCommand::SkillsInfo {
+                name: "calculator".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parse_skills_info_missing_name() {
+        assert!(parse("skills info").is_err());
+    }
+
+    #[test]
+    fn parse_skills_unknown_subcommand() {
+        assert!(parse("skills bogus").is_err());
+    }
+
+    #[test]
+    fn help_text_includes_skills() {
+        let help = help_text();
+        assert!(help.contains(":skills"));
+        assert!(help.contains(":skills list"));
+        assert!(help.contains(":skills install"));
+        assert!(help.contains(":skills search"));
+    }
+
+    #[test]
+    fn completions_skills_in_command_list() {
+        let agents = vec![];
+        let c = completions("sk", &agents);
+        assert!(c.contains(&"skills".to_string()));
+    }
+
+    #[test]
+    fn completions_skills_subcommands() {
+        let agents = vec![];
+        let c = completions("skills ", &agents);
+        assert!(c.contains(&"list".to_string()));
+        assert!(c.contains(&"search".to_string()));
+        assert!(c.contains(&"install".to_string()));
+        assert!(c.contains(&"update".to_string()));
+        assert!(c.contains(&"uninstall".to_string()));
+        assert!(c.contains(&"info".to_string()));
     }
 }

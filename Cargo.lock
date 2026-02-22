@@ -99,6 +99,7 @@ dependencies = [
  "aegis-policy",
  "aegis-proxy",
  "aegis-sandbox",
+ "aegis-skills",
  "aegis-toolkit",
  "aegis-types",
  "anyhow",
