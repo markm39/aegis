@@ -12,10 +12,14 @@
 //! - [`SkillPlugin`] -- plugin SDK trait for skill implementations
 //! - [`SkillExecutor`] -- subprocess-based skill execution
 //! - [`LoadCondition`] -- conditional skill loading based on environment
+//! - [`SlashCommand`] / [`CommandRouter`] -- slash command parsing and dispatch
+//! - [`SkillWatcher`] / [`HotReloader`] -- hot-reload of skills on filesystem changes
 
 pub mod conditions;
 pub mod discovery;
+pub mod dispatch;
 pub mod executor;
+pub mod hot_reload;
 pub mod hub;
 pub mod installer;
 pub mod lifecycle;
@@ -26,7 +30,12 @@ pub mod sdk;
 
 pub use conditions::{check_conditions, evaluate_conditions, LoadCondition, Platform};
 pub use discovery::{bundled_skill_names, discover_bundled_skills, discover_skills};
+pub use dispatch::{
+    auto_register_commands, parse_slash_command, CommandInfo, CommandRouter, CommandSource,
+    ManifestCommand, SlashCommand,
+};
 pub use executor::{ExecutionMode, ExecutorConfig, SkillExecutor};
+pub use hot_reload::{HotReloader, SkillChange, SkillWatcher, SkillWatcherConfig};
 pub use hub::{RegistryClient, RegistryConfig, SkillSummary, UpdateAvailable};
 pub use installer::{InstallSource, InstalledSkill, SkillInstaller};
 pub use lifecycle::{SkillInstance, SkillState};

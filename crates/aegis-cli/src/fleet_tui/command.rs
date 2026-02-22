@@ -174,6 +174,16 @@ pub enum FleetCommand {
     SessionChain { group_id: String },
     /// Resume a previous audit session for an agent.
     SessionResumeAudit { agent: String, session_id: String },
+    /// Inspect a session with full details, entry counts, and child links.
+    SessionInspect { session_id: String },
+    /// Reset a session: clear context snapshot and mark non-resumable.
+    SessionReset { session_id: String },
+    /// Delete a session and all its audit entries (destructive).
+    SessionDelete { session_id: String, confirm: bool },
+    /// Fork a session, creating a new conversation branch.
+    SessionFork { session_id: String },
+    /// Display the session tree from a root session.
+    SessionTree { session_id: String },
     /// Verify audit hash chain integrity.
     Verify,
     /// Export audit entries in structured format.
@@ -206,6 +216,12 @@ pub enum FleetCommand {
     },
     /// Test provider auth profile readiness.
     AuthTest { target: Option<String> },
+    /// Log out a provider: remove profile and stored OAuth tokens.
+    AuthLogout { provider: String },
+    /// Show status of all auth profiles and stored OAuth tokens.
+    AuthStatus,
+    /// Manually refresh an OAuth token for a provider.
+    AuthRefresh { provider: String },
     /// Add a command alias.
     AliasAdd {
         alias: String,
@@ -275,6 +291,10 @@ pub enum FleetCommand {
     SkillsUninstall { name: String },
     /// Show detailed info about a skill.
     SkillsInfo { name: String },
+    /// Reload a specific skill or all skills.
+    SkillsReload { name: Option<String> },
+    /// List all slash commands registered by skills.
+    SkillsCommands,
 }
 
 /// All known command names for completion.
@@ -336,7 +356,12 @@ const COMMAND_NAMES: &[&str] = &[
     "send",
     "session",
     "session-chain",
+    "session-delete",
+    "session-fork",
+    "session-inspect",
+    "session-reset",
     "session-resume",
+    "session-tree",
     "sessions",
     "setup",
     "skills",
@@ -757,8 +782,25 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 };
                 Ok(Some(FleetCommand::AuthTest { target }))
             }
+            "logout" => {
+                if arg2.is_empty() {
+                    return Err("usage: auth logout <provider>".into());
+                }
+                Ok(Some(FleetCommand::AuthLogout {
+                    provider: arg2.trim().to_string(),
+                }))
+            }
+            "status" => Ok(Some(FleetCommand::AuthStatus)),
+            "refresh" => {
+                if arg2.is_empty() {
+                    return Err("usage: auth refresh <provider>".into());
+                }
+                Ok(Some(FleetCommand::AuthRefresh {
+                    provider: arg2.trim().to_string(),
+                }))
+            }
             other => Err(format!(
-                "unknown auth subcommand: {other}. Use: list, add, login, test"
+                "unknown auth subcommand: {other}. Use: list, add, login, logout, test, status, refresh"
             )),
         },
         "compat" => match arg1 {
@@ -987,6 +1029,53 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Ok(Some(FleetCommand::SessionResumeAudit {
                     agent: arg1.into(),
                     session_id: arg2.into(),
+                }))
+            }
+        }
+        "session-inspect" => {
+            if arg1.is_empty() {
+                Err("usage: session-inspect <session-uuid>".into())
+            } else {
+                Ok(Some(FleetCommand::SessionInspect {
+                    session_id: arg1.into(),
+                }))
+            }
+        }
+        "session-reset" => {
+            if arg1.is_empty() {
+                Err("usage: session-reset <session-uuid>".into())
+            } else {
+                Ok(Some(FleetCommand::SessionReset {
+                    session_id: arg1.into(),
+                }))
+            }
+        }
+        "session-delete" => {
+            if arg1.is_empty() {
+                Err("usage: session-delete <session-uuid> [--confirm]".into())
+            } else {
+                let confirm = arg2 == "--confirm";
+                Ok(Some(FleetCommand::SessionDelete {
+                    session_id: arg1.into(),
+                    confirm,
+                }))
+            }
+        }
+        "session-fork" => {
+            if arg1.is_empty() {
+                Err("usage: session-fork <session-uuid>".into())
+            } else {
+                Ok(Some(FleetCommand::SessionFork {
+                    session_id: arg1.into(),
+                }))
+            }
+        }
+        "session-tree" => {
+            if arg1.is_empty() {
+                Err("usage: session-tree <root-session-uuid>".into())
+            } else {
+                Ok(Some(FleetCommand::SessionTree {
+                    session_id: arg1.into(),
                 }))
             }
         }
@@ -1312,8 +1401,17 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }
                 Ok(Some(FleetCommand::SkillsInfo { name }))
             }
+            "reload" => {
+                let name = if arg2.is_empty() {
+                    None
+                } else {
+                    Some(arg2.split_whitespace().next().unwrap_or("").to_string())
+                };
+                Ok(Some(FleetCommand::SkillsReload { name }))
+            }
+            "commands" => Ok(Some(FleetCommand::SkillsCommands)),
             other => Err(format!(
-                "unknown skills subcommand: {other}. Use: list, search, install, update, uninstall, info"
+                "unknown skills subcommand: {other}. Use: list, search, install, update, uninstall, info, reload, commands"
             )),
         },
         _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
@@ -1335,7 +1433,7 @@ const DAEMON_SUBCOMMANDS: &[&str] = &[
 /// Subcommands for `:telegram`.
 const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
 /// Subcommands for `:auth`.
-const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "test"];
+const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "logout", "refresh", "status", "test"];
 const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
 const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 const MATRIX_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
@@ -1352,7 +1450,7 @@ const POLL_SUBCOMMANDS: &[&str] = &["close", "create", "results"];
 /// Subcommands for `:schedule`.
 const SCHEDULE_SUBCOMMANDS: &[&str] = &["add", "list", "remove", "trigger"];
 /// Subcommands for `:skills`.
-const SKILLS_SUBCOMMANDS: &[&str] = &["info", "install", "list", "search", "uninstall", "update"];
+const SKILLS_SUBCOMMANDS: &[&str] = &["commands", "info", "install", "list", "reload", "search", "uninstall", "update"];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -1624,7 +1722,10 @@ pub fn help_text() -> &'static str {
      :auth list               List auth profiles\n\
      :auth add <p> [m]        Add auth profile (m: oauth/api-key/setup-token)\n\
      :auth login <p> [m]      Run provider auth flow\n\
+     :auth logout <provider>  Remove auth profile and stored tokens\n\
      :auth test [target]      Test auth readiness\n\
+     :auth status             Show all auth profiles and token status\n\
+     :auth refresh <provider> Manually refresh an OAuth token\n\
      :approve <agent>         Approve first pending prompt\n\
      :chat [agent]            Open orchestrator chat (or agent detail)\n\
      :config                  Edit daemon.toml in $EDITOR\n\
@@ -1708,6 +1809,11 @@ pub fn help_text() -> &'static str {
      :session list            List active session keys\n\
      :session history <k> [n] Show recent session output\n\
      :session send <k> <txt>  Send text to a session key\n\
+     :session-inspect <uuid>  Inspect session (full detail + links)\n\
+     :session-reset <uuid>    Clear context, mark non-resumable\n\
+     :session-delete <uuid> [--confirm]  Delete session + entries\n\
+     :session-fork <uuid>     Fork session (new conversation tree)\n\
+     :session-tree <uuid>     Display session tree from root\n\
      :sessions                List recent audit sessions\n\
      :setup                   Verify system requirements\n\
      :skills list             List installed skills\n\
@@ -1716,6 +1822,8 @@ pub fn help_text() -> &'static str {
      :skills update [name]    Update skill(s)\n\
      :skills uninstall <name> Uninstall a skill\n\
      :skills info <name>      Show skill details\n\
+     :skills reload [name]    Reload skill(s) from disk\n\
+     :skills commands         List all slash commands\n\
      :start <agent>           Start agent\n\
      :status                  Daemon status summary\n\
      :stop <agent>            Stop agent\n\

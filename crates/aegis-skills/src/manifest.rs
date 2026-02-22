@@ -9,6 +9,8 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::dispatch::ManifestCommand;
+
 /// Maximum allowed length for a skill name.
 const MAX_NAME_LEN: usize = 64;
 
@@ -35,6 +37,9 @@ pub struct SkillManifest {
     pub dependencies: Vec<String>,
     /// Minimum Aegis version required to run this skill.
     pub min_aegis_version: Option<String>,
+    /// Slash commands this skill provides.
+    #[serde(default)]
+    pub commands: Option<Vec<ManifestCommand>>,
 }
 
 /// Validate a parsed manifest for security and correctness constraints.

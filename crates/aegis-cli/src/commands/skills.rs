@@ -218,6 +218,148 @@ fn show_skill_info(skill_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Reload a skill or all skills from disk.
+///
+/// Discovers skills from the cache directory (or bundled skills directory),
+/// reloads them into a fresh registry, and reports the results.
+pub fn reload_skills(name: Option<&str>, cache_dir: Option<PathBuf>) -> Result<()> {
+    use aegis_skills::{
+        discover_skills, HotReloader, SkillRegistry,
+    };
+    use std::sync::{Arc, Mutex};
+
+    let client = build_client(cache_dir);
+    let cache = client.cache_dir().to_path_buf();
+
+    let registry = Arc::new(Mutex::new(SkillRegistry::new()));
+    let mut reloader = HotReloader::new(Arc::clone(&registry));
+
+    if let Some(name) = name {
+        // Reload a specific skill
+        let skill_dir = cache.join(name);
+        if !skill_dir.exists() {
+            // Also check bundled skills
+            let project_skills = std::path::Path::new("skills").join(name);
+            if project_skills.exists() {
+                // Load initial then reload
+                let _ = reloader.reload_all();
+                println!("Reloaded skill '{name}' from bundled skills.");
+                return Ok(());
+            }
+            anyhow::bail!(
+                "skill '{}' not found. Use 'aegis skills list' to see installed skills.",
+                name
+            );
+        }
+
+        // Discover the skill first so the registry has it, then reload
+        let instances = discover_skills(&cache)?;
+        {
+            let mut reg = registry.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            for inst in instances {
+                let _ = reg.register(inst);
+            }
+        }
+        reloader.reload_skill(name)?;
+        println!("Reloaded skill '{name}'.");
+    } else {
+        // Reload all skills
+        let paths_to_scan = if cache.is_dir() {
+            vec![&cache]
+        } else {
+            vec![]
+        };
+
+        let mut total_reloaded = 0;
+        for path in paths_to_scan {
+            let instances = discover_skills(path)?;
+            {
+                let mut reg = registry.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+                for inst in instances {
+                    let _ = reg.register(inst);
+                }
+            }
+            let messages = reloader.reload_all()?;
+            total_reloaded += messages.len();
+            for msg in &messages {
+                println!("  {msg}");
+            }
+        }
+
+        if total_reloaded == 0 {
+            println!("No skills to reload.");
+        } else {
+            println!("Reloaded {total_reloaded} skill(s).");
+        }
+    }
+
+    Ok(())
+}
+
+/// List all slash commands registered by skills.
+///
+/// Scans installed skills for command declarations in their manifests and
+/// displays the registered slash commands.
+pub fn list_commands(cache_dir: Option<PathBuf>) -> Result<()> {
+    use aegis_skills::{
+        auto_register_commands, discover_skills, CommandRouter, SkillRegistry,
+    };
+
+    let client = build_client(cache_dir);
+    let cache = client.cache_dir().to_path_buf();
+
+    let mut registry = SkillRegistry::new();
+    let mut router = CommandRouter::new();
+
+    // Discover from cache
+    if cache.is_dir() {
+        let instances = discover_skills(&cache)?;
+        for inst in instances {
+            let _ = registry.register(inst);
+        }
+    }
+
+    // Also check bundled skills
+    let project_skills = std::path::Path::new("skills");
+    if project_skills.is_dir() {
+        let instances = discover_skills(project_skills)?;
+        for inst in instances {
+            let _ = registry.register(inst);
+        }
+    }
+
+    auto_register_commands(&mut router, &registry);
+
+    let commands = router.list_commands();
+    if commands.is_empty() {
+        println!("No slash commands registered.");
+        println!();
+        println!("Add [[commands]] entries to skill manifest.toml files to register commands.");
+        return Ok(());
+    }
+
+    println!("{:<15} {:<20} {:<30} ALIASES", "COMMAND", "SKILL", "DESCRIPTION");
+    println!("{}", "-".repeat(75));
+
+    for cmd in &commands {
+        let aliases = if cmd.aliases.is_empty() {
+            String::new()
+        } else {
+            cmd.aliases.iter().map(|a| format!("/{a}")).collect::<Vec<_>>().join(", ")
+        };
+        let desc = if cmd.description.len() > 28 {
+            format!("{}...", &cmd.description[..25])
+        } else {
+            cmd.description.clone()
+        };
+        println!("/{:<14} {:<20} {:<30} {}", cmd.name, cmd.skill_name, desc, aliases);
+    }
+
+    println!();
+    println!("{} command(s) registered.", commands.len());
+    Ok(())
+}
+
 fn build_client(cache_dir: Option<PathBuf>) -> RegistryClient {
     match cache_dir {
         Some(dir) => RegistryClient::with_config(RegistryConfig {

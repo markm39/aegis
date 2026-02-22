@@ -477,6 +477,7 @@ impl RegistrySkillMeta {
             entry_point: self.entry_point.unwrap_or_else(|| "run.sh".into()),
             dependencies: Vec::new(),
             min_aegis_version: None,
+            commands: None,
         }
     }
 }

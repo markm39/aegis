@@ -612,6 +612,60 @@ enum SessionCommands {
         #[arg(long)]
         config: Option<String>,
     },
+
+    /// Inspect a session with full details, entry counts, and child links
+    Inspect {
+        /// Session UUID
+        session_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Reset a session: clear context snapshot and mark non-resumable
+    Reset {
+        /// Session UUID
+        session_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Delete a session and all its audit entries (destructive)
+    Delete {
+        /// Session UUID
+        session_id: String,
+
+        /// Confirm the destructive operation
+        #[arg(long)]
+        confirm: bool,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Fork a session, creating a new conversation branch
+    Fork {
+        /// Session UUID to fork from
+        session_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Display the session tree from a root session
+    Tree {
+        /// Root session UUID
+        session_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -660,6 +714,18 @@ enum AuthCommands {
     Test {
         /// Profile id or provider name.
         target: Option<String>,
+    },
+    /// Log out a provider: remove auth profile and stored OAuth tokens.
+    Logout {
+        /// Provider to log out.
+        provider: String,
+    },
+    /// Show status of all auth profiles and stored OAuth tokens.
+    Status,
+    /// Manually refresh an OAuth token for a provider.
+    Refresh {
+        /// Provider to refresh.
+        provider: String,
     },
 }
 
@@ -771,6 +837,23 @@ enum SkillsCommands {
         /// Skill name
         name: String,
 
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// Reload a skill or all skills from disk
+    Reload {
+        /// Skill name (omit to reload all)
+        name: Option<String>,
+
+        /// Custom skills cache directory
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+
+    /// List all slash commands registered by skills
+    Commands {
         /// Custom skills cache directory
         #[arg(long)]
         cache_dir: Option<PathBuf>,
@@ -1341,6 +1424,42 @@ fn main() -> anyhow::Result<()> {
                 let config = resolve_config(config)?;
                 commands::sessions::resume(&config, &agent, &session_id)
             }
+            SessionCommands::Inspect {
+                session_id,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::inspect(&config, &session_id)
+            }
+            SessionCommands::Reset {
+                session_id,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::reset(&config, &session_id)
+            }
+            SessionCommands::Delete {
+                session_id,
+                confirm,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::delete(&config, &session_id, confirm)
+            }
+            SessionCommands::Fork {
+                session_id,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::fork(&config, &session_id)
+            }
+            SessionCommands::Tree {
+                session_id,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::tree(&config, &session_id)
+            }
         },
         Commands::Config { action } => match action {
             ConfigCommands::Show { config } => {
@@ -1458,6 +1577,9 @@ fn main() -> anyhow::Result<()> {
                 profile,
             } => commands::auth::login(&provider, method.as_deref(), profile.as_deref()),
             AuthCommands::Test { target } => commands::auth::test(target.as_deref()),
+            AuthCommands::Logout { provider } => commands::auth::logout(&provider),
+            AuthCommands::Status => commands::auth::status(),
+            AuthCommands::Refresh { provider } => commands::auth::refresh(&provider),
         },
         Commands::Fleet => fleet_tui::run_fleet_tui(),
         Commands::Daemon { action } => match action {
@@ -1612,6 +1734,12 @@ fn main() -> anyhow::Result<()> {
                 }
                 SkillsCommands::Info { name, cache_dir } => {
                     rt.block_on(commands::skills::skill_info(&name, cache_dir))
+                }
+                SkillsCommands::Reload { name, cache_dir } => {
+                    commands::skills::reload_skills(name.as_deref(), cache_dir)
+                }
+                SkillsCommands::Commands { cache_dir } => {
+                    commands::skills::list_commands(cache_dir)
                 }
             }
         }
