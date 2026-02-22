@@ -156,6 +156,16 @@ pub enum FleetCommand {
     DaemonUninstall,
     /// List recent audit sessions.
     Sessions,
+    /// List sessions with filters (sender, channel, resumable).
+    SessionsFiltered {
+        sender: Option<String>,
+        channel: Option<String>,
+        resumable: bool,
+    },
+    /// Show a conversation chain for a session group.
+    SessionChain { group_id: String },
+    /// Resume a previous audit session for an agent.
+    SessionResumeAudit { agent: String, session_id: String },
     /// Verify audit hash chain integrity.
     Verify,
     /// Export audit entries in structured format.
@@ -305,6 +315,8 @@ const COMMAND_NAMES: &[&str] = &[
     "schedule",
     "send",
     "session",
+    "session-chain",
+    "session-resume",
     "sessions",
     "setup",
     "start",
@@ -343,6 +355,7 @@ const AGENT_COMMANDS: &[&str] = &[
     "restart",
     "resume",
     "send",
+    "session-resume",
     "start",
     "stop",
     "subagent",
@@ -882,7 +895,54 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "alerts" => Ok(Some(FleetCommand::Alerts)),
-        "sessions" => Ok(Some(FleetCommand::Sessions)),
+        "sessions" => {
+            if arg1.is_empty() {
+                Ok(Some(FleetCommand::Sessions))
+            } else if arg1 == "--resumable" {
+                Ok(Some(FleetCommand::SessionsFiltered {
+                    sender: None,
+                    channel: None,
+                    resumable: true,
+                }))
+            } else if arg1 == "--sender" && !arg2.is_empty() {
+                let mut parts = arg2.splitn(2, ' ');
+                let sender = parts.next().unwrap_or("").to_string();
+                Ok(Some(FleetCommand::SessionsFiltered {
+                    sender: Some(sender),
+                    channel: None,
+                    resumable: false,
+                }))
+            } else if arg1 == "--channel" && !arg2.is_empty() {
+                let mut parts = arg2.splitn(2, ' ');
+                let channel = parts.next().unwrap_or("").to_string();
+                Ok(Some(FleetCommand::SessionsFiltered {
+                    sender: None,
+                    channel: Some(channel),
+                    resumable: false,
+                }))
+            } else {
+                Ok(Some(FleetCommand::Sessions))
+            }
+        }
+        "session-chain" => {
+            if arg1.is_empty() {
+                Err("usage: session-chain <group-uuid>".into())
+            } else {
+                Ok(Some(FleetCommand::SessionChain {
+                    group_id: arg1.into(),
+                }))
+            }
+        }
+        "session-resume" => {
+            if arg1.is_empty() || arg2.is_empty() {
+                Err("usage: session-resume <agent> <session-uuid>".into())
+            } else {
+                Ok(Some(FleetCommand::SessionResumeAudit {
+                    agent: arg1.into(),
+                    session_id: arg2.into(),
+                }))
+            }
+        }
         "verify" => Ok(Some(FleetCommand::Verify)),
         "export" => {
             let format = if arg1.is_empty() { None } else { Some(arg1.to_string()) };

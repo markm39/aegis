@@ -144,6 +144,12 @@ enum Commands {
         config: Option<String>,
     },
 
+    /// Manage agent sessions (list, show, resume, chain)
+    Sessions {
+        #[command(subcommand)]
+        action: SessionCommands,
+    },
+
     /// Configuration management subcommands
     Config {
         #[command(subcommand)]
@@ -519,6 +525,65 @@ enum AlertCommands {
         /// Number of recent dispatches to show (default 20)
         #[arg(long, default_value = "20")]
         last: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SessionCommands {
+    /// List recent sessions with optional filters
+    List {
+        /// Filter by sender ID
+        #[arg(long)]
+        sender: Option<String>,
+
+        /// Filter by channel type (telegram, slack, etc.)
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// Only show resumable sessions
+        #[arg(long)]
+        resumable: bool,
+
+        /// Maximum results
+        #[arg(long, default_value = "20")]
+        limit: usize,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Show session details
+    Show {
+        /// Session UUID
+        session_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Show conversation chain for a session group
+    Chain {
+        /// Session group UUID
+        group_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+
+    /// Resume a previous session
+    Resume {
+        /// Agent name
+        agent: String,
+
+        /// Session UUID to resume
+        session_id: String,
+
+        /// Name of the aegis configuration (uses current if omitted)
+        #[arg(long)]
+        config: Option<String>,
     },
 }
 
@@ -1154,6 +1219,34 @@ fn main() -> anyhow::Result<()> {
             let config = resolve_config(config)?;
             commands::diff::run(&config, &session1, &session2)
         }
+        Commands::Sessions { action } => match action {
+            SessionCommands::List {
+                sender,
+                channel,
+                resumable,
+                limit,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::list(&config, sender.as_deref(), channel.as_deref(), resumable, limit)
+            }
+            SessionCommands::Show { session_id, config } => {
+                let config = resolve_config(config)?;
+                commands::sessions::show(&config, &session_id)
+            }
+            SessionCommands::Chain { group_id, config } => {
+                let config = resolve_config(config)?;
+                commands::sessions::chain(&config, &group_id)
+            }
+            SessionCommands::Resume {
+                agent,
+                session_id,
+                config,
+            } => {
+                let config = resolve_config(config)?;
+                commands::sessions::resume(&config, &agent, &session_id)
+            }
+        },
         Commands::Config { action } => match action {
             ConfigCommands::Show { config } => {
                 let config = resolve_config(config)?;

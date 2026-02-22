@@ -123,6 +123,18 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_fs_audit_timestamp ON fs_audit_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_fs_audit_path ON fs_audit_log(path);
     CREATE INDEX IF NOT EXISTS idx_fs_audit_operation ON fs_audit_log(operation);",
+    // Migration 6: Add persistent session columns for resume, sender isolation, and context
+    "ALTER TABLE sessions ADD COLUMN parent_id TEXT;
+     ALTER TABLE sessions ADD COLUMN group_id TEXT;
+     ALTER TABLE sessions ADD COLUMN sender_id TEXT;
+     ALTER TABLE sessions ADD COLUMN channel_type TEXT;
+     ALTER TABLE sessions ADD COLUMN thread_id TEXT;
+     ALTER TABLE sessions ADD COLUMN resumable INTEGER DEFAULT 0;
+     ALTER TABLE sessions ADD COLUMN context_snapshot TEXT;
+     CREATE INDEX IF NOT EXISTS idx_session_sender ON sessions(sender_id, channel_type);
+     CREATE INDEX IF NOT EXISTS idx_session_thread ON sessions(thread_id);
+     CREATE INDEX IF NOT EXISTS idx_session_group ON sessions(group_id);
+     CREATE INDEX IF NOT EXISTS idx_session_resumable ON sessions(resumable);",
 ];
 
 /// An append-only, hash-chained audit store backed by SQLite.

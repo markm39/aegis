@@ -2104,9 +2104,41 @@ impl FleetApp {
             }
             FleetCommand::Sessions => {
                 self.spawn_terminal(
-                    "aegis audit sessions",
-                    "Opened audit sessions in new terminal",
+                    "aegis sessions list",
+                    "Opened session list in new terminal",
                 );
+            }
+            FleetCommand::SessionsFiltered {
+                sender,
+                channel,
+                resumable,
+            } => {
+                let mut cmd = "aegis sessions list".to_string();
+                if let Some(ref s) = sender {
+                    cmd.push_str(&format!(" --sender {}", crate::terminal::shell_quote(s)));
+                }
+                if let Some(ref c) = channel {
+                    cmd.push_str(&format!(" --channel {}", crate::terminal::shell_quote(c)));
+                }
+                if resumable {
+                    cmd.push_str(" --resumable");
+                }
+                self.spawn_terminal(&cmd, "Opened filtered session list in new terminal");
+            }
+            FleetCommand::SessionChain { group_id } => {
+                let cmd = format!(
+                    "aegis sessions chain {}",
+                    crate::terminal::shell_quote(&group_id)
+                );
+                self.spawn_terminal(&cmd, "Opened session chain in new terminal");
+            }
+            FleetCommand::SessionResumeAudit { agent, session_id } => {
+                let cmd = format!(
+                    "aegis sessions resume {} {}",
+                    crate::terminal::shell_quote(&agent),
+                    crate::terminal::shell_quote(&session_id)
+                );
+                self.spawn_terminal(&cmd, "Resuming session in new terminal");
             }
             FleetCommand::Verify => {
                 self.spawn_terminal(

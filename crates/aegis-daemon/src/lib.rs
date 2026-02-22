@@ -3671,6 +3671,14 @@ impl DaemonRuntime {
                 self.handle_session_lifecycle_status(name)
             }
 
+            // -- Persistent session management --
+            DaemonCommand::SessionListFiltered { .. }
+            | DaemonCommand::SessionResumeAudit { .. }
+            | DaemonCommand::SessionSaveContext { .. }
+            | DaemonCommand::SessionGroup { .. } => {
+                DaemonResponse::error("persistent session commands require direct audit store access; use the CLI")
+            }
+
             // -- Auto-reply commands (added by another agent, stub handlers) --
             DaemonCommand::AddAutoReply { .. }
             | DaemonCommand::RemoveAutoReply { .. }

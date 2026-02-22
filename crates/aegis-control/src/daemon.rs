@@ -405,6 +405,42 @@ pub enum DaemonCommand {
     /// Get the current session lifecycle state for an agent.
     SessionLifecycleStatus { name: String },
 
+    // -- Persistent session management commands --
+    /// List sessions from the audit ledger with optional filters.
+    SessionListFiltered {
+        /// Filter by sender ID.
+        #[serde(default)]
+        sender_id: Option<String>,
+        /// Filter by channel type (telegram, slack, etc.).
+        #[serde(default)]
+        channel_type: Option<String>,
+        /// Only return resumable sessions.
+        #[serde(default)]
+        resumable_only: bool,
+        /// Maximum results.
+        #[serde(default = "default_session_limit")]
+        limit: usize,
+    },
+    /// Resume a previous audit session for an agent.
+    SessionResumeAudit {
+        /// Agent name to associate the resumed session with.
+        agent_name: String,
+        /// UUID of the session to resume.
+        session_id: String,
+    },
+    /// Save a context snapshot for the current session.
+    SessionSaveContext {
+        /// Agent name whose session context to save.
+        agent_name: String,
+        /// Serialized context snapshot.
+        snapshot: String,
+    },
+    /// Get all sessions in a conversation group (chain).
+    SessionGroup {
+        /// Session group UUID.
+        group_id: String,
+    },
+
     // -- Auto-reply rule management commands --
     /// Add a new auto-reply rule (pattern + response, optionally with media).
     AddAutoReply {
@@ -963,6 +999,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_session_limit() -> usize {
+    20
+}
+
 impl DaemonCommand {
     /// Cedar policy action name for this command.
     ///
@@ -1035,6 +1075,10 @@ impl DaemonCommand {
             DaemonCommand::ResumeSession { .. } => "daemon:resume_session",
             DaemonCommand::TerminateSession { .. } => "daemon:terminate_session",
             DaemonCommand::SessionLifecycleStatus { .. } => "daemon:session_lifecycle_status",
+            DaemonCommand::SessionListFiltered { .. } => "daemon:session_list_filtered",
+            DaemonCommand::SessionResumeAudit { .. } => "daemon:session_resume_audit",
+            DaemonCommand::SessionSaveContext { .. } => "daemon:session_save_context",
+            DaemonCommand::SessionGroup { .. } => "daemon:session_group",
             DaemonCommand::AddAutoReply { .. } => "daemon:add_auto_reply",
             DaemonCommand::RemoveAutoReply { .. } => "daemon:remove_auto_reply",
             DaemonCommand::ListAutoReplies => "daemon:list_auto_replies",
@@ -1995,6 +2039,24 @@ mod tests {
             },
             DaemonCommand::SessionLifecycleStatus {
                 name: "claude-1".into(),
+            },
+            // Persistent session commands
+            DaemonCommand::SessionListFiltered {
+                sender_id: Some("user123".into()),
+                channel_type: Some("telegram".into()),
+                resumable_only: true,
+                limit: 10,
+            },
+            DaemonCommand::SessionResumeAudit {
+                agent_name: "claude-1".into(),
+                session_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            },
+            DaemonCommand::SessionSaveContext {
+                agent_name: "claude-1".into(),
+                snapshot: r#"{"conversation":[{"role":"user","content":"hello"}]}"#.into(),
+            },
+            DaemonCommand::SessionGroup {
+                group_id: "550e8400-e29b-41d4-a716-446655440000".into(),
             },
             // Auto-reply commands
             DaemonCommand::AddAutoReply {
