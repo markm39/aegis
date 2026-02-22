@@ -1440,6 +1440,11 @@ mod tests {
     use super::*;
     use aegis_types::llm::{LlmMessage, LlmRequest, LlmToolDefinition};
 
+    /// Mutex to serialize tests that modify the HOME env var.
+    /// `set_var` is process-global and not thread-safe, so tests that depend
+    /// on HOME must hold this lock to avoid racing with each other.
+    static HOME_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn sample_request() -> LlmRequest {
         LlmRequest {
             model: "claude-sonnet-4-20250514".into(),
@@ -2310,6 +2315,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_no_token() {
+        let _guard = HOME_MUTEX.lock().unwrap();
         // Point HOME to a temp dir so FileTokenStore::new finds no tokens.
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
@@ -2331,6 +2337,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_valid_token() {
+        let _guard = HOME_MUTEX.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2358,6 +2365,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_expired_token_no_refresh() {
+        let _guard = HOME_MUTEX.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2383,6 +2391,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_expired_with_refresh_falls_back() {
+        let _guard = HOME_MUTEX.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2409,6 +2418,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_prefers_oauth() {
+        let _guard = HOME_MUTEX.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2440,6 +2450,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_falls_back_to_env() {
+        let _guard = HOME_MUTEX.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());

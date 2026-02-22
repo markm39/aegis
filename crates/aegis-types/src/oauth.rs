@@ -1033,7 +1033,10 @@ impl OAuthToken {
 /// to `FileTokenStore` on non-macOS platforms. The service name is
 /// `com.aegis.oauth.{provider}`.
 pub struct KeychainTokenStore {
+    // Used by keychain methods on macOS only.
+    #[allow(dead_code)]
     service: String,
+    #[allow(dead_code)]
     account: String,
     /// Fallback file store for non-macOS or Keychain errors.
     fallback: FileTokenStore,

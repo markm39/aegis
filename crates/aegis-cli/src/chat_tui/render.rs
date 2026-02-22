@@ -229,15 +229,34 @@ pub fn render_header(
 /// ```text
 ///  model-name  :help
 /// ```
-pub fn render_status_bar(model: &str, _width: u16) -> Line<'static> {
-    Line::from(vec![
+/// Optional usage info for the status bar.
+pub struct UsageInfo {
+    /// Total tokens used this session.
+    pub total_tokens: u64,
+    /// Estimated cost in USD.
+    pub cost_usd: f64,
+}
+
+pub fn render_status_bar(model: &str, _width: u16, usage: Option<&UsageInfo>) -> Line<'static> {
+    let mut spans = vec![
         Span::styled(
             format!(" {model}"),
             Style::default().fg(Color::DarkGray),
         ),
-        Span::raw("  ".to_string()),
-        Span::styled(":help".to_string(), Style::default().fg(Color::DarkGray)),
-    ])
+    ];
+
+    if let Some(u) = usage {
+        spans.push(Span::raw("  ".to_string()));
+        spans.push(Span::styled(
+            format!("{}tok ${:.4}", u.total_tokens, u.cost_usd),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    spans.push(Span::raw("  ".to_string()));
+    spans.push(Span::styled(":help".to_string(), Style::default().fg(Color::DarkGray)));
+
+    Line::from(spans)
 }
 
 // ---------------------------------------------------------------------------
@@ -428,9 +447,21 @@ mod tests {
 
     #[test]
     fn render_status_bar_shows_model() {
-        let line = render_status_bar("claude-sonnet-4-20250514", 80);
+        let line = render_status_bar("claude-sonnet-4-20250514", 80, None);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("claude-sonnet-4-20250514"));
         assert!(text.contains(":help"));
+    }
+
+    #[test]
+    fn render_status_bar_shows_usage() {
+        let usage = UsageInfo {
+            total_tokens: 12345,
+            cost_usd: 0.0234,
+        };
+        let line = render_status_bar("gpt-4o", 80, Some(&usage));
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("12345tok"));
+        assert!(text.contains("$0.0234"));
     }
 }

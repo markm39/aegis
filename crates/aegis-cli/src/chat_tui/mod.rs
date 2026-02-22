@@ -139,6 +139,16 @@ pub struct ChatApp {
     /// When the command result was set (for auto-clear).
     pub command_result_at: Option<Instant>,
 
+    // -- Usage tracking --
+    /// Cumulative input tokens this session.
+    pub total_input_tokens: u64,
+    /// Cumulative output tokens this session.
+    pub total_output_tokens: u64,
+    /// Cumulative estimated cost in USD this session.
+    pub total_cost_usd: f64,
+    /// Whether to show usage info in the status bar.
+    pub show_usage: bool,
+
     // -- Connection --
     /// Whether the last daemon poll succeeded.
     pub connected: bool,
@@ -150,11 +160,13 @@ pub struct ChatApp {
     client: Option<DaemonClient>,
     /// When we last polled the daemon.
     last_poll: Instant,
+    /// Pricing table for cost calculation.
+    pricing: aegis_proxy::pricing::PricingTable,
 }
 
 /// Commands recognized by the minimal command bar.
 const COMMANDS: &[&str] = &[
-    "quit", "q", "clear", "model", "help",
+    "quit", "q", "clear", "model", "help", "usage",
     "daemon start", "daemon stop", "daemon status",
     "daemon restart", "daemon reload", "daemon init",
 ];
@@ -192,12 +204,18 @@ impl ChatApp {
             command_result: None,
             command_result_at: None,
 
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
+            show_usage: true,
+
             connected: false,
             last_error: None,
 
             client,
             // Force immediate first poll.
             last_poll: Instant::now() - std::time::Duration::from_secs(10),
+            pricing: aegis_proxy::pricing::PricingTable::with_defaults(),
         }
     }
 
@@ -259,6 +277,19 @@ impl ChatApp {
 
             match event {
                 AgentLoopEvent::Response(resp) => {
+                    // Track usage.
+                    self.total_input_tokens += resp.usage.input_tokens;
+                    self.total_output_tokens += resp.usage.output_tokens;
+                    if let Some(cost) = self.pricing.calculate_cost(
+                        &resp.model,
+                        resp.usage.input_tokens,
+                        resp.usage.output_tokens,
+                        0,
+                        0,
+                    ) {
+                        self.total_cost_usd += cost;
+                    }
+
                     // Build assistant message with tool calls if present.
                     let mut assistant_msg = LlmMessage::assistant(resp.content.clone());
                     assistant_msg.tool_calls = resp.tool_calls.clone();
@@ -863,8 +894,18 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    ":quit  :clear  :model <name>  :daemon start|stop|status|restart|reload|init",
+                    ":quit  :clear  :model <name>  :usage  :daemon start|stop|status|restart|reload|init",
                 );
+            }
+            "usage" => {
+                let total_tokens = self.total_input_tokens + self.total_output_tokens;
+                self.set_result(format!(
+                    "Session: {} tokens ({}in/{}out) | ${:.4}",
+                    total_tokens,
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                    self.total_cost_usd,
+                ));
             }
             _ if trimmed.starts_with("model ") => {
                 let new_model = trimmed.strip_prefix("model ").unwrap().trim();

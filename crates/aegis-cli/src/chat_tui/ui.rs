@@ -187,7 +187,15 @@ fn draw_input_area(f: &mut Frame, app: &ChatApp, area: Rect) {
 
 /// Draw the status bar.
 fn draw_status_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let status = render::render_status_bar(&app.model, area.width);
+    let usage = if app.show_usage && app.total_input_tokens + app.total_output_tokens > 0 {
+        Some(render::UsageInfo {
+            total_tokens: app.total_input_tokens + app.total_output_tokens,
+            cost_usd: app.total_cost_usd,
+        })
+    } else {
+        None
+    };
+    let status = render::render_status_bar(&app.model, area.width, usage.as_ref());
     let para = Paragraph::new(vec![status])
         .style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
