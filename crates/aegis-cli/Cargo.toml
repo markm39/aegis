@@ -49,5 +49,6 @@ tempfile = { workspace = true }
 dialoguer = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+reqwest = { workspace = true }
 ctrlc = "3"
 libc = "0.2"

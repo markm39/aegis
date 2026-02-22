@@ -8,6 +8,7 @@ pub mod event;
 pub mod markdown;
 pub mod message;
 pub mod render;
+pub mod streaming;
 pub mod system_prompt;
 mod ui;
 
@@ -51,6 +52,8 @@ pub enum InputMode {
 enum AgentLoopEvent {
     /// LLM returned a text response (final -- loop ended).
     Response(LlmResponse),
+    /// Incremental text from a streaming LLM response.
+    StreamDelta(String),
     /// LLM wants to call tools -- display them to the user.
     ToolCalls(Vec<LlmToolCall>),
     /// A tool finished executing -- display the result.
@@ -261,10 +264,36 @@ impl ChatApp {
                     assistant_msg.tool_calls = resp.tool_calls.clone();
                     self.conversation.push(assistant_msg);
 
+                    // If we were streaming, the display message already exists.
+                    // Only create a new display message if we weren't streaming.
                     if !resp.content.is_empty() {
+                        let already_streaming = self
+                            .messages
+                            .last()
+                            .is_some_and(|m| m.role == MessageRole::Assistant);
+                        if !already_streaming {
+                            self.messages.push(ChatMessage::new(
+                                MessageRole::Assistant,
+                                resp.content,
+                            ));
+                        }
+                    }
+                    self.scroll_offset = 0;
+                }
+                AgentLoopEvent::StreamDelta(text) => {
+                    // Append to the current assistant message, or create one.
+                    let is_assistant = self
+                        .messages
+                        .last()
+                        .is_some_and(|m| m.role == MessageRole::Assistant);
+                    if is_assistant {
+                        if let Some(msg) = self.messages.last_mut() {
+                            msg.content.push_str(&text);
+                        }
+                    } else {
                         self.messages.push(ChatMessage::new(
                             MessageRole::Assistant,
-                            resp.content,
+                            text,
                         ));
                     }
                     self.scroll_offset = 0;
@@ -1199,48 +1228,52 @@ struct AgentLoopParams {
 /// calls, executes them and loops. Safe tools are auto-approved; dangerous
 /// tools require user approval via the `approval_rx` channel.
 fn run_agent_loop(
-    params: AgentLoopParams,
+    mut params: AgentLoopParams,
     event_tx: mpsc::Sender<AgentLoopEvent>,
     approval_rx: mpsc::Receiver<bool>,
 ) {
     let client = DaemonClient::new(params.socket_path.clone());
     let auto_approve_all = params.auto_approve;
-    let mut conversation = params.conversation;
+    let mut conversation = std::mem::take(&mut params.conversation);
 
     // Maximum iterations to prevent infinite loops.
     const MAX_ITERATIONS: usize = 50;
 
     for _iteration in 0..MAX_ITERATIONS {
-        // Serialize conversation.
-        let messages = match serde_json::to_value(&conversation) {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = event_tx.send(AgentLoopEvent::Error(format!(
-                    "failed to serialize conversation: {e}"
-                )));
-                let _ = event_tx.send(AgentLoopEvent::Done);
-                return;
-            }
-        };
-
-        let cmd = DaemonCommand::LlmComplete {
-            model: params.model.clone(),
-            messages,
-            temperature: None,
-            max_tokens: None,
-            system_prompt: Some(params.sys_prompt.clone()),
-            tools: params.tool_defs.clone(),
-        };
-
-        // Send LLM request with long timeout.
-        let result = send_with_timeout(&client, &cmd, LLM_TIMEOUT_SECS);
-
-        let resp = match parse_llm_response(result) {
+        // Try streaming first, fall back to daemon if unsupported.
+        let resp = match try_streaming_call(&params, &conversation, &event_tx) {
             Ok(r) => r,
-            Err(e) => {
-                let _ = event_tx.send(AgentLoopEvent::Error(e));
-                let _ = event_tx.send(AgentLoopEvent::Done);
-                return;
+            Err(_stream_err) => {
+                // Streaming not supported for this model -- fall back to daemon.
+                let messages = match serde_json::to_value(&conversation) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = event_tx.send(AgentLoopEvent::Error(format!(
+                            "failed to serialize conversation: {e}"
+                        )));
+                        let _ = event_tx.send(AgentLoopEvent::Done);
+                        return;
+                    }
+                };
+
+                let cmd = DaemonCommand::LlmComplete {
+                    model: params.model.clone(),
+                    messages,
+                    temperature: None,
+                    max_tokens: None,
+                    system_prompt: Some(params.sys_prompt.clone()),
+                    tools: params.tool_defs.clone(),
+                };
+
+                let result = send_with_timeout(&client, &cmd, LLM_TIMEOUT_SECS);
+                match parse_llm_response(result) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = event_tx.send(AgentLoopEvent::Error(e));
+                        let _ = event_tx.send(AgentLoopEvent::Done);
+                        return;
+                    }
+                }
             }
         };
 
@@ -1310,6 +1343,26 @@ fn run_agent_loop(
         "Agentic loop exceeded maximum iterations (50). Stopping.".into(),
     ));
     let _ = event_tx.send(AgentLoopEvent::Done);
+}
+
+/// Attempt a streaming LLM call. Returns `Err` if the model doesn't support
+/// streaming (caller should fall back to the daemon's blocking path).
+fn try_streaming_call(
+    params: &AgentLoopParams,
+    conversation: &[LlmMessage],
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+) -> Result<LlmResponse, String> {
+    let stream_params = streaming::StreamingCallParams {
+        model: params.model.clone(),
+        messages: conversation.to_vec(),
+        system_prompt: Some(params.sys_prompt.clone()),
+        tools: params.tool_defs.clone(),
+        temperature: None,
+        max_tokens: None,
+    };
+
+    let result = streaming::stream_llm_call(&stream_params, event_tx)?;
+    Ok(result.response)
 }
 
 /// Parse an LLM response from a daemon response.
