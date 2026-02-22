@@ -48,7 +48,7 @@ pub enum AuthMethod {
 }
 
 /// Tier grouping for display in the wizard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderTier {
     /// Major cloud AI providers.

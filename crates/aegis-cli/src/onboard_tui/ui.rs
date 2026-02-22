@@ -1,7 +1,7 @@
 //! TUI rendering for the onboarding wizard.
 //!
-//! Two screens: Welcome (environment scan results) and ProviderSelection
-//! (pick an LLM provider from the detected list).
+//! Renders all 9 wizard steps with consistent layout: title bar, content area,
+//! and help bar.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -9,249 +9,935 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use super::app::{all_providers, OnboardApp, OnboardStep};
+use super::app::{
+    filtered_providers, ConfigAction, GatewayField, OnboardApp, OnboardStep, ProviderSubStep,
+    BIND_OPTIONS,
+};
+
+// ---------------------------------------------------------------------------
+// Colors
+// ---------------------------------------------------------------------------
+
+const CYAN: Color = Color::Cyan;
+const GREEN: Color = Color::Green;
+const RED: Color = Color::Red;
+const YELLOW: Color = Color::Yellow;
+const DIM: Color = Color::DarkGray;
+const WHITE: Color = Color::White;
 
 // ---------------------------------------------------------------------------
 // Main draw
 // ---------------------------------------------------------------------------
 
-/// Main draw function -- dispatches to the appropriate step renderer.
+/// Draw the wizard to the terminal frame.
 pub fn draw(f: &mut Frame, app: &OnboardApp) {
-    let area = f.area();
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Title
-            Constraint::Min(5),   // Content
+            Constraint::Length(3),  // Title
+            Constraint::Min(5),    // Content
             Constraint::Length(3), // Help
         ])
-        .split(area);
+        .split(f.area());
 
-    // Title bar with progress.
-    let progress = app.progress_text();
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "Aegis Setup",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(progress, Style::default().fg(Color::DarkGray)),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
-    f.render_widget(title, chunks[0]);
+    draw_title(f, app, chunks[0]);
 
-    // Content area.
     match app.step {
-        OnboardStep::Welcome => draw_welcome(f, app, chunks[1]),
+        OnboardStep::ConfigDetection => draw_config_detection(f, app, chunks[1]),
         OnboardStep::ProviderSelection => draw_provider_selection(f, app, chunks[1]),
-        OnboardStep::Done | OnboardStep::Cancelled => {}
+        OnboardStep::WorkspaceConfig => draw_workspace_config(f, app, chunks[1]),
+        OnboardStep::GatewayConfig => draw_gateway_config(f, app, chunks[1]),
+        OnboardStep::ChannelSelection => draw_channel_selection(f, app, chunks[1]),
+        OnboardStep::ServiceInstall => draw_service_install(f, app, chunks[1]),
+        OnboardStep::HealthCheck => draw_health_check(f, app, chunks[1]),
+        OnboardStep::SkillSelection => draw_skill_selection(f, app, chunks[1]),
+        OnboardStep::Finish => draw_finish(f, app, chunks[1]),
+        OnboardStep::Cancelled => {}
     }
 
-    // Help bar.
-    let help_text = match app.step {
-        OnboardStep::Welcome => "Enter: continue  Esc: quit",
-        OnboardStep::ProviderSelection => "j/k: navigate  Enter: select  Esc: back",
-        OnboardStep::Done | OnboardStep::Cancelled => "",
-    };
-
-    let help = Paragraph::new(Span::styled(
-        help_text,
-        Style::default().fg(Color::DarkGray),
-    ))
-    .block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
-    f.render_widget(help, chunks[2]);
+    draw_help(f, app, chunks[2]);
 }
 
 // ---------------------------------------------------------------------------
-// Welcome screen
+// Title bar
 // ---------------------------------------------------------------------------
 
-fn draw_welcome(f: &mut Frame, app: &OnboardApp, area: Rect) {
+fn draw_title(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let progress = app.progress_text();
+    let title = if progress.is_empty() {
+        "Aegis Setup".to_string()
+    } else {
+        format!("Aegis Setup  |  {progress}")
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title(Span::styled(
+            title,
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ));
+    f.render_widget(block, area);
+}
+
+// ---------------------------------------------------------------------------
+// Help bar
+// ---------------------------------------------------------------------------
+
+fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let help_text = match app.step {
+        OnboardStep::ConfigDetection => {
+            if app.existing_config {
+                "j/k: navigate  Enter: select  Esc: quit"
+            } else {
+                "Enter: continue  Esc: quit"
+            }
+        }
+        OnboardStep::ProviderSelection => match app.provider_sub_step {
+            ProviderSubStep::SelectProvider => {
+                if app.provider_searching {
+                    "Type to search  Enter: confirm  Esc: cancel search"
+                } else {
+                    "j/k: navigate  /: search  a: enter API key  Enter: select  Esc: back"
+                }
+            }
+            ProviderSubStep::SelectModel => "j/k: navigate  Enter: confirm  Esc: back",
+            ProviderSubStep::EnterApiKey => "Enter: save key  Esc: cancel",
+        },
+        OnboardStep::WorkspaceConfig => "Enter: confirm  Esc: back",
+        OnboardStep::GatewayConfig => "Tab/Shift+Tab: next/prev field  Enter: continue  Esc: back",
+        OnboardStep::ChannelSelection => {
+            "j/k: navigate  Space: toggle  Enter: continue  Esc: back"
+        }
+        OnboardStep::ServiceInstall => "j/k: navigate  Enter: confirm  Esc: back",
+        OnboardStep::HealthCheck => {
+            if app.health_checked {
+                "r: re-check  Enter: continue  Esc: back"
+            } else {
+                "Enter: run checks  Esc: back"
+            }
+        }
+        OnboardStep::SkillSelection => {
+            "j/k: navigate  Space: toggle  a: select all  Enter: finish  Esc: back"
+        }
+        OnboardStep::Finish => "Enter/q: exit to fleet TUI",
+        OnboardStep::Cancelled => "",
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(DIM));
+    let para = Paragraph::new(Line::from(Span::styled(
+        help_text,
+        Style::default().fg(DIM),
+    )))
+    .block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: Config Detection
+// ---------------------------------------------------------------------------
+
+fn draw_config_detection(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Welcome");
+
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "                    Welcome to Aegis",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Detected providers:",
-            Style::default().fg(Color::White),
+            "  Welcome to Aegis",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
 
-    // API key providers.
-    for provider in &app.env_scan.api_keys {
-        let (tag, tag_color) = if provider.present {
-            ("[OK]", Color::Green)
-        } else {
-            ("[--]", Color::DarkGray)
-        };
-        // Pad label + env_var to align tags.
-        let label_part = format!(
-            "    {} ({})",
-            provider.label, provider.env_var
-        );
-        let pad_width = 46usize.saturating_sub(label_part.len());
-        let padding = " ".repeat(pad_width);
+    if app.existing_config {
+        lines.push(Line::from(Span::styled(
+            "  Existing configuration found at:",
+            Style::default().fg(WHITE),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                aegis_types::daemon::daemon_config_path().display()
+            ),
+            Style::default().fg(YELLOW),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  What would you like to do?",
+            Style::default().fg(WHITE),
+        )));
+        lines.push(Line::from(""));
 
-        lines.push(Line::from(vec![
-            Span::styled(label_part, Style::default().fg(Color::White)),
-            Span::raw(padding),
-            Span::styled(tag, Style::default().fg(tag_color)),
-        ]));
+        for (i, action) in ConfigAction::ALL.iter().enumerate() {
+            let marker = if i == app.config_action_selected {
+                "> "
+            } else {
+                "  "
+            };
+            let style = if i == app.config_action_selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(WHITE)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {marker}{}", action.label()),
+                style,
+            )));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  No existing configuration found.",
+            Style::default().fg(WHITE),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  This wizard will guide you through setting up Aegis.",
+            Style::default().fg(DIM),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Press Enter to begin.",
+            Style::default().fg(WHITE),
+        )));
     }
 
-    // Ollama.
-    let (ollama_tag, ollama_color) = if app.env_scan.ollama_running {
-        ("[Running]", Color::Green)
-    } else {
-        ("[--]", Color::DarkGray)
-    };
-    let ollama_label = "    Ollama (localhost:11434)";
-    let ollama_pad = 46usize.saturating_sub(ollama_label.len());
-    lines.push(Line::from(vec![
-        Span::styled(ollama_label, Style::default().fg(Color::White)),
-        Span::raw(" ".repeat(ollama_pad)),
-        Span::styled(ollama_tag, Style::default().fg(ollama_color)),
-    ]));
-
-    lines.push(Line::from(""));
-
-    // Aegis directory.
-    let (dir_tag, dir_color) = if app.env_scan.aegis_dir_ok {
-        ("[OK]", Color::Green)
-    } else {
-        ("[FAIL]", Color::Red)
-    };
-    let dir_label = format!("  Aegis directory: {}", app.env_scan.aegis_dir_path);
-    let dir_pad = 48usize.saturating_sub(dir_label.len());
-    lines.push(Line::from(vec![
-        Span::styled(dir_label, Style::default().fg(Color::White)),
-        Span::raw(" ".repeat(dir_pad)),
-        Span::styled(dir_tag, Style::default().fg(dir_color)),
-    ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Press Enter to continue, Esc to quit",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    let p = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Welcome"),
-    );
-    f.render_widget(p, area);
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
 }
 
 // ---------------------------------------------------------------------------
-// Provider Selection screen
+// Step 2: Provider Selection
 // ---------------------------------------------------------------------------
 
 fn draw_provider_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
-    let providers = all_providers(&app.env_scan);
+    match app.provider_sub_step {
+        ProviderSubStep::SelectProvider => draw_provider_list(f, app, area),
+        ProviderSubStep::SelectModel => draw_model_selection(f, app, area),
+        ProviderSubStep::EnterApiKey => draw_api_key_input(f, app, area),
+    }
+}
+
+fn draw_provider_list(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Select Provider");
+
+    let filtered = filtered_providers(app);
+    let mut lines = vec![Line::from("")];
+
+    // Search bar.
+    if app.provider_searching {
+        let search_spans = build_cursor_spans(&app.provider_search, app.provider_search_cursor);
+        let mut search_line = vec![Span::styled("  Search: ", Style::default().fg(YELLOW))];
+        search_line.extend(search_spans);
+        lines.push(Line::from(search_line));
+        lines.push(Line::from(""));
+    }
+
+    // Tier grouping.
+    let mut current_tier = None;
+    for &idx in &filtered {
+        let provider = &app.providers[idx];
+        let tier = provider.info.tier;
+
+        if current_tier != Some(tier) {
+            current_tier = Some(tier);
+            if lines.len() > 2 {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  {:?}", tier),
+                Style::default()
+                    .fg(YELLOW)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+        }
+
+        let is_selected = idx == app.provider_selected;
+        let marker = if is_selected { "> " } else { "  " };
+
+        let name_style = if !provider.available {
+            Style::default().fg(DIM)
+        } else if is_selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WHITE)
+        };
+
+        let status_style = if provider.available {
+            Style::default().fg(GREEN)
+        } else {
+            Style::default().fg(DIM)
+        };
+
+        let name = format!("  {marker}{:<20}", provider.info.display_name);
+        let model = format!("{:<28}", provider.info.default_model);
+        let status = provider.detection_label;
+
+        lines.push(Line::from(vec![
+            Span::styled(name, name_style),
+            Span::styled(model, if provider.available { name_style } else { Style::default().fg(DIM) }),
+            Span::styled(status, status_style),
+        ]));
+    }
+
+    // Error message.
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_model_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Select Model");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        if provider.info.models.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  Default: {}", provider.info.default_model),
+                Style::default().fg(WHITE),
+            )));
+        } else {
+            for (i, model) in provider.info.models.iter().enumerate() {
+                let is_selected = i == app.model_selected;
+                let marker = if is_selected { "> " } else { "  " };
+                let is_default = model.id == provider.info.default_model;
+                let default_tag = if is_default { " (default)" } else { "" };
+
+                let style = if is_selected {
+                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(WHITE)
+                };
+
+                lines.push(Line::from(Span::styled(
+                    format!("  {marker}{}{default_tag}", model.id),
+                    style,
+                )));
+            }
+        }
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_api_key_input(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Enter API Key");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+
+        if !provider.info.env_var.is_empty() {
+            let env_var = provider.info.env_var;
+            lines.push(Line::from(Span::styled(
+                format!("  Environment variable: {env_var}"),
+                Style::default().fg(DIM),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter your API key:",
+        Style::default().fg(WHITE),
+    )));
+    lines.push(Line::from(""));
+
+    // Masked key input with cursor.
+    let masked: String = "*".repeat(app.api_key_input.len());
+    let cursor_spans = build_cursor_spans(&masked, app.api_key_cursor);
+    let mut input_line = vec![Span::styled("  ", Style::default())];
+    input_line.extend(cursor_spans);
+    lines.push(Line::from(input_line));
+
+    // Error message.
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: Workspace Config
+// ---------------------------------------------------------------------------
+
+fn draw_workspace_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Workspace");
 
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "                  Select a Provider",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            "  Workspace Directory",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Where should Aegis store agent workspaces and session data?",
+            Style::default().fg(WHITE),
         )),
         Line::from(""),
     ];
 
-    for (i, provider) in providers.iter().enumerate() {
-        let selected = i == app.provider_selected;
-        let marker = if selected { "  > " } else { "    " };
+    let cursor_spans = build_cursor_spans(&app.workspace_path, app.workspace_cursor);
+    let mut input_line = vec![Span::styled("  ", Style::default())];
+    input_line.extend(cursor_spans);
+    lines.push(Line::from(input_line));
 
-        let (label_color, model_color, status_color) = if !provider.present {
-            (Color::DarkGray, Color::DarkGray, Color::DarkGray)
-        } else if selected {
-            (Color::Cyan, Color::Cyan, Color::Green)
-        } else {
-            (Color::White, Color::DarkGray, Color::Green)
-        };
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
 
-        let label_style = if selected && provider.present {
-            Style::default()
-                .fg(label_color)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(label_color)
-        };
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
 
-        // Build status tag.
-        let status_tag = if provider.label == "Ollama" {
-            if provider.present {
-                "[Running]"
-            } else {
-                "[--]"
-            }
-        } else if provider.present {
-            "[API Key Set]"
-        } else {
-            "[--]"
-        };
+// ---------------------------------------------------------------------------
+// Step 4: Gateway Config
+// ---------------------------------------------------------------------------
 
-        // Pad label + model to align status tags.
-        let label_model = format!("{}{:<16}{:<24}", marker, provider.label, provider.default_model);
-        let pad_width = 50usize.saturating_sub(label_model.len());
-        let padding = " ".repeat(pad_width);
+fn draw_gateway_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Gateway");
 
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{}{:<16}", marker, provider.label),
-                label_style,
-            ),
-            Span::styled(
-                format!("{:<24}", provider.default_model),
-                Style::default().fg(model_color),
-            ),
-            Span::raw(padding),
-            Span::styled(status_tag, Style::default().fg(status_color)),
-        ]));
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Control Server Configuration",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    // Port field.
+    let port_active = app.gateway_field == GatewayField::Port;
+    let port_label_style = if port_active {
+        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(WHITE)
+    };
+    lines.push(Line::from(Span::styled("  Port:", port_label_style)));
+
+    if port_active {
+        let cursor_spans = build_cursor_spans(&app.gateway_port, app.gateway_port_cursor);
+        let mut input_line = vec![Span::styled("  ", Style::default())];
+        input_line.extend(cursor_spans);
+        lines.push(Line::from(input_line));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", app.gateway_port),
+            Style::default().fg(DIM),
+        )));
     }
 
     lines.push(Line::from(""));
 
-    // Error message if present.
-    if let Some(err) = &app.selection_error {
-        lines.push(Line::from(Span::styled(
-            format!("  {err}"),
-            Style::default().fg(Color::Red),
-        )));
-        lines.push(Line::from(""));
-    }
-
+    // Bind address field.
+    let bind_active = app.gateway_field == GatewayField::BindAddress;
+    let bind_label_style = if bind_active {
+        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(WHITE)
+    };
     lines.push(Line::from(Span::styled(
-        "  j/k to navigate, Enter to select",
-        Style::default().fg(Color::DarkGray),
+        "  Bind Address:",
+        bind_label_style,
     )));
 
-    let p = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title("Provider"),
-    );
-    f.render_widget(p, area);
+    for (i, (addr, desc)) in BIND_OPTIONS.iter().enumerate() {
+        let is_selected = i == app.gateway_bind_selected;
+        let marker = if is_selected { "> " } else { "  " };
+        let style = if bind_active && is_selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else if bind_active {
+            Style::default().fg(WHITE)
+        } else {
+            Style::default().fg(DIM)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {marker}{addr} - {desc}"),
+            style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // Auth token field.
+    let token_active = app.gateway_field == GatewayField::AuthToken;
+    let token_label_style = if token_active {
+        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(WHITE)
+    };
+    lines.push(Line::from(Span::styled(
+        "  API Token:",
+        token_label_style,
+    )));
+
+    if token_active {
+        let cursor_spans = build_cursor_spans(&app.gateway_token, app.gateway_token_cursor);
+        let mut input_line = vec![Span::styled("  ", Style::default())];
+        input_line.extend(cursor_spans);
+        lines.push(Line::from(input_line));
+    } else {
+        let masked = if app.gateway_token.len() > 8 {
+            format!(
+                "{}...{}",
+                &app.gateway_token[..4],
+                &app.gateway_token[app.gateway_token.len() - 4..]
+            )
+        } else {
+            app.gateway_token.clone()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {masked}"),
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 5: Channel Selection
+// ---------------------------------------------------------------------------
+
+fn draw_channel_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Channels");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Select Messaging Channels",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Configure channels later from the TUI with :config",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, ch) in app.channels.iter().enumerate() {
+        let is_selected = i == app.channel_selected;
+        let marker = if is_selected { "> " } else { "  " };
+        let checkbox = if ch.selected { "[x]" } else { "[ ]" };
+
+        let style = if is_selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WHITE)
+        };
+
+        let desc_style = Style::default().fg(DIM);
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker}{checkbox} "), style),
+            Span::styled(format!("{:<12}", ch.label), style),
+            Span::styled(ch.description, desc_style),
+        ]));
+    }
+
+    let selected_count = app.channels.iter().filter(|c| c.selected).count();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {selected_count} channel(s) selected"),
+        Style::default().fg(DIM),
+    )));
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 6: Service Install
+// ---------------------------------------------------------------------------
+
+fn draw_service_install(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Service");
+
+    let platform = if cfg!(target_os = "macos") {
+        "macOS (launchd)"
+    } else if cfg!(target_os = "linux") {
+        "Linux (systemd)"
+    } else {
+        "Current platform"
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Daemon Service Installation",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Platform: {platform}"),
+            Style::default().fg(WHITE),
+        )),
+        Line::from(Span::styled(
+            "  Install as a system service to auto-start on login.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    let options = ["Install service", "Skip"];
+    for (i, opt) in options.iter().enumerate() {
+        let is_selected = i == app.service_action_selected;
+        let marker = if is_selected { "> " } else { "  " };
+        let style = if is_selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WHITE)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {marker}{opt}"),
+            style,
+        )));
+    }
+
+    if let Some(ref status) = app.service_status {
+        lines.push(Line::from(""));
+        let color = if status.contains("failed") || status.contains("Failed") {
+            RED
+        } else {
+            GREEN
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {status}"),
+            Style::default().fg(color),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 7: Health Check
+// ---------------------------------------------------------------------------
+
+fn draw_health_check(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Health");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Health Verification",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if app.health_results.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Press Enter to run health checks.",
+            Style::default().fg(WHITE),
+        )));
+    } else {
+        for result in &app.health_results {
+            let (icon, color) = if result.passed {
+                ("[OK]", GREEN)
+            } else {
+                ("[!!]", RED)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {icon} "), Style::default().fg(color)),
+                Span::styled(
+                    format!("{:<20}", result.label),
+                    Style::default().fg(WHITE),
+                ),
+                Span::styled(&result.message, Style::default().fg(DIM)),
+            ]));
+        }
+
+        let passed = app.health_results.iter().filter(|r| r.passed).count();
+        let total = app.health_results.len();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {passed}/{total} checks passed"),
+            Style::default().fg(if passed == total { GREEN } else { YELLOW }),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 8: Skill Selection
+// ---------------------------------------------------------------------------
+
+fn draw_skill_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Skills");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Select Skills to Install",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if app.skills.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No skills found.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        // Show visible window of skills.
+        let visible_height = area.height.saturating_sub(8) as usize;
+        let visible_height = visible_height.max(5);
+        let end = (app.skill_scroll_offset + visible_height).min(app.skills.len());
+
+        let mut current_category = None;
+        for i in app.skill_scroll_offset..end {
+            let skill = &app.skills[i];
+
+            // Category header.
+            if current_category.as_ref() != Some(&skill.category) {
+                current_category = Some(skill.category.clone());
+                if i > app.skill_scroll_offset {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", skill.category.to_uppercase()),
+                    Style::default()
+                        .fg(YELLOW)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                )));
+            }
+
+            let is_selected = i == app.skill_selected;
+            let marker = if is_selected { "> " } else { "  " };
+            let checkbox = if skill.selected { "[x]" } else { "[ ]" };
+            let installed_tag = if skill.installed { " [installed]" } else { "" };
+
+            let style = if is_selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(WHITE)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {marker}{checkbox} "), style),
+                Span::styled(format!("{:<24}", skill.name), style),
+                Span::styled(installed_tag, Style::default().fg(GREEN)),
+            ]));
+        }
+
+        let selected_count = app.skills.iter().filter(|s| s.selected).count();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {selected_count}/{} skill(s) selected  |  Showing {}-{} of {}",
+                app.skills.len(),
+                app.skill_scroll_offset + 1,
+                end,
+                app.skills.len()
+            ),
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 9: Finish
+// ---------------------------------------------------------------------------
+
+fn draw_finish(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Setup Complete");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Aegis Setup Complete",
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    // Summary.
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(vec![
+            Span::styled("  Provider:  ", Style::default().fg(WHITE)),
+            Span::styled(provider.info.display_name, Style::default().fg(CYAN)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Model:     ", Style::default().fg(WHITE)),
+            Span::styled(app.selected_model(), Style::default().fg(CYAN)),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("  Gateway:   ", Style::default().fg(WHITE)),
+        Span::styled(
+            format!(
+                "{}:{}",
+                BIND_OPTIONS
+                    .get(app.gateway_bind_selected)
+                    .map(|(a, _)| *a)
+                    .unwrap_or("127.0.0.1"),
+                app.gateway_port
+            ),
+            Style::default().fg(CYAN),
+        ),
+    ]));
+
+    let channel_count = app.channels.iter().filter(|c| c.selected).count();
+    lines.push(Line::from(vec![
+        Span::styled("  Channels:  ", Style::default().fg(WHITE)),
+        Span::styled(
+            format!("{channel_count} configured"),
+            Style::default().fg(CYAN),
+        ),
+    ]));
+
+    let skill_count = app.skills.iter().filter(|s| s.selected).count();
+    lines.push(Line::from(vec![
+        Span::styled("  Skills:    ", Style::default().fg(WHITE)),
+        Span::styled(
+            format!("{skill_count} selected"),
+            Style::default().fg(CYAN),
+        ),
+    ]));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Configuration saved to ~/.aegis/daemon/daemon.toml",
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Daemon is starting. Press Enter to continue to the fleet TUI.",
+        Style::default().fg(WHITE),
+    )));
+
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Cursor rendering
+// ---------------------------------------------------------------------------
+
+/// Build spans for a text input with a visible cursor block.
+///
+/// Characters before the cursor are yellow, the character at the cursor is
+/// rendered with inverted colors (black on yellow), and characters after are
+/// yellow. If the cursor is at the end, a yellow block space is shown.
+fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
+    let mut pos = cursor_pos.min(text.len());
+    // Clamp to char boundary.
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
+
+    let mut spans = Vec::new();
+
+    // Before cursor.
+    if pos > 0 {
+        spans.push(Span::styled(
+            &text[..pos],
+            Style::default().fg(YELLOW),
+        ));
+    }
+
+    // At cursor.
+    if pos < text.len() {
+        let ch = text[pos..].chars().next().unwrap();
+        let end = pos + ch.len_utf8();
+        spans.push(Span::styled(
+            &text[pos..end],
+            Style::default().fg(Color::Black).bg(YELLOW),
+        ));
+        // After cursor.
+        if end < text.len() {
+            spans.push(Span::styled(
+                &text[end..],
+                Style::default().fg(YELLOW),
+            ));
+        }
+    } else {
+        // At end of line: show cursor as space with background.
+        spans.push(Span::styled(
+            " ",
+            Style::default().bg(YELLOW),
+        ));
+    }
+
+    spans
 }
