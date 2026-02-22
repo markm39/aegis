@@ -47,6 +47,8 @@ pub mod tool_contract;
 pub mod toolkit_runtime;
 pub mod message_routing;
 pub mod scheduled_reply;
+pub mod heartbeat;
+pub mod deferred_reply;
 pub mod audio_transcription;
 pub mod image_understanding;
 pub mod link_understanding;

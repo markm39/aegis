@@ -1621,6 +1621,294 @@ fn render_lang_template(template: &str, lang: Option<&str>) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Rich template system (#52)
+// ---------------------------------------------------------------------------
+
+/// Built-in variables available in rich templates.
+///
+/// These are the variable names recognized by [`RichTemplate::render`].
+/// Any `{{variable}}` not in this list is left as-is (fail-safe).
+const RICH_TEMPLATE_VARIABLES: &[&str] = &[
+    "sender",
+    "time",
+    "agent_name",
+    "channel",
+    "lang",
+    "message",
+];
+
+/// Maximum template length (4096 chars). Prevents resource exhaustion from
+/// extremely large templates.
+const MAX_TEMPLATE_LENGTH: usize = 4096;
+
+/// Context data for rich template rendering.
+#[derive(Debug, Clone, Default)]
+pub struct TemplateContext {
+    /// The sender's name or identifier.
+    pub sender: String,
+    /// Current time as a human-readable string.
+    pub time: String,
+    /// The agent name processing the message.
+    pub agent_name: String,
+    /// The channel name (e.g., "telegram", "slack").
+    pub channel: String,
+    /// Detected language code (e.g., "en"), or "unknown".
+    pub lang: String,
+    /// The original inbound message text.
+    pub message: String,
+}
+
+/// A rich template with `{{variable}}` placeholders and conditional sections.
+///
+/// Supports:
+/// - `{{sender}}`, `{{time}}`, `{{agent_name}}`, `{{channel}}`, `{{lang}}`, `{{message}}`
+/// - Conditional sections: `{{#if variable}}...{{/if}}`
+///
+/// Conditionals evaluate to true if the variable is non-empty and not "unknown".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RichTemplate {
+    /// The template text with placeholders.
+    pub text: String,
+}
+
+impl RichTemplate {
+    /// Create a new template from a string.
+    ///
+    /// Validates the template length.
+    pub fn new(text: &str) -> Result<Self, String> {
+        if text.len() > MAX_TEMPLATE_LENGTH {
+            return Err(format!(
+                "template too long: {} chars > {MAX_TEMPLATE_LENGTH} max",
+                text.len()
+            ));
+        }
+        Ok(Self {
+            text: text.to_string(),
+        })
+    }
+
+    /// Validate that this template only references known variables.
+    ///
+    /// Returns `Ok(())` if all `{{variable}}` references and `{{#if variable}}`
+    /// conditions use recognized variable names. Returns `Err` with the first
+    /// unrecognized variable.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut rest = self.text.as_str();
+
+        while let Some(start) = rest.find("{{") {
+            let after_open = &rest[start + 2..];
+            if let Some(end) = after_open.find("}}") {
+                let inner = after_open[..end].trim();
+
+                // Skip closing tags like {{/if}}.
+                if inner.starts_with('/') {
+                    rest = &after_open[end + 2..];
+                    continue;
+                }
+
+                // Handle conditional: {{#if variable}}.
+                if let Some(var) = inner.strip_prefix("#if ") {
+                    let var = var.trim();
+                    if !RICH_TEMPLATE_VARIABLES.contains(&var) {
+                        return Err(format!(
+                            "unknown template variable in conditional: '{var}'. Allowed: {}",
+                            RICH_TEMPLATE_VARIABLES.join(", ")
+                        ));
+                    }
+                    rest = &after_open[end + 2..];
+                    continue;
+                }
+
+                // Regular variable.
+                if !RICH_TEMPLATE_VARIABLES.contains(&inner) {
+                    return Err(format!(
+                        "unknown template variable: '{inner}'. Allowed: {}",
+                        RICH_TEMPLATE_VARIABLES.join(", ")
+                    ));
+                }
+
+                rest = &after_open[end + 2..];
+            } else {
+                // Unclosed {{ -- stop scanning.
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Render the template with the given context.
+    ///
+    /// Substitutes `{{variable}}` placeholders and evaluates `{{#if variable}}...{{/if}}`
+    /// conditional sections. A conditional is "truthy" if the variable is non-empty
+    /// and not equal to "unknown".
+    ///
+    /// Unknown variables are left as-is (fail-safe). Output is sanitized to
+    /// remove control characters.
+    pub fn render(&self, ctx: &TemplateContext) -> String {
+        let vars: HashMap<&str, &str> = HashMap::from([
+            ("sender", ctx.sender.as_str()),
+            ("time", ctx.time.as_str()),
+            ("agent_name", ctx.agent_name.as_str()),
+            ("channel", ctx.channel.as_str()),
+            ("lang", ctx.lang.as_str()),
+            ("message", ctx.message.as_str()),
+        ]);
+
+        // Phase 1: Process conditionals.
+        let after_conditionals = self.process_conditionals(&self.text, &vars);
+
+        // Phase 2: Substitute variables.
+        let mut result = after_conditionals;
+        for &var_name in RICH_TEMPLATE_VARIABLES {
+            if let Some(value) = vars.get(var_name) {
+                let placeholder = format!("{{{{{var_name}}}}}");
+                result = result.replace(&placeholder, value);
+            }
+        }
+
+        // Sanitize output.
+        sanitize_response(&result)
+    }
+
+    /// Process `{{#if variable}}...{{/if}}` conditionals.
+    ///
+    /// If the variable is truthy (non-empty, not "unknown"), include the inner
+    /// content. Otherwise, remove the entire conditional block.
+    ///
+    /// Nesting is not supported -- nested conditionals are left as-is.
+    fn process_conditionals(&self, text: &str, vars: &HashMap<&str, &str>) -> String {
+        let mut result = String::with_capacity(text.len());
+        let mut rest = text;
+
+        while let Some(if_start) = rest.find("{{#if ") {
+            // Add everything before the conditional.
+            result.push_str(&rest[..if_start]);
+
+            let after_if = &rest[if_start + 6..]; // skip "{{#if "
+            if let Some(close_brace) = after_if.find("}}") {
+                let var_name = after_if[..close_brace].trim();
+                let after_open_tag = &after_if[close_brace + 2..];
+
+                // Find the matching {{/if}}.
+                if let Some(endif_pos) = after_open_tag.find("{{/if}}") {
+                    let inner_content = &after_open_tag[..endif_pos];
+                    let after_endif = &after_open_tag[endif_pos + 7..]; // skip "{{/if}}"
+
+                    // Evaluate truthiness.
+                    let is_truthy = vars
+                        .get(var_name)
+                        .map(|v| !v.is_empty() && *v != "unknown")
+                        .unwrap_or(false);
+
+                    if is_truthy {
+                        result.push_str(inner_content);
+                    }
+
+                    rest = after_endif;
+                } else {
+                    // No matching {{/if}}, leave as-is.
+                    result.push_str("{{#if ");
+                    rest = after_if;
+                }
+            } else {
+                // No closing }} for the if tag, leave as-is.
+                result.push_str("{{#if ");
+                rest = after_if;
+            }
+        }
+
+        // Add remaining text.
+        result.push_str(rest);
+        result
+    }
+}
+
+/// A template definition loadable from TOML configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TemplateDefinition {
+    /// Unique name for this template (e.g., "greeting", "busy-reply").
+    pub name: String,
+    /// The template text with `{{variable}}` placeholders.
+    pub template: String,
+    /// Optional description of what this template is for.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Load template definitions from a TOML string.
+///
+/// Expected format:
+/// ```toml
+/// [[templates]]
+/// name = "greeting"
+/// template = "Hello {{sender}}, I am {{agent_name}}."
+/// description = "Standard greeting"
+/// ```
+///
+/// Each template is validated for known variables.
+pub fn load_templates_from_toml(toml_str: &str) -> Result<Vec<TemplateDefinition>, String> {
+    #[derive(Deserialize)]
+    struct TemplateFile {
+        #[serde(default)]
+        templates: Vec<TemplateDefinition>,
+    }
+
+    let file: TemplateFile =
+        toml::from_str(toml_str).map_err(|e| format!("failed to parse template TOML: {e}"))?;
+
+    // Validate each template.
+    for def in &file.templates {
+        if def.name.is_empty() {
+            return Err("template name must not be empty".to_string());
+        }
+        let tmpl = RichTemplate::new(&def.template)?;
+        tmpl.validate()?;
+    }
+
+    Ok(file.templates)
+}
+
+// ---------------------------------------------------------------------------
+// Silent reply token (#53)
+// ---------------------------------------------------------------------------
+
+/// The silent reply token. When present in agent output, the reply is
+/// processed but not delivered to the outbound channel.
+const SILENT_TOKEN: &str = "[[silent]]";
+
+/// A processed reply with metadata about delivery suppression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessedReply {
+    /// The reply text with any special tokens stripped.
+    pub text: String,
+    /// Whether delivery should be suppressed (silent mode).
+    pub silent: bool,
+}
+
+/// Parse agent output for the silent token.
+///
+/// If `[[silent]]` is present anywhere in the text, it is stripped and
+/// the reply is marked as silent. The agent can use this to process
+/// input without generating visible output.
+///
+/// Multiple occurrences of the token are all stripped.
+pub fn parse_silent_token(text: &str) -> ProcessedReply {
+    if text.contains(SILENT_TOKEN) {
+        let stripped = text.replace(SILENT_TOKEN, "");
+        ProcessedReply {
+            text: stripped.trim().to_string(),
+            silent: true,
+        }
+    } else {
+        ProcessedReply {
+            text: text.to_string(),
+            silent: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2843,5 +3131,281 @@ mod tests {
             render_lang_template("{{lang}} start and {{lang}} end", Some("fr")),
             "fr start and fr end"
         );
+    }
+
+    // ===== Rich template tests (#52) =====
+
+    fn sample_context() -> TemplateContext {
+        TemplateContext {
+            sender: "Alice".into(),
+            time: "2026-02-21 10:30 UTC".into(),
+            agent_name: "claude-1".into(),
+            channel: "telegram".into(),
+            lang: "en".into(),
+            message: "Hello there".into(),
+        }
+    }
+
+    #[test]
+    fn rich_template_variable_substitution() {
+        let tmpl = RichTemplate::new("Hello {{sender}}, I am {{agent_name}}.").unwrap();
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        assert_eq!(result, "Hello Alice, I am claude-1.");
+    }
+
+    #[test]
+    fn rich_template_all_variables() {
+        let tmpl = RichTemplate::new(
+            "Sender: {{sender}}, Time: {{time}}, Agent: {{agent_name}}, \
+             Channel: {{channel}}, Lang: {{lang}}, Message: {{message}}",
+        )
+        .unwrap();
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        assert!(result.contains("Alice"));
+        assert!(result.contains("2026-02-21"));
+        assert!(result.contains("claude-1"));
+        assert!(result.contains("telegram"));
+        assert!(result.contains("Lang: en"));
+        assert!(result.contains("Hello there"));
+    }
+
+    #[test]
+    fn rich_template_conditional_truthy() {
+        let tmpl =
+            RichTemplate::new("Start{{#if sender}} from {{sender}}{{/if}} end.").unwrap();
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        assert_eq!(result, "Start from Alice end.");
+    }
+
+    #[test]
+    fn rich_template_conditional_falsy_empty() {
+        let tmpl =
+            RichTemplate::new("Start{{#if sender}} from {{sender}}{{/if}} end.").unwrap();
+        let ctx = TemplateContext {
+            sender: String::new(),
+            ..sample_context()
+        };
+        let result = tmpl.render(&ctx);
+        assert_eq!(result, "Start end.");
+    }
+
+    #[test]
+    fn rich_template_conditional_falsy_unknown() {
+        let tmpl =
+            RichTemplate::new("Lang{{#if lang}}: {{lang}}{{/if}}.").unwrap();
+        let ctx = TemplateContext {
+            lang: "unknown".into(),
+            ..sample_context()
+        };
+        let result = tmpl.render(&ctx);
+        assert_eq!(result, "Lang.");
+    }
+
+    #[test]
+    fn rich_template_multiple_conditionals() {
+        let tmpl = RichTemplate::new(
+            "{{#if sender}}From: {{sender}}. {{/if}}{{#if channel}}Via: {{channel}}.{{/if}}",
+        )
+        .unwrap();
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        assert_eq!(result, "From: Alice. Via: telegram.");
+    }
+
+    #[test]
+    fn rich_template_no_variables_passthrough() {
+        let tmpl = RichTemplate::new("Plain text with no templates.").unwrap();
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        assert_eq!(result, "Plain text with no templates.");
+    }
+
+    #[test]
+    fn rich_template_unknown_variable_left_asis() {
+        // Unknown variables should not be substituted (fail-safe).
+        let tmpl = RichTemplate {
+            text: "Known: {{sender}}, Unknown: {{password}}".to_string(),
+        };
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        assert!(result.contains("Alice"));
+        assert!(result.contains("{{password}}"));
+    }
+
+    #[test]
+    fn rich_template_validate_accepts_known() {
+        let tmpl = RichTemplate::new(
+            "{{sender}} at {{time}} via {{channel}} {{#if lang}}({{lang}}){{/if}}",
+        )
+        .unwrap();
+        assert!(tmpl.validate().is_ok());
+    }
+
+    #[test]
+    fn rich_template_validate_rejects_unknown() {
+        let tmpl = RichTemplate::new("Hello {{secret_key}}").unwrap();
+        let err = tmpl.validate().unwrap_err();
+        assert!(err.contains("secret_key"));
+    }
+
+    #[test]
+    fn rich_template_validate_rejects_unknown_in_conditional() {
+        let tmpl = RichTemplate::new("{{#if secret}}hidden{{/if}}").unwrap();
+        let err = tmpl.validate().unwrap_err();
+        assert!(err.contains("secret"));
+    }
+
+    #[test]
+    fn rich_template_too_long_rejected() {
+        let long = "x".repeat(MAX_TEMPLATE_LENGTH + 1);
+        let result = RichTemplate::new(&long);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too long"));
+    }
+
+    #[test]
+    fn rich_template_unclosed_conditional_passthrough() {
+        let tmpl = RichTemplate::new("{{#if sender}} no closing tag").unwrap();
+        let ctx = sample_context();
+        let result = tmpl.render(&ctx);
+        // Should not panic; the broken conditional is preserved as-is.
+        assert!(result.contains("{{#if sender}}"));
+    }
+
+    #[test]
+    fn rich_template_serde_roundtrip() {
+        let tmpl = RichTemplate::new("Hello {{sender}}").unwrap();
+        let json = serde_json::to_string(&tmpl).unwrap();
+        let back: RichTemplate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, tmpl);
+    }
+
+    #[test]
+    fn load_templates_from_toml_valid() {
+        let toml_str = r#"
+[[templates]]
+name = "greeting"
+template = "Hello {{sender}}, I am {{agent_name}}."
+description = "Standard greeting"
+
+[[templates]]
+name = "busy"
+template = "{{#if agent_name}}{{agent_name}} is busy.{{/if}}"
+"#;
+        let templates = load_templates_from_toml(toml_str).unwrap();
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].name, "greeting");
+        assert_eq!(templates[1].name, "busy");
+        assert!(templates[0].description.is_some());
+        assert!(templates[1].description.is_none());
+    }
+
+    #[test]
+    fn load_templates_from_toml_rejects_unknown_variable() {
+        let toml_str = r#"
+[[templates]]
+name = "bad"
+template = "Hello {{secret}}"
+"#;
+        let result = load_templates_from_toml(toml_str);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("secret"));
+    }
+
+    #[test]
+    fn load_templates_from_toml_rejects_empty_name() {
+        let toml_str = r#"
+[[templates]]
+name = ""
+template = "Hello"
+"#;
+        let result = load_templates_from_toml(toml_str);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn load_templates_from_toml_empty_file() {
+        let templates = load_templates_from_toml("").unwrap();
+        assert!(templates.is_empty());
+    }
+
+    #[test]
+    fn load_templates_from_toml_invalid_syntax() {
+        let result = load_templates_from_toml("this is {{not valid toml");
+        assert!(result.is_err());
+    }
+
+    // ===== Silent reply token tests (#53) =====
+
+    #[test]
+    fn silent_token_detected_and_stripped() {
+        let result = parse_silent_token("[[silent]] Processed but not sent");
+        assert!(result.silent);
+        assert_eq!(result.text, "Processed but not sent");
+    }
+
+    #[test]
+    fn silent_token_in_middle() {
+        let result = parse_silent_token("Before [[silent]] After");
+        assert!(result.silent);
+        assert_eq!(result.text, "Before  After");
+    }
+
+    #[test]
+    fn silent_token_at_end() {
+        let result = parse_silent_token("Some text [[silent]]");
+        assert!(result.silent);
+        assert_eq!(result.text, "Some text");
+    }
+
+    #[test]
+    fn silent_token_multiple_stripped() {
+        let result = parse_silent_token("[[silent]] text [[silent]]");
+        assert!(result.silent);
+        assert_eq!(result.text, "text");
+    }
+
+    #[test]
+    fn no_silent_token_passes_through() {
+        let result = parse_silent_token("Normal message with no special tokens");
+        assert!(!result.silent);
+        assert_eq!(result.text, "Normal message with no special tokens");
+    }
+
+    #[test]
+    fn silent_token_alone() {
+        let result = parse_silent_token("[[silent]]");
+        assert!(result.silent);
+        assert_eq!(result.text, "");
+    }
+
+    #[test]
+    fn silent_token_partial_not_matched() {
+        let result = parse_silent_token("[[silen]] not a match");
+        assert!(!result.silent);
+        assert_eq!(result.text, "[[silen]] not a match");
+    }
+
+    #[test]
+    fn processed_reply_equality() {
+        let a = ProcessedReply {
+            text: "hello".into(),
+            silent: false,
+        };
+        let b = ProcessedReply {
+            text: "hello".into(),
+            silent: false,
+        };
+        assert_eq!(a, b);
+
+        let c = ProcessedReply {
+            text: "hello".into(),
+            silent: true,
+        };
+        assert_ne!(a, c);
     }
 }
