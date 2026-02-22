@@ -814,12 +814,11 @@ impl Channel for ImessageChannel {
                 }
 
                 #[cfg(not(target_os = "macos"))]
-                {
-                    return Err(ChannelError::Other(
-                        "AppleScript mode is only available on macOS".into(),
-                    ));
-                }
+                return Err(ChannelError::Other(
+                    "AppleScript mode is only available on macOS".into(),
+                ));
 
+                #[cfg(target_os = "macos")]
                 Ok(())
             }
             ImessageMode::Bluebubbles => {

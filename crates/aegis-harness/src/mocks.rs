@@ -767,7 +767,13 @@ fn run_mock_server(
 
         // Non-blocking accept with a short sleep on WouldBlock.
         let stream = match listener.accept() {
-            Ok((stream, _addr)) => stream,
+            Ok((stream, _addr)) => {
+                // On macOS, accepted sockets can inherit non-blocking mode
+                // from the listener. Reset to blocking so reads don't fail
+                // with WouldBlock.
+                let _ = stream.set_nonblocking(false);
+                stream
+            }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
