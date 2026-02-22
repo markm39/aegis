@@ -8,6 +8,7 @@ pub mod event;
 pub mod markdown;
 pub mod message;
 pub mod render;
+pub mod system_prompt;
 mod ui;
 
 use std::sync::mpsc;
@@ -241,6 +242,11 @@ impl ChatApp {
         let conv = self.conversation.clone();
         let model = self.model.clone();
 
+        // Build the system prompt on the calling thread (it reads files and
+        // runs git commands, which is fine since we're about to spawn a
+        // background thread for the network call anyway).
+        let sys_prompt = system_prompt::build_system_prompt(&[]);
+
         // Build a new DaemonClient for the background thread (the existing
         // one does not implement Clone). We need a longer timeout for LLM
         // requests than the default 5-second ping timeout.
@@ -267,7 +273,7 @@ impl ChatApp {
                 messages,
                 temperature: None,
                 max_tokens: None,
-                system_prompt: None,
+                system_prompt: Some(sys_prompt),
                 tools: None,
             };
 
