@@ -214,6 +214,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -275,6 +276,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
 
         let toml_str = config.to_toml().unwrap();

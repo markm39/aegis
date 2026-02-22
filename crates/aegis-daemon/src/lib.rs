@@ -5389,6 +5389,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -5732,6 +5733,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -6414,6 +6416,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -6507,6 +6510,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

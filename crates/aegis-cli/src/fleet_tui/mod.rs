@@ -678,6 +678,7 @@ impl FleetApp {
                 lanes: vec![],
                 workspace_hooks: Default::default(),
                 acp_server: None,
+                default_model: None,
             }
         };
 

@@ -149,6 +149,7 @@ impl FixtureBuilder {
             lanes: vec![],
             workspace_hooks: Default::default(),
             acp_server: None,
+            default_model: None,
         };
 
         TestFixture {
@@ -193,6 +194,7 @@ pub fn build_test_daemon_config(temp_dir: &Path) -> DaemonConfig {
         lanes: vec![],
         workspace_hooks: Default::default(),
         acp_server: None,
+        default_model: None,
     }
 }
 

@@ -84,6 +84,9 @@ pub struct DaemonConfig {
     /// ACP (Agent Communication Protocol) server configuration.
     #[serde(default)]
     pub acp_server: Option<AcpServerConfig>,
+    /// Default LLM model for the chat TUI (e.g., "claude-sonnet-4-20250514").
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -982,6 +985,7 @@ mod tests {
             lanes: vec![],
             workspace_hooks: WorkspaceHooksConfig::default(),
             acp_server: None,
+            default_model: None,
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {
