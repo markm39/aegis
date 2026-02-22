@@ -473,11 +473,17 @@ impl RegistrySkillMeta {
             version: self.version,
             description: self.description,
             author: self.author,
+            category: None,
             permissions: Vec::new(),
             entry_point: self.entry_point.unwrap_or_else(|| "run.sh".into()),
             dependencies: Vec::new(),
             min_aegis_version: None,
             commands: None,
+            install_method: None,
+            install_target: None,
+            required_bins: Vec::new(),
+            required_env: Vec::new(),
+            os: Vec::new(),
         }
     }
 }

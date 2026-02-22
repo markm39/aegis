@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::{parse_manifest_file, validate_manifest, SkillManifest};
+use crate::manifest::{parse_manifest_file, validate_manifest, InstallMethod, SkillManifest};
 
 /// Where a skill was installed from.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -25,6 +25,11 @@ pub enum InstallSource {
     Local { path: PathBuf },
     /// Installed from the registry.
     Registry { version: String },
+    /// Installed via a system package manager (brew, npm, go, apt, uv).
+    PackageManager {
+        method: String,
+        target: String,
+    },
 }
 
 impl std::fmt::Display for InstallSource {
@@ -40,6 +45,9 @@ impl std::fmt::Display for InstallSource {
             }
             InstallSource::Local { path } => write!(f, "local: {}", path.display()),
             InstallSource::Registry { version } => write!(f, "registry: v{version}"),
+            InstallSource::PackageManager { method, target } => {
+                write!(f, "{method}: {target}")
+            }
         }
     }
 }
@@ -204,6 +212,183 @@ impl SkillInstaller for GitInstaller {
             manifest,
         })
     }
+}
+
+/// Install a skill whose system dependencies come from a package manager.
+///
+/// This installer first installs the required system tool (e.g., `brew install gh`),
+/// verifies it is available in PATH, then copies the skill files (manifest + entry
+/// script) from `source_dir` into `dest_dir`.
+pub struct PackageManagerInstaller {
+    /// Which package manager to use.
+    pub method: InstallMethod,
+    /// The package/formula/module name to install.
+    pub target: String,
+    /// Directory containing the skill's manifest and entry script.
+    pub source_dir: PathBuf,
+    /// Binaries that must exist in PATH after installation.
+    pub required_bins: Vec<String>,
+}
+
+impl PackageManagerInstaller {
+    /// Check if all required binaries are already available.
+    pub fn prerequisites_met(&self) -> bool {
+        self.required_bins.iter().all(|bin| binary_exists(bin))
+    }
+
+    /// Install the system dependency only (without copying skill files).
+    pub fn install_dependency(&self) -> Result<()> {
+        if self.prerequisites_met() {
+            return Ok(());
+        }
+
+        let manager_bin = self.method.binary_name();
+        if !binary_exists(manager_bin) {
+            bail!(
+                "package manager '{}' is not installed (need '{}' in PATH)",
+                self.method,
+                manager_bin
+            );
+        }
+
+        let (program, args) = self.method.install_command(&self.target);
+        let output = std::process::Command::new(&program)
+            .args(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .with_context(|| format!("failed to run: {} {}", program, args.join(" ")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!(
+                "{} install of '{}' failed: {}",
+                self.method,
+                self.target,
+                stderr.trim()
+            );
+        }
+
+        // Verify required binaries are now available
+        for bin in &self.required_bins {
+            if !binary_exists(bin) {
+                bail!(
+                    "'{}' was installed via {} but '{}' is still not found in PATH",
+                    self.target,
+                    self.method,
+                    bin
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl SkillInstaller for PackageManagerInstaller {
+    fn install(&self, dest_dir: &Path) -> Result<InstalledSkill> {
+        // Install system dependency first
+        self.install_dependency()?;
+
+        // Then copy skill files (manifest + entry script) from source
+        let local = LocalInstaller {
+            source_dir: self.source_dir.clone(),
+        };
+        let mut installed = local.install(dest_dir)?;
+
+        // Override the source metadata to reflect the package manager origin
+        installed.source = InstallSource::PackageManager {
+            method: self.method.to_string(),
+            target: self.target.clone(),
+        };
+
+        Ok(installed)
+    }
+}
+
+impl InstallMethod {
+    /// The binary name of this package manager.
+    pub fn binary_name(&self) -> &'static str {
+        match self {
+            InstallMethod::Brew => "brew",
+            InstallMethod::Npm => "npm",
+            InstallMethod::Go => "go",
+            InstallMethod::Apt => "apt-get",
+            InstallMethod::Uv => "uv",
+            InstallMethod::Download => "curl",
+            InstallMethod::Config => "true",
+        }
+    }
+
+    /// Build the command and arguments to install a package.
+    pub fn install_command(&self, target: &str) -> (String, Vec<String>) {
+        match self {
+            InstallMethod::Brew => ("brew".into(), vec!["install".into(), target.into()]),
+            InstallMethod::Npm => {
+                ("npm".into(), vec!["install".into(), "-g".into(), target.into()])
+            }
+            InstallMethod::Go => {
+                let target_with_version = if target.contains('@') {
+                    target.to_string()
+                } else {
+                    format!("{target}@latest")
+                };
+                ("go".into(), vec!["install".into(), target_with_version])
+            }
+            InstallMethod::Apt => (
+                "sudo".into(),
+                vec!["apt-get".into(), "install".into(), "-y".into(), target.into()],
+            ),
+            InstallMethod::Uv => ("uv".into(), vec!["tool".into(), "install".into(), target.into()]),
+            InstallMethod::Download => {
+                // Download expects target to be a URL; use curl -LO
+                ("curl".into(), vec!["-LO".into(), target.into()])
+            }
+            InstallMethod::Config => {
+                // Config-only skills have no install step
+                ("true".into(), vec![])
+            }
+        }
+    }
+}
+
+/// Check if a binary exists in PATH.
+pub fn binary_exists(name: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Check if all required binaries for a manifest are available.
+pub fn check_prerequisites(manifest: &SkillManifest) -> Vec<String> {
+    let mut missing = Vec::new();
+    for bin in &manifest.required_bins {
+        if !binary_exists(bin) {
+            missing.push(bin.clone());
+        }
+    }
+    missing
+}
+
+/// Check if a manifest's OS constraints match the current platform.
+pub fn is_supported_os(manifest: &SkillManifest) -> bool {
+    if manifest.os.is_empty() {
+        return true;
+    }
+    let current = if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "unknown"
+    };
+    manifest.os.iter().any(|os| os == current)
 }
 
 /// Validate a skill installation in an existing directory.
@@ -466,6 +651,123 @@ entry_point = "missing.sh"
             version: "2.0.0".into(),
         };
         assert!(registry.to_string().contains("registry"));
+    }
+
+    #[test]
+    fn test_install_source_display_package_manager() {
+        let pm = InstallSource::PackageManager {
+            method: "brew".into(),
+            target: "gh".into(),
+        };
+        assert!(pm.to_string().contains("brew"));
+        assert!(pm.to_string().contains("gh"));
+    }
+
+    #[test]
+    fn test_install_method_binary_name() {
+        assert_eq!(InstallMethod::Brew.binary_name(), "brew");
+        assert_eq!(InstallMethod::Npm.binary_name(), "npm");
+        assert_eq!(InstallMethod::Go.binary_name(), "go");
+        assert_eq!(InstallMethod::Apt.binary_name(), "apt-get");
+        assert_eq!(InstallMethod::Uv.binary_name(), "uv");
+    }
+
+    #[test]
+    fn test_install_method_install_command() {
+        let (prog, args) = InstallMethod::Brew.install_command("gh");
+        assert_eq!(prog, "brew");
+        assert_eq!(args, vec!["install", "gh"]);
+
+        let (prog, args) = InstallMethod::Npm.install_command("typescript");
+        assert_eq!(prog, "npm");
+        assert_eq!(args, vec!["install", "-g", "typescript"]);
+
+        let (prog, args) = InstallMethod::Go.install_command("github.com/cli/cli/v2");
+        assert_eq!(prog, "go");
+        assert_eq!(args, vec!["install", "github.com/cli/cli/v2@latest"]);
+
+        // Go target with existing version specifier
+        let (prog, args) = InstallMethod::Go.install_command("example.com/tool@v1.2.3");
+        assert_eq!(prog, "go");
+        assert_eq!(args, vec!["install", "example.com/tool@v1.2.3"]);
+
+        let (prog, args) = InstallMethod::Apt.install_command("curl");
+        assert_eq!(prog, "sudo");
+        assert_eq!(args, vec!["apt-get", "install", "-y", "curl"]);
+
+        let (prog, args) = InstallMethod::Uv.install_command("ruff");
+        assert_eq!(prog, "uv");
+        assert_eq!(args, vec!["tool", "install", "ruff"]);
+    }
+
+    #[test]
+    fn test_binary_exists_known() {
+        // `sh` should exist on any Unix system
+        assert!(binary_exists("sh"));
+        // Something that definitely doesn't exist
+        assert!(!binary_exists("definitely-not-a-real-binary-xyz-123"));
+    }
+
+    #[test]
+    fn test_check_prerequisites() {
+        let manifest = crate::manifest::parse_manifest(
+            r#"
+name = "test-skill"
+version = "1.0.0"
+description = "Test"
+entry_point = "run.sh"
+required_bins = ["sh", "nonexistent-binary-xyz"]
+"#,
+        )
+        .unwrap();
+
+        let missing = check_prerequisites(&manifest);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0], "nonexistent-binary-xyz");
+    }
+
+    #[test]
+    fn test_is_supported_os() {
+        let mut manifest = crate::manifest::parse_manifest(
+            r#"
+name = "test-skill"
+version = "1.0.0"
+description = "Test"
+entry_point = "run.sh"
+"#,
+        )
+        .unwrap();
+
+        // Empty os list means all platforms
+        assert!(is_supported_os(&manifest));
+
+        // Current platform should match
+        manifest.os = vec!["darwin".into(), "linux".into()];
+        assert!(is_supported_os(&manifest));
+
+        // Windows-only should not match on macOS/Linux
+        manifest.os = vec!["windows".into()];
+        assert!(!is_supported_os(&manifest));
+    }
+
+    #[test]
+    fn test_package_manager_installer_prerequisites_met() {
+        let tmp = create_skill_source("pm-test");
+        let installer = PackageManagerInstaller {
+            method: InstallMethod::Brew,
+            target: "gh".into(),
+            source_dir: tmp.path().to_path_buf(),
+            required_bins: vec!["sh".into()], // sh always exists
+        };
+        assert!(installer.prerequisites_met());
+
+        let installer2 = PackageManagerInstaller {
+            method: InstallMethod::Brew,
+            target: "gh".into(),
+            source_dir: tmp.path().to_path_buf(),
+            required_bins: vec!["nonexistent-xyz".into()],
+        };
+        assert!(!installer2.prerequisites_met());
     }
 
     #[test]

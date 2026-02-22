@@ -37,9 +37,14 @@ pub use dispatch::{
 pub use executor::{ExecutionMode, ExecutorConfig, SkillExecutor};
 pub use hot_reload::{HotReloader, SkillChange, SkillWatcher, SkillWatcherConfig};
 pub use hub::{RegistryClient, RegistryConfig, SkillSummary, UpdateAvailable};
-pub use installer::{InstallSource, InstalledSkill, SkillInstaller};
+pub use installer::{
+    binary_exists, check_prerequisites, is_supported_os, InstallSource, InstalledSkill,
+    PackageManagerInstaller, SkillInstaller,
+};
 pub use lifecycle::{SkillInstance, SkillState};
-pub use manifest::{parse_manifest, parse_manifest_file, validate_manifest, SkillManifest};
+pub use manifest::{
+    parse_manifest, parse_manifest_file, validate_manifest, InstallMethod, SkillManifest,
+};
 pub use registry::SkillRegistry;
 pub use scanner::{ScanFinding, ScanResult, Severity, SkillScanner};
 pub use sdk::{

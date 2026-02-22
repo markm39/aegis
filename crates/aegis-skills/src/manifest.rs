@@ -14,6 +14,40 @@ use crate::dispatch::ManifestCommand;
 /// Maximum allowed length for a skill name.
 const MAX_NAME_LEN: usize = 64;
 
+/// How a skill's system dependencies should be installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallMethod {
+    /// Homebrew (`brew install <target>`).
+    Brew,
+    /// npm global install (`npm install -g <target>`).
+    Npm,
+    /// Go install (`go install <target>@latest`).
+    Go,
+    /// APT package manager (`sudo apt-get install -y <target>`).
+    Apt,
+    /// uv tool install (`uv tool install <target>`).
+    Uv,
+    /// Direct download (URL in `install_target`).
+    Download,
+    /// Configuration-only skill (no binary to install).
+    Config,
+}
+
+impl std::fmt::Display for InstallMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallMethod::Brew => write!(f, "brew"),
+            InstallMethod::Npm => write!(f, "npm"),
+            InstallMethod::Go => write!(f, "go"),
+            InstallMethod::Apt => write!(f, "apt"),
+            InstallMethod::Uv => write!(f, "uv"),
+            InstallMethod::Download => write!(f, "download"),
+            InstallMethod::Config => write!(f, "config"),
+        }
+    }
+}
+
 /// A parsed skill manifest.
 ///
 /// Deserialized from a `manifest.toml` file inside a skill directory.
@@ -27,6 +61,8 @@ pub struct SkillManifest {
     pub description: String,
     /// Optional author attribution.
     pub author: Option<String>,
+    /// Category for grouping in the wizard UI (e.g., "development", "productivity").
+    pub category: Option<String>,
     /// Cedar action names the skill requires.
     #[serde(default)]
     pub permissions: Vec<String>,
@@ -40,6 +76,19 @@ pub struct SkillManifest {
     /// Slash commands this skill provides.
     #[serde(default)]
     pub commands: Option<Vec<ManifestCommand>>,
+    /// How to install this skill's system dependencies.
+    pub install_method: Option<InstallMethod>,
+    /// Package name for the install method (e.g., brew formula, npm package).
+    pub install_target: Option<String>,
+    /// System binaries required to run this skill.
+    #[serde(default)]
+    pub required_bins: Vec<String>,
+    /// Environment variables required to run this skill.
+    #[serde(default)]
+    pub required_env: Vec<String>,
+    /// Supported operating systems (empty = all). Values: "darwin", "linux".
+    #[serde(default)]
+    pub os: Vec<String>,
 }
 
 /// Validate a parsed manifest for security and correctness constraints.
