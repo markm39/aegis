@@ -415,6 +415,20 @@ impl ChatApp {
     /// it executes each tool and loops. Tool approvals are handled via a
     /// separate mpsc channel that the UI thread sends decisions through.
     fn send_llm_request(&mut self) {
+        // Auto-compact if the conversation exceeds the model's context window.
+        if let Some(compacted) = compaction::compact_conversation(&self.conversation, &self.model) {
+            let old_len = self.conversation.len();
+            let new_len = compacted.len();
+            self.conversation = compacted;
+            self.messages.push(ChatMessage::new(
+                MessageRole::System,
+                format!(
+                    "[Compacted: {} messages -> {} to fit context window]",
+                    old_len, new_len
+                ),
+            ));
+        }
+
         let conv = self.conversation.clone();
         let model = self.model.clone();
         let auto_approve = self.auto_approve_turn;
@@ -1116,7 +1130,30 @@ impl ChatApp {
                 self.set_result("New conversation started");
             }
             "compact" => {
-                self.set_result("Compaction not yet available");
+                if self.conversation.is_empty() {
+                    self.set_result("Nothing to compact (conversation is empty).");
+                } else {
+                    let (estimated, threshold) =
+                        compaction::should_compact(&self.conversation, &self.model);
+                    match compaction::compact_conversation(&self.conversation, &self.model) {
+                        Some(compacted) => {
+                            let old_len = self.conversation.len();
+                            let new_len = compacted.len();
+                            self.conversation = compacted;
+                            self.rebuild_display_messages();
+                            self.set_result(format!(
+                                "Compacted: {} -> {} messages (~{} -> ~{} tokens)",
+                                old_len, new_len, estimated, threshold,
+                            ));
+                        }
+                        None => {
+                            self.set_result(format!(
+                                "No compaction needed (~{} tokens, threshold ~{})",
+                                estimated, threshold,
+                            ));
+                        }
+                    }
+                }
             }
             "think off" | "think" => {
                 self.thinking_budget = None;
