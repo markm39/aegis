@@ -569,6 +569,7 @@ pub struct ToolApiState {
 // ---------------------------------------------------------------------------
 
 /// Authenticate a request using Bearer token.
+#[allow(clippy::result_large_err)]
 fn authenticate(
     state: &ToolApiState,
     headers: &HeaderMap,
