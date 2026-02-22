@@ -243,6 +243,222 @@ impl TelegramApi {
             .ok_or_else(|| ChannelError::Api("sendPhoto returned ok but no result".into()))
     }
 
+    /// Send a chat action (e.g., "typing") to indicate the bot is processing.
+    ///
+    /// The action automatically expires after about 5 seconds or when a message
+    /// is sent. Call repeatedly for long-running operations.
+    pub async fn send_chat_action(
+        &self,
+        chat_id: i64,
+        action: &str,
+    ) -> Result<(), ChannelError> {
+        let body = json!({
+            "chat_id": chat_id,
+            "action": action,
+        });
+
+        debug!("sendChatAction {action} to chat_id={chat_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/sendChatAction", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("sendChatAction failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    /// Edit the text of a previously sent message.
+    ///
+    /// The `message_id` must refer to a message sent by this bot. Only the text
+    /// content is changed; inline keyboards are preserved unless a new markup is
+    /// provided (not exposed here for simplicity).
+    pub async fn edit_message_text(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let mut body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        });
+
+        if let Some(mode) = parse_mode {
+            body["parse_mode"] = json!(mode);
+        }
+
+        debug!("editMessageText message_id={message_id} in chat_id={chat_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/editMessageText", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<serde_json::Value> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("editMessageText failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    /// Delete a message from a chat.
+    ///
+    /// The bot can delete messages it sent, or (in groups) messages from other
+    /// users if it has the `can_delete_messages` admin permission. Messages
+    /// older than 48 hours cannot be deleted.
+    pub async fn delete_message(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+    ) -> Result<(), ChannelError> {
+        let body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+        });
+
+        debug!("deleteMessage message_id={message_id} in chat_id={chat_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/deleteMessage", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("deleteMessage failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    /// Set an emoji reaction on a message.
+    ///
+    /// Uses the `setMessageReaction` Bot API method (available since Bot API 7.0).
+    /// The `emoji` must be a standard Unicode emoji supported by Telegram
+    /// reactions (e.g., thumbs up, heart, fire).
+    pub async fn set_message_reaction(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        emoji: &str,
+    ) -> Result<(), ChannelError> {
+        let body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reaction": [{"type": "emoji", "emoji": emoji}],
+        });
+
+        debug!("setMessageReaction emoji={emoji} on message_id={message_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/setMessageReaction", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<bool> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("setMessageReaction failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        Ok(())
+    }
+
+    /// Send a text message to a specific thread/topic in a supergroup.
+    ///
+    /// The `message_thread_id` identifies the forum topic. This only works in
+    /// groups that have topics enabled.
+    pub async fn send_message_to_thread(
+        &self,
+        chat_id: i64,
+        message_thread_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+        reply_markup: Option<InlineKeyboardMarkup>,
+        disable_notification: bool,
+    ) -> Result<i64, ChannelError> {
+        let text = if text.len() > Self::MAX_MESSAGE_LENGTH {
+            warn!(
+                len = text.len(),
+                "truncating Telegram thread message to {} chars",
+                Self::MAX_MESSAGE_LENGTH
+            );
+            let max = Self::MAX_MESSAGE_LENGTH - 15;
+            let mut end = max;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut truncated = text[..end].to_string();
+            truncated.push_str("\n...(truncated)");
+            truncated
+        } else {
+            text.to_string()
+        };
+
+        let mut body = json!({
+            "chat_id": chat_id,
+            "message_thread_id": message_thread_id,
+            "text": text,
+        });
+
+        if let Some(mode) = parse_mode {
+            body["parse_mode"] = json!(mode);
+        }
+        if let Some(markup) = reply_markup {
+            body["reply_markup"] = serde_json::to_value(markup)
+                .map_err(|e| ChannelError::Other(format!("serialize markup: {e}")))?;
+        }
+        if disable_notification {
+            body["disable_notification"] = json!(true);
+        }
+
+        debug!("sendMessage to thread_id={message_thread_id} in chat_id={chat_id}");
+
+        let resp = self
+            .client
+            .post(format!("{}/sendMessage", self.base_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        let api_resp: ApiResponse<SentMessage> = resp.json().await?;
+        if !api_resp.ok {
+            let desc = api_resp.description.unwrap_or_default();
+            warn!("sendMessage (thread) failed: {desc}");
+            return Err(ChannelError::Api(desc));
+        }
+
+        api_resp
+            .result
+            .map(|m| m.message_id)
+            .ok_or_else(|| {
+                ChannelError::Api("sendMessage (thread) returned ok but no result".into())
+            })
+    }
+
     /// Remove inline keyboard buttons from a message (prevents double-tap).
     pub async fn remove_reply_markup(
         &self,
@@ -808,5 +1024,239 @@ mod tests {
         // just verifies the struct serializes correctly. In production, the
         // token value would be read from TelegramConfig or env.
         assert_eq!(json["provider_token"], "stripe_test_token");
+    }
+
+    // -- Channel interaction API tests (wiremock) --
+
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+    /// Helper: create a TelegramApi pointed at the mock server.
+    fn api_for_mock(server: &MockServer) -> TelegramApi {
+        TelegramApi::with_base_url("test-token", &server.uri())
+    }
+
+    /// Helper: standard Telegram success response.
+    fn ok_response() -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": true}))
+    }
+
+    /// Helper: success response with a sent message containing a message_id.
+    fn sent_message_response(message_id: i64) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": {"message_id": message_id}
+        }))
+    }
+
+    #[tokio::test]
+    async fn send_chat_action_typing() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/sendChatAction"))
+            .and(matchers::body_json(json!({
+                "chat_id": 12345,
+                "action": "typing"
+            })))
+            .respond_with(ok_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        api.send_chat_action(12345, "typing").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn edit_message_text_request_body() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/editMessageText"))
+            .and(matchers::body_json(json!({
+                "chat_id": 12345,
+                "message_id": 42,
+                "text": "updated text",
+                "parse_mode": "MarkdownV2"
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "ok": true,
+                    "result": {"message_id": 42, "text": "updated text"}
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        api.edit_message_text(12345, 42, "updated text", Some("MarkdownV2"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn edit_message_text_without_parse_mode() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/editMessageText"))
+            .and(matchers::body_json(json!({
+                "chat_id": 12345,
+                "message_id": 42,
+                "text": "plain text"
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "ok": true,
+                    "result": {"message_id": 42, "text": "plain text"}
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        api.edit_message_text(12345, 42, "plain text", None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_message_request_body() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/deleteMessage"))
+            .and(matchers::body_json(json!({
+                "chat_id": 12345,
+                "message_id": 99
+            })))
+            .respond_with(ok_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        api.delete_message(12345, 99).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_message_reaction_request_body() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/setMessageReaction"))
+            .and(matchers::body_json(json!({
+                "chat_id": 12345,
+                "message_id": 77,
+                "reaction": [{"type": "emoji", "emoji": "\u{1f44d}"}]
+            })))
+            .respond_with(ok_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        api.set_message_reaction(12345, 77, "\u{1f44d}")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_message_to_thread_request_body() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/sendMessage"))
+            .and(matchers::body_json(json!({
+                "chat_id": -100123,
+                "message_thread_id": 456,
+                "text": "thread reply",
+                "parse_mode": "MarkdownV2"
+            })))
+            .respond_with(sent_message_response(789))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let msg_id = api
+            .send_message_to_thread(
+                -100123,
+                456,
+                "thread reply",
+                Some("MarkdownV2"),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(msg_id, 789);
+    }
+
+    #[tokio::test]
+    async fn send_message_returns_message_id() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/sendMessage"))
+            .respond_with(sent_message_response(42))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let msg_id = api
+            .send_message(12345, "hello", None, None, false)
+            .await
+            .unwrap();
+
+        assert_eq!(msg_id, 42);
+    }
+
+    #[tokio::test]
+    async fn send_chat_action_api_error() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/sendChatAction"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"ok": false, "description": "Bad Request"})),
+            )
+            .mount(&server)
+            .await;
+
+        let err = api.send_chat_action(12345, "typing").await.unwrap_err();
+        match err {
+            ChannelError::Api(desc) => assert_eq!(desc, "Bad Request"),
+            other => panic!("expected Api error, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_message_api_error() {
+        let server = MockServer::start().await;
+        let api = api_for_mock(&server);
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex(r"/bot.*/deleteMessage"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "ok": false,
+                    "description": "message to delete not found"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = api.delete_message(12345, 99).await.unwrap_err();
+        match err {
+            ChannelError::Api(desc) => assert!(desc.contains("not found")),
+            other => panic!("expected Api error, got {other}"),
+        }
     }
 }

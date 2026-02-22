@@ -47,5 +47,7 @@ pub mod webhook;
 pub mod whatsapp;
 pub mod zalo;
 
-pub use channel::{Channel, ChannelError, InboundAction, MediaPayload, OutboundMessage};
+pub use channel::{
+    Channel, ChannelCapabilities, ChannelError, InboundAction, MediaPayload, OutboundMessage,
+};
 pub use runner::{run, run_fleet, ChannelInput};
