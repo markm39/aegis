@@ -3,7 +3,9 @@
 //! `aegis setup` checks macOS version, verifies `sandbox-exec` availability,
 //! creates the `~/.aegis/` base directory, and runs a sandbox self-test.
 
-use anyhow::{bail, Context, Result};
+#[cfg(target_os = "macos")]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 /// Minimum macOS major version required by Aegis (Monterey).

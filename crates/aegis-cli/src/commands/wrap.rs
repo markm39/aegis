@@ -14,6 +14,7 @@ use anyhow::{bail, Context, Result};
 use tracing::info;
 
 use aegis_policy::builtin::get_builtin_policy;
+#[cfg(target_os = "macos")]
 use aegis_policy::PolicyEngine;
 use aegis_sandbox::SandboxBackend;
 use aegis_types::{

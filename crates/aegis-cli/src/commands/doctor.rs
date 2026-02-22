@@ -724,6 +724,8 @@ fn available_disk_space(path: &Path) -> Option<u64> {
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
+            // Cast needed on macOS where f_bavail is u32; on Linux it's already u64.
+            #[allow(clippy::unnecessary_cast)]
             Some(stat.f_bavail as u64 * stat.f_frsize)
         } else {
             None
