@@ -839,6 +839,53 @@ impl SignalApi {
     pub fn trust_mode(&self) -> TrustMode {
         self.trust_mode
     }
+
+    /// Send an emoji reaction to a message.
+    ///
+    /// PUT /v1/reactions/{number}
+    pub async fn send_reaction(
+        &self,
+        recipient: &str,
+        emoji: &str,
+        target_author: &str,
+        timestamp: i64,
+    ) -> Result<(), ChannelError> {
+        validate_phone_number(recipient)?;
+
+        let body = json!({
+            "recipient": recipient,
+            "reaction": emoji,
+            "target_author": target_author,
+            "timestamp": timestamp,
+        });
+
+        debug!(
+            recipient = recipient,
+            emoji = emoji,
+            "signal send_reaction"
+        );
+
+        let resp = self
+            .client
+            .put(format!(
+                "{}/v1/reactions/{}",
+                self.base_url, self.phone_number
+            ))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            warn!("signal send_reaction failed: {status} {body_text}");
+            return Err(ChannelError::Api(format!(
+                "signal-cli reaction failed: {status}: {body_text}"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,6 +1119,42 @@ impl Channel for SignalChannel {
                 &photo.bytes,
             )
             .await
+    }
+
+    async fn react(&self, message_id: &str, emoji: &str) -> Result<(), ChannelError> {
+        // message_id is expected as "recipient:timestamp" (colon-separated).
+        // The recipient is the author of the message being reacted to, and
+        // timestamp identifies the specific message.
+        let (target_author, ts_str) = message_id.split_once(':').ok_or_else(|| {
+            ChannelError::Other(
+                "Signal react requires message_id as 'recipient:timestamp'".to_string(),
+            )
+        })?;
+
+        let timestamp: i64 = ts_str.parse().map_err(|_| {
+            ChannelError::Other(format!("invalid timestamp in message_id: {ts_str}"))
+        })?;
+
+        // Send to the first recipient (or the target_author if no recipients configured).
+        let send_to = self
+            .recipients
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or(target_author);
+
+        self.api
+            .send_reaction(send_to, emoji, target_author, timestamp)
+            .await
+    }
+
+    fn capabilities(&self) -> crate::channel::ChannelCapabilities {
+        crate::channel::ChannelCapabilities {
+            reactions: true,
+            rich_media: true,
+            // Signal does not natively expose typing, editing, deletion,
+            // threads, or presence through signal-cli REST API.
+            ..Default::default()
+        }
     }
 }
 
@@ -1606,5 +1689,442 @@ mod tests {
             attachments[0].filename,
             Some("screenshot.png".to_string())
         );
+    }
+
+    // -- Capabilities --
+
+    #[test]
+    fn test_signal_capabilities() {
+        let channel = SignalChannel::new(SignalConfig {
+            api_url: "http://localhost:8080".to_string(),
+            phone_number: "+1234567890".to_string(),
+            recipients: vec![],
+            poll_interval_secs: 5,
+            group_ids: vec![],
+            trust_mode: "trust_all".to_string(),
+        })
+        .unwrap();
+        let caps = channel.capabilities();
+        assert!(caps.reactions);
+        assert!(caps.rich_media);
+        assert!(!caps.typing_indicators);
+        assert!(!caps.message_editing);
+        assert!(!caps.message_deletion);
+        assert!(!caps.threads);
+        assert!(!caps.presence);
+    }
+
+    // -- React message_id parsing --
+
+    #[tokio::test]
+    async fn test_react_invalid_message_id_format() {
+        let mut channel = SignalChannel::new(SignalConfig {
+            api_url: "http://localhost:8080".to_string(),
+            phone_number: "+1234567890".to_string(),
+            recipients: vec!["+1555000111".to_string()],
+            poll_interval_secs: 5,
+            group_ids: vec![],
+            trust_mode: "trust_all".to_string(),
+        })
+        .unwrap();
+
+        // Missing colon separator.
+        let err = Channel::react(&mut channel, "no-colon", "thumbsup")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("recipient:timestamp"));
+
+        // Invalid timestamp.
+        let err = Channel::react(&mut channel, "+1555000222:not-a-number", "thumbsup")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid timestamp"));
+    }
+
+    // -- Wiremock tests: Signal-cli REST API --
+
+    #[tokio::test]
+    async fn test_wiremock_signal_health_check() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/about"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "versions": ["0.13.4"],
+                    "build": 2,
+                    "mode": "json-rpc"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let about = api.health_check().await.unwrap();
+        assert_eq!(about.versions, vec!["0.13.4"]);
+        assert_eq!(about.build, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_health_check_failure() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/about"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("Service Unavailable"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let result = api.health_check().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_send_message() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v2/send"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let result = api
+            .send_message(&["+15559876543".to_string()], "Hello from test")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_send_message_failure() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v2/send"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("Bad request"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let result = api
+            .send_message(&["+15559876543".to_string()], "test")
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_receive_messages() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/receive/+15551234567"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "envelope": {
+                            "source": "+15559876543",
+                            "sourceNumber": "+15559876543",
+                            "dataMessage": {
+                                "message": "/status",
+                                "timestamp": 1700000001000_i64
+                            }
+                        }
+                    },
+                    {
+                        "envelope": {
+                            "source": "+15559876543",
+                            "sourceNumber": "+15559876543",
+                            "dataMessage": {
+                                "message": "hello world",
+                                "timestamp": 1700000002000_i64
+                            }
+                        }
+                    }
+                ])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let envelopes = api.receive_messages().await.unwrap();
+        assert_eq!(envelopes.len(), 2);
+
+        let actions = parse_signal_envelope(&envelopes[0]);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0].0,
+            InboundAction::Command(aegis_control::command::Command::Status)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_receive_empty() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/receive/+15551234567"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let envelopes = api.receive_messages().await.unwrap();
+        assert!(envelopes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_send_group_message() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v2/send"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let result = api
+            .send_group_message("dGVzdGdyb3Vw", "Hello group")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_send_reaction() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("PUT"))
+            .and(matchers::path("/v1/reactions/+15551234567"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let result = api
+            .send_reaction("+15559876543", "thumbsup", "+15559876543", 1700000001000)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_send_reaction_failure() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("PUT"))
+            .and(matchers::path("/v1/reactions/+15551234567"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Internal error"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let result = api
+            .send_reaction("+15559876543", "thumbsup", "+15559876543", 1700000001000)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_send_attachment() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v2/send"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let data = vec![0xFF, 0xD8, 0xFF, 0xE0]; // Fake JPEG header
+        let result = api
+            .send_with_attachment(
+                &["+15559876543".to_string()],
+                "A screenshot",
+                "screenshot.jpg",
+                "image/jpeg",
+                &data,
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_get_identities() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/identities/+15551234567"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "number": "+15559876543",
+                        "safety_number": "abc123def456",
+                        "trust_level": "TRUSTED_VERIFIED",
+                        "added_timestamp": 1700000000
+                    },
+                    {
+                        "number": "+15550001111",
+                        "trust_level": "UNTRUSTED"
+                    }
+                ])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let identities = api.get_identities().await.unwrap();
+        assert_eq!(identities.len(), 2);
+        assert!(identities[0].is_trusted());
+        assert!(identities[0].is_verified());
+        assert!(!identities[1].is_trusted());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_create_group() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v1/groups/+15551234567"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(json!({
+                    "id": "bmV3Z3JvdXA=",
+                    "name": "New Group",
+                    "members": ["+15559876543", "+15550001111"],
+                    "is_admin": true
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let group = api
+            .create_group(
+                "New Group",
+                &["+15559876543".to_string(), "+15550001111".to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(group.name, "New Group");
+        assert_eq!(group.members.len(), 2);
+        assert!(group.is_admin);
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_list_groups() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/groups/+15551234567"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "id": "Z3JvdXAx",
+                        "name": "Group 1",
+                        "members": ["+15559876543"],
+                        "is_admin": true
+                    },
+                    {
+                        "id": "Z3JvdXAy",
+                        "name": "Group 2",
+                        "members": ["+15550001111", "+15550002222"],
+                        "is_admin": false
+                    }
+                ])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let groups = api.list_groups().await.unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].name, "Group 1");
+        assert_eq!(groups[1].name, "Group 2");
+        assert!(!groups[1].is_admin);
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_signal_poller_poll() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/receive/+15551234567"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "envelope": {
+                            "source": "+15559876543",
+                            "sourceNumber": "+15559876543",
+                            "dataMessage": {
+                                "message": "/status"
+                            }
+                        }
+                    }
+                ])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
+        let mut poller = SignalPoller::new(api, 1);
+
+        let count = poller.poll().await.unwrap();
+        assert_eq!(count, 1);
+
+        let action = poller.next_action().unwrap();
+        assert!(matches!(
+            action,
+            InboundAction::Command(aegis_control::command::Command::Status)
+        ));
+
+        // Source tracking.
+        assert_eq!(poller.last_source(), Some("+15559876543"));
+
+        // Buffer should now be empty.
+        assert!(poller.next_action().is_none());
     }
 }

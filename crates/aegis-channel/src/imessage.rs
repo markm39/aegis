@@ -529,6 +529,50 @@ impl BlueBubblesApi {
         Ok(chats_resp.data)
     }
 
+    /// Send an attachment (image/file) to a chat.
+    ///
+    /// POST /api/v1/message/attachment with multipart form data.
+    pub async fn send_attachment(
+        &self,
+        chat_guid: &str,
+        filename: &str,
+        data: &[u8],
+        caption: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        debug!("BlueBubbles: sending attachment '{}' to chat {}", filename, chat_guid);
+
+        let file_part = reqwest::multipart::Part::bytes(data.to_vec())
+            .file_name(filename.to_string());
+
+        let mut form = reqwest::multipart::Form::new()
+            .text("chatGuid", chat_guid.to_string())
+            .text("method", "apple-script".to_string())
+            .part("attachment", file_part);
+
+        if let Some(cap) = caption {
+            form = form.text("message", cap.to_string());
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/api/v1/message/attachment", self.base_url))
+            .query(&[("password", &self.password)])
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            warn!("BlueBubbles attachment send failed: {status} (body redacted for security)");
+            return Err(ChannelError::Api(format!(
+                "BlueBubbles attachment API returned {status}: {body_text}"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Build the expected body JSON for a send_text call (for testing).
     pub fn build_send_body(chat_guid: &str, text: &str) -> serde_json::Value {
         serde_json::json!({
@@ -823,11 +867,45 @@ impl Channel for ImessageChannel {
 
     async fn send_photo(
         &self,
-        _photo: OutboundPhoto,
+        photo: OutboundPhoto,
     ) -> Result<(), ChannelError> {
-        Err(ChannelError::Other(
-            "photo messages not yet supported for iMessage".into(),
-        ))
+        match self.config.mode {
+            ImessageMode::Applescript => {
+                // AppleScript does not have a clean API for sending images
+                // programmatically via Messages.app. Fall back to sending a
+                // text notification that an image was generated.
+                let text = photo.caption.as_deref().unwrap_or("[photo attachment]");
+                self.send(OutboundMessage::text(text)).await
+            }
+            ImessageMode::Bluebubbles => {
+                let api = self.bb_api.as_ref().ok_or_else(|| {
+                    ChannelError::Other(
+                        "BlueBubbles API not initialized".into(),
+                    )
+                })?;
+
+                let chat_guid =
+                    format!("iMessage;-;{}", self.config.recipient);
+                api.send_attachment(
+                    &chat_guid,
+                    &photo.filename,
+                    &photo.bytes,
+                    photo.caption.as_deref(),
+                )
+                .await
+            }
+        }
+    }
+
+    fn capabilities(&self) -> crate::channel::ChannelCapabilities {
+        crate::channel::ChannelCapabilities {
+            // BlueBubbles mode supports sending images; AppleScript falls back
+            // to a text caption, so we report rich_media for BlueBubbles only.
+            rich_media: self.config.mode == ImessageMode::Bluebubbles,
+            // iMessage / AppleScript does not support typing, editing,
+            // deletion, reactions, threads, or presence natively.
+            ..Default::default()
+        }
     }
 }
 
@@ -1386,5 +1464,266 @@ mod tests {
     fn test_default_chat_db_path() {
         let path = default_chat_db_path();
         assert!(path.ends_with("/Library/Messages/chat.db"));
+    }
+
+    // -- Capabilities --
+
+    #[test]
+    fn test_applescript_capabilities_no_rich_media() {
+        let channel = ImessageChannel::new(ImessageConfig {
+            recipient: "+1234567890".to_string(),
+            mode: ImessageMode::Applescript,
+            bluebubbles_url: None,
+            bluebubbles_password: None,
+            poll_interval_secs: 10,
+            chat_db_path: None,
+        })
+        .unwrap();
+        let caps = channel.capabilities();
+        assert!(!caps.rich_media);
+        assert!(!caps.typing_indicators);
+        assert!(!caps.message_editing);
+        assert!(!caps.message_deletion);
+        assert!(!caps.reactions);
+        assert!(!caps.threads);
+        assert!(!caps.presence);
+    }
+
+    #[test]
+    fn test_bluebubbles_capabilities_rich_media() {
+        let channel = ImessageChannel::new(ImessageConfig {
+            recipient: "+1234567890".to_string(),
+            mode: ImessageMode::Bluebubbles,
+            bluebubbles_url: Some("http://localhost:1234".to_string()),
+            bluebubbles_password: Some("pass".to_string()),
+            poll_interval_secs: 10,
+            chat_db_path: None,
+        })
+        .unwrap();
+        let caps = channel.capabilities();
+        assert!(caps.rich_media);
+        assert!(!caps.typing_indicators);
+        assert!(!caps.reactions);
+    }
+
+    // -- Wiremock tests: BlueBubbles HTTP API --
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_send_text() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/api/v1/message/text"))
+            .and(matchers::query_param("password", "testpass"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": 200,
+                    "message": "Message sent!"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let result = api
+            .send_text("iMessage;-;+1234567890", "Hello from test")
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_send_text_failure() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/api/v1/message/text"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let result = api
+            .send_text("iMessage;-;+1234567890", "Hello")
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("500"));
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_get_messages() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/v1/message"))
+            .and(matchers::query_param("password", "testpass"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": 200,
+                    "data": [
+                        {
+                            "guid": "msg-100",
+                            "text": "/status",
+                            "isFromMe": false,
+                            "dateCreated": 1700000010000_i64,
+                            "handle": { "address": "+1234567890" }
+                        },
+                        {
+                            "guid": "msg-101",
+                            "text": "my reply",
+                            "isFromMe": true,
+                            "dateCreated": 1700000011000_i64
+                        }
+                    ]
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let messages = api.get_messages(1700000000000).await.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].guid, "msg-100");
+        assert_eq!(messages[0].text.as_deref(), Some("/status"));
+        assert!(!messages[0].is_from_me);
+        assert!(messages[1].is_from_me);
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_get_messages_failure() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/v1/message"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "wrongpass");
+        let result = api.get_messages(0).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_get_chats() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/v1/chat"))
+            .and(matchers::query_param("password", "testpass"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": 200,
+                    "data": [
+                        {
+                            "guid": "iMessage;-;+1234567890",
+                            "displayName": "Test User"
+                        }
+                    ]
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let chats = api.get_chats().await.unwrap();
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].guid, "iMessage;-;+1234567890");
+        assert_eq!(chats[0].display_name, "Test User");
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_send_attachment() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/api/v1/message/attachment"))
+            .and(matchers::query_param("password", "testpass"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": 200,
+                    "message": "Attachment sent!"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let photo_bytes = vec![0xFF, 0xD8, 0xFF, 0xE0]; // Fake JPEG header
+        let result = api
+            .send_attachment(
+                "iMessage;-;+1234567890",
+                "photo.jpg",
+                &photo_bytes,
+                Some("Check this out"),
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_send_attachment_failure() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/api/v1/message/attachment"))
+            .respond_with(ResponseTemplate::new(413).set_body_string("Payload too large"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let result = api
+            .send_attachment("iMessage;-;+1234567890", "big.jpg", &[0u8; 100], None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_wiremock_bluebubbles_send_text_bad_status_in_body() {
+        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        // HTTP 200 but BlueBubbles API status != 200 in body.
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/api/v1/message/text"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": 400,
+                    "message": "Invalid chat GUID"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
+        let result = api
+            .send_text("bad-guid", "test message")
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("400") || err.contains("Invalid chat GUID"));
     }
 }
