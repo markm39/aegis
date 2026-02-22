@@ -1,127 +1,118 @@
 //! Onboarding wizard state machine.
 //!
 //! Manages the current step, handles keyboard input, and tracks all user
-//! selections for the first-run onboarding wizard.
+//! selections for the streamlined 7-step onboarding wizard.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use aegis_types::config::ChannelConfig;
+use aegis_types::config::{ChannelConfig, TelegramConfig};
 use aegis_types::daemon::{
-    AgentSlotConfig, AgentToolConfig, OrchestratorConfig, SecurityPresetKind,
+    AgentSlotConfig, AgentToolConfig, DaemonConfig, DaemonControlConfig, DashboardConfig,
+    PersistenceConfig, RestartPolicy,
 };
 
-use crate::fleet_tui::wizard::{RestartChoice, ToolChoice};
+use crate::fleet_tui::wizard::ToolChoice;
 use crate::tui_utils::delete_word_backward_pos;
-use crate::wizard::model::{self, ActionEntry, ActionPermission, SecurityPreset};
 
-/// How the user wants to organize their fleet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkflowChoice {
-    /// A single agent working on its own.
-    Solo,
-    /// Multiple workers with a shared fleet goal.
-    Team,
-    /// An orchestrator agent directing worker agents.
-    Orchestrated,
-}
-
-impl WorkflowChoice {
-    pub const ALL: &'static [WorkflowChoice] = &[
-        WorkflowChoice::Solo,
-        WorkflowChoice::Team,
-        WorkflowChoice::Orchestrated,
-    ];
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            WorkflowChoice::Solo => "Solo Agent",
-            WorkflowChoice::Team => "Team",
-            WorkflowChoice::Orchestrated => "Orchestrated Team",
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            WorkflowChoice::Solo => "One agent, one task",
-            WorkflowChoice::Team => "Multiple workers sharing a fleet goal",
-            WorkflowChoice::Orchestrated => "An orchestrator directing worker agents",
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// Step enum (7 steps + 2 terminal)
+// ---------------------------------------------------------------------------
 
 /// Steps in the onboarding wizard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardStep {
-    /// Welcome screen with system check results.
+    /// Environment scan results.
     Welcome,
-    /// Choose fleet workflow: Solo, Team, or Orchestrated.
-    Workflow,
-    /// Fleet-wide goal (Team and Orchestrated only).
-    FleetGoal,
-    /// Select agent tool.
-    Tool,
-    /// Custom command path (only when tool == Custom).
-    CustomCommand,
-    /// Agent name.
-    Name,
-    /// Working directory.
-    WorkingDir,
-    /// Task / initial prompt (workers only).
-    Task,
-    /// Restart policy selection.
-    RestartPolicy,
-    /// Security preset selection (Observe Only, Read-only, etc.).
-    SecurityPreset,
-    /// Per-action Allow/Deny configuration (only when Custom selected).
-    SecurityDetail,
-    /// Informational screen explaining monitoring capabilities.
-    MonitoringInfo,
-    /// Backlog file path (orchestrator only).
-    OrchestratorBacklog,
-    /// Review interval in seconds (orchestrator only).
-    OrchestratorInterval,
-    /// Ask whether to add another worker (multi-agent only).
-    AddMore,
-    /// Ask whether to set up Telegram.
-    TelegramOffer,
-    /// Telegram bot token input.
-    TelegramToken,
-    /// Async validation and chat discovery.
-    TelegramProgress,
+    /// Compact multi-field: tool, name, dir, task.
+    AgentSetup,
+    /// Conditional: only if Custom tool + API keys detected.
+    ModelSelection,
+    /// Optional Telegram setup with sub-phases.
+    ChannelSetup,
     /// Review and confirm.
     Summary,
-    /// Completed.
+    /// Write config, start daemon, verify.
+    HealthCheck,
+    /// Completed successfully.
     Done,
-    /// Cancelled.
+    /// Cancelled by user.
     Cancelled,
 }
 
-impl OnboardStep {
-    /// Label for the progress display.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Welcome => "Welcome",
-            Self::Workflow => "Workflow",
-            Self::FleetGoal => "Fleet Goal",
-            Self::Tool | Self::CustomCommand => "Agent Tool",
-            Self::Name => "Agent Name",
-            Self::WorkingDir => "Working Directory",
-            Self::Task => "Task",
-            Self::RestartPolicy => "Restart Policy",
-            Self::SecurityPreset | Self::SecurityDetail => "Security",
-            Self::MonitoringInfo => "Monitoring",
-            Self::OrchestratorBacklog => "Backlog Path",
-            Self::OrchestratorInterval => "Review Interval",
-            Self::AddMore => "Add Agent",
-            Self::TelegramOffer | Self::TelegramToken | Self::TelegramProgress => "Telegram",
-            Self::Summary => "Summary",
-            Self::Done | Self::Cancelled => "Complete",
-        }
-    }
+// ---------------------------------------------------------------------------
+// Supporting types
+// ---------------------------------------------------------------------------
+
+/// Which field is active in the AgentSetup screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentField {
+    Tool,
+    Name,
+    WorkingDir,
+    Task,
+}
+
+/// Sub-phase within ChannelSetup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelPhase {
+    Offer,
+    TokenInput,
+    Validating,
+}
+
+/// Environment scan results.
+#[derive(Debug, Clone)]
+pub struct EnvScanResult {
+    pub api_keys: Vec<DetectedProvider>,
+    pub tools: Vec<DetectedTool>,
+    pub ollama_running: bool,
+    pub aegis_dir_ok: bool,
+    pub aegis_dir_path: String,
+}
+
+/// A detected API key provider.
+#[derive(Debug, Clone)]
+pub struct DetectedProvider {
+    pub env_var: &'static str,
+    pub label: &'static str,
+    pub default_model: &'static str,
+    pub present: bool,
+}
+
+/// A detected agent tool binary.
+#[derive(Debug, Clone)]
+pub struct DetectedTool {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub found: bool,
+}
+
+/// Health check progress items.
+#[derive(Debug, Clone)]
+pub struct HealthCheckItem {
+    pub label: String,
+    pub status: HealthStatus,
+}
+
+/// Status of a single health check item.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HealthStatus {
+    Pending,
+    Running,
+    Passed,
+    Failed(String),
+}
+
+/// Events from the health check background worker.
+pub enum HealthEvent {
+    ConfigWritten,
+    DaemonStarted,
+    DaemonFailed(String),
+    AllDone,
 }
 
 /// Events received from the Telegram background worker.
@@ -138,7 +129,7 @@ pub enum TelegramEvent {
     Error(String),
 }
 
-/// Telegram setup status for the progress step.
+/// Telegram setup status for the progress display.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TelegramStatus {
     Idle,
@@ -152,17 +143,13 @@ pub enum TelegramStatus {
 /// Result returned after the wizard completes.
 pub struct OnboardResult {
     pub cancelled: bool,
-    pub fleet_goal: Option<String>,
-    pub agents: Vec<AgentSlotConfig>,
-    pub channel: Option<ChannelConfig>,
-    pub start_daemon: bool,
-    /// Selected security preset for each agent.
-    pub security_preset: SecurityPresetKind,
-    /// Generated Cedar policy text (None for ObserveOnly).
-    pub policy_text: Option<String>,
-    /// Isolation config derived from security preset.
-    pub security_isolation: Option<aegis_types::IsolationConfig>,
+    // Config is written and daemon started by the health check step.
+    // The caller (onboard.rs) just transitions to the fleet TUI.
 }
+
+// ---------------------------------------------------------------------------
+// Main state
+// ---------------------------------------------------------------------------
 
 /// The onboarding wizard state.
 pub struct OnboardApp {
@@ -171,78 +158,151 @@ pub struct OnboardApp {
     /// Whether the event loop should keep running.
     pub running: bool,
 
-    // -- Welcome --
-    pub aegis_dir_ok: bool,
-    pub aegis_dir_path: String,
+    // -- Step 1: Welcome --
+    pub env_scan: EnvScanResult,
 
-    // -- Workflow --
-    pub workflow_selected: usize,
-
-    // -- Fleet Goal (Team/Orchestrated) --
-    pub fleet_goal: String,
-    pub fleet_goal_cursor: usize,
-
-    // -- Tool --
+    // -- Step 2: AgentSetup (multi-field) --
+    pub active_field: AgentField,
     pub tool_selected: usize,
-
-    // -- Custom command --
     pub custom_command: String,
     pub custom_cursor: usize,
-
-    // -- Name --
     pub name: String,
     pub name_cursor: usize,
     pub name_error: Option<String>,
-
-    // -- Working dir --
     pub working_dir: String,
     pub working_dir_cursor: usize,
     pub working_dir_error: Option<String>,
-
-    // -- Task --
     pub task: String,
     pub task_cursor: usize,
 
-    // -- Restart policy --
-    pub restart_selected: usize,
+    // -- Step 3: ModelSelection (conditional) --
+    pub show_model_step: bool,
+    pub provider_selected: usize,
 
-    // -- Orchestrator-specific --
-    pub backlog_path: String,
-    pub backlog_path_cursor: usize,
-    pub review_interval: String,
-    pub review_interval_cursor: usize,
-
-    // -- Multi-agent --
-    pub completed_agents: Vec<AgentSlotConfig>,
-    pub configuring_orchestrator: bool,
-    pub add_more_selected: usize,
-
-    // -- Security --
-    pub security_preset_selected: usize,
-    pub security_actions: Vec<ActionEntry>,
-    pub security_action_selected: usize,
-
-    // -- Telegram offer --
-    pub telegram_offer_selected: usize, // 0 = Yes, 1 = No
-
-    // -- Telegram token --
+    // -- Step 4: ChannelSetup --
+    pub channel_phase: ChannelPhase,
+    pub channel_offer_selected: usize, // 0=Skip, 1=Yes
     pub telegram_token: String,
     pub telegram_token_cursor: usize,
     pub telegram_status: TelegramStatus,
-
-    // -- Telegram async --
     pub telegram_evt_rx: Option<mpsc::Receiver<TelegramEvent>>,
     pub telegram_result: Option<(String, i64, String)>, // (token, chat_id, bot_username)
-    /// When Telegram validation started (for elapsed time display).
     pub telegram_started_at: Option<Instant>,
 
-    // -- Summary --
+    // -- Step 5: Summary --
     pub start_daemon: bool,
 
+    // -- Step 6: HealthCheck --
+    pub health_checks: Vec<HealthCheckItem>,
+    pub health_evt_rx: Option<mpsc::Receiver<HealthEvent>>,
+    pub health_started: bool,
+
     // -- Paste indicator --
-    /// Temporary paste notification: (message, when).
     pub paste_indicator: Option<(String, Instant)>,
 }
+
+// ---------------------------------------------------------------------------
+// Which text field is being edited
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+enum TextField {
+    CustomCommand,
+    Name,
+    WorkingDir,
+    Task,
+    TelegramToken,
+}
+
+// ---------------------------------------------------------------------------
+// Environment scan
+// ---------------------------------------------------------------------------
+
+fn scan_environment() -> EnvScanResult {
+    let api_keys = vec![
+        DetectedProvider {
+            env_var: "ANTHROPIC_API_KEY",
+            label: "Anthropic",
+            default_model: "claude-sonnet-4-20250514",
+            present: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+                .is_some(),
+        },
+        DetectedProvider {
+            env_var: "OPENAI_API_KEY",
+            label: "OpenAI",
+            default_model: "gpt-4o",
+            present: std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+                .is_some(),
+        },
+        DetectedProvider {
+            env_var: "GOOGLE_API_KEY",
+            label: "Google Gemini",
+            default_model: "gemini-2.0-flash",
+            present: std::env::var("GOOGLE_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+                .is_some()
+                || std::env::var("GEMINI_API_KEY")
+                    .ok()
+                    .filter(|k| !k.is_empty())
+                    .is_some(),
+        },
+        DetectedProvider {
+            env_var: "OPENROUTER_API_KEY",
+            label: "OpenRouter",
+            default_model: "openrouter/auto",
+            present: std::env::var("OPENROUTER_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+                .is_some(),
+        },
+    ];
+
+    let tools = vec![
+        DetectedTool {
+            name: "claude",
+            label: "Claude Code",
+            found: crate::tui_utils::binary_exists("claude"),
+        },
+        DetectedTool {
+            name: "codex",
+            label: "Codex",
+            found: crate::tui_utils::binary_exists("codex"),
+        },
+        DetectedTool {
+            name: "openclaw",
+            label: "OpenClaw",
+            found: crate::tui_utils::binary_exists("openclaw"),
+        },
+    ];
+
+    let ollama_running = std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:11434".parse().unwrap(),
+        std::time::Duration::from_millis(200),
+    )
+    .is_ok();
+
+    let (aegis_dir_ok, aegis_dir_path) = match crate::commands::init::ensure_aegis_dir() {
+        Ok(p) => (true, p.display().to_string()),
+        Err(_) => (false, "~/.aegis".into()),
+    };
+
+    EnvScanResult {
+        api_keys,
+        tools,
+        ollama_running,
+        aegis_dir_ok,
+        aegis_dir_path,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------------
 
 impl OnboardApp {
     /// Create a new wizard with sensible defaults.
@@ -256,20 +316,21 @@ impl OnboardApp {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "my-agent".into());
 
-        let (aegis_dir_ok, aegis_dir_path) = match crate::commands::init::ensure_aegis_dir() {
-            Ok(p) => (true, p.display().to_string()),
-            Err(_) => (false, "~/.aegis".into()),
-        };
+        let env_scan = scan_environment();
+
+        // Pre-select best detected tool
+        let tool_selected = env_scan
+            .tools
+            .iter()
+            .position(|t| t.found)
+            .unwrap_or(0);
 
         Self {
             step: OnboardStep::Welcome,
             running: true,
-            aegis_dir_ok,
-            aegis_dir_path,
-            workflow_selected: 0,
-            fleet_goal: String::new(),
-            fleet_goal_cursor: 0,
-            tool_selected: 0,
+            env_scan,
+            active_field: AgentField::Tool,
+            tool_selected,
             custom_command: String::new(),
             custom_cursor: 0,
             name_cursor: default_name.len(),
@@ -280,18 +341,10 @@ impl OnboardApp {
             working_dir_error: None,
             task: String::new(),
             task_cursor: 0,
-            restart_selected: 0,
-            backlog_path: String::new(),
-            backlog_path_cursor: 0,
-            review_interval: "300".into(),
-            review_interval_cursor: 3,
-            completed_agents: Vec::new(),
-            configuring_orchestrator: false,
-            add_more_selected: 0,
-            security_preset_selected: 0, // ObserveOnly
-            security_actions: model::default_action_entries(),
-            security_action_selected: 0,
-            telegram_offer_selected: 1, // default to No
+            show_model_step: false,
+            provider_selected: 0,
+            channel_phase: ChannelPhase::Offer,
+            channel_offer_selected: 0, // Skip by default
             telegram_token: String::new(),
             telegram_token_cursor: 0,
             telegram_status: TelegramStatus::Idle,
@@ -299,71 +352,61 @@ impl OnboardApp {
             telegram_result: None,
             telegram_started_at: None,
             start_daemon: true,
+            health_checks: Vec::new(),
+            health_evt_rx: None,
+            health_started: false,
             paste_indicator: None,
         }
     }
 
-    /// Get the selected workflow choice (bounds-checked).
-    pub fn workflow_choice(&self) -> WorkflowChoice {
-        WorkflowChoice::ALL
-            .get(self.workflow_selected)
-            .copied()
-            .unwrap_or(WorkflowChoice::Solo)
-    }
-
-    /// Whether the workflow involves multiple agents.
-    pub fn is_multi_agent(&self) -> bool {
-        self.workflow_choice() != WorkflowChoice::Solo
-    }
-
-    /// Number of non-orchestrator agents saved so far.
-    fn worker_count(&self) -> usize {
-        self.completed_agents
-            .iter()
-            .filter(|a| a.orchestrator.is_none())
-            .count()
-    }
+    // -----------------------------------------------------------------------
+    // Public accessors
+    // -----------------------------------------------------------------------
 
     /// Progress label for the title bar.
     pub fn progress_text(&self) -> String {
         match self.step {
-            OnboardStep::Welcome | OnboardStep::Workflow => {
-                format!("Setup: {}", self.step.label())
-            }
+            OnboardStep::Welcome => "Environment".into(),
+            OnboardStep::AgentSetup => "Agent".into(),
+            OnboardStep::ModelSelection => "Model".into(),
+            OnboardStep::ChannelSetup => "Notifications".into(),
+            OnboardStep::Summary => "Review".into(),
+            OnboardStep::HealthCheck => "Health Check".into(),
             OnboardStep::Done | OnboardStep::Cancelled => String::new(),
-            _ if !self.is_multi_agent() => {
-                format!("Setup: {}", self.step.label())
-            }
-            _ if matches!(self.step, OnboardStep::FleetGoal) => "Fleet: Fleet Goal".into(),
-            _ if self.configuring_orchestrator => {
-                format!("Orchestrator: {}", self.step.label())
-            }
-            _ if matches!(self.step, OnboardStep::AddMore) => "Fleet: Add Another?".into(),
-            _ if matches!(
-                self.step,
-                OnboardStep::SecurityPreset
-                    | OnboardStep::SecurityDetail
-                    | OnboardStep::MonitoringInfo
-            ) =>
-            {
-                format!("Security: {}", self.step.label())
-            }
-            _ if matches!(
-                self.step,
-                OnboardStep::TelegramOffer
-                    | OnboardStep::TelegramToken
-                    | OnboardStep::TelegramProgress
-            ) =>
-            {
-                format!("Notifications: {}", self.step.label())
-            }
-            _ if matches!(self.step, OnboardStep::Summary) => "Review: Summary".into(),
-            _ => {
-                let n = self.worker_count() + 1;
-                format!("Worker {n}: {}", self.step.label())
-            }
         }
     }
+
+    /// Build the result from current state.
+    pub fn result(&self) -> OnboardResult {
+        OnboardResult {
+            cancelled: self.step == OnboardStep::Cancelled,
+        }
+    }
+
+    /// Return only providers with `present == true`, for ModelSelection rendering.
+    pub fn available_providers(&self) -> Vec<&DetectedProvider> {
+        self.env_scan
+            .api_keys
+            .iter()
+            .filter(|p| p.present)
+            .collect()
+    }
+
+    /// Get the selected tool choice (bounds-checked).
+    pub fn tool_choice(&self) -> ToolChoice {
+        // 0..2 map to built-in tools, 3 = Custom
+        if self.tool_selected >= ToolChoice::ALL.len() {
+            return ToolChoice::Custom;
+        }
+        ToolChoice::ALL
+            .get(self.tool_selected)
+            .copied()
+            .unwrap_or(ToolChoice::ClaudeCode)
+    }
+
+    // -----------------------------------------------------------------------
+    // Key handling
+    // -----------------------------------------------------------------------
 
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -380,24 +423,15 @@ impl OnboardApp {
 
         match self.step {
             OnboardStep::Welcome => self.handle_welcome(key),
-            OnboardStep::Workflow => self.handle_workflow(key),
-            OnboardStep::FleetGoal => self.handle_text(key, TextField::FleetGoal),
-            OnboardStep::Tool => self.handle_tool(key),
-            OnboardStep::CustomCommand => self.handle_text(key, TextField::CustomCommand),
-            OnboardStep::Name => self.handle_name(key),
-            OnboardStep::WorkingDir => self.handle_working_dir(key),
-            OnboardStep::Task => self.handle_text(key, TextField::Task),
-            OnboardStep::RestartPolicy => self.handle_restart(key),
-            OnboardStep::SecurityPreset => self.handle_security_preset(key),
-            OnboardStep::SecurityDetail => self.handle_security_detail(key),
-            OnboardStep::MonitoringInfo => self.handle_monitoring_info(key),
-            OnboardStep::OrchestratorBacklog => self.handle_text(key, TextField::BacklogPath),
-            OnboardStep::OrchestratorInterval => self.handle_text(key, TextField::ReviewInterval),
-            OnboardStep::AddMore => self.handle_add_more(key),
-            OnboardStep::TelegramOffer => self.handle_telegram_offer(key),
-            OnboardStep::TelegramToken => self.handle_text(key, TextField::TelegramToken),
-            OnboardStep::TelegramProgress => self.handle_telegram_progress(key),
+            OnboardStep::AgentSetup => self.handle_agent_setup(key),
+            OnboardStep::ModelSelection => self.handle_model_selection(key),
+            OnboardStep::ChannelSetup => match self.channel_phase {
+                ChannelPhase::Offer => self.handle_channel_offer(key),
+                ChannelPhase::TokenInput => self.handle_channel_token(key),
+                ChannelPhase::Validating => self.handle_channel_validating(key),
+            },
             OnboardStep::Summary => self.handle_summary(key),
+            OnboardStep::HealthCheck => self.handle_health_check(key),
             OnboardStep::Done | OnboardStep::Cancelled => {}
         }
     }
@@ -408,26 +442,23 @@ impl OnboardApp {
     /// is currently active. For single-line fields (name, dir, token), newlines
     /// are collapsed to spaces. The task field preserves newlines.
     pub fn handle_paste(&mut self, text: &str) {
-        let (buf, cursor) = match self.step {
-            OnboardStep::FleetGoal => (&mut self.fleet_goal, &mut self.fleet_goal_cursor),
-            OnboardStep::CustomCommand => (&mut self.custom_command, &mut self.custom_cursor),
-            OnboardStep::Name => (&mut self.name, &mut self.name_cursor),
-            OnboardStep::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor),
-            OnboardStep::Task => (&mut self.task, &mut self.task_cursor),
-            OnboardStep::OrchestratorBacklog => {
-                (&mut self.backlog_path, &mut self.backlog_path_cursor)
+        let (buf, cursor, is_task) = match self.step {
+            OnboardStep::AgentSetup => match self.active_field {
+                AgentField::Tool => return,
+                AgentField::Name => (&mut self.name, &mut self.name_cursor, false),
+                AgentField::WorkingDir => {
+                    (&mut self.working_dir, &mut self.working_dir_cursor, false)
+                }
+                AgentField::Task => (&mut self.task, &mut self.task_cursor, true),
+            },
+            OnboardStep::ChannelSetup if self.channel_phase == ChannelPhase::TokenInput => {
+                (&mut self.telegram_token, &mut self.telegram_token_cursor, false)
             }
-            OnboardStep::OrchestratorInterval => {
-                (&mut self.review_interval, &mut self.review_interval_cursor)
-            }
-            OnboardStep::TelegramToken => {
-                (&mut self.telegram_token, &mut self.telegram_token_cursor)
-            }
-            _ => return, // Not a text input step
+            _ => return,
         };
 
         // Task keeps newlines; other fields collapse them
-        let cleaned = if self.step == OnboardStep::Task {
+        let cleaned = if is_task {
             text.replace('\r', "")
         } else {
             text.replace(['\n', '\r'], " ")
@@ -454,241 +485,55 @@ impl OnboardApp {
         }
     }
 
-    /// Process a single Telegram event, updating status and result.
-    fn process_telegram_event(&mut self, evt: TelegramEvent) {
-        match evt {
-            TelegramEvent::TokenValid { bot_username } => {
-                self.telegram_status = TelegramStatus::WaitingForChat { bot_username };
-            }
-            TelegramEvent::TokenInvalid(e) => {
-                self.telegram_status = TelegramStatus::Failed(format!("Invalid token: {e}"));
-            }
-            TelegramEvent::ChatDiscovered { chat_id } => {
-                let bot_username = match &self.telegram_status {
-                    TelegramStatus::WaitingForChat { bot_username } => bot_username.clone(),
-                    _ => "bot".into(),
-                };
-                self.telegram_status = TelegramStatus::SendingConfirmation;
-                self.telegram_result = Some((self.telegram_token.clone(), chat_id, bot_username));
-            }
-            TelegramEvent::ConfirmationSent => {
-                if let Some((_, chat_id, ref bot_username)) = self.telegram_result {
-                    self.telegram_status = TelegramStatus::Complete {
-                        bot_username: bot_username.clone(),
-                        chat_id,
-                    };
+    /// Poll for async health check events (called each tick from the event loop).
+    pub fn poll_health(&mut self) {
+        let evt = match &self.health_evt_rx {
+            Some(rx) => rx.try_recv().ok(),
+            None => None,
+        };
+        if let Some(evt) = evt {
+            match evt {
+                HealthEvent::ConfigWritten => {
+                    if let Some(c) = self.health_checks.first_mut() {
+                        c.status = HealthStatus::Passed;
+                    }
+                    if let Some(c) = self.health_checks.get_mut(1) {
+                        c.status = HealthStatus::Running;
+                    }
                 }
-            }
-            TelegramEvent::Error(e) => {
-                self.telegram_status = TelegramStatus::Failed(e);
-            }
-        }
-    }
-
-    /// Build the result from current state.
-    pub fn result(&self) -> OnboardResult {
-        if self.step == OnboardStep::Cancelled {
-            return OnboardResult {
-                cancelled: true,
-                fleet_goal: None,
-                agents: vec![],
-                channel: None,
-                start_daemon: false,
-                security_preset: SecurityPresetKind::ObserveOnly,
-                policy_text: None,
-                security_isolation: None,
-            };
-        }
-
-        let channel = self.telegram_result.as_ref().map(|(token, chat_id, _)| {
-            ChannelConfig::Telegram(aegis_types::config::TelegramConfig {
-                bot_token: token.clone(),
-                chat_id: *chat_id,
-                poll_timeout_secs: 30,
-                allow_group_commands: false,
-                active_hours: None,
-                webhook_mode: false,
-                webhook_port: None,
-                webhook_url: None,
-                webhook_secret: None,
-                inline_queries_enabled: false,
-            })
-        });
-
-        let fleet_goal = if self.fleet_goal.trim().is_empty() {
-            None
-        } else {
-            Some(self.fleet_goal.trim().to_string())
-        };
-
-        // Solo: build from current fields. Multi-agent: use completed_agents.
-        let agents = if self.is_multi_agent() {
-            self.completed_agents.clone()
-        } else {
-            vec![self.build_agent_slot()]
-        };
-
-        let preset = self.selected_security_preset();
-        let preset_kind = self.selected_security_preset_kind();
-        let policy_text = if preset == SecurityPreset::ObserveOnly {
-            None
-        } else {
-            Some(crate::wizard::policy_gen::generate_policy(
-                &self.security_actions,
-            ))
-        };
-        let security_isolation = if preset == SecurityPreset::ObserveOnly {
-            None
-        } else {
-            Some(preset.isolation())
-        };
-
-        OnboardResult {
-            cancelled: false,
-            fleet_goal,
-            agents,
-            channel,
-            start_daemon: self.start_daemon,
-            security_preset: preset_kind,
-            policy_text,
-            security_isolation,
-        }
-    }
-
-    /// Get the selected tool choice (bounds-checked).
-    fn tool_choice(&self) -> ToolChoice {
-        ToolChoice::ALL
-            .get(self.tool_selected)
-            .copied()
-            .unwrap_or(ToolChoice::ClaudeCode)
-    }
-
-    fn build_agent_slot(&self) -> AgentSlotConfig {
-        let tool = self.build_tool_config();
-        let task = if self.task.trim().is_empty() {
-            None
-        } else {
-            Some(self.task.clone())
-        };
-        crate::commands::build_agent_slot(
-            self.name.trim().to_string(),
-            tool,
-            PathBuf::from(self.working_dir.trim()),
-            task,
-            RestartChoice::ALL
-                .get(self.restart_selected)
-                .copied()
-                .unwrap_or(RestartChoice::OnFailure)
-                .to_policy(),
-            5,
-        )
-    }
-
-    fn build_tool_config(&self) -> AgentToolConfig {
-        match ToolChoice::ALL
-            .get(self.tool_selected)
-            .copied()
-            .unwrap_or(ToolChoice::ClaudeCode)
-        {
-            ToolChoice::ClaudeCode => AgentToolConfig::ClaudeCode {
-                skip_permissions: false,
-                one_shot: false,
-                extra_args: vec![],
-            },
-            ToolChoice::Codex => AgentToolConfig::Codex {
-                approval_mode: "suggest".into(),
-                one_shot: false,
-                extra_args: vec![],
-            },
-            ToolChoice::OpenClaw => AgentToolConfig::OpenClaw {
-                agent_name: None,
-                extra_args: vec![],
-            },
-            ToolChoice::Custom => {
-                // Split "command --flag1 --flag2" into command + args
-                let parts: Vec<&str> = self.custom_command.split_whitespace().collect();
-                let command = parts.first().map(|s| s.to_string()).unwrap_or_default();
-                let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
-                AgentToolConfig::Custom {
-                    command,
-                    args,
-                    adapter: Default::default(),
-                    env: vec![],
+                HealthEvent::DaemonStarted => {
+                    if let Some(c) = self.health_checks.get_mut(1) {
+                        c.status = HealthStatus::Passed;
+                    }
+                }
+                HealthEvent::DaemonFailed(e) => {
+                    // Mark the currently running check as failed
+                    for c in &mut self.health_checks {
+                        if c.status == HealthStatus::Running {
+                            c.status = HealthStatus::Failed(e.clone());
+                            break;
+                        }
+                    }
+                }
+                HealthEvent::AllDone => {
+                    // Mark any remaining pending as passed
+                    for c in &mut self.health_checks {
+                        if matches!(c.status, HealthStatus::Pending) {
+                            c.status = HealthStatus::Passed;
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Save the current fields as a worker agent to completed_agents.
-    fn save_current_agent(&mut self) {
-        let slot = self.build_agent_slot();
-        self.completed_agents.push(slot);
-    }
-
-    /// Save the current fields as an orchestrator agent to completed_agents.
-    fn save_orchestrator(&mut self) {
-        let tool = self.build_tool_config();
-        let backlog = if self.backlog_path.trim().is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(self.backlog_path.trim()))
-        };
-        let interval = self.review_interval.trim().parse::<u64>().unwrap_or(300);
-
-        let config = AgentSlotConfig {
-            name: self.name.trim().to_string(),
-            tool,
-            working_dir: PathBuf::from(self.working_dir.trim()),
-            role: Some("Orchestrator".into()),
-            agent_goal: Some(
-                "Keep coding agents focused on high-value backlog items. Verify their work.".into(),
-            ),
-            context: None,
-            task: None,
-            pilot: None,
-            restart: aegis_types::daemon::RestartPolicy::Always,
-            max_restarts: 0,
-            enabled: true,
-            orchestrator: Some(OrchestratorConfig {
-                review_interval_secs: interval,
-                backlog_path: backlog,
-                managed_agents: vec![],
-            }),
-            security_preset: None,
-            policy_dir: None,
-            isolation: None,
-            lane: None,
-        };
-        self.completed_agents.push(config);
-    }
-
-    /// Reset agent fields for configuring the next agent.
-    fn reset_agent_fields(&mut self) {
-        let default_name = std::env::current_dir()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| "worker".into());
-
-        self.tool_selected = 0;
-        self.custom_command.clear();
-        self.custom_cursor = 0;
-        self.name = default_name;
-        self.name_cursor = self.name.len();
-        self.name_error = None;
-        // Keep working_dir -- agents likely share the same project
-        self.working_dir_cursor = self.working_dir.len();
-        self.working_dir_error = None;
-        self.task.clear();
-        self.task_cursor = 0;
-        self.restart_selected = 0;
-        self.configuring_orchestrator = false;
-    }
-
-    // -- Step handlers --
+    // -----------------------------------------------------------------------
+    // Step handlers
+    // -----------------------------------------------------------------------
 
     fn handle_welcome(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Enter => self.step = OnboardStep::Workflow,
+            KeyCode::Enter => self.step = OnboardStep::AgentSetup,
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.step = OnboardStep::Cancelled;
                 self.running = false;
@@ -697,309 +542,201 @@ impl OnboardApp {
         }
     }
 
-    fn handle_workflow(&mut self, key: KeyEvent) {
+    fn handle_agent_setup(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.workflow_selected =
-                    (self.workflow_selected + 1).min(WorkflowChoice::ALL.len() - 1);
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.active_field = if key.code == KeyCode::Tab {
+                    match self.active_field {
+                        AgentField::Tool => AgentField::Name,
+                        AgentField::Name => AgentField::WorkingDir,
+                        AgentField::WorkingDir => AgentField::Task,
+                        AgentField::Task => AgentField::Tool,
+                    }
+                } else {
+                    match self.active_field {
+                        AgentField::Tool => AgentField::Task,
+                        AgentField::Name => AgentField::Tool,
+                        AgentField::WorkingDir => AgentField::Name,
+                        AgentField::Task => AgentField::WorkingDir,
+                    }
+                };
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.workflow_selected = self.workflow_selected.saturating_sub(1);
+            KeyCode::Enter => self.validate_and_advance_agent(),
+            KeyCode::Esc => {
+                self.step = OnboardStep::Welcome;
             }
-            KeyCode::Enter => match self.workflow_choice() {
-                WorkflowChoice::Solo => {
-                    self.configuring_orchestrator = false;
-                    self.step = OnboardStep::Tool;
-                }
-                WorkflowChoice::Team | WorkflowChoice::Orchestrated => {
-                    self.fleet_goal_cursor = self.fleet_goal.len();
-                    self.step = OnboardStep::FleetGoal;
-                }
-            },
-            KeyCode::Esc => self.step = OnboardStep::Welcome,
-            _ => {}
+            _ => self.handle_agent_field_input(key),
         }
     }
 
-    fn handle_tool(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.tool_selected = (self.tool_selected + 1).min(ToolChoice::ALL.len() - 1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.tool_selected = self.tool_selected.saturating_sub(1);
-            }
-            KeyCode::Enter => {
+    fn handle_agent_field_input(&mut self, key: KeyEvent) {
+        match self.active_field {
+            AgentField::Tool => {
                 if self.tool_choice() == ToolChoice::Custom {
-                    self.custom_cursor = self.custom_command.len();
-                    self.step = OnboardStep::CustomCommand;
-                } else {
-                    self.name_cursor = self.name.len();
-                    self.step = OnboardStep::Name;
-                }
-            }
-            KeyCode::Esc => {
-                if self.configuring_orchestrator {
-                    self.step = OnboardStep::FleetGoal;
-                } else if !self.is_multi_agent() {
-                    self.step = OnboardStep::Workflow;
-                } else if self.completed_agents.is_empty() {
-                    // Team mode, first worker: back to fleet goal
-                    self.step = OnboardStep::FleetGoal;
-                } else {
-                    // Additional worker: done adding, go to telegram
-                    self.step = OnboardStep::TelegramOffer;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_name(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                let trimmed = self.name.trim();
-                if trimmed.is_empty() {
-                    self.name_error = Some("Name cannot be empty".into());
-                    return;
-                }
-                match aegis_types::validate_config_name(trimmed) {
-                    Ok(()) => {
-                        self.name_error = None;
-                        self.working_dir_cursor = self.working_dir.len();
-                        self.step = OnboardStep::WorkingDir;
+                    // When Custom is selected, j/k still navigate, but other
+                    // keys edit the custom command text.
+                    match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            // Can't go further than Custom (last item)
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            self.tool_selected = self.tool_selected.saturating_sub(1);
+                        }
+                        _ => {
+                            self.edit_text(key, TextField::CustomCommand);
+                        }
                     }
-                    Err(e) => {
-                        self.name_error = Some(e.to_string());
+                } else {
+                    match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            self.tool_selected = (self.tool_selected + 1).min(3);
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            self.tool_selected = self.tool_selected.saturating_sub(1);
+                        }
+                        _ => {}
                     }
                 }
+                self.update_show_model_step();
             }
-            KeyCode::Esc => {
-                self.name_error = None;
-                if self.tool_choice() == ToolChoice::Custom {
-                    self.step = OnboardStep::CustomCommand;
-                } else {
-                    self.step = OnboardStep::Tool;
-                }
-            }
-            _ => {
+            AgentField::Name => {
                 self.name_error = None;
                 self.edit_text(key, TextField::Name);
             }
-        }
-    }
-
-    fn handle_working_dir(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                let trimmed = self.working_dir.trim();
-                if trimmed.is_empty() {
-                    self.working_dir_error = Some("Directory cannot be empty".into());
-                    return;
-                }
-                if !Path::new(trimmed).is_dir() {
-                    self.working_dir_error = Some(format!("Not a directory: {trimmed}"));
-                    return;
-                }
-                self.working_dir_error = None;
-                if self.configuring_orchestrator {
-                    self.backlog_path_cursor = self.backlog_path.len();
-                    self.step = OnboardStep::OrchestratorBacklog;
-                } else {
-                    self.task_cursor = self.task.len();
-                    self.step = OnboardStep::Task;
-                }
-            }
-            KeyCode::Esc => {
-                self.working_dir_error = None;
-                self.step = OnboardStep::Name;
-            }
-            _ => {
+            AgentField::WorkingDir => {
                 self.working_dir_error = None;
                 self.edit_text(key, TextField::WorkingDir);
             }
+            AgentField::Task => {
+                self.edit_text(key, TextField::Task);
+            }
         }
     }
 
-    fn handle_restart(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.restart_selected =
-                    (self.restart_selected + 1).min(RestartChoice::ALL.len() - 1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.restart_selected = self.restart_selected.saturating_sub(1);
-            }
-            KeyCode::Enter => {
-                if self.is_multi_agent() {
-                    self.save_current_agent();
-                    self.reset_agent_fields();
-                    self.add_more_selected = 0;
-                    self.step = OnboardStep::AddMore;
-                } else {
-                    self.step = OnboardStep::SecurityPreset;
-                }
-            }
-            KeyCode::Esc => self.step = OnboardStep::Task,
-            _ => {}
+    fn validate_and_advance_agent(&mut self) {
+        // Validate tool (Custom needs non-empty command)
+        if self.tool_choice() == ToolChoice::Custom && self.custom_command.trim().is_empty() {
+            self.active_field = AgentField::Tool;
+            return;
+        }
+        // Validate name
+        let trimmed_name = self.name.trim().to_string();
+        if trimmed_name.is_empty() {
+            self.name_error = Some("Name cannot be empty".into());
+            self.active_field = AgentField::Name;
+            return;
+        }
+        if let Err(e) = aegis_types::validate_config_name(&trimmed_name) {
+            self.name_error = Some(e.to_string());
+            self.active_field = AgentField::Name;
+            return;
+        }
+        // Validate working dir
+        let trimmed_dir = self.working_dir.trim().to_string();
+        if trimmed_dir.is_empty() {
+            self.working_dir_error = Some("Directory cannot be empty".into());
+            self.active_field = AgentField::WorkingDir;
+            return;
+        }
+        if !std::path::Path::new(&trimmed_dir).is_dir() {
+            self.working_dir_error = Some(format!("Not a directory: {trimmed_dir}"));
+            self.active_field = AgentField::WorkingDir;
+            return;
+        }
+        // All valid
+        self.name_error = None;
+        self.working_dir_error = None;
+        self.update_show_model_step();
+        if self.show_model_step {
+            self.step = OnboardStep::ModelSelection;
+        } else {
+            self.channel_phase = ChannelPhase::Offer;
+            self.step = OnboardStep::ChannelSetup;
         }
     }
 
-    fn handle_add_more(&mut self, key: KeyEvent) {
+    fn update_show_model_step(&mut self) {
+        let is_custom = self.tool_choice() == ToolChoice::Custom;
+        let has_keys = self.env_scan.api_keys.iter().any(|k| k.present);
+        self.show_model_step = is_custom && has_keys;
+    }
+
+    fn handle_model_selection(&mut self, key: KeyEvent) {
+        let count = self.available_providers().len();
+        if count == 0 {
+            // Nothing to select; skip
+            self.channel_phase = ChannelPhase::Offer;
+            self.step = OnboardStep::ChannelSetup;
+            return;
+        }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.add_more_selected = (self.add_more_selected + 1).min(1);
+                self.provider_selected = (self.provider_selected + 1).min(count - 1);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.add_more_selected = self.add_more_selected.saturating_sub(1);
+                self.provider_selected = self.provider_selected.saturating_sub(1);
             }
             KeyCode::Enter => {
-                if self.add_more_selected == 0 {
-                    // Yes, add another worker
-                    self.reset_agent_fields();
-                    self.step = OnboardStep::Tool;
-                } else {
-                    // No, done adding -- configure security
-                    self.step = OnboardStep::SecurityPreset;
-                }
+                self.channel_phase = ChannelPhase::Offer;
+                self.step = OnboardStep::ChannelSetup;
             }
             KeyCode::Esc => {
-                // Same as "No"
-                self.step = OnboardStep::SecurityPreset;
+                self.step = OnboardStep::AgentSetup;
             }
             _ => {}
         }
     }
 
-    fn handle_security_preset(&mut self, key: KeyEvent) {
+    fn handle_channel_offer(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.security_preset_selected =
-                    (self.security_preset_selected + 1).min(SecurityPreset::ALL.len() - 1);
+                self.channel_offer_selected = (self.channel_offer_selected + 1).min(1);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.security_preset_selected = self.security_preset_selected.saturating_sub(1);
+                self.channel_offer_selected = self.channel_offer_selected.saturating_sub(1);
             }
             KeyCode::Enter => {
-                let preset = self.selected_security_preset();
-                model::apply_preset(&mut self.security_actions, preset);
-
-                if preset == SecurityPreset::Custom {
-                    self.security_action_selected = 0;
-                    self.step = OnboardStep::SecurityDetail;
-                } else {
-                    self.step = OnboardStep::MonitoringInfo;
-                }
-            }
-            KeyCode::Esc => {
-                if self.is_multi_agent() {
-                    self.step = OnboardStep::AddMore;
-                } else {
-                    self.step = OnboardStep::RestartPolicy;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_security_detail(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                if self.security_action_selected < self.security_actions.len() - 1 {
-                    self.security_action_selected += 1;
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.security_action_selected = self.security_action_selected.saturating_sub(1);
-            }
-            KeyCode::Char(' ') => {
-                // Toggle allow/deny (skip infrastructure actions)
-                let idx = self.security_action_selected;
-                if !self.security_actions[idx].meta.infrastructure {
-                    self.security_actions[idx].permission =
-                        match &self.security_actions[idx].permission {
-                            ActionPermission::Allow | ActionPermission::Scoped(_) => {
-                                ActionPermission::Deny
-                            }
-                            ActionPermission::Deny => ActionPermission::Allow,
-                        };
-                }
-            }
-            KeyCode::Enter | KeyCode::Tab => {
-                self.step = OnboardStep::MonitoringInfo;
-            }
-            KeyCode::Esc => {
-                self.step = OnboardStep::SecurityPreset;
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_monitoring_info(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                self.step = OnboardStep::TelegramOffer;
-            }
-            KeyCode::Esc => {
-                self.step = OnboardStep::SecurityPreset;
-            }
-            _ => {}
-        }
-    }
-
-    /// Map the selected preset index to a `SecurityPreset` enum.
-    pub fn selected_security_preset(&self) -> SecurityPreset {
-        SecurityPreset::ALL
-            .get(self.security_preset_selected)
-            .copied()
-            .unwrap_or(SecurityPreset::ObserveOnly)
-    }
-
-    /// Map the selected preset to the `SecurityPresetKind` for daemon config.
-    fn selected_security_preset_kind(&self) -> SecurityPresetKind {
-        match self.selected_security_preset() {
-            SecurityPreset::ObserveOnly => SecurityPresetKind::ObserveOnly,
-            SecurityPreset::ReadOnly => SecurityPresetKind::ReadOnly,
-            SecurityPreset::FullLockdown => SecurityPresetKind::FullLockdown,
-            SecurityPreset::Custom => SecurityPresetKind::Custom,
-        }
-    }
-
-    fn handle_telegram_offer(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.telegram_offer_selected = (self.telegram_offer_selected + 1).min(1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.telegram_offer_selected = self.telegram_offer_selected.saturating_sub(1);
-            }
-            KeyCode::Enter => {
-                if self.telegram_offer_selected == 0 {
-                    // Yes
-                    self.telegram_token_cursor = self.telegram_token.len();
-                    self.step = OnboardStep::TelegramToken;
-                } else {
-                    // No
+                if self.channel_offer_selected == 0 {
+                    // Skip
                     self.step = OnboardStep::Summary;
+                } else {
+                    // Yes, set up Telegram
+                    self.telegram_token_cursor = self.telegram_token.len();
+                    self.channel_phase = ChannelPhase::TokenInput;
                 }
             }
             KeyCode::Esc => {
-                self.step = OnboardStep::MonitoringInfo;
+                self.back_before_channel();
             }
             _ => {}
         }
     }
 
-    fn handle_telegram_progress(&mut self, key: KeyEvent) {
+    fn handle_channel_token(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                if self.telegram_token.trim().is_empty() {
+                    return; // Don't advance with empty token
+                }
+                self.start_telegram_validation();
+                self.channel_phase = ChannelPhase::Validating;
+            }
+            KeyCode::Esc => {
+                self.channel_phase = ChannelPhase::Offer;
+            }
+            _ => self.edit_text(key, TextField::TelegramToken),
+        }
+    }
+
+    fn handle_channel_validating(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
-                // Cancel and go back
+                // Cancel and go back to offer
                 self.telegram_status = TelegramStatus::Idle;
                 self.telegram_evt_rx = None;
-                self.step = OnboardStep::TelegramOffer;
+                self.channel_phase = ChannelPhase::Offer;
             }
             KeyCode::Enter => {
-                // If complete or failed, advance/retry
                 match &self.telegram_status {
                     TelegramStatus::Complete { .. } => {
                         self.step = OnboardStep::Summary;
@@ -1007,7 +744,7 @@ impl OnboardApp {
                     TelegramStatus::Failed(_) => {
                         // Go back to token input to retry
                         self.telegram_status = TelegramStatus::Idle;
-                        self.step = OnboardStep::TelegramToken;
+                        self.channel_phase = ChannelPhase::TokenInput;
                     }
                     _ => {} // Waiting -- do nothing
                 }
@@ -1019,15 +756,15 @@ impl OnboardApp {
     fn handle_summary(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => {
-                self.step = OnboardStep::Done;
-                self.running = false;
+                self.step = OnboardStep::HealthCheck;
+                self.start_health_checks();
             }
             KeyCode::Char('d') => {
-                // Toggle start daemon
                 self.start_daemon = !self.start_daemon;
             }
             KeyCode::Esc => {
-                self.step = OnboardStep::TelegramOffer;
+                self.channel_phase = ChannelPhase::Offer;
+                self.step = OnboardStep::ChannelSetup;
             }
             KeyCode::Char('q') | KeyCode::Char('n') => {
                 self.step = OnboardStep::Cancelled;
@@ -1037,79 +774,42 @@ impl OnboardApp {
         }
     }
 
-    /// Generic text input handler for fields that don't need special Enter logic.
-    fn handle_text(&mut self, key: KeyEvent, field: TextField) {
-        match key.code {
-            KeyCode::Enter => {
-                match field {
-                    TextField::FleetGoal => {
-                        // Fleet goal is optional -- allow empty
-                        if self.workflow_choice() == WorkflowChoice::Orchestrated {
-                            self.configuring_orchestrator = true;
-                            self.name = "orchestrator".into();
-                            self.name_cursor = self.name.len();
-                        } else {
-                            self.configuring_orchestrator = false;
-                        }
-                        self.step = OnboardStep::Tool;
-                    }
-                    TextField::CustomCommand => {
-                        if self.custom_command.trim().is_empty() {
-                            return; // Don't advance with empty command
-                        }
-                        self.name_cursor = self.name.len();
-                        self.step = OnboardStep::Name;
-                    }
-                    TextField::Task => {
-                        self.step = OnboardStep::RestartPolicy;
-                    }
-                    TextField::BacklogPath => {
-                        self.review_interval_cursor = self.review_interval.len();
-                        self.step = OnboardStep::OrchestratorInterval;
-                    }
-                    TextField::ReviewInterval => {
-                        // Save orchestrator and start first worker
-                        self.save_orchestrator();
-                        self.reset_agent_fields();
-                        self.step = OnboardStep::Tool;
-                    }
-                    TextField::TelegramToken => {
-                        if self.telegram_token.trim().is_empty() {
-                            return;
-                        }
-                        self.start_telegram_validation();
-                        self.step = OnboardStep::TelegramProgress;
-                    }
-                    _ => {}
-                }
+    fn handle_health_check(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Enter {
+            let all_done = self
+                .health_checks
+                .iter()
+                .all(|c| matches!(c.status, HealthStatus::Passed | HealthStatus::Failed(_)));
+            if all_done {
+                self.step = OnboardStep::Done;
+                self.running = false;
             }
-            KeyCode::Esc => match field {
-                TextField::FleetGoal => self.step = OnboardStep::Workflow,
-                TextField::CustomCommand => self.step = OnboardStep::Tool,
-                TextField::Task => self.step = OnboardStep::WorkingDir,
-                TextField::BacklogPath => self.step = OnboardStep::WorkingDir,
-                TextField::ReviewInterval => self.step = OnboardStep::OrchestratorBacklog,
-                TextField::TelegramToken => {
-                    self.step = OnboardStep::TelegramOffer;
-                }
-                _ => {}
-            },
-            _ => self.edit_text(key, field),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Navigation helpers
+    // -----------------------------------------------------------------------
+
+    fn back_before_channel(&mut self) {
+        if self.show_model_step {
+            self.step = OnboardStep::ModelSelection;
+        } else {
+            self.step = OnboardStep::AgentSetup;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Text editing
+    // -----------------------------------------------------------------------
 
     /// Apply a key to a text field (character insert, backspace, cursor movement).
     fn edit_text(&mut self, key: KeyEvent, field: TextField) {
         let (text, cursor) = match field {
-            TextField::FleetGoal => (&mut self.fleet_goal, &mut self.fleet_goal_cursor),
             TextField::CustomCommand => (&mut self.custom_command, &mut self.custom_cursor),
             TextField::Name => (&mut self.name, &mut self.name_cursor),
             TextField::WorkingDir => (&mut self.working_dir, &mut self.working_dir_cursor),
             TextField::Task => (&mut self.task, &mut self.task_cursor),
-            TextField::BacklogPath => (&mut self.backlog_path, &mut self.backlog_path_cursor),
-            TextField::ReviewInterval => {
-                (&mut self.review_interval, &mut self.review_interval_cursor)
-            }
             TextField::TelegramToken => (&mut self.telegram_token, &mut self.telegram_token_cursor),
         };
 
@@ -1178,6 +878,41 @@ impl OnboardApp {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Telegram flow
+    // -----------------------------------------------------------------------
+
+    /// Process a single Telegram event, updating status and result.
+    fn process_telegram_event(&mut self, evt: TelegramEvent) {
+        match evt {
+            TelegramEvent::TokenValid { bot_username } => {
+                self.telegram_status = TelegramStatus::WaitingForChat { bot_username };
+            }
+            TelegramEvent::TokenInvalid(e) => {
+                self.telegram_status = TelegramStatus::Failed(format!("Invalid token: {e}"));
+            }
+            TelegramEvent::ChatDiscovered { chat_id } => {
+                let bot_username = match &self.telegram_status {
+                    TelegramStatus::WaitingForChat { bot_username } => bot_username.clone(),
+                    _ => "bot".into(),
+                };
+                self.telegram_status = TelegramStatus::SendingConfirmation;
+                self.telegram_result = Some((self.telegram_token.clone(), chat_id, bot_username));
+            }
+            TelegramEvent::ConfirmationSent => {
+                if let Some((_, chat_id, ref bot_username)) = self.telegram_result {
+                    self.telegram_status = TelegramStatus::Complete {
+                        bot_username: bot_username.clone(),
+                        chat_id,
+                    };
+                }
+            }
+            TelegramEvent::Error(e) => {
+                self.telegram_status = TelegramStatus::Failed(e);
+            }
+        }
+    }
+
     /// Launch the Telegram background worker.
     fn start_telegram_validation(&mut self) {
         let token = self.telegram_token.trim().to_string();
@@ -1206,20 +941,165 @@ impl OnboardApp {
             });
         });
     }
+
+    // -----------------------------------------------------------------------
+    // Health check flow
+    // -----------------------------------------------------------------------
+
+    fn start_health_checks(&mut self) {
+        self.health_started = true;
+        self.health_checks = vec![HealthCheckItem {
+            label: "Write daemon.toml".into(),
+            status: HealthStatus::Running,
+        }];
+        if self.start_daemon {
+            self.health_checks.push(HealthCheckItem {
+                label: "Start daemon".into(),
+                status: HealthStatus::Pending,
+            });
+        }
+
+        let config = self.build_daemon_config();
+        let start_daemon = self.start_daemon;
+        let (tx, rx) = mpsc::channel::<HealthEvent>();
+        self.health_evt_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let dir = aegis_types::daemon::daemon_dir();
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                let _ = tx.send(HealthEvent::DaemonFailed(format!(
+                    "Failed to create dir: {e}"
+                )));
+                return;
+            }
+            let config_path = aegis_types::daemon::daemon_config_path();
+            match config.to_toml() {
+                Ok(toml_str) => {
+                    if let Err(e) = std::fs::write(&config_path, &toml_str) {
+                        let _ = tx.send(HealthEvent::DaemonFailed(format!(
+                            "Failed to write config: {e}"
+                        )));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(HealthEvent::DaemonFailed(format!(
+                        "Failed to serialize: {e}"
+                    )));
+                    return;
+                }
+            }
+            let _ = tx.send(HealthEvent::ConfigWritten);
+
+            if start_daemon {
+                match crate::commands::daemon::start_quiet() {
+                    Ok(_) => {
+                        let _ = tx.send(HealthEvent::DaemonStarted);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(HealthEvent::DaemonFailed(format!("{e:#}")));
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(HealthEvent::AllDone);
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Config building
+    // -----------------------------------------------------------------------
+
+    fn build_agent_slot(&self) -> AgentSlotConfig {
+        let tool = self.build_tool_config();
+        let task = if self.task.trim().is_empty() {
+            None
+        } else {
+            Some(self.task.clone())
+        };
+        crate::commands::build_agent_slot(
+            self.name.trim().to_string(),
+            tool,
+            PathBuf::from(self.working_dir.trim()),
+            task,
+            RestartPolicy::OnFailure,
+            5,
+        )
+    }
+
+    fn build_tool_config(&self) -> AgentToolConfig {
+        match self.tool_choice() {
+            ToolChoice::ClaudeCode => AgentToolConfig::ClaudeCode {
+                skip_permissions: false,
+                one_shot: false,
+                extra_args: vec![],
+            },
+            ToolChoice::Codex => AgentToolConfig::Codex {
+                approval_mode: "suggest".into(),
+                one_shot: false,
+                extra_args: vec![],
+            },
+            ToolChoice::OpenClaw => AgentToolConfig::OpenClaw {
+                agent_name: None,
+                extra_args: vec![],
+            },
+            ToolChoice::Custom => {
+                // Split "command --flag1 --flag2" into command + args
+                let parts: Vec<&str> = self.custom_command.split_whitespace().collect();
+                let command = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
+                AgentToolConfig::Custom {
+                    command,
+                    args,
+                    adapter: Default::default(),
+                    env: vec![],
+                }
+            }
+        }
+    }
+
+    fn build_daemon_config(&self) -> DaemonConfig {
+        let agent = self.build_agent_slot();
+        let channel = self.telegram_result.as_ref().map(|(token, chat_id, _)| {
+            ChannelConfig::Telegram(TelegramConfig {
+                bot_token: token.clone(),
+                chat_id: *chat_id,
+                poll_timeout_secs: 30,
+                allow_group_commands: false,
+                active_hours: None,
+                webhook_mode: false,
+                webhook_port: None,
+                webhook_url: None,
+                webhook_secret: None,
+                inline_queries_enabled: false,
+            })
+        });
+
+        DaemonConfig {
+            goal: None,
+            persistence: PersistenceConfig::default(),
+            control: DaemonControlConfig::default(),
+            dashboard: DashboardConfig::default(),
+            alerts: vec![],
+            agents: vec![agent],
+            channel,
+            channel_routing: None,
+            toolkit: Default::default(),
+            memory: Default::default(),
+            session_files: Default::default(),
+            cron: Default::default(),
+            plugins: Default::default(),
+            aliases: Default::default(),
+            lanes: vec![],
+            workspace_hooks: Default::default(),
+            acp_server: None,
+        }
+    }
 }
 
-/// Which text field is being edited.
-#[derive(Debug, Clone, Copy)]
-enum TextField {
-    FleetGoal,
-    CustomCommand,
-    Name,
-    WorkingDir,
-    Task,
-    BacklogPath,
-    ReviewInterval,
-    TelegramToken,
-}
+// ---------------------------------------------------------------------------
+// Telegram background worker
+// ---------------------------------------------------------------------------
 
 /// Run the Telegram validation and chat discovery flow.
 async fn run_telegram_worker(token: String, tx: mpsc::Sender<TelegramEvent>) {
@@ -1267,6 +1147,10 @@ async fn run_telegram_worker(token: String, tx: mpsc::Sender<TelegramEvent>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,857 +1165,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn initial_state() {
-        let app = OnboardApp::new();
-        assert_eq!(app.step, OnboardStep::Welcome);
-        assert!(app.running);
-        assert!(app.start_daemon);
-        assert_eq!(app.workflow_selected, 0);
-        assert!(app.completed_agents.is_empty());
-    }
-
-    #[test]
-    fn welcome_enter_advances_to_workflow() {
-        let mut app = OnboardApp::new();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Workflow);
-    }
-
-    #[test]
-    fn welcome_esc_cancels() {
-        let mut app = OnboardApp::new();
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Cancelled);
-        assert!(!app.running);
-    }
-
-    #[test]
-    fn workflow_navigation() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Workflow;
-        assert_eq!(app.workflow_selected, 0);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.workflow_selected, 1);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.workflow_selected, 2);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.workflow_selected, 2); // clamped
-        app.handle_key(press(KeyCode::Char('k')));
-        assert_eq!(app.workflow_selected, 1);
-    }
-
-    #[test]
-    fn workflow_solo_goes_to_tool() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Workflow;
-        app.workflow_selected = 0;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-        assert!(!app.configuring_orchestrator);
-    }
-
-    #[test]
-    fn workflow_team_goes_to_fleet_goal() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Workflow;
-        app.workflow_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::FleetGoal);
-    }
-
-    #[test]
-    fn workflow_orchestrated_goes_to_fleet_goal() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Workflow;
-        app.workflow_selected = 2;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::FleetGoal);
-    }
-
-    #[test]
-    fn workflow_esc_goes_to_welcome() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Workflow;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Welcome);
-    }
-
-    #[test]
-    fn fleet_goal_orchestrated_starts_orchestrator() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::FleetGoal;
-        app.workflow_selected = 2;
-        app.fleet_goal = "Build a chess app".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-        assert!(app.configuring_orchestrator);
-        assert_eq!(app.name, "orchestrator");
-    }
-
-    #[test]
-    fn fleet_goal_team_starts_worker() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::FleetGoal;
-        app.workflow_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-        assert!(!app.configuring_orchestrator);
-    }
-
-    #[test]
-    fn fleet_goal_esc_goes_to_workflow() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::FleetGoal;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Workflow);
-    }
-
-    #[test]
-    fn tool_jk_navigation() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Tool;
-        assert_eq!(app.tool_selected, 0);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.tool_selected, 1);
-        app.handle_key(press(KeyCode::Char('k')));
-        assert_eq!(app.tool_selected, 0);
-        app.handle_key(press(KeyCode::Char('k')));
-        assert_eq!(app.tool_selected, 0);
-    }
-
-    #[test]
-    fn tool_enter_advances_to_name() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Tool;
-        app.tool_selected = 0;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Name);
-    }
-
-    #[test]
-    fn tool_enter_custom_goes_to_custom_command() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Tool;
-        app.tool_selected = ToolChoice::ALL
-            .iter()
-            .position(|t| *t == ToolChoice::Custom)
-            .unwrap();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::CustomCommand);
-    }
-
-    #[test]
-    fn tool_esc_solo_goes_to_workflow() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Tool;
-        app.workflow_selected = 0;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Workflow);
-    }
-
-    #[test]
-    fn tool_esc_orchestrator_goes_to_fleet_goal() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Tool;
-        app.workflow_selected = 2;
-        app.configuring_orchestrator = true;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::FleetGoal);
-    }
-
-    #[test]
-    fn custom_command_enter_empty_does_not_advance() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::CustomCommand;
-        app.custom_command.clear();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::CustomCommand);
-    }
-
-    #[test]
-    fn custom_command_enter_advances_to_name() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::CustomCommand;
-        app.custom_command = "/usr/bin/my-tool".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Name);
-    }
-
-    #[test]
-    fn custom_command_esc_goes_to_tool() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::CustomCommand;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Tool);
-    }
-
-    #[test]
-    fn name_typing() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.name.clear();
-        app.name_cursor = 0;
-        app.handle_key(press(KeyCode::Char('t')));
-        app.handle_key(press(KeyCode::Char('e')));
-        app.handle_key(press(KeyCode::Char('s')));
-        app.handle_key(press(KeyCode::Char('t')));
-        assert_eq!(app.name, "test");
-        assert_eq!(app.name_cursor, 4);
-    }
-
-    #[test]
-    fn name_cursor_movement() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.name = "hello".into();
-        app.name_cursor = 5;
-        app.handle_key(press(KeyCode::Left));
-        assert_eq!(app.name_cursor, 4);
-        app.handle_key(press(KeyCode::Home));
-        assert_eq!(app.name_cursor, 0);
-        app.handle_key(press(KeyCode::End));
-        assert_eq!(app.name_cursor, 5);
-    }
-
-    #[test]
-    fn name_backspace() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.name = "test".into();
-        app.name_cursor = 4;
-        app.handle_key(press(KeyCode::Backspace));
-        assert_eq!(app.name, "tes");
-        app.name_cursor = 0;
-        app.handle_key(press(KeyCode::Backspace));
-        assert_eq!(app.name, "tes");
-    }
-
-    #[test]
-    fn name_empty_does_not_advance() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.name = "  ".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Name);
-        assert!(app.name_error.is_some());
-    }
-
-    #[test]
-    fn name_enter_advances_to_working_dir() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.name = "my-agent".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::WorkingDir);
-        assert!(app.name_error.is_none());
-    }
-
-    #[test]
-    fn name_esc_goes_to_tool() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Tool);
-    }
-
-    #[test]
-    fn name_esc_goes_to_custom_if_custom_tool() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Name;
-        app.tool_selected = ToolChoice::ALL
-            .iter()
-            .position(|t| *t == ToolChoice::Custom)
-            .unwrap();
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::CustomCommand);
-    }
-
-    #[test]
-    fn working_dir_enter_with_valid_dir() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::WorkingDir;
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Task);
-    }
-
-    #[test]
-    fn working_dir_orchestrator_goes_to_backlog() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::WorkingDir;
-        app.configuring_orchestrator = true;
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::OrchestratorBacklog);
-    }
-
-    #[test]
-    fn working_dir_enter_with_invalid_dir() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::WorkingDir;
-        app.working_dir = "/nonexistent/path/unlikely".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::WorkingDir);
-        assert!(app.working_dir_error.is_some());
-    }
-
-    #[test]
-    fn working_dir_esc_goes_to_name() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::WorkingDir;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Name);
-    }
-
-    #[test]
-    fn task_enter_advances_to_restart() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Task;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::RestartPolicy);
-    }
-
-    #[test]
-    fn task_esc_goes_to_working_dir() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Task;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::WorkingDir);
-    }
-
-    #[test]
-    fn backlog_enter_advances_to_interval() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::OrchestratorBacklog;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::OrchestratorInterval);
-    }
-
-    #[test]
-    fn backlog_esc_goes_to_working_dir() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::OrchestratorBacklog;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::WorkingDir);
-    }
-
-    #[test]
-    fn interval_enter_saves_orchestrator() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::OrchestratorInterval;
-        app.workflow_selected = 2;
-        app.configuring_orchestrator = true;
-        app.name = "orchestrator".into();
-        app.working_dir = "/tmp".into();
-        app.review_interval = "300".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-        assert!(!app.configuring_orchestrator);
-        assert_eq!(app.completed_agents.len(), 1);
-        assert!(app.completed_agents[0].orchestrator.is_some());
-    }
-
-    #[test]
-    fn interval_esc_goes_to_backlog() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::OrchestratorInterval;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::OrchestratorBacklog);
-    }
-
-    #[test]
-    fn restart_navigation() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::RestartPolicy;
-        assert_eq!(app.restart_selected, 0);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.restart_selected, 1);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.restart_selected, 2);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.restart_selected, 2);
-    }
-
-    #[test]
-    fn restart_solo_goes_to_security_preset() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::RestartPolicy;
-        app.workflow_selected = 0;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-    }
-
-    #[test]
-    fn restart_multi_agent_saves_and_goes_to_add_more() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::RestartPolicy;
-        app.workflow_selected = 1;
-        app.name = "worker-1".into();
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::AddMore);
-        assert_eq!(app.completed_agents.len(), 1);
-    }
-
-    #[test]
-    fn restart_esc_goes_to_task() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::RestartPolicy;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::Task);
-    }
-
-    #[test]
-    fn add_more_yes_resets_and_goes_to_tool() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::AddMore;
-        app.workflow_selected = 1;
-        app.add_more_selected = 0;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-    }
-
-    #[test]
-    fn add_more_no_goes_to_security_preset() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::AddMore;
-        app.add_more_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-    }
-
-    #[test]
-    fn add_more_esc_goes_to_security_preset() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::AddMore;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-    }
-
-    #[test]
-    fn security_preset_navigation() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityPreset;
-        assert_eq!(app.security_preset_selected, 0);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.security_preset_selected, 1);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.security_preset_selected, 2);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.security_preset_selected, 3);
-        app.handle_key(press(KeyCode::Char('j')));
-        assert_eq!(app.security_preset_selected, 3); // clamped
-        app.handle_key(press(KeyCode::Char('k')));
-        assert_eq!(app.security_preset_selected, 2);
-    }
-
-    #[test]
-    fn security_preset_observe_skips_detail() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityPreset;
-        app.security_preset_selected = 0; // ObserveOnly
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::MonitoringInfo);
-    }
-
-    #[test]
-    fn security_preset_custom_goes_to_detail() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityPreset;
-        app.security_preset_selected = 3; // Custom
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::SecurityDetail);
-    }
-
-    #[test]
-    fn security_preset_esc_solo_goes_to_restart() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityPreset;
-        app.workflow_selected = 0;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::RestartPolicy);
-    }
-
-    #[test]
-    fn security_preset_esc_multi_goes_to_add_more() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityPreset;
-        app.workflow_selected = 1;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::AddMore);
-    }
-
-    #[test]
-    fn security_detail_toggle() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityDetail;
-        // First non-infrastructure action (FileRead) starts as Allow
-        app.security_action_selected = 0;
-        assert_eq!(app.security_actions[0].permission, ActionPermission::Allow);
-        app.handle_key(press(KeyCode::Char(' ')));
-        assert_eq!(app.security_actions[0].permission, ActionPermission::Deny);
-        app.handle_key(press(KeyCode::Char(' ')));
-        assert_eq!(app.security_actions[0].permission, ActionPermission::Allow);
-    }
-
-    #[test]
-    fn security_detail_infrastructure_cannot_toggle() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityDetail;
-        // ProcessSpawn (index 7) is infrastructure
-        app.security_action_selected = 7;
-        let before = app.security_actions[7].permission.clone();
-        app.handle_key(press(KeyCode::Char(' ')));
-        assert_eq!(app.security_actions[7].permission, before);
-    }
-
-    #[test]
-    fn security_detail_enter_goes_to_monitoring() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityDetail;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::MonitoringInfo);
-    }
-
-    #[test]
-    fn security_detail_esc_goes_to_preset() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::SecurityDetail;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-    }
-
-    #[test]
-    fn monitoring_info_enter_goes_to_telegram() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::MonitoringInfo;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::TelegramOffer);
-    }
-
-    #[test]
-    fn monitoring_info_esc_goes_to_security_preset() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::MonitoringInfo;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-    }
-
-    #[test]
-    fn result_has_security_preset() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Done;
-        app.workflow_selected = 0;
-        app.name = "test".into();
-        app.working_dir = "/tmp".into();
-        app.security_preset_selected = 1; // ReadOnly
-        model::apply_preset(&mut app.security_actions, SecurityPreset::ReadOnly);
-
-        let result = app.result();
-        assert_eq!(result.security_preset, SecurityPresetKind::ReadOnly);
-        assert!(result.policy_text.is_some());
-        assert!(result.security_isolation.is_some());
-    }
-
-    #[test]
-    fn result_observe_only_has_no_policy() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Done;
-        app.workflow_selected = 0;
-        app.name = "test".into();
-        app.working_dir = "/tmp".into();
-        app.security_preset_selected = 0; // ObserveOnly
-
-        let result = app.result();
-        assert_eq!(result.security_preset, SecurityPresetKind::ObserveOnly);
-        assert!(result.policy_text.is_none());
-        assert!(result.security_isolation.is_none());
-    }
-
-    #[test]
-    fn telegram_offer_no_goes_to_summary() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::TelegramOffer;
-        app.telegram_offer_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Summary);
-    }
-
-    #[test]
-    fn telegram_offer_yes_goes_to_token() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::TelegramOffer;
-        app.telegram_offer_selected = 0;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::TelegramToken);
-    }
-
-    #[test]
-    fn telegram_offer_esc_goes_to_monitoring_info() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::TelegramOffer;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::MonitoringInfo);
-    }
-
-    #[test]
-    fn summary_enter_completes() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Summary;
-        app.name = "test".into();
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Done);
-        assert!(!app.running);
-    }
-
-    #[test]
-    fn summary_esc_goes_to_telegram_offer() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Summary;
-        app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.step, OnboardStep::TelegramOffer);
-    }
-
-    #[test]
-    fn summary_q_cancels() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Summary;
-        app.handle_key(press(KeyCode::Char('q')));
-        assert_eq!(app.step, OnboardStep::Cancelled);
-        assert!(!app.running);
-    }
-
-    #[test]
-    fn summary_d_toggles_daemon() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Summary;
-        assert!(app.start_daemon);
-        app.handle_key(press(KeyCode::Char('d')));
-        assert!(!app.start_daemon);
-        app.handle_key(press(KeyCode::Char('d')));
-        assert!(app.start_daemon);
-    }
-
-    #[test]
-    fn result_cancelled() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Cancelled;
-        let result = app.result();
-        assert!(result.cancelled);
-        assert!(result.agents.is_empty());
-    }
-
-    #[test]
-    fn result_solo_builds_single_agent() {
-        let mut app = OnboardApp::new();
-        app.step = OnboardStep::Done;
-        app.workflow_selected = 0;
-        app.tool_selected = 0;
-        app.name = "my-agent".into();
-        app.working_dir = "/tmp/project".into();
-        app.task = "Build it".into();
-        app.restart_selected = 0;
-
-        let result = app.result();
-        assert!(!result.cancelled);
-        assert_eq!(result.agents.len(), 1);
-        assert_eq!(result.agents[0].name, "my-agent");
-        assert!(matches!(
-            result.agents[0].tool,
-            AgentToolConfig::ClaudeCode { .. }
-        ));
-        assert_eq!(result.agents[0].task, Some("Build it".into()));
-        assert!(result.fleet_goal.is_none());
-        assert!(result.start_daemon);
-    }
-
-    #[test]
-    fn full_solo_flow_skip_telegram() {
-        let mut app = OnboardApp::new();
-
-        // Welcome -> Workflow
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Workflow);
-
-        // Workflow (Solo) -> Tool
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-
-        // Tool -> Name
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Name);
-
-        // Name -> WorkingDir
-        app.name = "test-agent".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::WorkingDir);
-
-        // WorkingDir -> Task
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Task);
-
-        // Task -> RestartPolicy
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::RestartPolicy);
-
-        // RestartPolicy -> SecurityPreset
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-
-        // SecurityPreset (ObserveOnly) -> MonitoringInfo
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::MonitoringInfo);
-
-        // MonitoringInfo -> TelegramOffer
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::TelegramOffer);
-
-        // TelegramOffer (No) -> Summary
-        app.telegram_offer_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Summary);
-
-        // Summary -> Done
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Done);
-        assert!(!app.running);
-    }
-
-    #[test]
-    fn full_orchestrated_flow() {
-        let mut app = OnboardApp::new();
-
-        // Welcome -> Workflow
-        app.handle_key(press(KeyCode::Enter));
-
-        // Select Orchestrated
-        app.workflow_selected = 2;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::FleetGoal);
-
-        // Fleet Goal
-        app.fleet_goal = "Build chess app".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-        assert!(app.configuring_orchestrator);
-        assert_eq!(app.name, "orchestrator");
-
-        // Orchestrator: Tool -> Name -> WorkDir -> Backlog -> Interval
-        app.handle_key(press(KeyCode::Enter)); // Tool
-        assert_eq!(app.step, OnboardStep::Name);
-        app.handle_key(press(KeyCode::Enter)); // Name = "orchestrator"
-        assert_eq!(app.step, OnboardStep::WorkingDir);
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter)); // WorkDir
-        assert_eq!(app.step, OnboardStep::OrchestratorBacklog);
-        app.handle_key(press(KeyCode::Enter)); // Backlog (empty = skip)
-        assert_eq!(app.step, OnboardStep::OrchestratorInterval);
-        app.handle_key(press(KeyCode::Enter)); // Interval (default 300)
-        assert_eq!(app.step, OnboardStep::Tool);
-        assert!(!app.configuring_orchestrator);
-        assert_eq!(app.completed_agents.len(), 1);
-
-        // Worker: Tool -> Name -> WorkDir -> Task -> Restart
-        app.handle_key(press(KeyCode::Enter)); // Tool
-        app.name = "frontend".into();
-        app.handle_key(press(KeyCode::Enter)); // Name
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter)); // WorkDir
-        assert_eq!(app.step, OnboardStep::Task);
-        app.task = "Build the UI".into();
-        app.handle_key(press(KeyCode::Enter)); // Task
-        assert_eq!(app.step, OnboardStep::RestartPolicy);
-        app.handle_key(press(KeyCode::Enter)); // Restart
-        assert_eq!(app.step, OnboardStep::AddMore);
-        assert_eq!(app.completed_agents.len(), 2);
-
-        // No more agents -> SecurityPreset
-        app.add_more_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-
-        // SecurityPreset (ObserveOnly) -> MonitoringInfo -> TelegramOffer
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::MonitoringInfo);
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::TelegramOffer);
-
-        // Skip telegram -> Summary -> Done
-        app.telegram_offer_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Summary);
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Done);
-
-        let result = app.result();
-        assert!(!result.cancelled);
-        assert_eq!(result.fleet_goal, Some("Build chess app".into()));
-        assert_eq!(result.agents.len(), 2);
-        assert!(result.agents[0].orchestrator.is_some());
-        assert_eq!(result.agents[0].name, "orchestrator");
-        assert!(result.agents[1].orchestrator.is_none());
-        assert_eq!(result.agents[1].name, "frontend");
-    }
-
-    #[test]
-    fn full_team_flow_two_workers() {
-        let mut app = OnboardApp::new();
-
-        // Welcome -> Workflow -> Team -> FleetGoal
-        app.handle_key(press(KeyCode::Enter));
-        app.workflow_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::FleetGoal);
-        app.fleet_goal = "Ship v1".into();
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-
-        // Worker 1
-        app.handle_key(press(KeyCode::Enter)); // Tool
-        app.name = "backend".into();
-        app.handle_key(press(KeyCode::Enter)); // Name
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter)); // WorkDir
-        app.handle_key(press(KeyCode::Enter)); // Task (empty)
-        app.handle_key(press(KeyCode::Enter)); // Restart
-        assert_eq!(app.step, OnboardStep::AddMore);
-        assert_eq!(app.completed_agents.len(), 1);
-
-        // Yes, add another
-        app.add_more_selected = 0;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::Tool);
-
-        // Worker 2
-        app.handle_key(press(KeyCode::Enter)); // Tool
-        app.name = "frontend".into();
-        app.handle_key(press(KeyCode::Enter)); // Name
-        app.working_dir = "/tmp".into();
-        app.handle_key(press(KeyCode::Enter)); // WorkDir
-        app.handle_key(press(KeyCode::Enter)); // Task
-        app.handle_key(press(KeyCode::Enter)); // Restart
-        assert_eq!(app.step, OnboardStep::AddMore);
-        assert_eq!(app.completed_agents.len(), 2);
-
-        // Done adding -> SecurityPreset
-        app.add_more_selected = 1;
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::SecurityPreset);
-
-        // SecurityPreset -> MonitoringInfo -> TelegramOffer
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::MonitoringInfo);
-        app.handle_key(press(KeyCode::Enter));
-        assert_eq!(app.step, OnboardStep::TelegramOffer);
-
-        let result = app.result();
-        assert_eq!(result.fleet_goal, Some("Ship v1".into()));
-        assert_eq!(result.agents.len(), 2);
-    }
-
     fn ctrl_c() -> KeyEvent {
         KeyEvent {
             code: KeyCode::Char('c'),
@@ -2141,9 +1174,597 @@ mod tests {
         }
     }
 
+    fn shift_tab() -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::BackTab,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    /// Create a test app with pre-set valid defaults so tests don't depend
+    /// on environment scanning.
+    fn test_app() -> OnboardApp {
+        let mut app = OnboardApp::new();
+        // Ensure valid defaults for advancing through steps
+        app.name = "test-agent".into();
+        app.name_cursor = app.name.len();
+        app.working_dir = "/tmp".into();
+        app.working_dir_cursor = app.working_dir.len();
+        app
+    }
+
+    // -- 1. Initial state --
+
+    #[test]
+    fn initial_state() {
+        let app = OnboardApp::new();
+        assert_eq!(app.step, OnboardStep::Welcome);
+        assert!(app.running);
+        assert!(app.start_daemon);
+        assert_eq!(app.active_field, AgentField::Tool);
+        // env_scan should be populated
+        assert!(!app.env_scan.api_keys.is_empty());
+        assert!(!app.env_scan.tools.is_empty());
+    }
+
+    // -- 2. Welcome step --
+
+    #[test]
+    fn welcome_enter_goes_to_agent_setup() {
+        let mut app = test_app();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+    }
+
+    #[test]
+    fn welcome_esc_cancels() {
+        let mut app = test_app();
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.step, OnboardStep::Cancelled);
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn welcome_q_cancels() {
+        let mut app = test_app();
+        app.handle_key(press(KeyCode::Char('q')));
+        assert_eq!(app.step, OnboardStep::Cancelled);
+        assert!(!app.running);
+    }
+
+    // -- 3. AgentSetup field navigation --
+
+    #[test]
+    fn agent_setup_tab_cycles_forward() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        assert_eq!(app.active_field, AgentField::Tool);
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.active_field, AgentField::Name);
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.active_field, AgentField::WorkingDir);
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.active_field, AgentField::Task);
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.active_field, AgentField::Tool);
+    }
+
+    #[test]
+    fn agent_setup_backtab_cycles_backward() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        assert_eq!(app.active_field, AgentField::Tool);
+
+        app.handle_key(shift_tab());
+        assert_eq!(app.active_field, AgentField::Task);
+
+        app.handle_key(shift_tab());
+        assert_eq!(app.active_field, AgentField::WorkingDir);
+
+        app.handle_key(shift_tab());
+        assert_eq!(app.active_field, AgentField::Name);
+
+        app.handle_key(shift_tab());
+        assert_eq!(app.active_field, AgentField::Tool);
+    }
+
+    // -- 4. AgentSetup tool navigation --
+
+    #[test]
+    fn agent_setup_tool_jk_navigation() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Tool;
+        app.tool_selected = 0;
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.tool_selected, 1);
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.tool_selected, 2);
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.tool_selected, 3); // Custom
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.tool_selected, 3); // clamped
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.tool_selected, 2);
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.tool_selected, 1);
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.tool_selected, 0);
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.tool_selected, 0); // clamped at 0
+    }
+
+    #[test]
+    fn agent_setup_tool_arrow_navigation() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Tool;
+        app.tool_selected = 0;
+
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.tool_selected, 1);
+
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(app.tool_selected, 0);
+    }
+
+    // -- 5. AgentSetup text editing --
+
+    #[test]
+    fn agent_setup_typing_in_name_field() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Name;
+        app.name.clear();
+        app.name_cursor = 0;
+
+        app.handle_key(press(KeyCode::Char('t')));
+        app.handle_key(press(KeyCode::Char('e')));
+        app.handle_key(press(KeyCode::Char('s')));
+        app.handle_key(press(KeyCode::Char('t')));
+        assert_eq!(app.name, "test");
+        assert_eq!(app.name_cursor, 4);
+    }
+
+    #[test]
+    fn agent_setup_cursor_movement() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Name;
+        app.name = "hello".into();
+        app.name_cursor = 5;
+
+        app.handle_key(press(KeyCode::Left));
+        assert_eq!(app.name_cursor, 4);
+
+        app.handle_key(press(KeyCode::Home));
+        assert_eq!(app.name_cursor, 0);
+
+        app.handle_key(press(KeyCode::End));
+        assert_eq!(app.name_cursor, 5);
+    }
+
+    #[test]
+    fn agent_setup_backspace() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Name;
+        app.name = "test".into();
+        app.name_cursor = 4;
+
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.name, "tes");
+        assert_eq!(app.name_cursor, 3);
+
+        app.name_cursor = 0;
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.name, "tes"); // no change at beginning
+    }
+
+    // -- 6. AgentSetup validation --
+
+    #[test]
+    fn agent_setup_empty_name_shows_error() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.name = "  ".into();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+        assert!(app.name_error.is_some());
+        assert_eq!(app.active_field, AgentField::Name);
+    }
+
+    #[test]
+    fn agent_setup_invalid_name_shows_error() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.name = "../bad".into();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+        assert!(app.name_error.is_some());
+        assert_eq!(app.active_field, AgentField::Name);
+    }
+
+    #[test]
+    fn agent_setup_invalid_dir_shows_error() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.name = "good-name".into();
+        app.working_dir = "/nonexistent/path/unlikely".into();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+        assert!(app.working_dir_error.is_some());
+        assert_eq!(app.active_field, AgentField::WorkingDir);
+    }
+
+    #[test]
+    fn agent_setup_empty_dir_shows_error() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.name = "good-name".into();
+        app.working_dir = "  ".into();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+        assert!(app.working_dir_error.is_some());
+        assert_eq!(app.active_field, AgentField::WorkingDir);
+    }
+
+    #[test]
+    fn agent_setup_empty_custom_command_blocked() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        // Select Custom tool (index 3)
+        app.tool_selected = 3;
+        app.custom_command.clear();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+        assert_eq!(app.active_field, AgentField::Tool);
+    }
+
+    // -- 7. AgentSetup valid advance --
+
+    #[test]
+    fn agent_setup_valid_advances_to_channel() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        // show_model_step defaults to false with non-custom tool
+        app.tool_selected = 0; // ClaudeCode
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::ChannelSetup);
+        assert_eq!(app.channel_phase, ChannelPhase::Offer);
+    }
+
+    #[test]
+    fn agent_setup_custom_with_keys_advances_to_model() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.tool_selected = 3; // Custom
+        app.custom_command = "/usr/bin/my-agent".into();
+        // Simulate having API keys present
+        app.env_scan.api_keys[0].present = true;
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::ModelSelection);
+    }
+
+    // -- 8. AgentSetup Esc --
+
+    #[test]
+    fn agent_setup_esc_goes_to_welcome() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.step, OnboardStep::Welcome);
+    }
+
+    // -- 9. ModelSelection navigation --
+
+    #[test]
+    fn model_selection_jk_navigation() {
+        let mut app = test_app();
+        app.step = OnboardStep::ModelSelection;
+        // Set up multiple available providers
+        app.env_scan.api_keys[0].present = true;
+        app.env_scan.api_keys[1].present = true;
+        app.provider_selected = 0;
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.provider_selected, 1);
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.provider_selected, 1); // clamped at 2 providers
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.provider_selected, 0);
+    }
+
+    // -- 10. ModelSelection advance --
+
+    #[test]
+    fn model_selection_enter_goes_to_channel() {
+        let mut app = test_app();
+        app.step = OnboardStep::ModelSelection;
+        app.env_scan.api_keys[0].present = true;
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::ChannelSetup);
+        assert_eq!(app.channel_phase, ChannelPhase::Offer);
+    }
+
+    // -- 11. ModelSelection Esc --
+
+    #[test]
+    fn model_selection_esc_goes_to_agent_setup() {
+        let mut app = test_app();
+        app.step = OnboardStep::ModelSelection;
+        app.env_scan.api_keys[0].present = true;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+    }
+
+    // -- 12. Channel offer Skip --
+
+    #[test]
+    fn channel_offer_skip_goes_to_summary() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Offer;
+        app.channel_offer_selected = 0; // Skip
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::Summary);
+    }
+
+    // -- 13. Channel offer Yes --
+
+    #[test]
+    fn channel_offer_yes_goes_to_token_input() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Offer;
+        app.channel_offer_selected = 1; // Yes
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::ChannelSetup);
+        assert_eq!(app.channel_phase, ChannelPhase::TokenInput);
+    }
+
+    // -- 14. Channel offer Esc --
+
+    #[test]
+    fn channel_offer_esc_goes_back_no_model() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Offer;
+        app.show_model_step = false;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+    }
+
+    #[test]
+    fn channel_offer_esc_goes_back_with_model() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Offer;
+        app.show_model_step = true;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.step, OnboardStep::ModelSelection);
+    }
+
+    // -- 15. Channel token Enter empty --
+
+    #[test]
+    fn channel_token_enter_empty_stays() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::TokenInput;
+        app.telegram_token.clear();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::ChannelSetup);
+        assert_eq!(app.channel_phase, ChannelPhase::TokenInput);
+    }
+
+    // -- 16. Channel token Enter non-empty --
+
+    #[test]
+    fn channel_token_enter_nonempty_starts_validation() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::TokenInput;
+        app.telegram_token = "123456:ABC-DEF".into();
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.channel_phase, ChannelPhase::Validating);
+        assert_eq!(app.telegram_status, TelegramStatus::ValidatingToken);
+    }
+
+    // -- 17. Channel token Esc --
+
+    #[test]
+    fn channel_token_esc_goes_to_offer() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::TokenInput;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.channel_phase, ChannelPhase::Offer);
+    }
+
+    // -- 18. Channel validating complete Enter --
+
+    #[test]
+    fn channel_validating_complete_enter_goes_to_summary() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Validating;
+        app.telegram_status = TelegramStatus::Complete {
+            bot_username: "testbot".into(),
+            chat_id: 12345,
+        };
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::Summary);
+    }
+
+    // -- 19. Channel validating failed Enter --
+
+    #[test]
+    fn channel_validating_failed_enter_retries() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Validating;
+        app.telegram_status = TelegramStatus::Failed("bad token".into());
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.channel_phase, ChannelPhase::TokenInput);
+        assert_eq!(app.telegram_status, TelegramStatus::Idle);
+    }
+
+    // -- 20. Channel validating Esc --
+
+    #[test]
+    fn channel_validating_esc_cancels_to_offer() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Validating;
+        app.telegram_status = TelegramStatus::ValidatingToken;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.channel_phase, ChannelPhase::Offer);
+        assert_eq!(app.telegram_status, TelegramStatus::Idle);
+    }
+
+    // -- 21. Summary Enter --
+
+    #[test]
+    fn summary_enter_goes_to_health_check() {
+        let mut app = test_app();
+        app.step = OnboardStep::Summary;
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::HealthCheck);
+        assert!(app.health_started);
+    }
+
+    // -- 22. Summary d toggles daemon --
+
+    #[test]
+    fn summary_d_toggles_daemon() {
+        let mut app = test_app();
+        app.step = OnboardStep::Summary;
+        assert!(app.start_daemon);
+        app.handle_key(press(KeyCode::Char('d')));
+        assert!(!app.start_daemon);
+        app.handle_key(press(KeyCode::Char('d')));
+        assert!(app.start_daemon);
+    }
+
+    // -- 23. Summary Esc --
+
+    #[test]
+    fn summary_esc_goes_to_channel_offer() {
+        let mut app = test_app();
+        app.step = OnboardStep::Summary;
+        app.handle_key(press(KeyCode::Esc));
+        assert_eq!(app.step, OnboardStep::ChannelSetup);
+        assert_eq!(app.channel_phase, ChannelPhase::Offer);
+    }
+
+    // -- 24. Summary q cancels --
+
+    #[test]
+    fn summary_q_cancels() {
+        let mut app = test_app();
+        app.step = OnboardStep::Summary;
+        app.handle_key(press(KeyCode::Char('q')));
+        assert_eq!(app.step, OnboardStep::Cancelled);
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn summary_n_cancels() {
+        let mut app = test_app();
+        app.step = OnboardStep::Summary;
+        app.handle_key(press(KeyCode::Char('n')));
+        assert_eq!(app.step, OnboardStep::Cancelled);
+        assert!(!app.running);
+    }
+
+    // -- 25. HealthCheck Enter when all done --
+
+    #[test]
+    fn health_check_enter_when_all_done() {
+        let mut app = test_app();
+        app.step = OnboardStep::HealthCheck;
+        app.health_checks = vec![HealthCheckItem {
+            label: "Write daemon.toml".into(),
+            status: HealthStatus::Passed,
+        }];
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::Done);
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn health_check_enter_with_failure_still_completes() {
+        let mut app = test_app();
+        app.step = OnboardStep::HealthCheck;
+        app.health_checks = vec![
+            HealthCheckItem {
+                label: "Write daemon.toml".into(),
+                status: HealthStatus::Passed,
+            },
+            HealthCheckItem {
+                label: "Start daemon".into(),
+                status: HealthStatus::Failed("oops".into()),
+            },
+        ];
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::Done);
+        assert!(!app.running);
+    }
+
+    // -- 26. HealthCheck Enter when not done --
+
+    #[test]
+    fn health_check_enter_when_not_done_stays() {
+        let mut app = test_app();
+        app.step = OnboardStep::HealthCheck;
+        app.health_checks = vec![HealthCheckItem {
+            label: "Write daemon.toml".into(),
+            status: HealthStatus::Running,
+        }];
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::HealthCheck);
+    }
+
+    #[test]
+    fn health_check_enter_when_pending_stays() {
+        let mut app = test_app();
+        app.step = OnboardStep::HealthCheck;
+        app.health_checks = vec![
+            HealthCheckItem {
+                label: "Write daemon.toml".into(),
+                status: HealthStatus::Passed,
+            },
+            HealthCheckItem {
+                label: "Start daemon".into(),
+                status: HealthStatus::Pending,
+            },
+        ];
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::HealthCheck);
+    }
+
+    // -- 27. Ctrl+C from every step --
+
     #[test]
     fn ctrl_c_cancels_from_welcome() {
-        let mut app = OnboardApp::new();
+        let mut app = test_app();
         app.handle_key(ctrl_c());
         assert_eq!(app.step, OnboardStep::Cancelled);
         assert!(!app.running);
@@ -2152,24 +1773,17 @@ mod tests {
     #[test]
     fn ctrl_c_cancels_from_any_step() {
         for step in [
-            OnboardStep::Workflow,
-            OnboardStep::FleetGoal,
-            OnboardStep::Tool,
-            OnboardStep::Name,
-            OnboardStep::WorkingDir,
-            OnboardStep::Task,
-            OnboardStep::RestartPolicy,
-            OnboardStep::SecurityPreset,
-            OnboardStep::SecurityDetail,
-            OnboardStep::MonitoringInfo,
-            OnboardStep::OrchestratorBacklog,
-            OnboardStep::OrchestratorInterval,
-            OnboardStep::AddMore,
-            OnboardStep::TelegramOffer,
+            OnboardStep::AgentSetup,
+            OnboardStep::ModelSelection,
+            OnboardStep::ChannelSetup,
             OnboardStep::Summary,
+            OnboardStep::HealthCheck,
         ] {
-            let mut app = OnboardApp::new();
+            let mut app = test_app();
             app.step = step;
+            if step == OnboardStep::ChannelSetup {
+                app.channel_phase = ChannelPhase::Offer;
+            }
             app.handle_key(ctrl_c());
             assert_eq!(
                 app.step,
@@ -2179,5 +1793,392 @@ mod tests {
             );
             assert!(!app.running);
         }
+    }
+
+    // -- 28. Full flow (fast path) --
+
+    #[test]
+    fn full_fast_path_flow() {
+        let mut app = test_app();
+
+        // Welcome -> AgentSetup
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::AgentSetup);
+
+        // AgentSetup (valid defaults) -> ChannelSetup (skipping model selection)
+        app.tool_selected = 0; // ClaudeCode (not Custom, so no model step)
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::ChannelSetup);
+        assert_eq!(app.channel_phase, ChannelPhase::Offer);
+
+        // ChannelSetup(Offer, Skip) -> Summary
+        app.channel_offer_selected = 0; // Skip
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::Summary);
+
+        // Summary -> HealthCheck (triggers start_health_checks)
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::HealthCheck);
+        assert!(app.health_started);
+
+        // Simulate health checks completing
+        app.health_checks = vec![
+            HealthCheckItem {
+                label: "Write daemon.toml".into(),
+                status: HealthStatus::Passed,
+            },
+            HealthCheckItem {
+                label: "Start daemon".into(),
+                status: HealthStatus::Passed,
+            },
+        ];
+
+        // HealthCheck(AllDone) -> Done
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.step, OnboardStep::Done);
+        assert!(!app.running);
+    }
+
+    // -- 29. Result cancelled --
+
+    #[test]
+    fn result_cancelled_when_step_is_cancelled() {
+        let mut app = test_app();
+        app.step = OnboardStep::Cancelled;
+        let result = app.result();
+        assert!(result.cancelled);
+    }
+
+    // -- 30. Result not cancelled --
+
+    #[test]
+    fn result_not_cancelled_when_step_is_done() {
+        let mut app = test_app();
+        app.step = OnboardStep::Done;
+        let result = app.result();
+        assert!(!result.cancelled);
+    }
+
+    // -- 31. Paste handling --
+
+    #[test]
+    fn paste_into_name_field() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Name;
+        app.name.clear();
+        app.name_cursor = 0;
+
+        app.handle_paste("pasted-name");
+        assert_eq!(app.name, "pasted-name");
+        assert_eq!(app.name_cursor, 11);
+    }
+
+    #[test]
+    fn paste_into_task_preserves_newlines() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Task;
+        app.task.clear();
+        app.task_cursor = 0;
+
+        app.handle_paste("line1\nline2");
+        assert_eq!(app.task, "line1\nline2");
+    }
+
+    #[test]
+    fn paste_into_name_collapses_newlines() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Name;
+        app.name.clear();
+        app.name_cursor = 0;
+
+        app.handle_paste("line1\nline2");
+        assert_eq!(app.name, "line1 line2");
+    }
+
+    #[test]
+    fn paste_into_tool_field_does_nothing() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Tool;
+        let before_tool = app.tool_selected;
+
+        app.handle_paste("garbage");
+        assert_eq!(app.tool_selected, before_tool);
+    }
+
+    #[test]
+    fn paste_into_telegram_token() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::TokenInput;
+        app.telegram_token.clear();
+        app.telegram_token_cursor = 0;
+
+        app.handle_paste("123456:ABC-DEF");
+        assert_eq!(app.telegram_token, "123456:ABC-DEF");
+    }
+
+    #[test]
+    fn paste_shows_indicator_for_large_paste() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Task;
+        app.task.clear();
+        app.task_cursor = 0;
+
+        let long_text = "a".repeat(50);
+        app.handle_paste(&long_text);
+        assert!(app.paste_indicator.is_some());
+    }
+
+    // -- 32. tool_choice --
+
+    #[test]
+    fn tool_choice_bounds_checked() {
+        let mut app = test_app();
+        app.tool_selected = 0;
+        assert_eq!(app.tool_choice(), ToolChoice::ClaudeCode);
+
+        app.tool_selected = 1;
+        assert_eq!(app.tool_choice(), ToolChoice::Codex);
+
+        app.tool_selected = 2;
+        assert_eq!(app.tool_choice(), ToolChoice::OpenClaw);
+
+        app.tool_selected = 3;
+        assert_eq!(app.tool_choice(), ToolChoice::Custom);
+
+        // Out of bounds defaults to Custom
+        app.tool_selected = 99;
+        assert_eq!(app.tool_choice(), ToolChoice::Custom);
+    }
+
+    // -- 33. build_tool_config --
+
+    #[test]
+    fn build_tool_config_claude_code() {
+        let mut app = test_app();
+        app.tool_selected = 0;
+        let config = app.build_tool_config();
+        assert!(matches!(config, AgentToolConfig::ClaudeCode { .. }));
+    }
+
+    #[test]
+    fn build_tool_config_codex() {
+        let mut app = test_app();
+        app.tool_selected = 1;
+        let config = app.build_tool_config();
+        assert!(matches!(config, AgentToolConfig::Codex { .. }));
+    }
+
+    #[test]
+    fn build_tool_config_openclaw() {
+        let mut app = test_app();
+        app.tool_selected = 2;
+        let config = app.build_tool_config();
+        assert!(matches!(config, AgentToolConfig::OpenClaw { .. }));
+    }
+
+    #[test]
+    fn build_tool_config_custom() {
+        let mut app = test_app();
+        app.tool_selected = 3;
+        app.custom_command = "/usr/bin/my-agent --flag".into();
+        let config = app.build_tool_config();
+        match config {
+            AgentToolConfig::Custom { command, args, .. } => {
+                assert_eq!(command, "/usr/bin/my-agent");
+                assert_eq!(args, vec!["--flag".to_string()]);
+            }
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    // -- Additional edge case tests --
+
+    #[test]
+    fn channel_offer_jk_navigation() {
+        let mut app = test_app();
+        app.step = OnboardStep::ChannelSetup;
+        app.channel_phase = ChannelPhase::Offer;
+        app.channel_offer_selected = 0;
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.channel_offer_selected, 1);
+
+        app.handle_key(press(KeyCode::Char('j')));
+        assert_eq!(app.channel_offer_selected, 1); // clamped
+
+        app.handle_key(press(KeyCode::Char('k')));
+        assert_eq!(app.channel_offer_selected, 0);
+    }
+
+    #[test]
+    fn progress_text_for_each_step() {
+        let mut app = test_app();
+
+        app.step = OnboardStep::Welcome;
+        assert_eq!(app.progress_text(), "Environment");
+
+        app.step = OnboardStep::AgentSetup;
+        assert_eq!(app.progress_text(), "Agent");
+
+        app.step = OnboardStep::ModelSelection;
+        assert_eq!(app.progress_text(), "Model");
+
+        app.step = OnboardStep::ChannelSetup;
+        assert_eq!(app.progress_text(), "Notifications");
+
+        app.step = OnboardStep::Summary;
+        assert_eq!(app.progress_text(), "Review");
+
+        app.step = OnboardStep::HealthCheck;
+        assert_eq!(app.progress_text(), "Health Check");
+
+        app.step = OnboardStep::Done;
+        assert_eq!(app.progress_text(), "");
+
+        app.step = OnboardStep::Cancelled;
+        assert_eq!(app.progress_text(), "");
+    }
+
+    #[test]
+    fn poll_health_processes_config_written() {
+        let mut app = test_app();
+        app.health_checks = vec![
+            HealthCheckItem {
+                label: "Write daemon.toml".into(),
+                status: HealthStatus::Running,
+            },
+            HealthCheckItem {
+                label: "Start daemon".into(),
+                status: HealthStatus::Pending,
+            },
+        ];
+        let (tx, rx) = mpsc::channel();
+        app.health_evt_rx = Some(rx);
+        tx.send(HealthEvent::ConfigWritten).unwrap();
+        app.poll_health();
+        assert_eq!(app.health_checks[0].status, HealthStatus::Passed);
+        assert_eq!(app.health_checks[1].status, HealthStatus::Running);
+    }
+
+    #[test]
+    fn poll_health_processes_daemon_started() {
+        let mut app = test_app();
+        app.health_checks = vec![
+            HealthCheckItem {
+                label: "Write daemon.toml".into(),
+                status: HealthStatus::Passed,
+            },
+            HealthCheckItem {
+                label: "Start daemon".into(),
+                status: HealthStatus::Running,
+            },
+        ];
+        let (tx, rx) = mpsc::channel();
+        app.health_evt_rx = Some(rx);
+        tx.send(HealthEvent::DaemonStarted).unwrap();
+        app.poll_health();
+        assert_eq!(app.health_checks[1].status, HealthStatus::Passed);
+    }
+
+    #[test]
+    fn poll_health_processes_daemon_failed() {
+        let mut app = test_app();
+        app.health_checks = vec![
+            HealthCheckItem {
+                label: "Write daemon.toml".into(),
+                status: HealthStatus::Running,
+            },
+        ];
+        let (tx, rx) = mpsc::channel();
+        app.health_evt_rx = Some(rx);
+        tx.send(HealthEvent::DaemonFailed("boom".into())).unwrap();
+        app.poll_health();
+        assert_eq!(
+            app.health_checks[0].status,
+            HealthStatus::Failed("boom".into())
+        );
+    }
+
+    #[test]
+    fn summary_y_goes_to_health_check() {
+        let mut app = test_app();
+        app.step = OnboardStep::Summary;
+        app.handle_key(press(KeyCode::Char('y')));
+        assert_eq!(app.step, OnboardStep::HealthCheck);
+    }
+
+    #[test]
+    fn agent_setup_typing_clears_name_error() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::Name;
+        app.name_error = Some("some error".into());
+        app.handle_key(press(KeyCode::Char('a')));
+        assert!(app.name_error.is_none());
+    }
+
+    #[test]
+    fn agent_setup_typing_clears_dir_error() {
+        let mut app = test_app();
+        app.step = OnboardStep::AgentSetup;
+        app.active_field = AgentField::WorkingDir;
+        app.working_dir_error = Some("some error".into());
+        app.handle_key(press(KeyCode::Char('a')));
+        assert!(app.working_dir_error.is_none());
+    }
+
+    #[test]
+    fn available_providers_filters_present() {
+        let mut app = test_app();
+        // By default, providers depend on environment.
+        // Set all to not present, then enable one.
+        for p in &mut app.env_scan.api_keys {
+            p.present = false;
+        }
+        assert_eq!(app.available_providers().len(), 0);
+
+        app.env_scan.api_keys[0].present = true;
+        assert_eq!(app.available_providers().len(), 1);
+        assert_eq!(app.available_providers()[0].label, "Anthropic");
+    }
+
+    #[test]
+    fn build_agent_slot_produces_valid_config() {
+        let mut app = test_app();
+        app.name = "my-agent".into();
+        app.working_dir = "/tmp".into();
+        app.task = "do stuff".into();
+        app.tool_selected = 0;
+
+        let slot = app.build_agent_slot();
+        assert_eq!(slot.name, "my-agent");
+        assert_eq!(slot.working_dir, PathBuf::from("/tmp"));
+        assert_eq!(slot.task, Some("do stuff".into()));
+        assert!(matches!(slot.tool, AgentToolConfig::ClaudeCode { .. }));
+        assert_eq!(slot.restart, RestartPolicy::OnFailure);
+        assert_eq!(slot.max_restarts, 5);
+    }
+
+    #[test]
+    fn build_daemon_config_includes_telegram() {
+        let mut app = test_app();
+        app.telegram_result = Some(("token".into(), 12345, "bot".into()));
+        let config = app.build_daemon_config();
+        assert!(config.channel.is_some());
+        assert_eq!(config.agents.len(), 1);
+    }
+
+    #[test]
+    fn build_daemon_config_no_telegram() {
+        let app = test_app();
+        let config = app.build_daemon_config();
+        assert!(config.channel.is_none());
+        assert_eq!(config.agents.len(), 1);
     }
 }

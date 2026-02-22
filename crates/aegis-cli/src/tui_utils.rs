@@ -18,6 +18,17 @@ pub fn delete_word_backward_pos(text: &str, cursor: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// Check whether a binary exists in `$PATH` using `which`.
+pub fn binary_exists(name: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Truncate a string to `max_chars` characters, appending "..." if truncated.
 ///
 /// Safe for multi-byte UTF-8 (truncates at char boundaries, not bytes).

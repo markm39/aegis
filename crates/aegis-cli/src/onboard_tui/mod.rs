@@ -2,8 +2,9 @@
 //!
 //! When `aegis` is invoked with nothing configured, this module provides a
 //! proper ratatui-based wizard (replacing the old plain stdin/stdout prompts).
-//! It configures an agent, optionally sets up Telegram, and returns an
-//! `OnboardResult` that the caller uses to write daemon.toml and start the daemon.
+//! It configures an agent, optionally sets up Telegram, writes daemon.toml,
+//! starts the daemon, and returns an `OnboardResult` indicating success or
+//! cancellation.
 
 pub mod app;
 mod ui;
@@ -64,8 +65,9 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
             }
         }
 
-        // Check for async Telegram events each tick
+        // Check for async events each tick
         app.poll_telegram();
+        app.poll_health();
     }
 
     // Restore terminal

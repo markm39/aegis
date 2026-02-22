@@ -457,13 +457,7 @@ fn check_runtime(aegis_dir: &Path) -> Vec<CheckResult> {
 }
 
 fn binary_exists(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    crate::tui_utils::binary_exists(name)
 }
 
 fn format_uptime(secs: u64) -> String {

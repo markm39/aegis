@@ -11,17 +11,14 @@
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 
-use aegis_types::daemon::{
-    daemon_config_path, daemon_dir, AgentToolConfig, DaemonConfig, DaemonControlConfig,
-    PersistenceConfig,
-};
+use aegis_types::daemon::AgentToolConfig;
 
 /// Run the unified onboarding wizard.
 ///
-/// Launches a full ratatui TUI wizard, then writes `daemon.toml` and
-/// optionally starts the daemon + fleet dashboard.
+/// Launches a full ratatui TUI wizard that writes `daemon.toml`, starts the
+/// daemon (via the health check step), then opens the fleet dashboard.
 pub fn run() -> anyhow::Result<()> {
     let result = crate::onboard_tui::run_onboard_wizard()?;
 
@@ -30,71 +27,8 @@ pub fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Apply security preset to each agent from the wizard result.
-    let mut agents = result.agents;
-    for agent in &mut agents {
-        if agent.security_preset.is_none() {
-            agent.security_preset = Some(result.security_preset.clone());
-        }
-        if agent.isolation.is_none() {
-            agent.isolation = result.security_isolation.clone();
-        }
-    }
-
-    let dir = daemon_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-
-    // Write Cedar policy file if the security preset generated one.
-    if let Some(ref policy_text) = result.policy_text {
-        let policy_path = dir.join("policy.cedar");
-        std::fs::write(&policy_path, policy_text)
-            .with_context(|| format!("failed to write {}", policy_path.display()))?;
-        // Point each agent at the shared policy directory.
-        for agent in &mut agents {
-            if agent.policy_dir.is_none() {
-                agent.policy_dir = Some(dir.clone());
-            }
-        }
-    }
-
-    // Write daemon.toml (after TUI closes, back in normal terminal mode)
-    let config = DaemonConfig {
-        goal: result.fleet_goal,
-        persistence: PersistenceConfig::default(),
-        control: DaemonControlConfig::default(),
-        dashboard: Default::default(),
-        alerts: vec![],
-        agents,
-        channel: result.channel,
-        channel_routing: None,
-        toolkit: Default::default(),
-        memory: Default::default(),
-        session_files: Default::default(),
-        cron: Default::default(),
-        plugins: Default::default(),
-        aliases: Default::default(),
-        lanes: vec![],
-        workspace_hooks: Default::default(),
-        acp_server: None,
-    };
-
-    let config_path = daemon_config_path();
-    let toml_str = config.to_toml().context("failed to serialize config")?;
-    std::fs::write(&config_path, &toml_str)
-        .with_context(|| format!("failed to write {}", config_path.display()))?;
-
-    // Start daemon if requested, then always open fleet TUI hub.
-    // No println! here: the fleet TUI enters alternate screen immediately,
-    // so any output would be invisible. The TUI shows agent info on its own.
-    if result.start_daemon {
-        // Surface errors rather than silently discarding: the fleet TUI
-        // enters alternate screen immediately after this, so eprintln
-        // captures the error to stderr for later diagnosis.
-        if let Err(e) = crate::commands::daemon::start_quiet() {
-            eprintln!("warning: daemon failed to start: {e:#}");
-        }
-    }
-
+    // Config was written and daemon started by the wizard's health check step.
+    // Just open the fleet TUI hub.
     crate::fleet_tui::run_fleet_tui()
 }
 
@@ -203,7 +137,10 @@ mod tests {
     use super::*;
     use crate::commands::daemon::tool_display_name;
     use aegis_types::config::{ChannelConfig, TelegramConfig};
-    use aegis_types::daemon::{AgentSlotConfig, DashboardConfig, RestartPolicy};
+    use aegis_types::daemon::{
+        AgentSlotConfig, DaemonConfig, DaemonControlConfig, DashboardConfig, PersistenceConfig,
+        RestartPolicy,
+    };
 
     #[test]
     fn tool_display_names() {
