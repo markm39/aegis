@@ -7,11 +7,13 @@ pub mod action;
 pub mod config;
 pub mod config_loader;
 pub mod copilot;
+pub mod credentials;
 pub mod daemon;
 pub mod error;
 pub mod google_ai;
 pub mod llm;
 pub mod oauth;
+pub mod providers;
 pub mod tool_classification;
 pub mod verdict;
 
@@ -37,5 +39,10 @@ pub use daemon::{
     AcpServerConfig, AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig,
     DaemonControlConfig, PersistenceConfig, RestartPolicy,
 };
+pub use credentials::CredentialStore;
 pub use error::AegisError;
+pub use providers::{
+    scan_providers, provider_by_id, providers_by_tier, DetectedProvider, ProviderInfo,
+    ProviderTier, ALL_PROVIDERS,
+};
 pub use verdict::{Decision, Verdict};
