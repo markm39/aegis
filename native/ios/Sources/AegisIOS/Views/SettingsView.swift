@@ -2,6 +2,16 @@ import SwiftUI
 
 /// Settings view for configuring the daemon connection, authentication, and app preferences.
 ///
+/// Sections:
+/// - Pairing: Quick pair/re-pair with daemon
+/// - Server: URL configuration with validation
+/// - Authentication: API token management (Keychain)
+/// - Connection: Status indicator and test
+/// - Security: Biometric lock
+/// - Notifications: Sound, haptic, and history
+/// - Location: Location service settings
+/// - About: Version info
+///
 /// Security:
 /// - Server URL is validated (HTTPS required, except localhost)
 /// - API token is stored exclusively in the iOS Keychain
@@ -9,9 +19,12 @@ import SwiftUI
 /// - Connection test verifies the daemon is reachable
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var pushManager: PushManager
+    @EnvironmentObject var locationService: LocationService
 
     // Server configuration
     @AppStorage("server_url") private var serverURL: String = "http://localhost:3100"
+    @AppStorage("is_paired") private var isPaired: Bool = false
     @State private var urlInput: String = ""
     @State private var urlValidationError: String?
 
@@ -31,16 +44,24 @@ struct SettingsView: View {
     @State private var biometricAvailable: Bool = false
     @State private var biometricType: String = "Biometric"
 
+    // Pairing
+    @State private var showPairingSheet: Bool = false
+
+    // Notification history
+    @State private var showNotificationHistory: Bool = false
+
     private let tokenManager = TokenManager()
 
     var body: some View {
         NavigationStack {
             Form {
+                pairingSection
                 serverSection
                 authSection
                 connectionSection
                 securitySection
                 notificationSection
+                locationSection
                 aboutSection
             }
             .navigationTitle("Settings")
@@ -49,6 +70,35 @@ struct SettingsView: View {
                 hasToken = tokenManager.hasToken()
                 checkBiometricAvailability()
             }
+            .sheet(isPresented: $showPairingSheet) {
+                PairingView()
+            }
+            .sheet(isPresented: $showNotificationHistory) {
+                notificationHistoryView
+            }
+        }
+    }
+
+    // MARK: - Pairing Section
+
+    private var pairingSection: some View {
+        Section {
+            HStack {
+                Image(systemName: isPaired ? "link.circle.fill" : "link.circle")
+                    .foregroundStyle(isPaired ? .green : .secondary)
+                Text(isPaired ? "Paired" : "Not Paired")
+                    .font(.body)
+                Spacer()
+                Button(isPaired ? "Re-pair" : "Pair Device") {
+                    showPairingSheet = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        } header: {
+            Label("Device Pairing", systemImage: "link")
+        } footer: {
+            Text("Scan a QR code or enter a pairing code to connect to your Aegis daemon.")
         }
     }
 
@@ -133,7 +183,7 @@ struct SettingsView: View {
                 Circle()
                     .fill(appState.isConnected ? Color.green : Color.red)
                     .frame(width: 10, height: 10)
-                Text(appState.isConnected ? "Connected" : "Disconnected")
+                Text(appState.connectionState.displayName)
                     .font(.body)
 
                 Spacer()
@@ -192,10 +242,91 @@ struct SettingsView: View {
     private var notificationSection: some View {
         Section {
             Toggle("Approval Notifications", isOn: $notificationsEnabled)
+
+            Toggle("Sound", isOn: $pushManager.soundEnabled)
+                .disabled(!notificationsEnabled)
+
+            Toggle("Haptic Feedback", isOn: $pushManager.hapticEnabled)
+                .disabled(!notificationsEnabled)
+
+            Button {
+                showNotificationHistory = true
+            } label: {
+                HStack {
+                    Text("Notification History")
+                    Spacer()
+                    if !pushManager.notificationHistory.isEmpty {
+                        Text("\(pushManager.notificationHistory.count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .foregroundStyle(.primary)
         } header: {
             Label("Notifications", systemImage: "bell")
         } footer: {
             Text("Receive notifications when agents request approval for actions.")
+        }
+    }
+
+    // MARK: - Location Section
+
+    private var locationSection: some View {
+        Section {
+            HStack {
+                Text("Authorization")
+                Spacer()
+                Text(locationAuthText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !locationService.isAuthorized {
+                Button("Request Location Access") {
+                    locationService.requestAuthorization()
+                }
+            }
+
+            if !locationService.activeGeofences.isEmpty {
+                ForEach(locationService.activeGeofences) { geofence in
+                    HStack {
+                        Image(systemName: "location.circle")
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading) {
+                            Text(geofence.name)
+                                .font(.subheadline)
+                            Text("\(Int(geofence.radiusMeters))m radius")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .onDelete { indices in
+                    for index in indices {
+                        let geofence = locationService.activeGeofences[index]
+                        locationService.removeGeofence(name: geofence.name)
+                    }
+                }
+            }
+        } header: {
+            Label("Location", systemImage: "location")
+        } footer: {
+            Text("Location is shared with agents only when you explicitly send it. Aegis never tracks your location in the background.")
+        }
+    }
+
+    private var locationAuthText: String {
+        switch locationService.authorizationStatus {
+        case .authorizedWhenInUse: return "When In Use"
+        case .authorizedAlways: return "Always"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not Set"
+        @unknown default: return "Unknown"
         }
     }
 
@@ -217,6 +348,63 @@ struct SettingsView: View {
             }
         } header: {
             Label("About", systemImage: "info.circle")
+        }
+    }
+
+    // MARK: - Notification History View
+
+    private var notificationHistoryView: some View {
+        NavigationStack {
+            List {
+                if pushManager.notificationHistory.isEmpty {
+                    ContentUnavailableView(
+                        "No Notifications",
+                        systemImage: "bell.slash",
+                        description: Text("Notification history will appear here.")
+                    )
+                } else {
+                    ForEach(pushManager.notificationHistory) { record in
+                        HStack(spacing: 12) {
+                            Image(systemName: record.category.iconName)
+                                .foregroundStyle(record.category.color)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(record.subtitle)
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    Text(record.timeAgo)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(record.body)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Notification History")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        showNotificationHistory = false
+                    }
+                }
+                if !pushManager.notificationHistory.isEmpty {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Clear") {
+                            pushManager.clearHistory()
+                        }
+                        .tint(.red)
+                    }
+                }
+            }
         }
     }
 

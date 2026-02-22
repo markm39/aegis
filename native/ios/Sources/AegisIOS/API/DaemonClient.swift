@@ -1,6 +1,6 @@
 import Foundation
 
-/// HTTP client for the Aegis daemon API, designed for iOS.
+/// HTTP and WebSocket client for the Aegis daemon API, designed for iOS.
 ///
 /// Connects to the daemon's HTTP API with security-first defaults:
 /// - Bearer token authentication from Keychain
@@ -8,6 +8,8 @@ import Foundation
 /// - X-Request-ID header on every mutating request for audit trail
 /// - TLS certificate pinning via custom URLSessionDelegate
 /// - Server URL validation (HTTPS required, except localhost for dev)
+/// - Retry logic with exponential backoff for transient failures
+/// - WebSocket support for real-time fleet updates
 ///
 /// All methods are async/await and safe to call from any actor context.
 final class DaemonClient: NSObject, @unchecked Sendable {
@@ -23,8 +25,20 @@ final class DaemonClient: NSObject, @unchecked Sendable {
     /// TLS pinning delegate.
     private let pinningDelegate = CertificatePinningDelegate()
 
-    init(baseURL: URL = URL(string: "http://localhost:3100")!) {
+    /// Maximum number of retry attempts for transient failures.
+    private let maxRetries: Int
+
+    /// Base delay for exponential backoff (in seconds).
+    private let baseRetryDelay: TimeInterval
+
+    init(
+        baseURL: URL = URL(string: "http://localhost:3100")!,
+        maxRetries: Int = 3,
+        baseRetryDelay: TimeInterval = 1.0
+    ) {
         self.baseURL = baseURL
+        self.maxRetries = maxRetries
+        self.baseRetryDelay = baseRetryDelay
 
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30
@@ -81,7 +95,7 @@ final class DaemonClient: NSObject, @unchecked Sendable {
     /// List all agents in the fleet.
     /// GET /v1/agents
     func listAgents() async throws -> [AgentInfo] {
-        let response = try await get(path: "/v1/agents")
+        let response = try await getWithRetry(path: "/v1/agents")
         guard response.ok, let data = response.data else {
             throw DaemonClientError.apiError(response.message)
         }
@@ -162,9 +176,19 @@ final class DaemonClient: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Send a chat message to an agent and get a response.
+    func sendChatMessage(agentName: String, message: String) async throws -> APIResponse {
+        let body: [String: Any] = [
+            "type": "send_to_agent",
+            "name": agentName,
+            "text": message
+        ]
+        return try await postJSON(path: "/v1/command", body: body)
+    }
+
     /// Fetch recent output lines for an agent.
     func fetchAgentOutput(agentId: String) async throws -> [String] {
-        let response = try await get(path: "/v1/agents/\(agentId)/output?lines=100")
+        let response = try await getWithRetry(path: "/v1/agents/\(agentId)/output?lines=100")
         guard response.ok, let data = response.data else {
             return []
         }
@@ -196,12 +220,115 @@ final class DaemonClient: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Get pilot/daemon status.
-    func getStatus() async throws -> APIResponse {
-        return try await get(path: "/v1/status")
+    /// Nudge a stalled agent.
+    func nudgeAgent(name: String) async throws {
+        let body: [String: Any] = [
+            "type": "nudge_agent",
+            "name": name
+        ]
+        let response = try await postJSON(path: "/v1/command", body: body)
+        guard response.ok else {
+            throw DaemonClientError.apiError(response.message)
+        }
     }
 
-    // MARK: - HTTP Primitives
+    /// Get pilot/daemon status.
+    func getStatus() async throws -> APIResponse {
+        return try await getWithRetry(path: "/v1/status")
+    }
+
+    // MARK: - WebSocket Support
+
+    /// Open a WebSocket connection to the daemon for real-time updates.
+    ///
+    /// The daemon's gateway WebSocket endpoint streams fleet events (agent status changes,
+    /// new pending prompts, output lines) as JSON messages.
+    ///
+    /// - Returns: An AsyncStream of WebSocketEvent values.
+    func connectWebSocket() -> AsyncStream<WebSocketEvent> {
+        AsyncStream { continuation in
+            let wsScheme = baseURL.scheme == "https" ? "wss" : "ws"
+            guard let host = baseURL.host else {
+                continuation.finish()
+                return
+            }
+            let port = baseURL.port.map { ":\($0)" } ?? ""
+            guard let wsURL = URL(string: "\(wsScheme)://\(host)\(port)/v1/ws") else {
+                continuation.finish()
+                return
+            }
+
+            var request = URLRequest(url: wsURL)
+            if let token = tokenManager.getToken() {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+
+            let task = session.webSocketTask(with: request)
+            task.resume()
+
+            continuation.onTermination = { _ in
+                task.cancel(with: .goingAway, reason: nil)
+            }
+
+            // Send initial event
+            continuation.yield(.connected)
+
+            // Start reading messages
+            Task {
+                await readWebSocketMessages(task: task, continuation: continuation)
+            }
+        }
+    }
+
+    /// Continuously read messages from the WebSocket task.
+    private func readWebSocketMessages(
+        task: URLSessionWebSocketTask,
+        continuation: AsyncStream<WebSocketEvent>.Continuation
+    ) async {
+        var retryCount = 0
+
+        while !Task.isCancelled {
+            do {
+                let message = try await task.receive()
+                retryCount = 0 // Reset on successful receive
+
+                switch message {
+                case .string(let text):
+                    if let data = text.data(using: .utf8) {
+                        continuation.yield(.message(data))
+                    }
+                case .data(let data):
+                    continuation.yield(.message(data))
+                @unknown default:
+                    break
+                }
+            } catch {
+                continuation.yield(.disconnected(error.localizedDescription))
+
+                // Exponential backoff for reconnection
+                retryCount += 1
+                if retryCount > maxRetries {
+                    continuation.yield(.error("WebSocket connection failed after \(maxRetries) retries"))
+                    continuation.finish()
+                    return
+                }
+
+                let delay = baseRetryDelay * pow(2.0, Double(retryCount - 1))
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+
+        continuation.finish()
+    }
+
+    // MARK: - HTTP Primitives with Retry
+
+    /// GET with exponential backoff retry for transient failures.
+    private func getWithRetry(path: String) async throws -> APIResponse {
+        return try await withRetry {
+            try await self.get(path: path)
+        }
+    }
 
     private func get(path: String) async throws -> APIResponse {
         let url = baseURL.appendingPathComponent(path)
@@ -247,6 +374,51 @@ final class DaemonClient: NSObject, @unchecked Sendable {
         return try decoder.decode(APIResponse.self, from: data)
     }
 
+    // MARK: - Retry Logic
+
+    /// Execute an operation with exponential backoff retry.
+    ///
+    /// Retries on network errors (URLError) and server errors (5xx).
+    /// Does not retry on client errors (4xx) or decoding errors.
+    private func withRetry<T>(_ operation: @escaping () async throws -> T) async throws -> T {
+        var lastError: Error?
+
+        for attempt in 0...maxRetries {
+            do {
+                return try await operation()
+            } catch let error as URLError where isRetryableURLError(error) {
+                lastError = error
+            } catch let error as DaemonClientError {
+                if case .httpError(let code) = error, (500...599).contains(code) {
+                    lastError = error
+                } else {
+                    throw error // Non-retryable client error
+                }
+            } catch {
+                throw error // Non-retryable error
+            }
+
+            if attempt < maxRetries {
+                let delay = baseRetryDelay * pow(2.0, Double(attempt))
+                let jitter = Double.random(in: 0...0.5)
+                try? await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
+            }
+        }
+
+        throw lastError ?? DaemonClientError.apiError("Request failed after \(maxRetries) retries")
+    }
+
+    /// Determine if a URLError is transient and worth retrying.
+    private func isRetryableURLError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .cannotConnectToHost, .networkConnectionLost,
+             .dnsLookupFailed, .notConnectedToInternet, .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Apply Bearer token authentication from the Keychain.
     private func applyAuth(_ request: inout URLRequest) {
         if let token = tokenManager.getToken() {
@@ -258,6 +430,46 @@ final class DaemonClient: NSObject, @unchecked Sendable {
     /// Every mutating request gets a UUID to trace through the daemon audit log.
     private func applyRequestId(_ request: inout URLRequest) {
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+    }
+}
+
+// MARK: - WebSocket Event
+
+/// Events received from the daemon WebSocket connection.
+enum WebSocketEvent {
+    /// WebSocket connection established.
+    case connected
+    /// Received a message (raw JSON data).
+    case message(Data)
+    /// Connection lost with reason.
+    case disconnected(String)
+    /// Unrecoverable error.
+    case error(String)
+}
+
+// MARK: - Connection State
+
+/// Observable connection state for the daemon client.
+///
+/// Used by views to display connection status and trigger reconnection.
+enum ConnectionState: Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case reconnecting(attempt: Int)
+
+    var displayName: String {
+        switch self {
+        case .disconnected: return "Disconnected"
+        case .connecting: return "Connecting..."
+        case .connected: return "Connected"
+        case .reconnecting(let attempt): return "Reconnecting (\(attempt))..."
+        }
+    }
+
+    var isConnected: Bool {
+        if case .connected = self { return true }
+        return false
     }
 }
 
@@ -314,6 +526,7 @@ enum DaemonClientError: LocalizedError {
     case invalidResponse
     case httpError(statusCode: Int)
     case invalidServerURL(String)
+    case webSocketError(String)
 
     var errorDescription: String? {
         switch self {
@@ -325,6 +538,8 @@ enum DaemonClientError: LocalizedError {
             return "HTTP error: \(code)"
         case .invalidServerURL(let url):
             return "Invalid server URL: \(url). HTTPS required for remote servers."
+        case .webSocketError(let message):
+            return "WebSocket error: \(message)"
         }
     }
 }

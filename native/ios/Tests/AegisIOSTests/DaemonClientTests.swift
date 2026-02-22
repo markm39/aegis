@@ -18,6 +18,11 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertEqual(client.baseURL, url)
     }
 
+    func testClientCreatesWithRetryConfig() {
+        let client = DaemonClient(maxRetries: 5, baseRetryDelay: 2.0)
+        XCTAssertNotNil(client)
+    }
+
     // MARK: - Request Includes Auth Header
 
     /// Verify that Bearer token is set when a token exists in Keychain.
@@ -82,6 +87,10 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertNil(DaemonClient.validateServerURL("ws://aegis.example.com"))
     }
 
+    func testLocalhostIPv6Accepted() {
+        XCTAssertNotNil(DaemonClient.validateServerURL("http://[::1]:3100"))
+    }
+
     // MARK: - Error Types
 
     func testDaemonClientErrorDescriptions() {
@@ -96,13 +105,41 @@ final class DaemonClientTests: XCTestCase {
 
         let urlErr = DaemonClientError.invalidServerURL("http://bad.example.com")
         XCTAssertTrue(urlErr.localizedDescription.contains("HTTPS"))
+
+        let wsErr = DaemonClientError.webSocketError("connection lost")
+        XCTAssertTrue(wsErr.localizedDescription.contains("connection lost"))
+    }
+
+    // MARK: - Connection State
+
+    func testConnectionStateDisplayNames() {
+        XCTAssertEqual(ConnectionState.disconnected.displayName, "Disconnected")
+        XCTAssertEqual(ConnectionState.connecting.displayName, "Connecting...")
+        XCTAssertEqual(ConnectionState.connected.displayName, "Connected")
+        XCTAssertEqual(ConnectionState.reconnecting(attempt: 2).displayName, "Reconnecting (2)...")
+    }
+
+    func testConnectionStateIsConnected() {
+        XCTAssertFalse(ConnectionState.disconnected.isConnected)
+        XCTAssertFalse(ConnectionState.connecting.isConnected)
+        XCTAssertTrue(ConnectionState.connected.isConnected)
+        XCTAssertFalse(ConnectionState.reconnecting(attempt: 1).isConnected)
+    }
+
+    func testConnectionStateEquality() {
+        XCTAssertEqual(ConnectionState.connected, ConnectionState.connected)
+        XCTAssertEqual(ConnectionState.disconnected, ConnectionState.disconnected)
+        XCTAssertEqual(ConnectionState.reconnecting(attempt: 3), ConnectionState.reconnecting(attempt: 3))
+        XCTAssertNotEqual(ConnectionState.connected, ConnectionState.disconnected)
+        XCTAssertNotEqual(ConnectionState.reconnecting(attempt: 1), ConnectionState.reconnecting(attempt: 2))
     }
 
     // MARK: - Connection Failure
 
     func testListAgentsFailsWhenDaemonNotRunning() async {
         let url = URL(string: "http://127.0.0.1:19999")!
-        let client = DaemonClient(baseURL: url)
+        // Use zero retries to speed up the test
+        let client = DaemonClient(baseURL: url, maxRetries: 0)
 
         do {
             _ = try await client.listAgents()
@@ -114,13 +151,47 @@ final class DaemonClientTests: XCTestCase {
 
     func testGetStatusFailsWhenDaemonNotRunning() async {
         let url = URL(string: "http://127.0.0.1:19999")!
-        let client = DaemonClient(baseURL: url)
+        let client = DaemonClient(baseURL: url, maxRetries: 0)
 
         do {
             _ = try await client.getStatus()
             XCTFail("Expected an error when daemon is not running")
         } catch {
             XCTAssertNotNil(error)
+        }
+    }
+
+    // MARK: - WebSocket Event Types
+
+    func testWebSocketEventTypes() {
+        // Verify WebSocketEvent enum can be constructed
+        let connected = WebSocketEvent.connected
+        let message = WebSocketEvent.message(Data())
+        let disconnected = WebSocketEvent.disconnected("reason")
+        let error = WebSocketEvent.error("fatal")
+
+        // These are mainly compile-time checks; verify they exist
+        switch connected {
+        case .connected: break
+        default: XCTFail("Expected .connected")
+        }
+
+        switch message {
+        case .message(let data):
+            XCTAssertTrue(data.isEmpty)
+        default: XCTFail("Expected .message")
+        }
+
+        switch disconnected {
+        case .disconnected(let reason):
+            XCTAssertEqual(reason, "reason")
+        default: XCTFail("Expected .disconnected")
+        }
+
+        switch error {
+        case .error(let msg):
+            XCTAssertEqual(msg, "fatal")
+        default: XCTFail("Expected .error")
         }
     }
 }

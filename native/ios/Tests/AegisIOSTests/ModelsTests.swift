@@ -92,6 +92,24 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(agent.statusKind, .stopped)
     }
 
+    func testAgentInfoIdentifiable() throws {
+        let json = """
+        {
+            "name": "test-agent",
+            "status": "Running",
+            "tool": "ClaudeCode",
+            "working_dir": "/tmp",
+            "restart_count": 0,
+            "pending_count": 0,
+            "attention_needed": false,
+            "is_orchestrator": false
+        }
+        """.data(using: .utf8)!
+
+        let agent = try JSONDecoder().decode(AgentInfo.self, from: json)
+        XCTAssertEqual(agent.id, "test-agent", "Agent id should equal name")
+    }
+
     // MARK: - Pending Request Decoding
 
     func test_pending_request_decoding() throws {
@@ -122,6 +140,13 @@ final class ModelsTests: XCTestCase {
 
         let prompt = try JSONDecoder().decode(PendingPrompt.self, from: json)
         XCTAssertEqual(prompt.agentName, "claude-1")
+    }
+
+    func testPendingPromptIdentifiable() {
+        let prompt = PendingPrompt(
+            requestId: "test-id", rawPrompt: "test", ageSecs: 0, agentName: "test"
+        )
+        XCTAssertEqual(prompt.id, "test-id", "Prompt id should equal requestId")
     }
 
     // MARK: - Invalid JSON
@@ -164,6 +189,16 @@ final class ModelsTests: XCTestCase {
             requestId: "2", rawPrompt: "Read password from config", ageSecs: 5, agentName: "test"
         )
         XCTAssertEqual(passwordPrompt.riskLevel, .high)
+
+        let sshPrompt = PendingPrompt(
+            requestId: "3", rawPrompt: "Access .ssh/id_rsa file", ageSecs: 5, agentName: "test"
+        )
+        XCTAssertEqual(sshPrompt.riskLevel, .high)
+
+        let sudoPrompt = PendingPrompt(
+            requestId: "4", rawPrompt: "Execute sudo command", ageSecs: 5, agentName: "test"
+        )
+        XCTAssertEqual(sudoPrompt.riskLevel, .high)
     }
 
     func testMediumRiskDetection() {
@@ -176,6 +211,11 @@ final class ModelsTests: XCTestCase {
             requestId: "2", rawPrompt: "npm install express", ageSecs: 5, agentName: "test"
         )
         XCTAssertEqual(installPrompt.riskLevel, .medium)
+
+        let curlPrompt = PendingPrompt(
+            requestId: "3", rawPrompt: "curl https://example.com/api", ageSecs: 5, agentName: "test"
+        )
+        XCTAssertEqual(curlPrompt.riskLevel, .medium)
     }
 
     func testLowRiskDetection() {
@@ -183,6 +223,11 @@ final class ModelsTests: XCTestCase {
             requestId: "1", rawPrompt: "Read file contents", ageSecs: 5, agentName: "test"
         )
         XCTAssertEqual(prompt.riskLevel, .low)
+
+        let listPrompt = PendingPrompt(
+            requestId: "2", rawPrompt: "List directory entries", ageSecs: 5, agentName: "test"
+        )
+        XCTAssertEqual(listPrompt.riskLevel, .low)
     }
 
     // MARK: - Status Kind
@@ -195,6 +240,16 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(AgentStatusKind.failed.displayName, "Failed")
         XCTAssertEqual(AgentStatusKind.stopping.displayName, "Stopping")
         XCTAssertEqual(AgentStatusKind.disabled.displayName, "Disabled")
+    }
+
+    func testStatusKindIconNames() {
+        XCTAssertEqual(AgentStatusKind.running.iconName, "circle.fill")
+        XCTAssertEqual(AgentStatusKind.pending.iconName, "circle.dotted")
+        XCTAssertEqual(AgentStatusKind.stopped.iconName, "circle")
+        XCTAssertEqual(AgentStatusKind.crashed.iconName, "exclamationmark.circle.fill")
+        XCTAssertEqual(AgentStatusKind.failed.iconName, "exclamationmark.circle.fill")
+        XCTAssertEqual(AgentStatusKind.stopping.iconName, "circle.dotted")
+        XCTAssertEqual(AgentStatusKind.disabled.iconName, "circle")
     }
 
     // MARK: - APIResponse Decoding
@@ -242,6 +297,28 @@ final class ModelsTests: XCTestCase {
         }
     }
 
+    func testAnyCodableIntRoundtrip() throws {
+        let value = AnyCodableValue.int(42)
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(AnyCodableValue.self, from: data)
+        if case .int(let i) = decoded {
+            XCTAssertEqual(i, 42)
+        } else {
+            XCTFail("Expected int value")
+        }
+    }
+
+    func testAnyCodableBoolRoundtrip() throws {
+        let value = AnyCodableValue.bool(true)
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(AnyCodableValue.self, from: data)
+        if case .bool(let b) = decoded {
+            XCTAssertTrue(b)
+        } else {
+            XCTFail("Expected bool value")
+        }
+    }
+
     func testAnyCodableNullRoundtrip() throws {
         let value = AnyCodableValue.null
         let data = try JSONEncoder().encode(value)
@@ -250,6 +327,33 @@ final class ModelsTests: XCTestCase {
             // OK
         } else {
             XCTFail("Expected null value")
+        }
+    }
+
+    func testAnyCodableArrayRoundtrip() throws {
+        let value = AnyCodableValue.array([.string("a"), .int(1)])
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(AnyCodableValue.self, from: data)
+        if case .array(let arr) = decoded {
+            XCTAssertEqual(arr.count, 2)
+        } else {
+            XCTFail("Expected array value")
+        }
+    }
+
+    func testAnyCodableObjectRoundtrip() throws {
+        let value = AnyCodableValue.object(["key": .string("val")])
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(AnyCodableValue.self, from: data)
+        if case .object(let dict) = decoded {
+            XCTAssertEqual(dict.count, 1)
+            if case .string(let v) = dict["key"] {
+                XCTAssertEqual(v, "val")
+            } else {
+                XCTFail("Expected string value for key")
+            }
+        } else {
+            XCTFail("Expected object value")
         }
     }
 
@@ -289,5 +393,88 @@ final class ModelsTests: XCTestCase {
         let status = try JSONDecoder().decode(FleetStatus.self, from: json)
         XCTAssertEqual(status.totalPending, 5)
         XCTAssertTrue(status.agents.isEmpty)
+    }
+
+    func testFleetStatusWithAgents() throws {
+        let json = """
+        {
+            "agents": [
+                {
+                    "name": "a1",
+                    "status": "Running",
+                    "tool": "ClaudeCode",
+                    "working_dir": "/tmp",
+                    "restart_count": 0,
+                    "pending_count": 1,
+                    "attention_needed": false,
+                    "is_orchestrator": false
+                }
+            ],
+            "total_pending": 1
+        }
+        """.data(using: .utf8)!
+
+        let status = try JSONDecoder().decode(FleetStatus.self, from: json)
+        XCTAssertEqual(status.agents.count, 1)
+        XCTAssertEqual(status.agents[0].name, "a1")
+    }
+
+    // MARK: - Chat Message
+
+    func testChatMessageCreation() {
+        let msg = ChatMessage(role: .user, content: "hello", timestamp: Date())
+        XCTAssertEqual(msg.content, "hello")
+        XCTAssertFalse(msg.id.uuidString.isEmpty)
+    }
+
+    func testChatMessageRoles() {
+        let userMsg = ChatMessage(role: .user, content: "user input", timestamp: Date())
+        let agentMsg = ChatMessage(role: .agent, content: "agent output", timestamp: Date())
+
+        switch userMsg.role {
+        case .user: break // expected
+        case .agent: XCTFail("Expected user role")
+        }
+
+        switch agentMsg.role {
+        case .agent: break // expected
+        case .user: XCTFail("Expected agent role")
+        }
+    }
+
+    // MARK: - Input Sanitizer
+
+    func testSanitizerStripsControlChars() {
+        let input = "hello\u{0001}world\u{007F}test"
+        let sanitized = InputSanitizer.sanitize(input)
+        XCTAssertEqual(sanitized, "helloworldtest")
+    }
+
+    func testSanitizerTrimsWhitespace() {
+        let input = "  hello world  "
+        let sanitized = InputSanitizer.sanitize(input)
+        XCTAssertEqual(sanitized, "hello world")
+    }
+
+    func testSanitizerEmptyInput() {
+        XCTAssertEqual(InputSanitizer.sanitize(""), "")
+        XCTAssertEqual(InputSanitizer.sanitize("   "), "")
+        XCTAssertEqual(InputSanitizer.sanitize("\n\t"), "")
+    }
+
+    func testSanitizerPreservesNormalText() {
+        let input = "cargo build --release"
+        XCTAssertEqual(InputSanitizer.sanitize(input), input)
+    }
+
+    // MARK: - Activity Entry
+
+    func testActivityEntryTimeAgo() {
+        let recent = ActivityEntry(
+            agentName: "test",
+            description: "test event",
+            timestamp: Date()
+        )
+        XCTAssertTrue(recent.timeAgo.contains("s ago"))
     }
 }

@@ -1,32 +1,90 @@
 import SwiftUI
+import UserNotifications
 
 /// Aegis iOS application for fleet management, agent monitoring, and approval workflows.
 ///
-/// The app provides four main tabs:
+/// The app provides five main tabs:
 /// - Dashboard: Fleet overview with agent status
 /// - Pending: Approval queue with swipe actions
-/// - Chat: Direct agent interaction
-/// - Settings: Server configuration and security
+/// - Chat: Direct agent interaction with message bubbles
+/// - Camera: Image capture and sharing with agents
+/// - Settings: Server configuration, pairing, and security
 @main
 struct AegisIOSApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var pushManager = PushManager()
+    @StateObject private var locationService = LocationService()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
                 .environmentObject(pushManager)
+                .environmentObject(locationService)
                 .onAppear {
                     appState.startPolling()
                 }
+                .onOpenURL { url in
+                    handleDeepLink(url)
+                }
+        }
+    }
+
+    /// Handle deep links from notifications and external sources.
+    ///
+    /// Supported URL schemes:
+    /// - aegis://dashboard
+    /// - aegis://pending
+    /// - aegis://pending/{requestId}
+    /// - aegis://chat/{agentName}
+    /// - aegis://agent/{agentName}
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme == "aegis" else { return }
+
+        switch url.host {
+        case "dashboard":
+            appState.selectedTab = .dashboard
+        case "pending":
+            appState.selectedTab = .pending
+            if let requestId = url.pathComponents.dropFirst().first {
+                appState.deepLinkRequestId = requestId
+            }
+        case "chat":
+            appState.selectedTab = .chat
+            if let agentName = url.pathComponents.dropFirst().first {
+                appState.deepLinkAgentName = agentName
+            }
+        case "agent":
+            appState.selectedTab = .dashboard
+            if let agentName = url.pathComponents.dropFirst().first {
+                appState.deepLinkAgentName = agentName
+            }
+        default:
+            break
         }
     }
 }
 
+// MARK: - Tab Identifiers
+
+/// Identifiers for the main navigation tabs.
+enum AppTab: Hashable {
+    case dashboard
+    case pending
+    case chat
+    case camera
+    case settings
+}
+
 // MARK: - Content View
 
-/// Root view with tab navigation across all four primary sections.
+/// Root view with tab navigation across all primary sections.
+///
+/// Features:
+/// - Biometric lock screen (when enabled in settings)
+/// - Tab badges for pending approval count
+/// - Deep link support for notification taps
+/// - State restoration across app lifecycle
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @State private var requireBiometric: Bool = UserDefaults.standard.bool(forKey: "biometric_enabled")
@@ -49,28 +107,38 @@ struct ContentView: View {
     }
 
     private var mainTabView: some View {
-        TabView {
+        TabView(selection: $appState.selectedTab) {
             DashboardView()
                 .tabItem {
                     Label("Dashboard", systemImage: "shield.checkered")
                 }
+                .tag(AppTab.dashboard)
                 .badge(appState.runningCount)
 
             PendingView()
                 .tabItem {
                     Label("Pending", systemImage: "bell.badge")
                 }
+                .tag(AppTab.pending)
                 .badge(appState.totalPendingCount)
 
             ChatView()
                 .tabItem {
                     Label("Chat", systemImage: "bubble.left.and.bubble.right")
                 }
+                .tag(AppTab.chat)
+
+            CameraView()
+                .tabItem {
+                    Label("Camera", systemImage: "camera")
+                }
+                .tag(AppTab.camera)
 
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gear")
                 }
+                .tag(AppTab.settings)
         }
     }
 
@@ -108,124 +176,6 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Chat View (agent interaction)
-
-/// Simple chat interface for sending input to a selected agent.
-struct ChatView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var selectedAgent: String?
-    @State private var inputText: String = ""
-    @State private var outputLines: [String] = []
-    @State private var errorMessage: String?
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if appState.agents.isEmpty {
-                    ContentUnavailableView(
-                        "No Agents",
-                        systemImage: "bubble.left.and.bubble.right",
-                        description: Text("Connect to the daemon to interact with agents.")
-                    )
-                } else {
-                    // Agent picker
-                    Picker("Agent", selection: $selectedAgent) {
-                        Text("Select an agent").tag(nil as String?)
-                        ForEach(appState.agents, id: \.name) { agent in
-                            Text(agent.name).tag(agent.name as String?)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding()
-
-                    // Output area
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 2) {
-                                ForEach(Array(outputLines.enumerated()), id: \.offset) { index, line in
-                                    Text(line)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .textSelection(.enabled)
-                                        .id(index)
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                        .onChange(of: outputLines.count) { _ in
-                            if let last = outputLines.indices.last {
-                                proxy.scrollTo(last, anchor: .bottom)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
-
-                    Divider()
-
-                    // Input bar
-                    HStack(spacing: 8) {
-                        TextField("Send input to agent...", text: $inputText)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { sendInput() }
-
-                        Button {
-                            sendInput()
-                        } label: {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
-                        }
-                        .disabled(sanitizedInput.isEmpty || selectedAgent == nil)
-                    }
-                    .padding()
-                }
-
-                // Error banner
-                if let error = errorMessage {
-                    errorBanner(error)
-                }
-            }
-            .navigationTitle("Chat")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-
-    /// Sanitized user input with control characters stripped.
-    private var sanitizedInput: String {
-        InputSanitizer.sanitize(inputText)
-    }
-
-    private func sendInput() {
-        let text = sanitizedInput
-        guard !text.isEmpty, let agent = selectedAgent else { return }
-        inputText = ""
-        outputLines.append("> \(text)")
-        Task {
-            do {
-                try await appState.sendInput(agentName: agent, text: text)
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
-            Spacer()
-            Button("Dismiss") {
-                errorMessage = nil
-            }
-            .font(.caption)
-        }
-        .padding(8)
-        .background(Color.red.opacity(0.1))
-    }
-}
-
 // MARK: - Input Sanitizer
 
 /// Strips control characters from user input before sending to the daemon.
@@ -247,15 +197,29 @@ enum InputSanitizer {
 ///
 /// Polls the daemon API periodically and exposes agent/pending data to all views.
 /// All state mutations happen on the main actor to ensure UI consistency.
+///
+/// Supports:
+/// - HTTP polling (fallback, always active)
+/// - WebSocket for real-time updates (when available)
+/// - Deep linking from notifications
+/// - Connection state tracking with auto-reconnect
 @MainActor
 final class AppState: ObservableObject {
     @Published var agents: [AgentInfo] = []
     @Published var pendingPrompts: [PendingPrompt] = []
     @Published var connectionError: String?
     @Published var isConnected: Bool = false
+    @Published var connectionState: ConnectionState = .disconnected
+    @Published var recentActivity: [ActivityEntry] = []
+
+    // Navigation state for deep linking
+    @Published var selectedTab: AppTab = .dashboard
+    @Published var deepLinkAgentName: String?
+    @Published var deepLinkRequestId: String?
 
     private var client: DaemonClient
     private var pollTask: Task<Void, Never>?
+    private var wsTask: Task<Void, Never>?
 
     init() {
         self.client = DaemonClient()
@@ -263,6 +227,7 @@ final class AppState: ObservableObject {
 
     deinit {
         pollTask?.cancel()
+        wsTask?.cancel()
     }
 
     /// Reconfigure the client with a new base URL.
@@ -271,11 +236,14 @@ final class AppState: ObservableObject {
         client = DaemonClient(baseURL: baseURL)
         // Restart polling with the new client
         startPolling()
+        // Restart WebSocket if it was active
+        connectWebSocket()
     }
 
     /// Begin periodic polling of the daemon API every 5 seconds.
     func startPolling() {
         pollTask?.cancel()
+        connectionState = .connecting
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -288,8 +256,28 @@ final class AppState: ObservableObject {
     func refresh() async {
         do {
             let agentList = try await client.listAgents()
+
+            // Track activity: detect status changes
+            for newAgent in agentList {
+                if let oldAgent = agents.first(where: { $0.name == newAgent.name }) {
+                    if oldAgent.statusKind != newAgent.statusKind {
+                        let entry = ActivityEntry(
+                            agentName: newAgent.name,
+                            description: "\(newAgent.name): \(oldAgent.statusKind.displayName) -> \(newAgent.statusKind.displayName)",
+                            timestamp: Date()
+                        )
+                        recentActivity.insert(entry, at: 0)
+                        // Keep only last 50 entries
+                        if recentActivity.count > 50 {
+                            recentActivity = Array(recentActivity.prefix(50))
+                        }
+                    }
+                }
+            }
+
             self.agents = agentList
             self.isConnected = true
+            self.connectionState = .connected
             self.connectionError = nil
 
             // Collect pending prompts for agents that have them
@@ -302,7 +290,32 @@ final class AppState: ObservableObject {
             self.pendingPrompts = allPending
         } catch {
             self.isConnected = false
+            self.connectionState = .disconnected
             self.connectionError = error.localizedDescription
+        }
+    }
+
+    /// Connect to the daemon WebSocket for real-time updates.
+    func connectWebSocket() {
+        wsTask?.cancel()
+        wsTask = Task { [weak self] in
+            guard let self = self else { return }
+            let stream = self.client.connectWebSocket()
+            for await event in stream {
+                switch event {
+                case .connected:
+                    self.connectionState = .connected
+                case .message:
+                    // Trigger a refresh when we get a WebSocket message
+                    // The message itself contains event data, but for simplicity
+                    // we just refresh the full state.
+                    await self.refresh()
+                case .disconnected:
+                    self.connectionState = .disconnected
+                case .error:
+                    self.connectionState = .disconnected
+                }
+            }
         }
     }
 
@@ -349,6 +362,10 @@ final class AppState: ObservableObject {
         await refresh()
     }
 
+    func nudgeAgent(name: String) async throws {
+        try await client.nudgeAgent(name: name)
+    }
+
     func fetchAgentOutput(agentId: String) async throws -> [String] {
         return try await client.fetchAgentOutput(agentId: agentId)
     }
@@ -377,5 +394,22 @@ final class AppState: ObservableObject {
             parts.append("\(crashed) failed")
         }
         return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - Activity Entry
+
+/// A single entry in the recent activity feed.
+struct ActivityEntry: Identifiable {
+    let id = UUID()
+    let agentName: String
+    let description: String
+    let timestamp: Date
+
+    var timeAgo: String {
+        let seconds = Int(Date().timeIntervalSince(timestamp))
+        if seconds < 60 { return "\(seconds)s ago" }
+        if seconds < 3600 { return "\(seconds / 60)m ago" }
+        return "\(seconds / 3600)h ago"
     }
 }

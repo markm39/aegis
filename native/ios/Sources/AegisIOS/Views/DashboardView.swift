@@ -3,13 +3,16 @@ import SwiftUI
 /// Fleet dashboard showing all agents with status, pending counts, and navigation to details.
 ///
 /// Features:
-/// - Agent list with color-coded status indicators
+/// - Agent list with color-coded status indicators and badges
 /// - Pending count badges on agents with outstanding approvals
+/// - Quick action swipe gestures (stop, restart, nudge)
+/// - Recent activity feed section
 /// - Pull-to-refresh for manual data reload
 /// - Auto-refresh every 5 seconds via AppState polling
 /// - Navigation to AgentDetailView for each agent
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
+    @State private var showPairingSheet: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -27,6 +30,16 @@ struct DashboardView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     connectionIndicator
                 }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showPairingSheet = true
+                    } label: {
+                        Image(systemName: "link.circle")
+                    }
+                }
+            }
+            .sheet(isPresented: $showPairingSheet) {
+                PairingView()
             }
         }
     }
@@ -64,6 +77,77 @@ struct DashboardView: View {
                     } label: {
                         agentRow(agent)
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if agent.statusKind == .running {
+                            Button {
+                                Task {
+                                    try? await appState.stopAgent(name: agent.name)
+                                }
+                            } label: {
+                                Label("Stop", systemImage: "stop.circle")
+                            }
+                            .tint(.red)
+
+                            Button {
+                                Task {
+                                    try? await appState.restartAgent(name: agent.name)
+                                }
+                            } label: {
+                                Label("Restart", systemImage: "arrow.counterclockwise")
+                            }
+                            .tint(.orange)
+                        } else {
+                            Button {
+                                Task {
+                                    try? await appState.startAgent(name: agent.name)
+                                }
+                            } label: {
+                                Label("Start", systemImage: "play.circle")
+                            }
+                            .tint(.green)
+                        }
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        if agent.pendingCount > 0 {
+                            Button {
+                                appState.selectedTab = .pending
+                            } label: {
+                                Label("Pending", systemImage: "bell.badge")
+                            }
+                            .tint(.orange)
+                        }
+
+                        if agent.statusKind == .running {
+                            Button {
+                                Task {
+                                    try? await appState.nudgeAgent(name: agent.name)
+                                }
+                            } label: {
+                                Label("Nudge", systemImage: "hand.tap")
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                }
+            }
+
+            // Recent Activity Feed
+            if !appState.recentActivity.isEmpty {
+                Section("Recent Activity") {
+                    ForEach(appState.recentActivity.prefix(10)) { entry in
+                        HStack {
+                            Circle()
+                                .fill(activityColor(for: entry))
+                                .frame(width: 8, height: 8)
+                            Text(entry.description)
+                                .font(.caption)
+                                .lineLimit(2)
+                            Spacer()
+                            Text(entry.timeAgo)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         }
@@ -74,10 +158,9 @@ struct DashboardView: View {
 
     private func agentRow(_ agent: AgentInfo) -> some View {
         HStack(spacing: 12) {
-            // Status indicator
-            Circle()
-                .fill(statusColor(for: agent.statusKind))
-                .frame(width: 12, height: 12)
+            // Status indicator with icon
+            statusIcon(for: agent.statusKind)
+                .frame(width: 24, height: 24)
 
             // Agent info
             VStack(alignment: .leading, spacing: 2) {
@@ -95,9 +178,7 @@ struct DashboardView: View {
                     Text(agent.tool)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(agent.statusKind.displayName)
-                        .font(.caption)
-                        .foregroundStyle(statusColor(for: agent.statusKind))
+                    statusBadge(for: agent.statusKind)
                 }
             }
 
@@ -126,18 +207,44 @@ struct DashboardView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Status Display
+
+    private func statusIcon(for status: AgentStatusKind) -> some View {
+        Image(systemName: status.iconName)
+            .foregroundStyle(statusColor(for: status))
+            .font(.system(size: 14))
+    }
+
+    private func statusBadge(for status: AgentStatusKind) -> some View {
+        Text(status.displayName)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(statusColor(for: status).opacity(0.15))
+            .foregroundStyle(statusColor(for: status))
+            .clipShape(Capsule())
+    }
+
     // MARK: - Empty / Disconnected States
 
     private var disconnectedView: some View {
         ContentUnavailableView {
             Label("Disconnected", systemImage: "wifi.slash")
         } description: {
-            Text("Cannot reach the Aegis daemon. Check your server URL in Settings.")
+            Text("Cannot reach the Aegis daemon. Check your server URL in Settings or pair with a daemon.")
         } actions: {
-            Button("Retry") {
-                Task { await appState.refresh() }
+            HStack(spacing: 16) {
+                Button("Retry") {
+                    Task { await appState.refresh() }
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Pair") {
+                    showPairingSheet = true
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -161,7 +268,7 @@ struct DashboardView: View {
             Circle()
                 .fill(appState.isConnected ? Color.green : Color.red)
                 .frame(width: 8, height: 8)
-            Text(appState.isConnected ? "Connected" : "Offline")
+            Text(appState.connectionState.displayName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -180,5 +287,13 @@ struct DashboardView: View {
         case .crashed, .failed:
             return .red
         }
+    }
+
+    private func activityColor(for entry: ActivityEntry) -> Color {
+        let desc = entry.description.lowercased()
+        if desc.contains("running") { return .green }
+        if desc.contains("crashed") || desc.contains("failed") { return .red }
+        if desc.contains("stopped") { return .gray }
+        return .blue
     }
 }
