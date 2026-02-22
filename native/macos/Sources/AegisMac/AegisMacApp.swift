@@ -8,18 +8,44 @@ import SwiftUI
 struct AegisMacApp: App {
     @StateObject private var fleetState = FleetState()
     @StateObject private var notificationManager = NotificationManager()
+    @StateObject private var hotkeyManager = HotkeyManager()
+    @StateObject private var gatewayManager = GatewayManager()
 
     var body: some Scene {
         // Menu bar icon with dropdown
         MenuBarExtra("Aegis", systemImage: menuBarIcon) {
-            MenuBarView(fleetState: fleetState)
+            MenuBarView(fleetState: fleetState, gatewayManager: gatewayManager)
         }
         .menuBarExtraStyle(.window)
 
         // Dashboard window, opened on demand
         Window("Aegis Dashboard", id: "dashboard") {
             DashboardWindow(fleetState: fleetState)
-                .frame(minWidth: 800, minHeight: 500)
+                .frame(minWidth: 900, minHeight: 600)
+        }
+
+        // Chat window
+        Window("Aegis Chat", id: "chat") {
+            ChatWindow(fleetState: fleetState)
+                .frame(minWidth: 600, minHeight: 400)
+        }
+        .defaultSize(width: 700, height: 500)
+
+        // Voice overlay
+        Window("Aegis Voice", id: "voice") {
+            VoiceOverlay(fleetState: fleetState)
+                .frame(width: 280, height: 320)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 280, height: 320)
+
+        // Settings window
+        Settings {
+            SettingsWindow(
+                fleetState: fleetState,
+                hotkeyManager: hotkeyManager,
+                notificationManager: notificationManager
+            )
         }
     }
 
@@ -49,16 +75,21 @@ final class FleetState: ObservableObject {
     @Published var pendingPrompts: [PendingPrompt] = []
     @Published var connectionError: String?
     @Published var isConnected: Bool = false
+    @Published var connectionState: ConnectionState = .disconnected
+    @Published var recentActivity: [ActivityEvent] = []
+    @Published var searchFilter: String = ""
 
-    private let client = DaemonClient()
+    let client = DaemonClient()
     private var pollTask: Task<Void, Never>?
 
     init() {
         startPolling()
+        setupWebSocket()
     }
 
     deinit {
         pollTask?.cancel()
+        client.disconnectWebSocket()
     }
 
     /// Begin periodic polling of the daemon API.
@@ -72,10 +103,75 @@ final class FleetState: ObservableObject {
         }
     }
 
+    /// Setup WebSocket for real-time updates.
+    private func setupWebSocket() {
+        client.onConnectionStateChange = { [weak self] state in
+            Task { @MainActor in
+                self?.connectionState = state
+            }
+        }
+
+        client.onGatewayMessage = { [weak self] response in
+            Task { @MainActor in
+                self?.handleGatewayMessage(response)
+            }
+        }
+
+        client.connectWebSocket()
+    }
+
+    /// Handle a gateway WebSocket message.
+    private func handleGatewayMessage(_ response: GatewayResponse) {
+        // Refresh on any gateway event to keep state fresh
+        Task { await refresh() }
+
+        // Add to activity feed based on method
+        if let method = response.method {
+            let event = ActivityEvent(
+                timestamp: Date(),
+                agentName: "",
+                summary: method,
+                kind: .info
+            )
+            addActivity(event)
+        }
+    }
+
+    /// Add an activity event, keeping only the most recent entries.
+    func addActivity(_ event: ActivityEvent) {
+        recentActivity.insert(event, at: 0)
+        if recentActivity.count > 50 {
+            recentActivity = Array(recentActivity.prefix(50))
+        }
+    }
+
     /// Fetch latest fleet data from the daemon.
     func refresh() async {
         do {
             let agentList = try await client.listAgents()
+
+            // Detect changes for activity feed
+            let previousAgents = self.agents
+            for agent in agentList {
+                if let prev = previousAgents.first(where: { $0.name == agent.name }) {
+                    if prev.statusKind != agent.statusKind {
+                        let kind: ActivityEvent.ActivityKind
+                        switch agent.statusKind {
+                        case .running: kind = .agentStart
+                        case .stopped: kind = .agentStop
+                        case .crashed, .failed: kind = .agentCrash
+                        default: kind = .info
+                        }
+                        addActivity(ActivityEvent(
+                            timestamp: Date(),
+                            agentName: agent.name,
+                            summary: "\(agent.name): \(prev.statusKind.displayName) -> \(agent.statusKind.displayName)",
+                            kind: kind
+                        ))
+                    }
+                }
+            }
+
             self.agents = agentList
             self.isConnected = true
             self.connectionError = nil
@@ -97,12 +193,48 @@ final class FleetState: ObservableObject {
     /// Approve a pending permission request.
     func approve(requestId: String, agentName: String) async throws {
         try await client.approve(requestId: requestId, agentName: agentName)
+        addActivity(ActivityEvent(
+            timestamp: Date(),
+            agentName: agentName,
+            summary: "Approved request for \(agentName)",
+            kind: .approval
+        ))
         await refresh()
     }
 
     /// Deny a pending permission request.
     func deny(requestId: String, agentName: String, reason: String?) async throws {
         try await client.deny(requestId: requestId, agentName: agentName, reason: reason)
+        addActivity(ActivityEvent(
+            timestamp: Date(),
+            agentName: agentName,
+            summary: "Denied request for \(agentName)",
+            kind: .denial
+        ))
+        await refresh()
+    }
+
+    /// Approve all pending prompts.
+    func approveAll() async throws {
+        try await client.approveAll(prompts: pendingPrompts)
+        addActivity(ActivityEvent(
+            timestamp: Date(),
+            agentName: "",
+            summary: "Approved all \(pendingPrompts.count) pending requests",
+            kind: .approval
+        ))
+        await refresh()
+    }
+
+    /// Deny all pending prompts.
+    func denyAll(reason: String?) async throws {
+        try await client.denyAll(prompts: pendingPrompts, reason: reason)
+        addActivity(ActivityEvent(
+            timestamp: Date(),
+            agentName: "",
+            summary: "Denied all \(pendingPrompts.count) pending requests",
+            kind: .denial
+        ))
         await refresh()
     }
 
@@ -126,6 +258,30 @@ final class FleetState: ObservableObject {
     /// Restart an agent.
     func restartAgent(name: String) async throws {
         try await client.restartAgent(name: name)
+        await refresh()
+    }
+
+    /// Add a new agent.
+    func addAgent(name: String, tool: String, workingDir: String, role: String?) async throws {
+        try await client.addAgent(name: name, tool: tool, workingDir: workingDir, role: role)
+        addActivity(ActivityEvent(
+            timestamp: Date(),
+            agentName: name,
+            summary: "Added agent \(name)",
+            kind: .agentStart
+        ))
+        await refresh()
+    }
+
+    /// Remove an agent.
+    func removeAgent(name: String) async throws {
+        try await client.removeAgent(name: name)
+        addActivity(ActivityEvent(
+            timestamp: Date(),
+            agentName: name,
+            summary: "Removed agent \(name)",
+            kind: .agentStop
+        ))
         await refresh()
     }
 
@@ -153,5 +309,19 @@ final class FleetState: ObservableObject {
             parts.append("\(crashed) failed")
         }
         return parts.joined(separator: ", ")
+    }
+
+    /// Agents filtered by the current search term.
+    var filteredAgents: [AgentInfo] {
+        if searchFilter.isEmpty {
+            return agents
+        }
+        let term = searchFilter.lowercased()
+        return agents.filter { agent in
+            agent.name.lowercased().contains(term) ||
+            agent.tool.lowercased().contains(term) ||
+            agent.statusKind.displayName.lowercased().contains(term) ||
+            (agent.role?.lowercased().contains(term) ?? false)
+        }
     }
 }
