@@ -8,6 +8,8 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Result};
 
+use aegis_types::llm::LlmToolDefinition;
+
 use crate::definition::{validate_input_schema, validate_tool_name, ToolDefinition, ToolInfo};
 
 /// A thread-safe registry of tool definitions.
@@ -66,6 +68,24 @@ impl ToolRegistry {
             .collect();
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
+    }
+
+    /// Convert all registered tools to LLM tool definition format.
+    ///
+    /// Returns definitions sorted by name for deterministic output. These
+    /// can be passed directly in an [`LlmRequest::tools`] field.
+    pub fn to_llm_definitions(&self) -> Vec<LlmToolDefinition> {
+        let map = self.tools.read().expect("registry lock poisoned");
+        let mut defs: Vec<LlmToolDefinition> = map
+            .values()
+            .map(|t| LlmToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
+            })
+            .collect();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        defs
     }
 
     /// Number of registered tools.
@@ -277,5 +297,29 @@ mod tests {
     fn test_tool_registry_default() {
         let registry = ToolRegistry::default();
         assert_eq!(registry.tool_count(), 0);
+    }
+
+    #[test]
+    fn test_to_llm_definitions() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(MockTool::new("zeta"))).unwrap();
+        registry
+            .register(Box::new(MockTool::new("alpha")))
+            .unwrap();
+        registry.register(Box::new(MockTool::new("mu"))).unwrap();
+
+        let defs = registry.to_llm_definitions();
+        assert_eq!(defs.len(), 3);
+
+        // Sorted by name.
+        assert_eq!(defs[0].name, "alpha");
+        assert_eq!(defs[1].name, "mu");
+        assert_eq!(defs[2].name, "zeta");
+
+        // Each has correct fields.
+        for def in &defs {
+            assert!(!def.description.is_empty());
+            assert!(def.input_schema.is_object());
+        }
     }
 }

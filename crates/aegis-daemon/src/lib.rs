@@ -14,6 +14,7 @@
 //! - [`state`]: crash recovery via persistent state.json
 
 pub mod browser_profile;
+pub mod builtin_tools;
 pub mod command_queue;
 pub mod commands;
 pub mod control;
@@ -869,6 +870,8 @@ pub struct DaemonRuntime {
     voice_gateway: crate::voice_gateway::VoiceGateway,
     /// LLM HTTP client for Anthropic and OpenAI completions.
     llm_client: Option<crate::llm_client::LlmClient>,
+    /// Tool registry for builtin tool execution (bash, read_file, etc.).
+    tool_registry: Option<aegis_tools::ToolRegistry>,
 }
 
 impl DaemonRuntime {
@@ -970,6 +973,19 @@ impl DaemonRuntime {
             voice_manager: None, // Initialized lazily if TWILIO_AUTH_TOKEN is set
             speech_manager: None, // Initialized lazily if DEEPGRAM_API_KEY or OPENAI_API_KEY is set
             voice_gateway: crate::voice_gateway::VoiceGateway::new(),
+            tool_registry: {
+                let registry = aegis_tools::ToolRegistry::new();
+                match crate::builtin_tools::register_builtins(&registry) {
+                    Ok(()) => {
+                        info!(count = registry.tool_count(), "builtin tool registry initialized");
+                        Some(registry)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to initialize builtin tool registry");
+                        None
+                    }
+                }
+            },
             llm_client: match crate::llm_client::build_registry_from_env() {
                 Ok(registry) => match crate::llm_client::LlmClient::new(registry) {
                     Ok(client) => {
@@ -4193,6 +4209,33 @@ impl DaemonRuntime {
                         }
                     }
                     Err(e) => DaemonResponse::error(format!("LLM completion failed: {e}")),
+                }
+            }
+
+            DaemonCommand::ExecuteTool { ref name, input } => {
+                let Some(ref registry) = self.tool_registry else {
+                    return DaemonResponse::error("tool registry not initialized");
+                };
+                let Some(tool) = registry.get_tool(name) else {
+                    return DaemonResponse::error(format!("tool not found: {name}"));
+                };
+
+                // Execute tool via tokio runtime handle.
+                let rt = tokio::runtime::Handle::try_current()
+                    .or_else(|_| {
+                        tokio::runtime::Runtime::new().map(|rt| rt.handle().clone())
+                    });
+                match rt {
+                    Ok(handle) => {
+                        match handle.block_on(tool.execute(input)) {
+                            Ok(output) => {
+                                let data = serde_json::to_value(&output).unwrap_or_default();
+                                DaemonResponse::ok_with_data("tool executed", data)
+                            }
+                            Err(e) => DaemonResponse::error(format!("tool execution failed: {e}")),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(format!("no async runtime available: {e}")),
                 }
             }
 

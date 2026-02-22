@@ -993,6 +993,19 @@ pub enum DaemonCommand {
     ///
     /// Cedar policy gate: `daemon:list_voice_sessions`.
     ListVoiceSessions,
+
+    // -- Builtin tool execution --
+    /// Execute a tool by name with given input.
+    ///
+    /// Used by the chat TUI's agentic loop to execute tools through the daemon.
+    /// The tool is looked up in the daemon's `ToolRegistry` and executed.
+    /// Cedar policy gate: `daemon:execute_tool`.
+    ExecuteTool {
+        /// Tool name (e.g., "bash", "read_file", "glob_search").
+        name: String,
+        /// Tool input as JSON.
+        input: serde_json::Value,
+    },
 }
 
 fn default_true() -> bool {
@@ -1148,6 +1161,7 @@ impl DaemonCommand {
             DaemonCommand::StartVoiceSession { .. } => "daemon:start_voice_session",
             DaemonCommand::StopVoiceSession { .. } => "daemon:stop_voice_session",
             DaemonCommand::ListVoiceSessions => "daemon:list_voice_sessions",
+            DaemonCommand::ExecuteTool { .. } => "daemon:execute_tool",
         }
     }
 }

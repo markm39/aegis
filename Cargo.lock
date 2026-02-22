@@ -172,6 +172,7 @@ dependencies = [
  "base64",
  "chrono",
  "futures-util",
+ "glob",
  "hex",
  "hmac",
  "libc",
