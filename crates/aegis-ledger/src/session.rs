@@ -491,6 +491,339 @@ impl AuditStore {
 
         Ok(())
     }
+
+    /// Set sender/channel/thread metadata on a session and mark it resumable.
+    ///
+    /// Used by the session router to associate a newly-created session with
+    /// sender context after `begin_session`.
+    pub fn set_session_sender(
+        &self,
+        session_id: Uuid,
+        sender_id: &str,
+        channel_type: &str,
+        thread_id: Option<&str>,
+    ) -> Result<(), AegisError> {
+        let rows_affected = self
+            .connection()
+            .execute(
+                "UPDATE sessions SET sender_id = ?1, channel_type = ?2, thread_id = ?3, resumable = 1 WHERE session_id = ?4",
+                params![sender_id, channel_type, thread_id, session_id.to_string()],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("set_session_sender failed: {e}")))?;
+
+        if rows_affected == 0 {
+            return Err(AegisError::LedgerError(format!(
+                "session {session_id} not found"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Set the group_id for a session.
+    pub fn set_session_group(
+        &self,
+        session_id: Uuid,
+        group_id: Uuid,
+    ) -> Result<(), AegisError> {
+        let rows_affected = self
+            .connection()
+            .execute(
+                "UPDATE sessions SET group_id = ?1 WHERE session_id = ?2",
+                params![group_id.to_string(), session_id.to_string()],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("set_session_group failed: {e}")))?;
+
+        if rows_affected == 0 {
+            return Err(AegisError::LedgerError(format!(
+                "session {session_id} not found"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Fork a session, creating a branch (new conversation tree).
+    ///
+    /// Unlike `resume_session`, a forked session gets its own `group_id`
+    /// (set to the new session's own ID), creating an independent
+    /// conversation tree while still recording the parent linkage.
+    pub fn fork_session(
+        &mut self,
+        parent_id: Uuid,
+        config_name: &str,
+        command: &str,
+        args: &[String],
+    ) -> Result<Session, AegisError> {
+        let parent = self
+            .get_session(&parent_id)?
+            .ok_or_else(|| {
+                AegisError::LedgerError(format!("parent session {parent_id} not found"))
+            })?;
+
+        let session_id = Uuid::new_v4();
+        let start_time = Utc::now();
+        // Forked sessions get their own group_id (the new session's own ID)
+        let group_id = session_id;
+        let args_json = serde_json::to_string(args).map_err(|e| {
+            AegisError::LedgerError(format!("failed to serialize session args: {e}"))
+        })?;
+
+        self.connection()
+            .execute(
+                "INSERT INTO sessions (session_id, config_name, command, args, start_time, parent_id, group_id, sender_id, channel_type, thread_id, resumable)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    session_id.to_string(),
+                    config_name,
+                    command,
+                    args_json,
+                    start_time.to_rfc3339(),
+                    parent_id.to_string(),
+                    group_id.to_string(),
+                    parent.sender_id,
+                    parent.channel_type,
+                    parent.thread_id,
+                    1i64,
+                ],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to fork session: {e}")))?;
+
+        tracing::info!(
+            session_id = %session_id,
+            parent_id = %parent_id,
+            group_id = %group_id,
+            "session forked (new tree)"
+        );
+
+        self.get_session(&session_id)?
+            .ok_or_else(|| AegisError::LedgerError("forked session not found after insert".into()))
+    }
+
+    /// List all descendants of a root session as a flat list with depth.
+    ///
+    /// Uses a recursive CTE to walk the parent-child tree starting from
+    /// the given root session_id. Returns `SessionTreeNode` entries with
+    /// depth indicators for display.
+    pub fn list_session_tree(
+        &self,
+        root_id: &Uuid,
+    ) -> Result<Vec<SessionTreeNode>, AegisError> {
+        // Prefix each column with the table alias for the recursive part.
+        let s_cols: String = SESSION_COLUMNS
+            .split(", ")
+            .map(|c| format!("s.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            "WITH RECURSIVE tree AS (
+                SELECT {SESSION_COLUMNS}, 0 AS depth FROM sessions WHERE session_id = ?1
+                UNION ALL
+                SELECT {s_cols}, t.depth + 1
+                FROM sessions s JOIN tree t ON s.parent_id = t.session_id
+            )
+            SELECT {SESSION_COLUMNS}, depth FROM tree ORDER BY depth ASC"
+        );
+
+        let mut stmt = self
+            .connection()
+            .prepare(&sql)
+            .map_err(|e| AegisError::LedgerError(format!("list_session_tree prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![root_id.to_string()], |row| {
+                let session = row_to_session(row)?;
+                let depth: i64 = row.get(18)?;
+                Ok(SessionTreeNode {
+                    session,
+                    depth: depth as usize,
+                    children: vec![],
+                })
+            })
+            .map_err(|e| AegisError::LedgerError(format!("list_session_tree query: {e}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("list_session_tree read: {e}")))
+    }
+
+    /// Delete a session and all its audit entries.
+    ///
+    /// This is a destructive operation; callers should confirm before invoking.
+    pub fn delete_session(&mut self, session_id: &Uuid) -> Result<(), AegisError> {
+        let sid = session_id.to_string();
+
+        // Delete audit entries first
+        self.connection()
+            .execute(
+                "DELETE FROM audit_log WHERE session_id = ?1",
+                params![sid],
+            )
+            .map_err(|e| {
+                AegisError::LedgerError(format!("failed to delete session audit entries: {e}"))
+            })?;
+
+        // Delete the session row
+        let rows_affected = self
+            .connection()
+            .execute(
+                "DELETE FROM sessions WHERE session_id = ?1",
+                params![sid],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("failed to delete session: {e}")))?;
+
+        if rows_affected == 0 {
+            return Err(AegisError::LedgerError(format!(
+                "session {session_id} not found"
+            )));
+        }
+
+        tracing::info!(session_id = %session_id, "session deleted");
+        Ok(())
+    }
+
+    /// Reset a session: clear its context snapshot and mark it non-resumable.
+    pub fn reset_session(&self, session_id: &Uuid) -> Result<(), AegisError> {
+        let rows_affected = self
+            .connection()
+            .execute(
+                "UPDATE sessions SET context_snapshot = NULL, resumable = 0 WHERE session_id = ?1",
+                params![session_id.to_string()],
+            )
+            .map_err(|e| AegisError::LedgerError(format!("reset_session failed: {e}")))?;
+
+        if rows_affected == 0 {
+            return Err(AegisError::LedgerError(format!(
+                "session {session_id} not found"
+            )));
+        }
+
+        tracing::info!(session_id = %session_id, "session reset");
+        Ok(())
+    }
+
+    /// Count audit entries belonging to a session.
+    pub fn count_session_entries(&self, session_id: &Uuid) -> Result<usize, AegisError> {
+        self.connection()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE session_id = ?1",
+                params![session_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as usize)
+            .map_err(|e| {
+                AegisError::LedgerError(format!("count_session_entries failed: {e}"))
+            })
+    }
+
+    /// List direct children of a session (sessions whose parent_id matches).
+    pub fn list_session_children(&self, session_id: &Uuid) -> Result<Vec<Session>, AegisError> {
+        let mut stmt = self
+            .connection()
+            .prepare(&format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions WHERE parent_id = ?1 ORDER BY id ASC"
+            ))
+            .map_err(|e| {
+                AegisError::LedgerError(format!("list_session_children prepare: {e}"))
+            })?;
+
+        let rows = stmt
+            .query_map(params![session_id.to_string()], row_to_session)
+            .map_err(|e| {
+                AegisError::LedgerError(format!("list_session_children query: {e}"))
+            })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AegisError::LedgerError(format!("list_session_children read: {e}")))
+    }
+}
+
+/// A node in a session tree, wrapping a `Session` with depth and children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTreeNode {
+    /// The session at this node.
+    pub session: Session,
+    /// Depth in the tree (0 = root).
+    pub depth: usize,
+    /// Child nodes (populated by `build_session_tree`).
+    pub children: Vec<SessionTreeNode>,
+}
+
+/// Build a hierarchical tree from a flat list of `SessionTreeNode` entries.
+///
+/// Takes the flat output of `list_session_tree()` and arranges nodes into
+/// a proper tree structure using parent-child relationships.
+pub fn build_session_tree(flat: &[SessionTreeNode]) -> Vec<SessionTreeNode> {
+    use std::collections::HashMap;
+
+    if flat.is_empty() {
+        return vec![];
+    }
+
+    // Build a map from session_id -> node (without children initially)
+    let mut node_map: HashMap<Uuid, SessionTreeNode> = HashMap::new();
+    let mut order: Vec<Uuid> = Vec::new();
+
+    for node in flat {
+        let id = node.session.session_id;
+        order.push(id);
+        node_map.insert(
+            id,
+            SessionTreeNode {
+                session: node.session.clone(),
+                depth: node.depth,
+                children: vec![],
+            },
+        );
+    }
+
+    // Collect parent-child pairs: (parent_id, child_node)
+    let mut child_map: HashMap<Uuid, Vec<SessionTreeNode>> = HashMap::new();
+    let mut roots: Vec<Uuid> = Vec::new();
+
+    for id in &order {
+        let node = node_map.get(id).unwrap();
+        if let Some(parent_id) = node.session.parent_id {
+            if node_map.contains_key(&parent_id) {
+                child_map
+                    .entry(parent_id)
+                    .or_default()
+                    .push(node.clone());
+            } else {
+                roots.push(*id);
+            }
+        } else {
+            roots.push(*id);
+        }
+    }
+
+    // Build tree bottom-up by assigning children
+    fn attach_children(
+        node_id: Uuid,
+        node_map: &HashMap<Uuid, SessionTreeNode>,
+        child_map: &HashMap<Uuid, Vec<SessionTreeNode>>,
+    ) -> SessionTreeNode {
+        let base = node_map.get(&node_id).unwrap().clone();
+        let children = child_map
+            .get(&node_id)
+            .map(|kids| {
+                kids.iter()
+                    .map(|k| attach_children(k.session.session_id, node_map, child_map))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        SessionTreeNode {
+            session: base.session,
+            depth: base.depth,
+            children,
+        }
+    }
+
+    roots
+        .iter()
+        .map(|root_id| attach_children(*root_id, &node_map, &child_map))
+        .collect()
 }
 
 /// Map a SQLite row to a Session.
@@ -1089,5 +1422,285 @@ mod tests {
             let sessions = store.list_sessions(10, 0).unwrap();
             assert!(sessions.is_empty());
         }
+    }
+
+    // --- Session branching tests (Gap #38) ---
+
+    #[test]
+    fn fork_session_creates_new_tree() {
+        let (_tmp, mut store) = test_db();
+        let parent_id = store
+            .begin_session("test", "claude", &["--chat".into()], None)
+            .unwrap();
+
+        let forked = store
+            .fork_session(parent_id, "test", "claude", &["--fork".into()])
+            .unwrap();
+
+        // Forked session should reference the parent
+        assert_eq!(forked.parent_id, Some(parent_id));
+        // But have its own group_id (not the parent's)
+        assert_eq!(forked.group_id, Some(forked.session_id));
+        assert_ne!(forked.group_id, Some(parent_id));
+        assert!(forked.resumable);
+    }
+
+    #[test]
+    fn fork_nonexistent_session_fails() {
+        let (_tmp, mut store) = test_db();
+        let result = store.fork_session(Uuid::new_v4(), "test", "cmd", &[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn fork_inherits_sender_context() {
+        let (_tmp, mut store) = test_db();
+        let parent_id = store
+            .begin_session("test", "claude", &[], None)
+            .unwrap();
+        store
+            .connection()
+            .execute(
+                "UPDATE sessions SET sender_id = 'alice', channel_type = 'telegram', thread_id = 'thread-1' WHERE session_id = ?1",
+                params![parent_id.to_string()],
+            )
+            .unwrap();
+
+        let forked = store
+            .fork_session(parent_id, "test", "claude", &[])
+            .unwrap();
+
+        assert_eq!(forked.sender_id.as_deref(), Some("alice"));
+        assert_eq!(forked.channel_type.as_deref(), Some("telegram"));
+        assert_eq!(forked.thread_id.as_deref(), Some("thread-1"));
+    }
+
+    #[test]
+    fn list_session_tree_single_root() {
+        let (_tmp, mut store) = test_db();
+        let root_id = store
+            .begin_session("test", "root-cmd", &[], None)
+            .unwrap();
+
+        let tree = store.list_session_tree(&root_id).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].depth, 0);
+        assert_eq!(tree[0].session.session_id, root_id);
+    }
+
+    #[test]
+    fn list_session_tree_with_children() {
+        let (_tmp, mut store) = test_db();
+        let root_id = store
+            .begin_session("test", "root", &[], None)
+            .unwrap();
+        store.mark_resumable(root_id, true).unwrap();
+
+        let child1 = store
+            .resume_session(root_id, "test", "child1", &[])
+            .unwrap();
+        store.mark_resumable(child1.session_id, true).unwrap();
+
+        let _child2 = store
+            .resume_session(root_id, "test", "child2", &[])
+            .unwrap();
+
+        let grandchild = store
+            .resume_session(child1.session_id, "test", "grandchild", &[])
+            .unwrap();
+
+        let tree = store.list_session_tree(&root_id).unwrap();
+        assert_eq!(tree.len(), 4);
+        assert_eq!(tree[0].depth, 0);
+        assert_eq!(tree[0].session.command, "root");
+
+        // Children at depth 1
+        let depth_1: Vec<_> = tree.iter().filter(|n| n.depth == 1).collect();
+        assert_eq!(depth_1.len(), 2);
+
+        // Grandchild at depth 2
+        let depth_2: Vec<_> = tree.iter().filter(|n| n.depth == 2).collect();
+        assert_eq!(depth_2.len(), 1);
+        assert_eq!(depth_2[0].session.session_id, grandchild.session_id);
+    }
+
+    #[test]
+    fn list_session_tree_nonexistent_returns_empty() {
+        let (_tmp, store) = test_db();
+        let tree = store.list_session_tree(&Uuid::new_v4()).unwrap();
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn build_session_tree_creates_hierarchy() {
+        let (_tmp, mut store) = test_db();
+        let root_id = store
+            .begin_session("test", "root", &[], None)
+            .unwrap();
+        store.mark_resumable(root_id, true).unwrap();
+
+        let child = store
+            .resume_session(root_id, "test", "child", &[])
+            .unwrap();
+
+        let flat = store.list_session_tree(&root_id).unwrap();
+        let tree = build_session_tree(&flat);
+
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].session.session_id, root_id);
+        assert_eq!(tree[0].children.len(), 1);
+        assert_eq!(tree[0].children[0].session.session_id, child.session_id);
+    }
+
+    #[test]
+    fn build_session_tree_empty_input() {
+        let tree = build_session_tree(&[]);
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn delete_session_removes_session_and_entries() {
+        let (_tmp, mut store) = test_db();
+        let session_id = store
+            .begin_session("test", "cmd", &[], None)
+            .unwrap();
+
+        // Add an audit entry
+        let action = Action::new(
+            "agent",
+            ActionKind::FileRead {
+                path: PathBuf::from("/a"),
+            },
+        );
+        let verdict = Verdict::allow(action.id, "ok", None);
+        store
+            .append_with_session(&action, &verdict, &session_id)
+            .unwrap();
+
+        // Verify entry exists
+        let entries = store.query_by_session(&session_id).unwrap();
+        assert_eq!(entries.len(), 1);
+
+        // Delete session
+        store.delete_session(&session_id).unwrap();
+
+        // Session should be gone
+        assert!(store.get_session(&session_id).unwrap().is_none());
+
+        // Entries should be gone
+        let entries = store.query_by_session(&session_id).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn delete_nonexistent_session_fails() {
+        let (_tmp, mut store) = test_db();
+        let result = store.delete_session(&Uuid::new_v4());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reset_session_clears_context_and_resumable() {
+        let (_tmp, mut store) = test_db();
+        let session_id = store
+            .begin_session("test", "claude", &[], None)
+            .unwrap();
+        store.mark_resumable(session_id, true).unwrap();
+        store
+            .save_context_snapshot(session_id, r#"{"data":"test"}"#)
+            .unwrap();
+
+        // Verify it's resumable and has context
+        let session = store.get_session(&session_id).unwrap().unwrap();
+        assert!(session.resumable);
+        assert!(session.context_snapshot.is_some());
+
+        // Reset
+        store.reset_session(&session_id).unwrap();
+
+        let session = store.get_session(&session_id).unwrap().unwrap();
+        assert!(!session.resumable);
+        assert!(session.context_snapshot.is_none());
+    }
+
+    #[test]
+    fn reset_nonexistent_session_fails() {
+        let (_tmp, store) = test_db();
+        let result = store.reset_session(&Uuid::new_v4());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn count_session_entries() {
+        let (_tmp, mut store) = test_db();
+        let session_id = store
+            .begin_session("test", "cmd", &[], None)
+            .unwrap();
+
+        assert_eq!(store.count_session_entries(&session_id).unwrap(), 0);
+
+        let action = Action::new(
+            "agent",
+            ActionKind::FileRead {
+                path: PathBuf::from("/a"),
+            },
+        );
+        let verdict = Verdict::allow(action.id, "ok", None);
+        store
+            .append_with_session(&action, &verdict, &session_id)
+            .unwrap();
+
+        assert_eq!(store.count_session_entries(&session_id).unwrap(), 1);
+    }
+
+    #[test]
+    fn list_session_children() {
+        let (_tmp, mut store) = test_db();
+        let parent_id = store
+            .begin_session("test", "parent", &[], None)
+            .unwrap();
+        store.mark_resumable(parent_id, true).unwrap();
+
+        let c1 = store
+            .resume_session(parent_id, "test", "child1", &[])
+            .unwrap();
+        let c2 = store
+            .resume_session(parent_id, "test", "child2", &[])
+            .unwrap();
+
+        let children = store.list_session_children(&parent_id).unwrap();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].session_id, c1.session_id);
+        assert_eq!(children[1].session_id, c2.session_id);
+    }
+
+    #[test]
+    fn fork_then_resume_separate_trees() {
+        let (_tmp, mut store) = test_db();
+        let root_id = store
+            .begin_session("test", "root", &[], None)
+            .unwrap();
+        store.mark_resumable(root_id, true).unwrap();
+
+        // Fork creates a new tree
+        let forked = store
+            .fork_session(root_id, "test", "forked", &[])
+            .unwrap();
+        store.mark_resumable(forked.session_id, true).unwrap();
+
+        // Resume continues existing tree
+        let resumed = store
+            .resume_session(root_id, "test", "resumed", &[])
+            .unwrap();
+
+        // Fork has its own group
+        assert_eq!(forked.group_id, Some(forked.session_id));
+        // Resumed inherits root's group
+        assert_eq!(resumed.group_id, Some(root_id));
+
+        // Both reference the same parent
+        assert_eq!(forked.parent_id, Some(root_id));
+        assert_eq!(resumed.parent_id, Some(root_id));
     }
 }

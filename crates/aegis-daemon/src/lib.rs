@@ -42,6 +42,7 @@ pub mod slot;
 pub mod state;
 pub mod stream_fmt;
 pub mod session_files;
+pub mod session_router;
 pub mod session_tools;
 pub mod tool_contract;
 pub mod toolkit_runtime;
