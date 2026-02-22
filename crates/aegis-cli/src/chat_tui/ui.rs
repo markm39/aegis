@@ -2,7 +2,7 @@
 //!
 //! Arranges the header, scrollable chat area, input box, and status bar
 //! into a ratatui frame. Overlays the command bar on the status line
-//! when command mode is active, and an agent picker popup when visible.
+//! when command mode is active.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -15,8 +15,6 @@ use super::message::MessageRole;
 use super::render;
 use super::ChatApp;
 use super::InputMode;
-
-use aegis_types::AgentStatus;
 
 /// Draw the complete chat TUI frame.
 pub fn draw(f: &mut Frame, app: &mut ChatApp) {
@@ -46,11 +44,6 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
         draw_status_bar(f, app, chunks[3]);
     }
 
-    // Agent picker overlay
-    if app.agent_picker_visible {
-        draw_agent_picker(f, app, area);
-    }
-
     // Completion popup above command bar
     if app.input_mode == InputMode::Command && !app.command_completions.is_empty() {
         draw_completion_popup(f, app, chunks[3]);
@@ -59,26 +52,10 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
 
 /// Draw the header bar.
 fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let (agent_name, status_str, mediation) = match &app.active_agent {
-        Some(name) => {
-            let status = app
-                .agents
-                .iter()
-                .find(|a| a.name == *name)
-                .map(|a| format_agent_status(&a.status))
-                .unwrap_or_else(|| "Unknown".to_string());
-            let med = app.security.mediation_mode.clone();
-            (name.as_str(), status, if med.is_empty() { "unknown".to_string() } else { med })
-        }
-        None => ("(no agent)", "Disconnected".to_string(), "unknown".to_string()),
-    };
-
-    let pending_count = app.pending_prompts.len();
     let header = render::render_header(
-        agent_name,
-        &status_str,
-        &mediation,
-        pending_count,
+        &app.model,
+        app.connected,
+        app.awaiting_response,
         area.width,
     );
     let para = Paragraph::new(vec![header])
@@ -90,13 +67,9 @@ fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
 fn draw_chat_area(f: &mut Frame, app: &ChatApp, area: Rect) {
     if app.messages.is_empty() {
         let placeholder = if app.connected {
-            if app.active_agent.is_some() {
-                "Waiting for agent output..."
-            } else {
-                "No agent selected. Use :follow <agent> or :chat"
-            }
+            "Type a message to start chatting..."
         } else {
-            "Not connected to daemon. Use :daemon start"
+            "Starting daemon... (or :daemon start)"
         };
         let para = Paragraph::new(Line::from(Span::styled(
             format!("  {placeholder}"),
@@ -144,7 +117,6 @@ fn draw_chat_area(f: &mut Frame, app: &ChatApp, area: Rect) {
                 .add_modifier(Modifier::DIM),
         );
         let indicator_line = Paragraph::new(Line::from(indicator));
-        // Render at the bottom of the chat area
         let indicator_area = Rect {
             x: area.x,
             y: area.y + area.height.saturating_sub(1),
@@ -215,14 +187,7 @@ fn draw_input_area(f: &mut Frame, app: &ChatApp, area: Rect) {
 
 /// Draw the status bar.
 fn draw_status_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let status = render::render_status_bar(
-        &app.security.policy_mode,
-        app.security.audit_entries,
-        app.security.audit_chain_ok,
-        app.security.sandbox_active,
-        app.agents.len(),
-        area.width,
-    );
+    let status = render::render_status_bar(&app.model, area.width);
     let para = Paragraph::new(vec![status])
         .style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
@@ -293,80 +258,6 @@ fn draw_completion_popup(f: &mut Frame, app: &ChatApp, cmd_area: Rect) {
     f.render_widget(para, popup_area);
 }
 
-/// Draw the agent picker overlay (centered popup).
-fn draw_agent_picker(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let agents = &app.agents;
-    if agents.is_empty() {
-        return;
-    }
-
-    let popup_width = 50u16.min(area.width.saturating_sub(4));
-    let popup_height = (agents.len() as u16 + 3).min(area.height.saturating_sub(4));
-
-    let x = (area.width.saturating_sub(popup_width)) / 2;
-    let y = (area.height.saturating_sub(popup_height)) / 2;
-
-    let popup_area = Rect {
-        x,
-        y,
-        width: popup_width,
-        height: popup_height,
-    };
-
-    f.render_widget(Clear, popup_area);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        " Select Agent:".to_string(),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-
-    for (i, agent) in agents.iter().enumerate() {
-        let prefix = if i == app.agent_picker_selected {
-            " > "
-        } else {
-            "   "
-        };
-        let status_str = format_agent_status(&agent.status);
-        let pending_str = if agent.pending_count > 0 {
-            format!("  {} pending", agent.pending_count)
-        } else {
-            "  -".to_string()
-        };
-
-        let style = if i == app.agent_picker_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(prefix.to_string(), style),
-            Span::styled(
-                format!("{:<16}", agent.name),
-                style,
-            ),
-            Span::styled(format!("[{status_str}]"), style_for_status(&agent.status)),
-            Span::styled(pending_str, Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-
-    let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(" Agents "),
-        )
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
-    f.render_widget(para, popup_area);
-}
-
 /// Build spans for text with a cursor highlight at the given position.
 ///
 /// Text before the cursor is rendered in the default style. The character
@@ -419,32 +310,6 @@ fn build_cursor_spans(text: &str, cursor: usize) -> Vec<Span<'static>> {
     spans
 }
 
-/// Format an AgentStatus as a short string.
-fn format_agent_status(status: &AgentStatus) -> String {
-    match status {
-        AgentStatus::Pending => "Pending".to_string(),
-        AgentStatus::Running { .. } => "Running".to_string(),
-        AgentStatus::Stopped { .. } => "Stopped".to_string(),
-        AgentStatus::Crashed { .. } => "Crashed".to_string(),
-        AgentStatus::Failed { .. } => "Failed".to_string(),
-        AgentStatus::Stopping => "Stopping".to_string(),
-        AgentStatus::Disabled => "Disabled".to_string(),
-    }
-}
-
-/// Get a style color for an agent status.
-fn style_for_status(status: &AgentStatus) -> Style {
-    match status {
-        AgentStatus::Running { .. } => Style::default().fg(Color::Green),
-        AgentStatus::Stopped { .. } => Style::default().fg(Color::DarkGray),
-        AgentStatus::Crashed { .. } | AgentStatus::Failed { .. } => {
-            Style::default().fg(Color::Red)
-        }
-        AgentStatus::Pending | AgentStatus::Stopping => Style::default().fg(Color::Yellow),
-        AgentStatus::Disabled => Style::default().fg(Color::DarkGray),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,7 +319,6 @@ mod tests {
         let spans = build_cursor_spans("", 0);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content.as_ref(), " ");
-        // Should have inverted style
         assert_eq!(spans[0].style.fg, Some(Color::Black));
         assert_eq!(spans[0].style.bg, Some(Color::White));
     }
@@ -462,9 +326,8 @@ mod tests {
     #[test]
     fn cursor_spans_at_start() {
         let spans = build_cursor_spans("hello", 0);
-        // No before text, cursor on 'h', after "ello"
         assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].content.as_ref(), "h"); // cursor char
+        assert_eq!(spans[0].content.as_ref(), "h");
         assert_eq!(spans[0].style.bg, Some(Color::White));
         assert_eq!(spans[1].content.as_ref(), "ello");
     }
@@ -472,7 +335,6 @@ mod tests {
     #[test]
     fn cursor_spans_at_middle() {
         let spans = build_cursor_spans("hello", 2);
-        // before "he", cursor on 'l', after "lo"
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].content.as_ref(), "he");
         assert_eq!(spans[1].content.as_ref(), "l");
@@ -483,31 +345,9 @@ mod tests {
     #[test]
     fn cursor_spans_at_end() {
         let spans = build_cursor_spans("hello", 5);
-        // before "hello", cursor block at end
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content.as_ref(), "hello");
-        assert_eq!(spans[1].content.as_ref(), " "); // block cursor
+        assert_eq!(spans[1].content.as_ref(), " ");
         assert_eq!(spans[1].style.bg, Some(Color::White));
-    }
-
-    #[test]
-    fn format_status_running() {
-        assert_eq!(
-            format_agent_status(&AgentStatus::Running { pid: 1 }),
-            "Running"
-        );
-    }
-
-    #[test]
-    fn format_status_stopped() {
-        assert_eq!(
-            format_agent_status(&AgentStatus::Stopped { exit_code: 0 }),
-            "Stopped"
-        );
-    }
-
-    #[test]
-    fn format_status_pending() {
-        assert_eq!(format_agent_status(&AgentStatus::Pending), "Pending");
     }
 }
