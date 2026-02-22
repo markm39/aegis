@@ -20,6 +20,7 @@ members = [
     "crates/aegis-skills",
     "crates/aegis-tts",
     "crates/aegis-canvas",
+    "crates/aegis-browser",
     "tests",
 ]
 
@@ -89,8 +90,11 @@ aegis-tools = { path = "crates/aegis-tools" }
 aegis-skills = { path = "crates/aegis-skills" }
 aegis-tts = { path = "crates/aegis-tts" }
 aegis-canvas = { path = "crates/aegis-canvas" }
+aegis-browser = { path = "crates/aegis-browser" }
 
 async-trait = "0.1"
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
 
 axum = { version = "0.8", features = ["json", "ws"] }
 subtle = "2"
