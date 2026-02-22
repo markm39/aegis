@@ -142,6 +142,8 @@ pub enum FleetCommand {
     DaemonRestart,
     /// Run system checks (verify sandbox, tools, etc.).
     Setup,
+    /// Diagnose configuration issues and suggest fixes.
+    Doctor { fix: bool },
     /// Create an aegis project config (init wizard).
     Init,
     /// Enable an agent slot (allow starting/restarting).
@@ -264,6 +266,7 @@ const COMMAND_NAMES: &[&str] = &[
     "deny",
     "diff",
     "disable",
+    "doctor",
     "enable",
     "export",
     "fetch",
@@ -887,6 +890,10 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         }
         "orch" | "orchestrator" => Ok(Some(FleetCommand::OrchestratorStatus)),
         "setup" => Ok(Some(FleetCommand::Setup)),
+        "doctor" => {
+            let fix = arg1 == "--fix";
+            Ok(Some(FleetCommand::Doctor { fix }))
+        }
         "init" => Ok(Some(FleetCommand::Init)),
         "enable" => {
             if arg1.is_empty() {
@@ -1467,6 +1474,7 @@ pub fn help_text() -> &'static str {
      :deny <agent>            Deny first pending prompt\n\
      :diff <s1> <s2>          Compare two audit sessions\n\
      :disable <agent>         Disable agent (stop + prevent restart)\n\
+     :doctor [--fix]          Diagnose config issues (fix with --fix)\n\
      :enable <agent>          Enable agent (allow starting)\n\
      :export [format]         Export audit data (json/csv/cef)\n\
      :fetch <url>             Fetch URL content (SSRF-safe)\n\
@@ -2788,5 +2796,28 @@ mod tests {
         let agents = vec![];
         let c = completions("fe", &agents);
         assert!(c.contains(&"fetch".to_string()));
+    }
+
+    #[test]
+    fn parse_doctor() {
+        assert_eq!(
+            parse("doctor").unwrap(),
+            Some(FleetCommand::Doctor { fix: false })
+        );
+    }
+
+    #[test]
+    fn parse_doctor_fix() {
+        assert_eq!(
+            parse("doctor --fix").unwrap(),
+            Some(FleetCommand::Doctor { fix: true })
+        );
+    }
+
+    #[test]
+    fn completions_doctor_in_command_list() {
+        let agents = vec![];
+        let c = completions("do", &agents);
+        assert!(c.contains(&"doctor".to_string()));
     }
 }

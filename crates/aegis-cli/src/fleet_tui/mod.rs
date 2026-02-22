@@ -1962,6 +1962,14 @@ impl FleetApp {
             FleetCommand::Setup => {
                 self.spawn_terminal("aegis setup", "Running system checks in new terminal");
             }
+            FleetCommand::Doctor { fix } => {
+                let cmd = if fix {
+                    "aegis doctor --fix"
+                } else {
+                    "aegis doctor"
+                };
+                self.spawn_terminal(cmd, "Running doctor diagnostics in new terminal");
+            }
             FleetCommand::Init => {
                 self.spawn_terminal("aegis init", "Opened init wizard in new terminal");
             }

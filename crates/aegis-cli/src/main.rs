@@ -107,6 +107,17 @@ enum Commands {
         config: Option<String>,
     },
 
+    /// Diagnose configuration issues and suggest fixes
+    Doctor {
+        /// Automatically fix issues where possible
+        #[arg(long)]
+        fix: bool,
+
+        /// Check a specific config instead of the default
+        #[arg(long)]
+        config: Option<String>,
+    },
+
     /// List all Aegis configurations
     List,
 
@@ -1116,6 +1127,7 @@ fn main() -> anyhow::Result<()> {
             let config = resolve_config(config)?;
             commands::status::run(&config)
         }
+        Commands::Doctor { fix, config } => commands::doctor::run(fix, config.as_deref()),
         Commands::List => commands::list::run(),
         Commands::Log { config, last } => {
             let config = resolve_config(config)?;

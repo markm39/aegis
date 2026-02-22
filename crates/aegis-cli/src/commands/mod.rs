@@ -48,6 +48,7 @@ pub mod config;
 pub mod daemon;
 pub mod default_action;
 pub mod diff;
+pub mod doctor;
 pub mod hook;
 pub mod init;
 pub mod list;
