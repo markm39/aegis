@@ -19,18 +19,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -60,12 +65,15 @@ import kotlinx.coroutines.launch
  * Fleet dashboard showing all agents with status indicators, pending count badges,
  * and navigation to agent detail views.
  *
- * Features:
+ * Enhanced features:
  * - Agent list with color-coded status dots
  * - Pending count badges on agents with outstanding approvals
  * - Pull-to-refresh for manual data reload
  * - Auto-refresh every 5 seconds
  * - Connection status indicator in toolbar
+ * - Search bar for filtering agents by name
+ * - Status filter chips (All, Running, Stopped, etc.)
+ * - Fleet summary header with stats
  * - Click navigates to AgentDetailScreen
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +90,11 @@ fun DashboardScreen(
     var isConnected by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Search and filter state
+    var searchQuery by remember { mutableStateOf("") }
+    var showSearch by remember { mutableStateOf(false) }
+    var statusFilter by remember { mutableStateOf<AgentStatusKind?>(null) }
 
     // Refresh function
     val refresh: suspend () -> Unit = {
@@ -107,33 +120,72 @@ fun DashboardScreen(
         onDispose { job.cancel() }
     }
 
+    // Apply filters
+    val filteredAgents = agents.filter { agent ->
+        val matchesSearch = searchQuery.isEmpty() ||
+            agent.name.contains(searchQuery, ignoreCase = true) ||
+            agent.tool.contains(searchQuery, ignoreCase = true) ||
+            (agent.role?.contains(searchQuery, ignoreCase = true) == true)
+        val matchesStatus = statusFilter == null || agent.statusKind == statusFilter
+        matchesSearch && matchesStatus
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Fleet") },
+                title = {
+                    if (showSearch) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search agents...") },
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        Text("Fleet")
+                    }
+                },
                 actions = {
-                    // Connection indicator
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(if (isConnected) Color(0xFF4CAF50) else Color(0xFFF44336))
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isConnected) "Connected" else "Offline",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = {
-                        scope.launch {
-                            isRefreshing = true
-                            refresh()
-                            isRefreshing = false
+                    if (showSearch) {
+                        IconButton(onClick = {
+                            showSearch = false
+                            searchQuery = ""
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close search")
                         }
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    } else {
+                        // Connection indicator
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(if (isConnected) Color(0xFF4CAF50) else Color(0xFFF44336))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isConnected) "Connected" else "Offline",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        IconButton(onClick = { showSearch = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
+                        }
+                        IconButton(onClick = {
+                            scope.launch {
+                                isRefreshing = true
+                                refresh()
+                                isRefreshing = false
+                            }
+                        }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                        }
                     }
                 }
             )
@@ -166,7 +218,10 @@ fun DashboardScreen(
                 }
                 else -> {
                     AgentList(
-                        agents = agents,
+                        agents = filteredAgents,
+                        allAgents = agents,
+                        statusFilter = statusFilter,
+                        onStatusFilterChange = { statusFilter = it },
                         onAgentClick = onAgentClick,
                     )
                 }
@@ -175,13 +230,17 @@ fun DashboardScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AgentList(
     agents: List<AgentInfo>,
+    allAgents: List<AgentInfo>,
+    statusFilter: AgentStatusKind?,
+    onStatusFilterChange: (AgentStatusKind?) -> Unit,
     onAgentClick: (String) -> Unit,
 ) {
-    val totalPending = agents.sumOf { it.pendingCount }
-    val runningCount = agents.count { it.statusKind == AgentStatusKind.RUNNING }
+    val totalPending = allAgents.sumOf { it.pendingCount }
+    val runningCount = allAgents.count { it.statusKind == AgentStatusKind.RUNNING }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -196,42 +255,100 @@ private fun AgentList(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                 ),
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "$runningCount/${agents.size} running",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (totalPending > 0) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = Color(0xFFFF9800),
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "$totalPending pending",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFFF9800),
-                            )
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "$runningCount/${allAgents.size} running",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (totalPending > 0) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF9800),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "$totalPending pending",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFFF9800),
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
+        // Status filter chips
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = statusFilter == null,
+                    onClick = { onStatusFilterChange(null) },
+                    label = { Text("All") },
+                )
+                FilterChip(
+                    selected = statusFilter == AgentStatusKind.RUNNING,
+                    onClick = {
+                        onStatusFilterChange(
+                            if (statusFilter == AgentStatusKind.RUNNING) null else AgentStatusKind.RUNNING
+                        )
+                    },
+                    label = { Text("Running") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFF4CAF50).copy(alpha = 0.2f),
+                    ),
+                )
+                FilterChip(
+                    selected = statusFilter == AgentStatusKind.STOPPED,
+                    onClick = {
+                        onStatusFilterChange(
+                            if (statusFilter == AgentStatusKind.STOPPED) null else AgentStatusKind.STOPPED
+                        )
+                    },
+                    label = { Text("Stopped") },
+                )
+                FilterChip(
+                    selected = statusFilter == AgentStatusKind.CRASHED,
+                    onClick = {
+                        onStatusFilterChange(
+                            if (statusFilter == AgentStatusKind.CRASHED) null else AgentStatusKind.CRASHED
+                        )
+                    },
+                    label = { Text("Crashed") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFF44336).copy(alpha = 0.2f),
+                    ),
+                )
+            }
+        }
+
         // Agent rows
-        items(agents, key = { it.name }) { agent ->
-            AgentRow(agent = agent, onClick = { onAgentClick(agent.name) })
+        if (agents.isEmpty()) {
+            item {
+                Text(
+                    text = "No agents match the current filter.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        } else {
+            items(agents, key = { it.name }) { agent ->
+                AgentRow(agent = agent, onClick = { onAgentClick(agent.name) })
+            }
         }
     }
 }

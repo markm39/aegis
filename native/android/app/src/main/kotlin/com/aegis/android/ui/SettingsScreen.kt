@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -31,7 +30,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +44,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.aegis.android.api.DaemonClient
 import com.aegis.android.security.TokenStore
+import com.aegis.android.services.ConnectionService
 import kotlinx.coroutines.launch
 
 /**
@@ -55,6 +54,7 @@ import kotlinx.coroutines.launch
  * - Server URL: validated text field (HTTPS required, localhost exception)
  * - API Token: password field stored in EncryptedSharedPreferences
  * - Connection: test button with status indicator
+ * - Background Service: toggle for persistent WebSocket connection
  * - Security: biometric authentication toggle
  * - Notifications: approval notification toggle
  * - About: app version
@@ -86,6 +86,7 @@ fun SettingsScreen() {
     // Preferences
     var biometricEnabled by remember { mutableStateOf(tokenStore.isBiometricEnabled()) }
     var notificationsEnabled by remember { mutableStateOf(tokenStore.isNotificationsEnabled()) }
+    var backgroundServiceEnabled by remember { mutableStateOf(tokenStore.isBackgroundServiceEnabled()) }
 
     Scaffold(
         topBar = {
@@ -256,6 +257,39 @@ fun SettingsScreen() {
                     enabled = !isTesting,
                 ) {
                     Text("Test Connection")
+                }
+            }
+
+            // -- Background Service Section --
+            SectionCard(title = "Background Service") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Persistent Connection",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "Keep a WebSocket connection to the daemon for real-time updates and push notifications",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = backgroundServiceEnabled,
+                        onCheckedChange = { enabled ->
+                            backgroundServiceEnabled = enabled
+                            tokenStore.setBackgroundServiceEnabled(enabled)
+                            if (enabled) {
+                                ConnectionService.start(context)
+                            } else {
+                                ConnectionService.stop(context)
+                            }
+                        },
+                    )
                 }
             }
 

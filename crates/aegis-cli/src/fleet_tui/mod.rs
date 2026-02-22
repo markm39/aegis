@@ -2194,6 +2194,48 @@ impl FleetApp {
                 );
                 self.spawn_terminal(&cmd, "Resuming session in new terminal");
             }
+            FleetCommand::SessionInspect { session_id } => {
+                let cmd = format!(
+                    "aegis sessions inspect {}",
+                    crate::terminal::shell_quote(&session_id)
+                );
+                self.spawn_terminal(&cmd, "Inspecting session in new terminal");
+            }
+            FleetCommand::SessionReset { session_id } => {
+                let cmd = format!(
+                    "aegis sessions reset {}",
+                    crate::terminal::shell_quote(&session_id)
+                );
+                self.spawn_terminal(&cmd, "Resetting session in new terminal");
+            }
+            FleetCommand::SessionDelete { session_id, confirm } => {
+                let cmd = if confirm {
+                    format!(
+                        "aegis sessions delete {} --confirm",
+                        crate::terminal::shell_quote(&session_id)
+                    )
+                } else {
+                    format!(
+                        "aegis sessions delete {}",
+                        crate::terminal::shell_quote(&session_id)
+                    )
+                };
+                self.spawn_terminal(&cmd, "Deleting session in new terminal");
+            }
+            FleetCommand::SessionFork { session_id } => {
+                let cmd = format!(
+                    "aegis sessions fork {}",
+                    crate::terminal::shell_quote(&session_id)
+                );
+                self.spawn_terminal(&cmd, "Forking session in new terminal");
+            }
+            FleetCommand::SessionTree { session_id } => {
+                let cmd = format!(
+                    "aegis sessions tree {}",
+                    crate::terminal::shell_quote(&session_id)
+                );
+                self.spawn_terminal(&cmd, "Displaying session tree in new terminal");
+            }
             FleetCommand::Verify => {
                 self.spawn_terminal(
                     "aegis audit verify",
@@ -2254,6 +2296,23 @@ impl FleetApp {
                     None => "aegis auth test".to_string(),
                 };
                 self.spawn_terminal(&cmd, "Testing auth readiness in new terminal");
+            }
+            FleetCommand::AuthLogout { provider } => {
+                let cmd = format!(
+                    "aegis auth logout {}",
+                    crate::terminal::shell_quote(&provider)
+                );
+                self.spawn_terminal(&cmd, &format!("Logging out '{provider}'"));
+            }
+            FleetCommand::AuthStatus => {
+                self.spawn_terminal("aegis auth status", "Showing auth status");
+            }
+            FleetCommand::AuthRefresh { provider } => {
+                let cmd = format!(
+                    "aegis auth refresh {}",
+                    crate::terminal::shell_quote(&provider)
+                );
+                self.spawn_terminal(&cmd, &format!("Refreshing token for '{provider}'"));
             }
             FleetCommand::AliasList => {
                 self.send_and_show_result(DaemonCommand::ListAliases);
@@ -2455,6 +2514,19 @@ impl FleetApp {
                 self.spawn_terminal(
                     &format!("aegis skills info {name}"),
                     &format!("Showing info for skill '{name}' in new terminal"),
+                );
+            }
+            FleetCommand::SkillsReload { name } => {
+                let cmd = match name {
+                    Some(n) => format!("aegis skills update {n}"),
+                    None => "aegis skills update".to_string(),
+                };
+                self.spawn_terminal(&cmd, "Reloading skill(s) in new terminal");
+            }
+            FleetCommand::SkillsCommands => {
+                self.spawn_terminal(
+                    "aegis skills commands",
+                    "Listing skill commands in new terminal",
                 );
             }
         }

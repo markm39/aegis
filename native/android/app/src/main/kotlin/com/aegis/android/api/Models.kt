@@ -152,6 +152,80 @@ enum class RiskLevel(val displayName: String) {
     HIGH("High"),
 }
 
+// -- Chat Models --
+
+/**
+ * A single message in a chat conversation with an agent.
+ */
+@Serializable
+data class ChatMessage(
+    val id: String,
+    val role: MessageRole,
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    @SerialName("agent_name") val agentName: String = "",
+)
+
+/**
+ * Role of a chat message sender.
+ */
+@Serializable
+enum class MessageRole {
+    @SerialName("user") USER,
+    @SerialName("agent") AGENT,
+    @SerialName("system") SYSTEM,
+}
+
+// -- Pairing Models --
+
+/**
+ * Connection information extracted from a QR code or manual entry.
+ */
+@Serializable
+data class PairingInfo(
+    @SerialName("server_url") val serverUrl: String,
+    val token: String,
+    val name: String? = null,
+)
+
+// -- Location Models --
+
+/**
+ * Location data to send to the daemon.
+ */
+@Serializable
+data class LocationData(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracy: Float? = null,
+    val altitude: Double? = null,
+    val timestamp: Long = System.currentTimeMillis(),
+)
+
+// -- WebSocket Models --
+
+/**
+ * WebSocket event from the daemon for real-time updates.
+ */
+@Serializable
+data class WebSocketEvent(
+    val type: String,
+    val data: JsonElement? = null,
+)
+
+// -- Widget Models --
+
+/**
+ * Snapshot of fleet state for widget display.
+ */
+data class WidgetState(
+    val agentCount: Int = 0,
+    val runningCount: Int = 0,
+    val pendingCount: Int = 0,
+    val isConnected: Boolean = false,
+    val lastUpdated: Long = 0L,
+)
+
 // -- Request Bodies --
 
 /**

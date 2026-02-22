@@ -97,7 +97,7 @@ impl OAuthConfig {
 ///
 /// Both `access_token` and `refresh_token` are masked in `Debug` and `Display`
 /// output to prevent accidental exposure in logs.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthToken {
     /// The short-lived access token for API calls.
     pub access_token: String,
@@ -687,6 +687,559 @@ fn url_encode(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// OAuthProvider enum and ProviderRegistry
+// ---------------------------------------------------------------------------
+
+/// Known OAuth2 provider endpoints.
+///
+/// Each variant bundles the authorization, token, and optional device-code
+/// URLs plus default scopes and client ID environment variable references
+/// for a well-known provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthProvider {
+    /// Anthropic Console.
+    Anthropic,
+    /// OpenAI Platform.
+    OpenAi,
+    /// GitHub (Copilot, etc.).
+    GitHub,
+    /// Google Cloud / Vertex AI.
+    Google,
+    /// Microsoft Azure / Entra ID.
+    Azure,
+    /// Custom provider with user-supplied endpoints.
+    Custom {
+        /// Display name for the custom provider.
+        name: String,
+    },
+}
+
+impl std::fmt::Display for OAuthProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OAuthProvider::Anthropic => write!(f, "anthropic"),
+            OAuthProvider::OpenAi => write!(f, "openai"),
+            OAuthProvider::GitHub => write!(f, "github"),
+            OAuthProvider::Google => write!(f, "google"),
+            OAuthProvider::Azure => write!(f, "azure"),
+            OAuthProvider::Custom { name } => write!(f, "custom:{name}"),
+        }
+    }
+}
+
+/// OAuth2 endpoint configuration for a specific provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderEndpoints {
+    /// OAuth2 authorization URL.
+    pub authorize_url: String,
+    /// OAuth2 token URL.
+    pub token_url: String,
+    /// Device code URL (for CLI/headless environments). `None` if not supported.
+    pub device_code_url: Option<String>,
+    /// Default OAuth2 scopes for this provider.
+    pub default_scopes: Vec<String>,
+    /// Name of the environment variable holding the client ID.
+    pub client_id_env: String,
+    /// Name of the environment variable holding the client secret.
+    pub client_secret_env: Option<String>,
+}
+
+/// Registry mapping provider names to their OAuth endpoint configurations.
+///
+/// Comes pre-loaded with built-in configs for Anthropic, OpenAI, and GitHub.
+/// Custom providers can be registered at runtime.
+pub struct OAuthProviderRegistry {
+    providers: std::collections::HashMap<String, ProviderEndpoints>,
+}
+
+impl OAuthProviderRegistry {
+    /// Create a new registry with built-in provider defaults.
+    pub fn with_defaults() -> Self {
+        let mut providers = std::collections::HashMap::new();
+
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderEndpoints {
+                authorize_url: "https://console.anthropic.com/oauth/authorize".to_string(),
+                token_url: "https://console.anthropic.com/oauth/token".to_string(),
+                device_code_url: None,
+                default_scopes: vec!["api".to_string()],
+                client_id_env: "ANTHROPIC_OAUTH_CLIENT_ID".to_string(),
+                client_secret_env: Some("ANTHROPIC_OAUTH_CLIENT_SECRET".to_string()),
+            },
+        );
+
+        providers.insert(
+            "openai".to_string(),
+            ProviderEndpoints {
+                authorize_url: "https://auth.openai.com/authorize".to_string(),
+                token_url: "https://auth.openai.com/oauth/token".to_string(),
+                device_code_url: Some("https://auth.openai.com/oauth/device/code".to_string()),
+                default_scopes: vec!["openid".to_string(), "profile".to_string()],
+                client_id_env: "OPENAI_OAUTH_CLIENT_ID".to_string(),
+                client_secret_env: Some("OPENAI_OAUTH_CLIENT_SECRET".to_string()),
+            },
+        );
+
+        providers.insert(
+            "github".to_string(),
+            ProviderEndpoints {
+                authorize_url: "https://github.com/login/oauth/authorize".to_string(),
+                token_url: "https://github.com/login/oauth/access_token".to_string(),
+                device_code_url: Some("https://github.com/login/device/code".to_string()),
+                default_scopes: vec!["read:user".to_string(), "copilot".to_string()],
+                client_id_env: "GITHUB_OAUTH_CLIENT_ID".to_string(),
+                client_secret_env: None,
+            },
+        );
+
+        Self { providers }
+    }
+
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self {
+            providers: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register or update a provider's endpoint configuration.
+    pub fn register(&mut self, name: &str, endpoints: ProviderEndpoints) {
+        self.providers.insert(name.to_string(), endpoints);
+    }
+
+    /// Look up a provider by name.
+    pub fn get(&self, name: &str) -> Option<&ProviderEndpoints> {
+        self.providers.get(name)
+    }
+
+    /// List all registered provider names.
+    pub fn provider_names(&self) -> Vec<&str> {
+        self.providers.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Check whether a provider supports the device code flow.
+    pub fn supports_device_flow(&self, name: &str) -> bool {
+        self.providers
+            .get(name)
+            .map(|p| p.device_code_url.is_some())
+            .unwrap_or(false)
+    }
+}
+
+impl Default for OAuthProviderRegistry {
+    fn default() -> Self {
+        Self::with_defaults()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Device Code Flow
+// ---------------------------------------------------------------------------
+
+/// Request payload for the device code authorization grant (RFC 8628).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceCodeRequest {
+    /// The client ID of the application.
+    pub client_id: String,
+    /// Requested scopes (space-separated).
+    pub scope: String,
+}
+
+/// Response from a device code authorization endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceCodeResponse {
+    /// The device verification code.
+    pub device_code: String,
+    /// The code the user enters at the verification URI.
+    pub user_code: String,
+    /// The URL where the user authorizes the device.
+    pub verification_uri: String,
+    /// Polling interval in seconds.
+    #[serde(default = "default_device_interval")]
+    pub interval: u64,
+    /// Time in seconds until the device code expires.
+    #[serde(default = "default_device_expires_in")]
+    pub expires_in: u64,
+}
+
+fn default_device_interval() -> u64 {
+    5
+}
+
+fn default_device_expires_in() -> u64 {
+    900
+}
+
+/// Possible states when polling the token endpoint during a device code flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceFlowPollState {
+    /// User has not yet authorized. Keep polling.
+    AuthorizationPending,
+    /// Polling too fast. Increase interval by 5 seconds.
+    SlowDown,
+    /// The device code has expired. Must restart the flow.
+    ExpiredToken,
+    /// The user denied the authorization request.
+    AccessDenied,
+    /// Authorization succeeded.
+    Success(OAuthToken),
+}
+
+/// Request a device code from a provider's device authorization endpoint.
+///
+/// Validates the URL for HTTPS and sends the device code request.
+pub fn request_device_code(
+    device_code_url: &str,
+    client_id: &str,
+    scope: &str,
+) -> Result<DeviceCodeResponse, AegisError> {
+    if !device_code_url.starts_with("https://") {
+        return Err(AegisError::ConfigError(format!(
+            "device code URL must use HTTPS, got: {device_code_url}"
+        )));
+    }
+
+    if client_id.is_empty() {
+        return Err(AegisError::ConfigError(
+            "client_id must not be empty for device code request".into(),
+        ));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
+
+    let resp = client
+        .post(device_code_url)
+        .header("Accept", "application/json")
+        .form(&[("client_id", client_id), ("scope", scope)])
+        .send()
+        .map_err(|e| AegisError::ConfigError(format!("device code request failed: {e}")))?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse device code response: {e}")))?;
+
+    if !status.is_success() {
+        let error_desc = body
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .or_else(|| body.get("error").and_then(|v| v.as_str()))
+            .unwrap_or("unknown error");
+        return Err(AegisError::ConfigError(format!(
+            "device code request failed: {error_desc}"
+        )));
+    }
+
+    serde_json::from_value(body).map_err(|e| {
+        AegisError::ConfigError(format!("failed to parse device code response: {e}"))
+    })
+}
+
+/// Poll a token endpoint once during a device code flow.
+///
+/// Returns the poll state. The caller is responsible for waiting the
+/// appropriate interval between calls.
+pub fn poll_device_code(
+    token_url: &str,
+    client_id: &str,
+    device_code: &str,
+) -> Result<DeviceFlowPollState, AegisError> {
+    if !token_url.starts_with("https://") {
+        return Err(AegisError::ConfigError(format!(
+            "token URL must use HTTPS, got: {token_url}"
+        )));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
+
+    let resp = client
+        .post(token_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .map_err(|e| AegisError::ConfigError(format!("device code poll request failed: {e}")))?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse poll response: {e}")))?;
+
+    if let Some(error) = body.get("error").and_then(|v| v.as_str()) {
+        return Ok(match error {
+            "authorization_pending" => DeviceFlowPollState::AuthorizationPending,
+            "slow_down" => DeviceFlowPollState::SlowDown,
+            "expired_token" => DeviceFlowPollState::ExpiredToken,
+            "access_denied" => DeviceFlowPollState::AccessDenied,
+            other => {
+                return Err(AegisError::ConfigError(format!(
+                    "unexpected device flow error: {other}"
+                )));
+            }
+        });
+    }
+
+    let token = parse_token_response(&body)?;
+    Ok(DeviceFlowPollState::Success(token))
+}
+
+// ---------------------------------------------------------------------------
+// Extended token methods
+// ---------------------------------------------------------------------------
+
+impl OAuthToken {
+    /// Check whether the token needs refreshing.
+    ///
+    /// Returns `true` if the token will expire within `buffer_secs` seconds,
+    /// or if expiry is unknown.
+    pub fn needs_refresh(&self, buffer_secs: i64) -> bool {
+        match self.expires_at {
+            Some(exp) => Utc::now() >= exp - chrono::Duration::seconds(buffer_secs),
+            None => true,
+        }
+    }
+
+    /// Check whether this token has a refresh token available.
+    pub fn has_refresh_token(&self) -> bool {
+        !self.refresh_token.is_empty()
+    }
+
+    /// Return seconds until expiry, or `None` if expiry is unknown or already past.
+    pub fn seconds_until_expiry(&self) -> Option<i64> {
+        self.expires_at.map(|exp| {
+            let diff = exp - Utc::now();
+            diff.num_seconds().max(0)
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KeychainTokenStore (macOS)
+// ---------------------------------------------------------------------------
+
+/// macOS Keychain-backed token store using the `security` CLI.
+///
+/// Stores and retrieves OAuth tokens from the macOS Keychain. Falls back
+/// to `FileTokenStore` on non-macOS platforms. The service name is
+/// `com.aegis.oauth.{provider}`.
+pub struct KeychainTokenStore {
+    service: String,
+    account: String,
+    /// Fallback file store for non-macOS or Keychain errors.
+    fallback: FileTokenStore,
+}
+
+impl KeychainTokenStore {
+    /// Create a new Keychain token store for the given provider.
+    pub fn new(provider: &str) -> Result<Self, AegisError> {
+        validate_provider_name(provider)?;
+        let fallback = FileTokenStore::new(provider)?;
+        Ok(Self {
+            service: format!("com.aegis.oauth.{provider}"),
+            account: "oauth_token".to_string(),
+            fallback,
+        })
+    }
+
+    /// Try to store a token in the macOS Keychain.
+    #[cfg(target_os = "macos")]
+    fn keychain_save(&self, token: &OAuthToken) -> Result<(), AegisError> {
+        let json = serde_json::to_string(token)
+            .map_err(|e| AegisError::ConfigError(format!("failed to serialize token: {e}")))?;
+
+        // Delete any existing entry first (ignore errors).
+        let _ = std::process::Command::new("security")
+            .args(["delete-generic-password", "-s", &self.service, "-a", &self.account])
+            .output();
+
+        let output = std::process::Command::new("security")
+            .args([
+                "add-generic-password",
+                "-s",
+                &self.service,
+                "-a",
+                &self.account,
+                "-w",
+                &json,
+                "-U",
+            ])
+            .output()
+            .map_err(|e| {
+                AegisError::ConfigError(format!("failed to execute security command: {e}"))
+            })?;
+
+        if !output.status.success() {
+            return Err(AegisError::ConfigError(format!(
+                "Keychain save failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        Ok(())
+    }
+
+    /// Try to load a token from the macOS Keychain.
+    #[cfg(target_os = "macos")]
+    fn keychain_load(&self) -> Result<Option<OAuthToken>, AegisError> {
+        let output = std::process::Command::new("security")
+            .args([
+                "find-generic-password",
+                "-s",
+                &self.service,
+                "-a",
+                &self.account,
+                "-w",
+            ])
+            .output()
+            .map_err(|e| {
+                AegisError::ConfigError(format!("failed to execute security command: {e}"))
+            })?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let json = String::from_utf8_lossy(&output.stdout);
+        let json = json.trim();
+        if json.is_empty() {
+            return Ok(None);
+        }
+
+        let token: OAuthToken = serde_json::from_str(json).map_err(|e| {
+            AegisError::ConfigError(format!("failed to parse Keychain token: {e}"))
+        })?;
+        Ok(Some(token))
+    }
+
+    /// Delete a token from the macOS Keychain.
+    #[cfg(target_os = "macos")]
+    fn keychain_delete(&self) -> Result<(), AegisError> {
+        let _ = std::process::Command::new("security")
+            .args(["delete-generic-password", "-s", &self.service, "-a", &self.account])
+            .output();
+        Ok(())
+    }
+}
+
+impl OAuthTokenStore for KeychainTokenStore {
+    fn load(&self) -> Result<Option<OAuthToken>, AegisError> {
+        #[cfg(target_os = "macos")]
+        {
+            match self.keychain_load() {
+                Ok(Some(token)) => return Ok(Some(token)),
+                Ok(None) => {}
+                Err(_) => {} // Fall through to file store.
+            }
+        }
+        self.fallback.load()
+    }
+
+    fn save(&self, token: &OAuthToken) -> Result<(), AegisError> {
+        #[cfg(target_os = "macos")]
+        {
+            if self.keychain_save(token).is_ok() {
+                return Ok(());
+            }
+            // Fall through to file store on Keychain failure.
+        }
+        self.fallback.save(token)
+    }
+
+    fn delete(&self) -> Result<(), AegisError> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = self.keychain_delete();
+        }
+        self.fallback.delete()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Token status helpers
+// ---------------------------------------------------------------------------
+
+/// Summary of an OAuth token's current status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenStatus {
+    /// No token stored.
+    NotFound,
+    /// Token exists and is valid.
+    Valid {
+        /// Seconds until expiry.
+        expires_in_secs: i64,
+        /// Scopes granted.
+        scope: Option<String>,
+    },
+    /// Token exists but is expired.
+    Expired {
+        /// Whether a refresh token is available.
+        has_refresh: bool,
+    },
+}
+
+/// Check the status of a stored token for a given provider.
+pub fn check_token_status(store: &dyn OAuthTokenStore) -> Result<TokenStatus, AegisError> {
+    match store.load()? {
+        None => Ok(TokenStatus::NotFound),
+        Some(token) => {
+            if token.is_expired() {
+                Ok(TokenStatus::Expired {
+                    has_refresh: token.has_refresh_token(),
+                })
+            } else {
+                let expires_in_secs = token.seconds_until_expiry().unwrap_or(0);
+                Ok(TokenStatus::Valid {
+                    expires_in_secs,
+                    scope: token.scope.clone(),
+                })
+            }
+        }
+    }
+}
+
+/// List all providers that have stored tokens.
+///
+/// Scans `~/.aegis/oauth/` for provider directories containing token files.
+pub fn list_stored_providers() -> Result<Vec<String>, AegisError> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let oauth_dir = PathBuf::from(home).join(".aegis").join("oauth");
+
+    if !oauth_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut providers = Vec::new();
+    let entries = std::fs::read_dir(&oauth_dir).map_err(|e| {
+        AegisError::ConfigError(format!(
+            "failed to read oauth directory '{}': {e}",
+            oauth_dir.display()
+        ))
+    })?;
+
+    for entry in entries.flatten() {
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let token_path = entry.path().join("token.json");
+            if token_path.exists() {
+                providers.push(name);
+            }
+        }
+    }
+
+    providers.sort();
+    Ok(providers)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1036,5 +1589,333 @@ mod tests {
         assert!(!is_private_or_loopback("8.8.8.8"));
         assert!(!is_private_or_loopback("example.com"));
         assert!(!is_private_or_loopback("accounts.google.com"));
+    }
+
+    // -----------------------------------------------------------------------
+    // OAuthProvider enum tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_oauth_provider_display() {
+        assert_eq!(OAuthProvider::Anthropic.to_string(), "anthropic");
+        assert_eq!(OAuthProvider::OpenAi.to_string(), "openai");
+        assert_eq!(OAuthProvider::GitHub.to_string(), "github");
+        assert_eq!(OAuthProvider::Google.to_string(), "google");
+        assert_eq!(OAuthProvider::Azure.to_string(), "azure");
+        assert_eq!(
+            OAuthProvider::Custom {
+                name: "acme".into()
+            }
+            .to_string(),
+            "custom:acme"
+        );
+    }
+
+    #[test]
+    fn test_oauth_provider_serialization() {
+        let provider = OAuthProvider::Anthropic;
+        let json = serde_json::to_string(&provider).unwrap();
+        let back: OAuthProvider = serde_json::from_str(&json).unwrap();
+        assert_eq!(provider, back);
+
+        let custom = OAuthProvider::Custom {
+            name: "myorg".into(),
+        };
+        let json = serde_json::to_string(&custom).unwrap();
+        let back: OAuthProvider = serde_json::from_str(&json).unwrap();
+        assert_eq!(custom, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // ProviderRegistry tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_provider_registry_defaults() {
+        let registry = OAuthProviderRegistry::with_defaults();
+
+        assert!(registry.get("anthropic").is_some());
+        assert!(registry.get("openai").is_some());
+        assert!(registry.get("github").is_some());
+        assert!(registry.get("nonexistent").is_none());
+
+        let names = registry.provider_names();
+        assert!(names.contains(&"anthropic"));
+        assert!(names.contains(&"openai"));
+        assert!(names.contains(&"github"));
+    }
+
+    #[test]
+    fn test_provider_registry_device_flow_support() {
+        let registry = OAuthProviderRegistry::with_defaults();
+        assert!(!registry.supports_device_flow("anthropic"));
+        assert!(registry.supports_device_flow("openai"));
+        assert!(registry.supports_device_flow("github"));
+        assert!(!registry.supports_device_flow("nonexistent"));
+    }
+
+    #[test]
+    fn test_provider_registry_custom_registration() {
+        let mut registry = OAuthProviderRegistry::new();
+        assert!(registry.provider_names().is_empty());
+
+        registry.register(
+            "custom-provider",
+            ProviderEndpoints {
+                authorize_url: "https://custom.example.com/authorize".into(),
+                token_url: "https://custom.example.com/token".into(),
+                device_code_url: None,
+                default_scopes: vec!["api".into()],
+                client_id_env: "CUSTOM_CLIENT_ID".into(),
+                client_secret_env: None,
+            },
+        );
+
+        assert!(registry.get("custom-provider").is_some());
+        let endpoints = registry.get("custom-provider").unwrap();
+        assert_eq!(endpoints.authorize_url, "https://custom.example.com/authorize");
+        assert!(!registry.supports_device_flow("custom-provider"));
+    }
+
+    // -----------------------------------------------------------------------
+    // DeviceCodeResponse tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_device_code_response_deserialization() {
+        let json = serde_json::json!({
+            "device_code": "dc_abc123",
+            "user_code": "XYZW-1234",
+            "verification_uri": "https://example.com/device",
+            "interval": 10,
+            "expires_in": 600
+        });
+
+        let resp: DeviceCodeResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(resp.device_code, "dc_abc123");
+        assert_eq!(resp.user_code, "XYZW-1234");
+        assert_eq!(resp.verification_uri, "https://example.com/device");
+        assert_eq!(resp.interval, 10);
+        assert_eq!(resp.expires_in, 600);
+    }
+
+    #[test]
+    fn test_device_code_response_defaults() {
+        let json = serde_json::json!({
+            "device_code": "dc_123",
+            "user_code": "ABCD",
+            "verification_uri": "https://example.com/device"
+        });
+
+        let resp: DeviceCodeResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(resp.interval, 5);
+        assert_eq!(resp.expires_in, 900);
+    }
+
+    // -----------------------------------------------------------------------
+    // Token extended methods tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_token_needs_refresh() {
+        let token = OAuthToken {
+            access_token: "valid".into(),
+            refresh_token: "refresh".into(),
+            expires_at: Some(Utc::now() + chrono::Duration::hours(2)),
+            scope: None,
+        };
+        assert!(!token.needs_refresh(300));
+
+        let soon = OAuthToken {
+            access_token: "soon".into(),
+            refresh_token: "refresh".into(),
+            expires_at: Some(Utc::now() + chrono::Duration::seconds(120)),
+            scope: None,
+        };
+        assert!(soon.needs_refresh(300));
+
+        let unknown = OAuthToken {
+            access_token: "unknown".into(),
+            refresh_token: "refresh".into(),
+            expires_at: None,
+            scope: None,
+        };
+        assert!(unknown.needs_refresh(0));
+    }
+
+    #[test]
+    fn test_token_has_refresh_token() {
+        let with_refresh = OAuthToken {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: None,
+            scope: None,
+        };
+        assert!(with_refresh.has_refresh_token());
+
+        let without_refresh = OAuthToken {
+            access_token: "a".into(),
+            refresh_token: "".into(),
+            expires_at: None,
+            scope: None,
+        };
+        assert!(!without_refresh.has_refresh_token());
+    }
+
+    #[test]
+    fn test_token_seconds_until_expiry() {
+        let token = OAuthToken {
+            access_token: "a".into(),
+            refresh_token: "".into(),
+            expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            scope: None,
+        };
+
+        let secs = token.seconds_until_expiry().unwrap();
+        assert!(secs > 3500 && secs <= 3600);
+
+        let expired = OAuthToken {
+            access_token: "a".into(),
+            refresh_token: "".into(),
+            expires_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            scope: None,
+        };
+        let secs = expired.seconds_until_expiry().unwrap();
+        assert_eq!(secs, 0);
+
+        let no_expiry = OAuthToken {
+            access_token: "a".into(),
+            refresh_token: "".into(),
+            expires_at: None,
+            scope: None,
+        };
+        assert!(no_expiry.seconds_until_expiry().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // TokenStatus tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_check_token_status() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // No token stored.
+        let store = FileTokenStore::with_path(dir.path().join("empty.json"));
+        assert_eq!(check_token_status(&store).unwrap(), TokenStatus::NotFound);
+
+        // Valid token stored.
+        let path = dir.path().join("valid.json");
+        let store = FileTokenStore::with_path(path);
+        let token = OAuthToken {
+            access_token: "valid-token".into(),
+            refresh_token: "refresh-token".into(),
+            expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            scope: Some("read".into()),
+        };
+        store.save(&token).unwrap();
+        match check_token_status(&store).unwrap() {
+            TokenStatus::Valid {
+                expires_in_secs,
+                scope,
+            } => {
+                assert!(expires_in_secs > 3500);
+                assert_eq!(scope, Some("read".into()));
+            }
+            other => panic!("expected Valid, got {other:?}"),
+        }
+
+        // Expired token stored.
+        let path = dir.path().join("expired.json");
+        let store = FileTokenStore::with_path(path);
+        let token = OAuthToken {
+            access_token: "expired-token".into(),
+            refresh_token: "refresh-token".into(),
+            expires_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            scope: None,
+        };
+        store.save(&token).unwrap();
+        match check_token_status(&store).unwrap() {
+            TokenStatus::Expired { has_refresh } => {
+                assert!(has_refresh);
+            }
+            other => panic!("expected Expired, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // KeychainTokenStore fallback tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_keychain_store_fallback_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileTokenStore::with_path(dir.path().join("keychain-fallback.json"));
+
+        let token = OAuthToken {
+            access_token: "kc-access".into(),
+            refresh_token: "kc-refresh".into(),
+            expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            scope: Some("openid".into()),
+        };
+
+        store.save(&token).unwrap();
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.access_token, "kc-access");
+        store.delete().unwrap();
+        assert!(store.load().unwrap().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Device flow validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_device_code_url_must_be_https() {
+        let result = request_device_code(
+            "http://example.com/device/code",
+            "client-id",
+            "read",
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("HTTPS"), "error should mention HTTPS: {err}");
+    }
+
+    #[test]
+    fn test_device_code_empty_client_id_rejected() {
+        let result = request_device_code(
+            "https://example.com/device/code",
+            "",
+            "read",
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("client_id"),
+            "error should mention client_id: {err}"
+        );
+    }
+
+    #[test]
+    fn test_poll_device_code_url_must_be_https() {
+        let result = poll_device_code(
+            "http://example.com/token",
+            "client-id",
+            "device-code-123",
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("HTTPS"), "error should mention HTTPS: {err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // list_stored_providers tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_list_stored_providers_empty() {
+        let result = list_stored_providers();
+        assert!(result.is_ok());
     }
 }

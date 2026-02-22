@@ -113,12 +113,27 @@ class TokenStore(context: Context) {
         prefs.edit().putBoolean(KEY_NOTIFICATIONS_ENABLED, enabled).apply()
     }
 
+    /**
+     * Check whether the background connection service is enabled.
+     */
+    fun isBackgroundServiceEnabled(): Boolean {
+        return prefs.getBoolean(KEY_BACKGROUND_SERVICE_ENABLED, false)
+    }
+
+    /**
+     * Set the background connection service preference.
+     */
+    fun setBackgroundServiceEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BACKGROUND_SERVICE_ENABLED, enabled).apply()
+    }
+
     companion object {
         private const val PREFS_FILE_NAME = "aegis_secure_prefs"
         private const val KEY_API_TOKEN = "aegis_daemon_api_token"
         private const val KEY_SERVER_URL = "aegis_server_url"
         private const val KEY_BIOMETRIC_ENABLED = "aegis_biometric_enabled"
         private const val KEY_NOTIFICATIONS_ENABLED = "aegis_notifications_enabled"
+        private const val KEY_BACKGROUND_SERVICE_ENABLED = "aegis_background_service"
         const val DEFAULT_SERVER_URL = "http://localhost:3100"
 
         /** Minimum acceptable token length to prevent empty/trivial tokens. */

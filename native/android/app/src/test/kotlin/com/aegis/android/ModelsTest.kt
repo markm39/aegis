@@ -3,11 +3,17 @@ package com.aegis.android
 import com.aegis.android.api.AgentInfo
 import com.aegis.android.api.AgentStatusKind
 import com.aegis.android.api.ApiResponse
+import com.aegis.android.api.ChatMessage
 import com.aegis.android.api.DenyBody
 import com.aegis.android.api.FleetStatus
 import com.aegis.android.api.InputBody
+import com.aegis.android.api.LocationData
+import com.aegis.android.api.MessageRole
+import com.aegis.android.api.PairingInfo
 import com.aegis.android.api.PendingRequest
 import com.aegis.android.api.RiskLevel
+import com.aegis.android.api.WebSocketEvent
+import com.aegis.android.api.WidgetState
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,7 +26,8 @@ import org.junit.Test
  * Unit tests for API model deserialization.
  *
  * These mirror the iOS ModelsTests to ensure cross-platform consistency
- * in JSON parsing behavior.
+ * in JSON parsing behavior. Also tests new chat, location, pairing, and
+ * widget models.
  */
 class ModelsTest {
 
@@ -278,6 +285,179 @@ class ModelsTest {
         assertEquals("Failed", AgentStatusKind.FAILED.displayName)
         assertEquals("Stopping", AgentStatusKind.STOPPING.displayName)
         assertEquals("Disabled", AgentStatusKind.DISABLED.displayName)
+    }
+
+    // -- Chat Models --
+
+    @Test
+    fun test_chat_message_deserialization() {
+        val jsonString = """
+        {
+            "id": "msg-001",
+            "role": "user",
+            "content": "Hello agent",
+            "timestamp": 1700000000000,
+            "agent_name": "claude-1"
+        }
+        """
+        val msg = json.decodeFromString<ChatMessage>(jsonString)
+        assertEquals("msg-001", msg.id)
+        assertEquals(MessageRole.USER, msg.role)
+        assertEquals("Hello agent", msg.content)
+        assertEquals(1700000000000L, msg.timestamp)
+        assertEquals("claude-1", msg.agentName)
+    }
+
+    @Test
+    fun test_chat_message_agent_role() {
+        val jsonString = """
+        {
+            "id": "msg-002",
+            "role": "agent",
+            "content": "I can help with that.",
+            "timestamp": 1700000001000
+        }
+        """
+        val msg = json.decodeFromString<ChatMessage>(jsonString)
+        assertEquals(MessageRole.AGENT, msg.role)
+    }
+
+    @Test
+    fun test_chat_message_system_role() {
+        val jsonString = """
+        {
+            "id": "msg-003",
+            "role": "system",
+            "content": "Agent connected.",
+            "timestamp": 1700000002000
+        }
+        """
+        val msg = json.decodeFromString<ChatMessage>(jsonString)
+        assertEquals(MessageRole.SYSTEM, msg.role)
+    }
+
+    @Test
+    fun test_chat_message_serialization() {
+        val msg = ChatMessage(
+            id = "test-id",
+            role = MessageRole.USER,
+            content = "test message",
+            timestamp = 12345L,
+            agentName = "test-agent",
+        )
+        val serialized = json.encodeToString(ChatMessage.serializer(), msg)
+        assertTrue(serialized.contains("\"id\":\"test-id\""))
+        assertTrue(serialized.contains("\"role\":\"user\""))
+        assertTrue(serialized.contains("\"content\":\"test message\""))
+    }
+
+    // -- Pairing Models --
+
+    @Test
+    fun test_pairing_info_deserialization() {
+        val jsonString = """
+        {
+            "server_url": "https://aegis.example.com:3100",
+            "token": "sk-test-token-1234567890",
+            "name": "Home Server"
+        }
+        """
+        val info = json.decodeFromString<PairingInfo>(jsonString)
+        assertEquals("https://aegis.example.com:3100", info.serverUrl)
+        assertEquals("sk-test-token-1234567890", info.token)
+        assertEquals("Home Server", info.name)
+    }
+
+    @Test
+    fun test_pairing_info_without_name() {
+        val jsonString = """
+        {
+            "server_url": "http://localhost:3100",
+            "token": "dev-token-abcdefgh"
+        }
+        """
+        val info = json.decodeFromString<PairingInfo>(jsonString)
+        assertEquals("http://localhost:3100", info.serverUrl)
+        assertNull(info.name)
+    }
+
+    // -- Location Models --
+
+    @Test
+    fun test_location_data_serialization() {
+        val location = LocationData(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            accuracy = 10.0f,
+            altitude = 15.0,
+            timestamp = 1700000000000L,
+        )
+        val serialized = json.encodeToString(LocationData.serializer(), location)
+        assertTrue(serialized.contains("37.7749"))
+        assertTrue(serialized.contains("-122.4194"))
+        assertTrue(serialized.contains("\"accuracy\""))
+        assertTrue(serialized.contains("\"altitude\""))
+    }
+
+    @Test
+    fun test_location_data_without_optional_fields() {
+        val location = LocationData(
+            latitude = 40.7128,
+            longitude = -74.0060,
+        )
+        val serialized = json.encodeToString(LocationData.serializer(), location)
+        assertTrue(serialized.contains("40.7128"))
+        assertTrue(serialized.contains("-74.006"))
+    }
+
+    // -- WebSocket Models --
+
+    @Test
+    fun test_websocket_event_deserialization() {
+        val jsonString = """
+        {
+            "type": "pending_request",
+            "data": {"agent_name": "claude-1", "request_id": "req-123"}
+        }
+        """
+        val event = json.decodeFromString<WebSocketEvent>(jsonString)
+        assertEquals("pending_request", event.type)
+        assertNotNull(event.data)
+    }
+
+    @Test
+    fun test_websocket_event_without_data() {
+        val jsonString = """{"type": "heartbeat"}"""
+        val event = json.decodeFromString<WebSocketEvent>(jsonString)
+        assertEquals("heartbeat", event.type)
+        assertNull(event.data)
+    }
+
+    // -- Widget State --
+
+    @Test
+    fun test_widget_state_defaults() {
+        val state = WidgetState()
+        assertEquals(0, state.agentCount)
+        assertEquals(0, state.runningCount)
+        assertEquals(0, state.pendingCount)
+        assertFalse(state.isConnected)
+        assertEquals(0L, state.lastUpdated)
+    }
+
+    @Test
+    fun test_widget_state_with_values() {
+        val state = WidgetState(
+            agentCount = 5,
+            runningCount = 3,
+            pendingCount = 2,
+            isConnected = true,
+            lastUpdated = 1700000000000L,
+        )
+        assertEquals(5, state.agentCount)
+        assertEquals(3, state.runningCount)
+        assertEquals(2, state.pendingCount)
+        assertTrue(state.isConnected)
     }
 
     // -- Invalid JSON --

@@ -283,3 +283,219 @@ pub fn test(target: Option<&str>) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Log out a provider by removing its auth profile and any stored OAuth tokens.
+pub fn logout(provider: &str) -> anyhow::Result<()> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if provider.is_empty() {
+        return Err(anyhow::anyhow!("provider cannot be empty"));
+    }
+
+    let path = auth_store_path();
+    let mut store = load_store(&path)?;
+
+    let removed_count = store.profiles.len();
+    store.profiles.retain(|p| p.provider != provider && p.id != provider);
+    let removed = removed_count - store.profiles.len();
+
+    if removed == 0 {
+        println!("No auth profiles found for '{provider}'.");
+    } else {
+        // If the default profile was removed, clear it.
+        if let Some(ref default_id) = store.default_profile {
+            if !store.profiles.iter().any(|p| &p.id == default_id) {
+                store.default_profile = store.profiles.first().map(|p| p.id.clone());
+            }
+        }
+        save_store(&path, &store)?;
+        println!("Removed {removed} auth profile(s) for '{provider}'.");
+    }
+
+    // Also remove any stored OAuth tokens for this provider.
+    let token_store = aegis_types::oauth::FileTokenStore::new(&provider);
+    if let Ok(ts) = token_store {
+        if ts.path().exists() {
+            use aegis_types::oauth::OAuthTokenStore;
+            ts.delete()
+                .map_err(|e| anyhow::anyhow!("failed to remove stored token: {e}"))?;
+            println!("Removed stored OAuth token for '{provider}'.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Show the status of all configured auth profiles and their stored tokens.
+pub fn status() -> anyhow::Result<()> {
+    let path = auth_store_path();
+    let store = load_store(&path)?;
+
+    // Show profiles.
+    if store.profiles.is_empty() {
+        println!("No auth profiles configured.");
+    } else {
+        println!("Auth profiles:");
+        for profile in &store.profiles {
+            let (ready, note) = auth_readiness(profile);
+            let default_marker = if store.default_profile.as_deref() == Some(profile.id.as_str()) {
+                " (default)"
+            } else {
+                ""
+            };
+            println!(
+                "  {}{}: provider={} method={} ready={} ({})",
+                profile.id, default_marker, profile.provider, profile.method, ready, note
+            );
+        }
+    }
+
+    // Show stored OAuth tokens.
+    let stored = aegis_types::oauth::list_stored_providers()
+        .unwrap_or_default();
+
+    if stored.is_empty() {
+        println!("\nNo stored OAuth tokens.");
+    } else {
+        println!("\nStored OAuth tokens:");
+        for provider in &stored {
+            let token_store = aegis_types::oauth::FileTokenStore::new(provider);
+            if let Ok(ts) = token_store {
+                #[allow(unused_imports)]
+                use aegis_types::oauth::OAuthTokenStore;
+                match aegis_types::oauth::check_token_status(&ts) {
+                    Ok(aegis_types::oauth::TokenStatus::Valid {
+                        expires_in_secs,
+                        scope,
+                    }) => {
+                        let scope_str = scope
+                            .as_deref()
+                            .unwrap_or("(none)");
+                        let minutes = expires_in_secs / 60;
+                        println!(
+                            "  {provider}: valid (expires in {minutes}m, scope={scope_str})"
+                        );
+                    }
+                    Ok(aegis_types::oauth::TokenStatus::Expired { has_refresh }) => {
+                        let refresh_note = if has_refresh {
+                            ", refresh token available"
+                        } else {
+                            ", no refresh token"
+                        };
+                        println!("  {provider}: expired{refresh_note}");
+                    }
+                    Ok(aegis_types::oauth::TokenStatus::NotFound) => {
+                        println!("  {provider}: no token stored");
+                    }
+                    Err(e) => {
+                        println!("  {provider}: error reading token: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Manually refresh an OAuth token for a provider.
+pub fn refresh(provider: &str) -> anyhow::Result<()> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if provider.is_empty() {
+        return Err(anyhow::anyhow!("provider cannot be empty"));
+    }
+
+    let token_store = aegis_types::oauth::FileTokenStore::new(&provider)
+        .map_err(|e| anyhow::anyhow!("invalid provider name: {e}"))?;
+
+    use aegis_types::oauth::OAuthTokenStore;
+    let token = token_store
+        .load()
+        .map_err(|e| anyhow::anyhow!("failed to load token: {e}"))?;
+
+    let Some(token) = token else {
+        return Err(anyhow::anyhow!(
+            "No OAuth token stored for '{provider}'. Run `aegis auth login {provider}` first."
+        ));
+    };
+
+    if !token.has_refresh_token() {
+        return Err(anyhow::anyhow!(
+            "Token for '{provider}' has no refresh token. Re-authenticate with `aegis auth login {provider}`."
+        ));
+    }
+
+    if !token.is_expired() && !token.needs_refresh(300) {
+        let secs = token.seconds_until_expiry().unwrap_or(0);
+        println!(
+            "Token for '{provider}' is still valid ({} minutes remaining). No refresh needed.",
+            secs / 60
+        );
+        return Ok(());
+    }
+
+    // Look up OAuth config from the provider registry.
+    let registry = aegis_types::oauth::OAuthProviderRegistry::with_defaults();
+    let endpoints = registry.get(&provider).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No OAuth endpoints configured for '{provider}'. \
+             Supported providers: {}",
+            registry.provider_names().join(", ")
+        )
+    })?;
+
+    // Read client ID and secret from environment.
+    let client_id = std::env::var(&endpoints.client_id_env).unwrap_or_default();
+    if client_id.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Set {} to refresh OAuth token for '{provider}'.",
+            endpoints.client_id_env
+        ));
+    }
+
+    let client_secret = endpoints
+        .client_secret_env
+        .as_ref()
+        .and_then(|env| std::env::var(env).ok())
+        .unwrap_or_default();
+
+    // Build the token refresh request.
+    let config = aegis_types::oauth::OAuthConfig {
+        client_id,
+        client_secret_env: endpoints
+            .client_secret_env
+            .clone()
+            .unwrap_or_default(),
+        auth_url: endpoints.authorize_url.clone(),
+        token_url: endpoints.token_url.clone(),
+        scopes: endpoints.default_scopes.clone(),
+        redirect_uri: "http://localhost:8080/callback".to_string(),
+    };
+
+    // Set the env var so OAuthConfig::read_client_secret works.
+    if !client_secret.is_empty() {
+        if let Some(ref env_name) = endpoints.client_secret_env {
+            std::env::set_var(env_name, &client_secret);
+        }
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create tokio runtime")?;
+
+    let flow = aegis_types::oauth::OAuthFlow::new(config);
+    let new_token = rt
+        .block_on(flow.refresh_token(&token))
+        .map_err(|e| anyhow::anyhow!("token refresh failed: {e}"))?;
+
+    token_store
+        .save(&new_token)
+        .map_err(|e| anyhow::anyhow!("failed to save refreshed token: {e}"))?;
+
+    let secs = new_token.seconds_until_expiry().unwrap_or(0);
+    println!(
+        "Token refreshed for '{provider}'. Valid for {} minutes.",
+        secs / 60
+    );
+    Ok(())
+}

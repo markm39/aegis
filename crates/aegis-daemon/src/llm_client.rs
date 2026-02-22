@@ -15,11 +15,12 @@
 //! - Rate limited to 100 calls per minute (token-bucket).
 //! - All completions logged to audit trail (model, token counts, NOT content).
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use aegis_types::llm::{
     to_anthropic_message, to_gemini_content, to_openai_message, from_gemini_response,
@@ -27,6 +28,7 @@ use aegis_types::llm::{
     LlmToolCall, LlmUsage, MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig,
     ProviderConfig, ProviderRegistry, StopReason,
 };
+use aegis_types::oauth::{FileTokenStore, OAuthTokenStore};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -90,6 +92,78 @@ impl TokenBucket {
 }
 
 // ---------------------------------------------------------------------------
+// OAuthTokenResolver
+// ---------------------------------------------------------------------------
+
+/// Resolves OAuth bearer tokens for LLM providers.
+///
+/// For each provider, builds a per-provider `FileTokenStore` and loads the
+/// token from `~/.aegis/oauth/<provider>/token.json`. Falls back gracefully
+/// when no OAuth token is available (the caller should use the API key instead).
+#[derive(Debug)]
+pub struct OAuthTokenResolver {
+    /// Base directory for per-provider token stores (e.g. `~/.aegis/oauth`).
+    _base: PathBuf,
+}
+
+impl OAuthTokenResolver {
+    /// Create a resolver using the default token store location (`~/.aegis/oauth/`).
+    pub fn new() -> Option<Self> {
+        let home = std::env::var("HOME").ok()?;
+        let base = PathBuf::from(home).join(".aegis").join("oauth");
+        Some(Self { _base: base })
+    }
+
+    /// Try to resolve a valid OAuth bearer token for the given provider.
+    ///
+    /// Returns `Some(token_string)` if a valid, non-expired token is found.
+    /// Returns `None` if no token exists, the token is expired with no
+    /// refresh token, or the store is inaccessible.
+    pub fn resolve_token(&self, provider: &str) -> Option<String> {
+        let store = match FileTokenStore::new(provider) {
+            Ok(s) => s,
+            Err(e) => {
+                debug!(provider, error = %e, "could not create token store for provider");
+                return None;
+            }
+        };
+
+        let token = match store.load() {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                debug!(provider, "no OAuth token found for provider");
+                return None;
+            }
+            Err(e) => {
+                debug!(provider, error = %e, "failed to load OAuth token");
+                return None;
+            }
+        };
+
+        // Check if token is still valid (with a 60-second buffer).
+        if !token.needs_refresh(60) {
+            debug!(provider, "using cached OAuth token");
+            return Some(token.access_token);
+        }
+
+        // Token needs refresh but we don't have a refresh token.
+        if !token.has_refresh_token() {
+            warn!(
+                provider,
+                "OAuth token expired and no refresh token available"
+            );
+            return None;
+        }
+
+        warn!(
+            provider,
+            "OAuth token expired; automatic refresh requires async runtime (falling back to API key)"
+        );
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LlmClient
 // ---------------------------------------------------------------------------
 
@@ -98,6 +172,10 @@ impl TokenBucket {
 /// Routes requests to Anthropic or OpenAI based on model name via a
 /// `ProviderRegistry`. Enforces rate limiting, request/response size limits,
 /// and SSRF protections.
+///
+/// When an `OAuthTokenResolver` is configured, the client will attempt to
+/// use OAuth bearer tokens before falling back to API keys from environment
+/// variables.
 pub struct LlmClient {
     /// The HTTP client (blocking, no redirects).
     http_client: reqwest::blocking::Client,
@@ -108,6 +186,8 @@ pub struct LlmClient {
     default_timeout: Duration,
     /// Rate limiter.
     rate_limiter: Mutex<TokenBucket>,
+    /// Optional OAuth token resolver for bearer token auth.
+    oauth_resolver: Option<OAuthTokenResolver>,
 }
 
 impl std::fmt::Debug for LlmClient {
@@ -127,6 +207,9 @@ impl LlmClient {
     /// - Connection timeout of 10 seconds
     /// - Request timeout of 60 seconds
     /// - User-Agent header: "aegis-daemon/0.1"
+    ///
+    /// Automatically initializes an `OAuthTokenResolver` if the home
+    /// directory is available.
     pub fn new(registry: ProviderRegistry) -> Result<Self, String> {
         let http_client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -136,12 +219,43 @@ impl LlmClient {
             .build()
             .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
+        let oauth_resolver = OAuthTokenResolver::new();
+        if oauth_resolver.is_some() {
+            info!("OAuth token resolver initialized");
+        }
+
         Ok(Self {
             http_client,
             registry,
             default_timeout: Duration::from_secs(30),
             rate_limiter: Mutex::new(TokenBucket::new(RATE_LIMIT_RPM)),
+            oauth_resolver,
         })
+    }
+
+    /// Resolve an API key for the given provider, preferring OAuth tokens.
+    ///
+    /// Checks the OAuth token store first. If a valid OAuth bearer token
+    /// is found, returns it. Otherwise falls back to reading the API key
+    /// from environment variables via the provider config.
+    fn resolve_api_key_with_oauth(
+        &self,
+        provider_name: &str,
+        read_env_key: impl FnOnce() -> Result<String, String>,
+    ) -> Result<String, String> {
+        // Try OAuth first.
+        if let Some(ref resolver) = self.oauth_resolver {
+            if let Some(oauth_token) = resolver.resolve_token(provider_name) {
+                info!(
+                    provider = provider_name,
+                    "using OAuth bearer token instead of API key"
+                );
+                return Ok(oauth_token);
+            }
+        }
+
+        // Fall back to API key from environment.
+        read_env_key()
     }
 
     /// Get a reference to the provider registry.
@@ -284,8 +398,10 @@ impl LlmClient {
         request: &LlmRequest,
         config: &AnthropicConfig,
     ) -> Result<LlmResponse, String> {
-        // Read API key from environment.
-        let api_key = config.read_api_key().map_err(|e| e.to_string())?;
+        // Resolve API key, preferring OAuth if available.
+        let api_key = self.resolve_api_key_with_oauth("anthropic", || {
+            config.read_api_key().map_err(|e| e.to_string())
+        })?;
         let masked = MaskedApiKey(api_key.clone());
         debug!(provider = "anthropic", key = %masked, "resolved API key");
 
@@ -504,8 +620,10 @@ impl LlmClient {
         request: &LlmRequest,
         config: &OpenAiConfig,
     ) -> Result<LlmResponse, String> {
-        // Read API key from environment.
-        let api_key = config.read_api_key().map_err(|e| e.to_string())?;
+        // Resolve API key, preferring OAuth if available.
+        let api_key = self.resolve_api_key_with_oauth("openai", || {
+            config.read_api_key().map_err(|e| e.to_string())
+        })?;
         let masked = MaskedApiKey(api_key.clone());
         debug!(provider = "openai", key = %masked, "resolved API key");
 
@@ -638,8 +756,10 @@ impl LlmClient {
         request: &LlmRequest,
         config: &GeminiProviderConfig,
     ) -> Result<LlmResponse, String> {
-        // Read API key from environment.
-        let api_key = config.read_api_key().map_err(|e| e.to_string())?;
+        // Resolve API key, preferring OAuth if available.
+        let api_key = self.resolve_api_key_with_oauth("google", || {
+            config.read_api_key().map_err(|e| e.to_string())
+        })?;
         let masked = MaskedApiKey(api_key.clone());
         debug!(provider = "gemini", key = %masked, "resolved API key");
 
@@ -987,8 +1107,10 @@ impl LlmClient {
         request: &LlmRequest,
         config: &OpenRouterConfig,
     ) -> Result<LlmResponse, String> {
-        // Read API key from environment.
-        let api_key = config.read_api_key().map_err(|e| e.to_string())?;
+        // Resolve API key, preferring OAuth if available.
+        let api_key = self.resolve_api_key_with_oauth("openrouter", || {
+            config.read_api_key().map_err(|e| e.to_string())
+        })?;
         let masked = MaskedApiKey(api_key.clone());
         debug!(provider = "openrouter", key = %masked, "resolved API key");
 
@@ -2182,5 +2304,172 @@ mod tests {
         // Generation config.
         assert_eq!(body["generationConfig"]["temperature"], 0.7);
         assert_eq!(body["generationConfig"]["maxOutputTokens"], 2048);
+    }
+
+    // -- test_oauth_resolver_no_token --
+
+    #[test]
+    fn test_oauth_resolver_no_token() {
+        // Point HOME to a temp dir so FileTokenStore::new finds no tokens.
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        let resolver = OAuthTokenResolver::new().unwrap();
+
+        // Should return None for any provider (no token files exist).
+        assert!(resolver.resolve_token("anthropic").is_none());
+        assert!(resolver.resolve_token("openai").is_none());
+
+        // Restore HOME.
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // -- test_oauth_resolver_valid_token --
+
+    #[test]
+    fn test_oauth_resolver_valid_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        // Store a valid token via FileTokenStore (uses HOME).
+        let store = FileTokenStore::new("anthropic").unwrap();
+        let token = aegis_types::oauth::OAuthToken {
+            access_token: "oauth-test-token-abc123".to_string(),
+            refresh_token: String::new(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            scope: None,
+        };
+        store.save(&token).unwrap();
+
+        let resolver = OAuthTokenResolver::new().unwrap();
+        let resolved = resolver.resolve_token("anthropic");
+        assert_eq!(resolved, Some("oauth-test-token-abc123".to_string()));
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // -- test_oauth_resolver_expired_token_no_refresh --
+
+    #[test]
+    fn test_oauth_resolver_expired_token_no_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        let store = FileTokenStore::new("openai").unwrap();
+        let token = aegis_types::oauth::OAuthToken {
+            access_token: "expired-token".to_string(),
+            refresh_token: String::new(),
+            expires_at: Some(chrono::DateTime::from_timestamp(1000, 0).unwrap()),
+            scope: None,
+        };
+        store.save(&token).unwrap();
+
+        let resolver = OAuthTokenResolver::new().unwrap();
+        assert!(resolver.resolve_token("openai").is_none());
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // -- test_oauth_resolver_expired_token_with_refresh --
+
+    #[test]
+    fn test_oauth_resolver_expired_with_refresh_falls_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        let store = FileTokenStore::new("google").unwrap();
+        let token = aegis_types::oauth::OAuthToken {
+            access_token: "expired-token".to_string(),
+            refresh_token: "refresh-me".to_string(),
+            expires_at: Some(chrono::DateTime::from_timestamp(1000, 0).unwrap()),
+            scope: None,
+        };
+        store.save(&token).unwrap();
+
+        let resolver = OAuthTokenResolver::new().unwrap();
+        // Falls back to None because async refresh is not available in blocking mode.
+        assert!(resolver.resolve_token("google").is_none());
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // -- test_resolve_api_key_with_oauth_prefers_oauth --
+
+    #[test]
+    fn test_resolve_api_key_prefers_oauth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        let store = FileTokenStore::new("anthropic").unwrap();
+        let token = aegis_types::oauth::OAuthToken {
+            access_token: "oauth-preferred".to_string(),
+            refresh_token: String::new(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            scope: None,
+        };
+        store.save(&token).unwrap();
+
+        let registry = build_registry_from_env().unwrap();
+        let mut client = LlmClient::new(registry).unwrap();
+        client.oauth_resolver = OAuthTokenResolver::new();
+
+        let key = client.resolve_api_key_with_oauth("anthropic", || {
+            Ok("env-key-fallback".to_string())
+        });
+        assert_eq!(key.unwrap(), "oauth-preferred");
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // -- test_resolve_api_key_with_oauth_falls_back_to_env --
+
+    #[test]
+    fn test_resolve_api_key_falls_back_to_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        // No tokens stored.
+        let registry = build_registry_from_env().unwrap();
+        let mut client = LlmClient::new(registry).unwrap();
+        client.oauth_resolver = OAuthTokenResolver::new();
+
+        let key = client.resolve_api_key_with_oauth("anthropic", || {
+            Ok("env-key-value".to_string())
+        });
+        assert_eq!(key.unwrap(), "env-key-value");
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // -- test_resolve_api_key_no_resolver --
+
+    #[test]
+    fn test_resolve_api_key_no_resolver() {
+        let registry = build_registry_from_env().unwrap();
+        let mut client = LlmClient::new(registry).unwrap();
+        client.oauth_resolver = None;
+
+        let key = client.resolve_api_key_with_oauth("anthropic", || {
+            Ok("only-env".to_string())
+        });
+        assert_eq!(key.unwrap(), "only-env");
     }
 }

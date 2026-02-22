@@ -11,7 +11,8 @@ import java.util.UUID
 /**
  * Unit tests for DaemonClient.
  *
- * Tests server URL validation, request ID generation, and input sanitization.
+ * Tests server URL validation, request ID generation, input sanitization,
+ * retry configuration, and friendly error message generation.
  * These tests run on the JVM without Android dependencies.
  */
 class DaemonClientTest {
@@ -118,5 +119,46 @@ class DaemonClientTest {
     fun test_sanitize_empty_input() {
         assertEquals("", sanitizeInput(""))
         assertEquals("", sanitizeInput("   "))
+    }
+
+    // -- Retry Configuration --
+
+    @Test
+    fun test_retry_delay_constants() {
+        assertEquals(500L, DaemonClient.INITIAL_RETRY_DELAY_MS)
+        assertEquals(8_000L, DaemonClient.MAX_RETRY_DELAY_MS)
+        assertTrue(DaemonClient.INITIAL_RETRY_DELAY_MS < DaemonClient.MAX_RETRY_DELAY_MS)
+    }
+
+    // -- Friendly Error Messages --
+
+    @Test
+    fun test_friendly_error_connect_exception() {
+        val error = DaemonClient.friendlyError(java.net.ConnectException("refused"))
+        assertTrue(error.contains("Cannot reach"))
+    }
+
+    @Test
+    fun test_friendly_error_timeout() {
+        val error = DaemonClient.friendlyError(java.net.SocketTimeoutException("timed out"))
+        assertTrue(error.contains("timed out"))
+    }
+
+    @Test
+    fun test_friendly_error_unknown_host() {
+        val error = DaemonClient.friendlyError(java.net.UnknownHostException("no.such.host"))
+        assertTrue(error.contains("Unknown host"))
+    }
+
+    @Test
+    fun test_friendly_error_generic() {
+        val error = DaemonClient.friendlyError(RuntimeException("something broke"))
+        assertEquals("something broke", error)
+    }
+
+    @Test
+    fun test_friendly_error_null_message() {
+        val error = DaemonClient.friendlyError(RuntimeException())
+        assertEquals("An unexpected error occurred", error)
     }
 }
