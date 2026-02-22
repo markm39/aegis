@@ -119,6 +119,10 @@ fn format_deny(format: HookFormat, tool_name: &str, reason: &str) -> serde_json:
 /// daemon for a Cedar policy verdict, and outputs the result in the caller's
 /// expected format. Falls back to fail-closed deny when the daemon is
 /// unreachable unless `AEGIS_HOOK_FAIL_OPEN` is explicitly enabled.
+///
+/// When `AEGIS_AGENT_NAME` is not set, the hook allows unconditionally --
+/// this means the Claude Code session is not under Aegis supervision (the
+/// user is running Claude Code directly, not through `aegis`).
 pub fn pre_tool_use() -> anyhow::Result<()> {
     // Read the hook payload from stdin (capped at 10 MB to prevent memory exhaustion)
     let mut input = String::new();
@@ -131,8 +135,17 @@ pub fn pre_tool_use() -> anyhow::Result<()> {
 
     let hook_input = parse_hook_input(&payload);
 
-    // Get agent name from environment (set by the daemon/driver when spawning)
-    let agent_name = std::env::var("AEGIS_AGENT_NAME").unwrap_or_else(|_| "unknown".to_string());
+    // Get agent name from environment (set by the daemon/driver when spawning).
+    // If not set, this Claude Code session is not under Aegis supervision --
+    // allow unconditionally so we don't break normal Claude Code usage.
+    let agent_name = match std::env::var("AEGIS_AGENT_NAME") {
+        Ok(name) => name,
+        Err(_) => {
+            let output = format_allow(hook_input.format);
+            println!("{}", serde_json::to_string(&output)?);
+            return Ok(());
+        }
+    };
 
     // Try to reach the daemon for policy evaluation.
     // AEGIS_SOCKET_PATH allows the daemon to point hooks at a non-default socket.
@@ -226,6 +239,13 @@ pub fn post_tool_use() -> anyhow::Result<()> {
         .take(10 * 1024 * 1024)
         .read_to_string(&mut input)?;
 
+    // Not under Aegis supervision -- nothing to record.
+    if std::env::var("AEGIS_AGENT_NAME").is_err() {
+        let output = format_post_tool_use_response();
+        println!("{}", serde_json::to_string(&output)?);
+        return Ok(());
+    }
+
     let payload: serde_json::Value =
         serde_json::from_str(&input).unwrap_or_else(|_| serde_json::Value::Null);
 
@@ -268,7 +288,11 @@ pub fn post_tool_use() -> anyhow::Result<()> {
 /// event in the audit ledger via the daemon for lifecycle tracking.
 /// This is purely observational -- always exits successfully.
 pub fn session_end() -> anyhow::Result<()> {
-    let agent_name = std::env::var("AEGIS_AGENT_NAME").unwrap_or_else(|_| "unknown".to_string());
+    // Not under Aegis supervision -- nothing to record.
+    let agent_name = match std::env::var("AEGIS_AGENT_NAME") {
+        Ok(name) => name,
+        Err(_) => return Ok(()),
+    };
 
     // Read stdin (Stop hook may or may not send a payload)
     let mut input = String::new();

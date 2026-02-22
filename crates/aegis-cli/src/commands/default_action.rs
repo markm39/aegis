@@ -40,7 +40,7 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Nothing configured: onboard wizard (transitions to fleet TUI when done)
+    // Nothing configured: onboard wizard (transitions to chat TUI when done)
     crate::commands::onboard::run()
 }
 
