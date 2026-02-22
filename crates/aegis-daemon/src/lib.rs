@@ -38,6 +38,7 @@ pub mod ndjson_fmt;
 pub mod semantic_search;
 pub mod persistence;
 pub mod plugins;
+pub mod service;
 pub mod prompt_builder;
 pub mod slot;
 pub mod state;
