@@ -1,0 +1,15 @@
+name = "1password"
+version = "1.0.0"
+description = "Read secrets and manage 1Password vaults via the op CLI"
+author = "Aegis Team"
+category = "security"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "1password-cli"
+required_bins = ["op"]
+required_env = []
+os = []
+

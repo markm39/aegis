@@ -1,0 +1,15 @@
+name = "tmux"
+version = "1.0.0"
+description = "Terminal multiplexer management - sessions, windows, panes, and commands"
+author = "Aegis Team"
+category = "development"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "tmux"
+required_bins = ["tmux"]
+required_env = []
+os = []
+

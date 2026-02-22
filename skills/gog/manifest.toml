@@ -1,0 +1,13 @@
+name = "gog"
+version = "1.0.0"
+description = "Google Workspace operations - Drive, Docs, Sheets, Calendar via API"
+author = "Aegis Team"
+category = "misc"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["GOOGLE_APPLICATION_CREDENTIALS"]
+os = []
+

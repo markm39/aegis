@@ -1,0 +1,13 @@
+name = "sag"
+version = "1.0.0"
+description = "Text-to-speech generation via ElevenLabs API"
+author = "Aegis Team"
+category = "audio"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["ELEVENLABS_API_KEY"]
+os = []
+

@@ -1,0 +1,15 @@
+name = "nano-pdf"
+version = "1.0.0"
+description = "Extract text, metadata, and pages from PDF files"
+author = "Aegis Team"
+category = "ai"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "uv"
+install_target = "pymupdf"
+required_bins = []
+required_env = []
+os = []
+

@@ -1,0 +1,15 @@
+name = "video-frames"
+version = "1.0.0"
+description = "Extract frames from video files using ffmpeg for analysis"
+author = "Aegis Team"
+category = "media"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "ffmpeg"
+required_bins = ["ffmpeg"]
+required_env = []
+os = []
+

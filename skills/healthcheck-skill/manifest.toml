@@ -1,0 +1,13 @@
+name = "healthcheck-skill"
+version = "1.0.0"
+description = "Run system health checks on daemon, channels, and connected services"
+author = "Aegis Team"
+category = "security"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

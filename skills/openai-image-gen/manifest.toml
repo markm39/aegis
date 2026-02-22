@@ -1,0 +1,13 @@
+name = "openai-image-gen"
+version = "1.0.0"
+description = "Generate and edit images via OpenAI DALL-E API"
+author = "Aegis Team"
+category = "media"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["OPENAI_API_KEY"]
+os = []
+

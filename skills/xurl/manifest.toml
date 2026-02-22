@@ -1,0 +1,13 @@
+name = "xurl"
+version = "1.0.0"
+description = "Post, read, and search X (Twitter) via API"
+author = "Aegis Team"
+category = "social"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["X_API_KEY"]
+os = []
+

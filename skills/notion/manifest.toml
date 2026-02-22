@@ -1,0 +1,13 @@
+name = "notion"
+version = "1.0.0"
+description = "Interact with Notion pages, databases, and blocks via the Notion API"
+author = "Aegis Team"
+category = "productivity"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["NOTION_API_KEY"]
+os = []
+

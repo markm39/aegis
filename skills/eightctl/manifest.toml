@@ -1,0 +1,13 @@
+name = "eightctl"
+version = "1.0.0"
+description = "Control Eight Sleep smart mattress - temperature, schedules, and sleep data"
+author = "Aegis Team"
+category = "smart-home"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["EIGHT_SLEEP_EMAIL", "EIGHT_SLEEP_PASSWORD"]
+os = []
+

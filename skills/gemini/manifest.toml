@@ -1,0 +1,15 @@
+name = "gemini"
+version = "1.0.0"
+description = "Interact with Google Gemini models via the gemini CLI"
+author = "Aegis Team"
+category = "ai"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "npm"
+install_target = "@anthropic-ai/claude-code"
+required_bins = []
+required_env = []
+os = []
+

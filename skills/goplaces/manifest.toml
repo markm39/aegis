@@ -1,0 +1,13 @@
+name = "goplaces"
+version = "1.0.0"
+description = "Search for places, get directions, and explore locations via Google Maps API"
+author = "Aegis Team"
+category = "misc"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["GOOGLE_MAPS_API_KEY"]
+os = []
+

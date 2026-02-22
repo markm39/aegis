@@ -1,0 +1,15 @@
+name = "openai-whisper"
+version = "1.0.0"
+description = "Local speech-to-text transcription using OpenAI Whisper model"
+author = "Aegis Team"
+category = "media"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "uv"
+install_target = "openai-whisper"
+required_bins = ["whisper"]
+required_env = []
+os = []
+

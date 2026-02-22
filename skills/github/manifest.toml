@@ -1,0 +1,15 @@
+name = "github"
+version = "1.0.0"
+description = "GitHub operations via gh CLI - repos, PRs, issues, releases, gists"
+author = "Aegis Team"
+category = "development"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "gh"
+required_bins = ["gh"]
+required_env = []
+os = []
+

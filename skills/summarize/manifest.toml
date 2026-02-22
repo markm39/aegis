@@ -1,0 +1,13 @@
+name = "summarize"
+version = "1.0.0"
+description = "Summarize long text, articles, or documents using the active LLM"
+author = "Aegis Team"
+category = "search"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

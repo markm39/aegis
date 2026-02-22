@@ -1,0 +1,13 @@
+name = "apple-notes"
+version = "1.0.0"
+description = "Create, read, search, and manage Apple Notes via AppleScript"
+author = "Aegis Team"
+category = "productivity"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = ["darwin"]
+

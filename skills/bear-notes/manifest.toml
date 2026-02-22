@@ -1,0 +1,13 @@
+name = "bear-notes"
+version = "1.0.0"
+description = "Create, read, search, and manage Bear app notes on macOS"
+author = "Aegis Team"
+category = "misc"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = ["darwin"]
+

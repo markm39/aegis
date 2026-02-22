@@ -1,0 +1,13 @@
+name = "sherpa-onnx-tts"
+version = "1.0.0"
+description = "Local text-to-speech using sherpa-onnx models - offline, fast, multilingual"
+author = "Aegis Team"
+category = "audio"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

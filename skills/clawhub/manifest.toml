@@ -1,0 +1,13 @@
+name = "clawhub"
+version = "1.0.0"
+description = "Browse and install skills from the AegisHub skill registry"
+author = "Aegis Team"
+category = "ai"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

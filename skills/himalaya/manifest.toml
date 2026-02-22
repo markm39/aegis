@@ -1,0 +1,15 @@
+name = "himalaya"
+version = "1.0.0"
+description = "Read, send, search, and manage email via the himalaya CLI"
+author = "Aegis Team"
+category = "communication"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "himalaya"
+required_bins = ["himalaya"]
+required_env = []
+os = []
+

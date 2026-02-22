@@ -1,0 +1,15 @@
+name = "camsnap"
+version = "1.0.0"
+description = "Capture photos from connected cameras and webcams"
+author = "Aegis Team"
+category = "media"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "imagesnap"
+required_bins = ["imagesnap"]
+required_env = []
+os = ["darwin"]
+

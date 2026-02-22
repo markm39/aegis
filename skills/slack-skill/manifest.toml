@@ -1,0 +1,13 @@
+name = "slack-skill"
+version = "1.0.0"
+description = "Send messages, read channels, and manage Slack workspace via API"
+author = "Aegis Team"
+category = "communication"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["SLACK_BOT_TOKEN"]
+os = []
+

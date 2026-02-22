@@ -1,0 +1,13 @@
+name = "model-usage"
+version = "1.0.0"
+description = "Track and report LLM token usage, costs, and rate limit status"
+author = "Aegis Team"
+category = "ai"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

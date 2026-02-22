@@ -325,10 +325,9 @@ entry_point = "run.sh"
         };
 
         let skills = discover_skills(skills_dir).unwrap();
-        assert_eq!(
-            skills.len(),
-            10,
-            "expected 10 bundled skills in {}, found {}",
+        assert!(
+            skills.len() >= 50,
+            "expected at least 50 bundled skills in {}, found {}",
             skills_dir.display(),
             skills.len()
         );

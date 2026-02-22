@@ -1,0 +1,13 @@
+name = "coding-agent"
+version = "1.0.0"
+description = "Delegate complex coding tasks to Claude Code or Codex CLI"
+author = "Aegis Team"
+category = "development"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

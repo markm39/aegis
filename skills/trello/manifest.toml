@@ -1,0 +1,13 @@
+name = "trello"
+version = "1.0.0"
+description = "Manage Trello boards, lists, and cards via the Trello API"
+author = "Aegis Team"
+category = "productivity"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["TRELLO_API_KEY"]
+os = []
+

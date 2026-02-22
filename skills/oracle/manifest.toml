@@ -1,0 +1,13 @@
+name = "oracle"
+version = "1.0.0"
+description = "Multi-model consensus - query multiple LLMs and synthesize responses"
+author = "Aegis Team"
+category = "misc"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

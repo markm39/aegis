@@ -1,0 +1,13 @@
+name = "ordercli"
+version = "1.0.0"
+description = "Track packages and deliveries across major shipping carriers"
+author = "Aegis Team"
+category = "misc"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = []
+os = []
+

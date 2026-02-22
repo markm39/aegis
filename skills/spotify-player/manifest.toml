@@ -1,0 +1,15 @@
+name = "spotify-player"
+version = "1.0.0"
+description = "Control Spotify playback - play, pause, skip, queue, search, and playlists"
+author = "Aegis Team"
+category = "audio"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "spotify_player"
+required_bins = ["spotify_player"]
+required_env = []
+os = []
+

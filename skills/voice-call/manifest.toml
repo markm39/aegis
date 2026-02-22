@@ -1,0 +1,13 @@
+name = "voice-call"
+version = "1.0.0"
+description = "Make and manage voice calls via Twilio or compatible telephony API"
+author = "Aegis Team"
+category = "misc"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]
+os = []
+

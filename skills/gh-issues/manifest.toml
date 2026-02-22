@@ -1,0 +1,15 @@
+name = "gh-issues"
+version = "1.0.0"
+description = "GitHub issue management - create, list, assign, label, and close issues"
+author = "Aegis Team"
+category = "development"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "brew"
+install_target = "gh"
+required_bins = ["gh"]
+required_env = []
+os = []
+

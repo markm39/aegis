@@ -1,0 +1,13 @@
+name = "discord-skill"
+version = "1.0.0"
+description = "Send messages, manage channels, and interact with Discord servers via API"
+author = "Aegis Team"
+category = "communication"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = []
+required_env = ["DISCORD_BOT_TOKEN"]
+os = []
+

@@ -1,0 +1,15 @@
+name = "sonoscli"
+version = "1.0.0"
+description = "Control Sonos speakers - playback, volume, grouping, and queue management"
+author = "Aegis Team"
+category = "smart-home"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "npm"
+install_target = "sonos-cli"
+required_bins = ["sonos"]
+required_env = []
+os = []
+
