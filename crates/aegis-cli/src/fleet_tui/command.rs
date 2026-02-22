@@ -55,6 +55,14 @@ pub enum FleetCommand {
     Status,
     /// Open daemon config in $EDITOR in a new terminal window.
     Config,
+    /// Read a config value using dot-notation.
+    ConfigGet { key: String },
+    /// Write a config value using dot-notation to workspace config.
+    ConfigSet { key: String, value: String },
+    /// Show all effective config key-value pairs.
+    ConfigList,
+    /// Show which config files are active and their priority.
+    ConfigLayers,
     /// Show Telegram configuration status.
     Telegram,
     /// Run Telegram setup wizard in new terminal.
@@ -531,7 +539,33 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Ok(Some(FleetCommand::Remove { agent: arg1.into() }))
             }
         }
-        "config" => Ok(Some(FleetCommand::Config)),
+        "config" => match arg1 {
+            "" => Ok(Some(FleetCommand::Config)),
+            "get" => {
+                if arg2.is_empty() {
+                    return Err("usage: config get <key>  (e.g., config get pilot.stall.timeout_secs)".into());
+                }
+                let key = arg2.split_whitespace().next().unwrap_or("").to_string();
+                Ok(Some(FleetCommand::ConfigGet { key }))
+            }
+            "set" => {
+                if arg2.is_empty() {
+                    return Err("usage: config set <key> <value>  (e.g., config set name myagent)".into());
+                }
+                match arg2.split_once(' ') {
+                    Some((key, value)) => Ok(Some(FleetCommand::ConfigSet {
+                        key: key.to_string(),
+                        value: value.to_string(),
+                    })),
+                    None => Err("usage: config set <key> <value>".into()),
+                }
+            }
+            "list" => Ok(Some(FleetCommand::ConfigList)),
+            "layers" => Ok(Some(FleetCommand::ConfigLayers)),
+            other => Err(format!(
+                "unknown config subcommand: {other}. Try: get, set, list, layers"
+            )),
+        },
         "telegram" => match arg1 {
             "" => Ok(Some(FleetCommand::Telegram)),
             "setup" => Ok(Some(FleetCommand::TelegramSetup)),
@@ -1594,6 +1628,10 @@ pub fn help_text() -> &'static str {
      :approve <agent>         Approve first pending prompt\n\
      :chat [agent]            Open orchestrator chat (or agent detail)\n\
      :config                  Edit daemon.toml in $EDITOR\n\
+     :config get <key>        Read config value (dot-notation)\n\
+     :config set <key> <val>  Write config value (workspace)\n\
+     :config list             Show all effective config values\n\
+     :config layers           Show active config file layers\n\
      :context <agent>         View agent context\n\
      :context <a> <field>     Clear field\n\
      :context <a> <f> <val>   Set field (role/goal/context/task)\n\
@@ -1915,6 +1953,51 @@ mod tests {
     #[test]
     fn parse_config() {
         assert_eq!(parse("config").unwrap(), Some(FleetCommand::Config));
+    }
+
+    #[test]
+    fn parse_config_get() {
+        assert_eq!(
+            parse("config get pilot.stall.timeout_secs").unwrap(),
+            Some(FleetCommand::ConfigGet {
+                key: "pilot.stall.timeout_secs".into(),
+            })
+        );
+        assert!(parse("config get").is_err());
+    }
+
+    #[test]
+    fn parse_config_set() {
+        assert_eq!(
+            parse("config set name myagent").unwrap(),
+            Some(FleetCommand::ConfigSet {
+                key: "name".into(),
+                value: "myagent".into(),
+            })
+        );
+        assert!(parse("config set").is_err());
+        assert!(parse("config set name").is_err());
+    }
+
+    #[test]
+    fn parse_config_list() {
+        assert_eq!(
+            parse("config list").unwrap(),
+            Some(FleetCommand::ConfigList)
+        );
+    }
+
+    #[test]
+    fn parse_config_layers() {
+        assert_eq!(
+            parse("config layers").unwrap(),
+            Some(FleetCommand::ConfigLayers)
+        );
+    }
+
+    #[test]
+    fn parse_config_unknown_subcommand() {
+        assert!(parse("config foo").is_err());
     }
 
     #[test]

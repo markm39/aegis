@@ -323,6 +323,27 @@ enum ConfigCommands {
         /// Name of the aegis configuration (uses current if omitted)
         config: Option<String>,
     },
+
+    /// Read a config value using dot-notation (e.g., pilot.stall.timeout_secs)
+    Get {
+        /// Dot-separated key path (e.g., pilot.stall.timeout_secs)
+        key: String,
+    },
+
+    /// Write a config value using dot-notation to the workspace config
+    Set {
+        /// Dot-separated key path (e.g., pilot.stall.timeout_secs)
+        key: String,
+
+        /// Value to set (auto-detected type: int, float, bool, string, array)
+        value: String,
+    },
+
+    /// Show all effective config key-value pairs with source annotations
+    List,
+
+    /// Show which config files are active and their priority
+    Layers,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1334,6 +1355,10 @@ fn main() -> anyhow::Result<()> {
                 let config = resolve_config(config)?;
                 commands::config::edit(&config)
             }
+            ConfigCommands::Get { key } => commands::config::get(&key),
+            ConfigCommands::Set { key, value } => commands::config::set(&key, &value),
+            ConfigCommands::List => commands::config::list(),
+            ConfigCommands::Layers => commands::config::layers(),
         },
         Commands::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "aegis", &mut std::io::stdout());
@@ -2315,6 +2340,63 @@ mod tests {
                 assert_eq!(config, Some("myagent".to_string()));
             }
             _ => panic!("expected Config Edit command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_config_get() {
+        let cli = Cli::try_parse_from(["aegis", "config", "get", "pilot.stall.timeout_secs"]);
+        assert!(cli.is_ok(), "should parse config get: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Config {
+                action: ConfigCommands::Get { key },
+            } => {
+                assert_eq!(key, "pilot.stall.timeout_secs");
+            }
+            _ => panic!("expected Config Get command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_config_set() {
+        let cli = Cli::try_parse_from(["aegis", "config", "set", "name", "myagent"]);
+        assert!(cli.is_ok(), "should parse config set: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Config {
+                action: ConfigCommands::Set { key, value },
+            } => {
+                assert_eq!(key, "name");
+                assert_eq!(value, "myagent");
+            }
+            _ => panic!("expected Config Set command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_config_list() {
+        let cli = Cli::try_parse_from(["aegis", "config", "list"]);
+        assert!(cli.is_ok(), "should parse config list: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Config {
+                action: ConfigCommands::List,
+            } => {}
+            _ => panic!("expected Config List command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_config_layers() {
+        let cli = Cli::try_parse_from(["aegis", "config", "layers"]);
+        assert!(cli.is_ok(), "should parse config layers: {cli:?}");
+        let cli = cli.unwrap();
+        match cli.command.unwrap() {
+            Commands::Config {
+                action: ConfigCommands::Layers,
+            } => {}
+            _ => panic!("expected Config Layers command"),
         }
     }
 

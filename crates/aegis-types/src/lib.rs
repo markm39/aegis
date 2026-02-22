@@ -29,7 +29,9 @@ pub use config::{
     LEDGER_FILENAME,
 };
 pub use config_loader::{
-    mask_sensitive, is_sensitive_field, ConfigLoader, ConfigSource, EffectiveConfig,
+    discover_layers, flatten_toml, format_toml_value, get_dot_value, mask_sensitive,
+    is_sensitive_field, set_dot_value, ConfigLayerInfo, ConfigLoader, ConfigSource,
+    EffectiveConfig, CONFIG_KEY_NAMES,
 };
 pub use daemon::{
     AcpServerConfig, AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig,

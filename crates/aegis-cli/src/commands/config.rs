@@ -3,12 +3,20 @@
 //! `aegis config show NAME`   -- display all settings
 //! `aegis config path NAME`   -- print the config file path
 //! `aegis config edit NAME`   -- open config in $EDITOR
+//! `aegis config get KEY`     -- read a value using dot-notation
+//! `aegis config set KEY VAL` -- write a value using dot-notation
+//! `aegis config list`        -- show all effective config key-value pairs
+//! `aegis config layers`      -- show which config files are active
 
 use std::fs;
 
 use anyhow::{bail, Context, Result};
 
 use aegis_types::{AegisConfig, CONFIG_FILENAME};
+use aegis_types::{
+    flatten_toml, format_toml_value, get_dot_value, is_sensitive_field, mask_sensitive,
+    set_dot_value, ConfigLoader,
+};
 
 use crate::commands::init::{load_config, resolve_config_dir};
 
@@ -141,6 +149,152 @@ pub fn edit(config_name: &str) -> Result<()> {
                 bak_path.display()
             );
         }
+    }
+
+    Ok(())
+}
+
+/// Run `aegis config get KEY`.
+///
+/// Reads a value from the effective (merged) configuration using dot-notation.
+/// Example: `aegis config get pilot.stall.timeout_secs`
+pub fn get(key: &str) -> Result<()> {
+    let loader = ConfigLoader::new();
+    let effective = loader
+        .load()
+        .map_err(|e| anyhow::anyhow!("failed to load config: {e}"))?;
+
+    let toml_value = toml::Value::try_from(&effective.config)
+        .map_err(|e| anyhow::anyhow!("failed to serialize config: {e}"))?;
+
+    match get_dot_value(&toml_value, key) {
+        Some(val) => {
+            let display = if is_sensitive_field(key) {
+                match &val {
+                    toml::Value::String(s) => mask_sensitive(s),
+                    other => format_toml_value(other),
+                }
+            } else {
+                format_toml_value(&val)
+            };
+            println!("{display}");
+        }
+        None => {
+            bail!("key '{key}' not found in effective config");
+        }
+    }
+
+    // Show provenance if available
+    if let Some(source) = effective.sources.get(key) {
+        eprintln!("  (source: {source})");
+    }
+
+    Ok(())
+}
+
+/// Run `aegis config set KEY VALUE`.
+///
+/// Writes a value to the workspace config file (.aegis/config.toml) using
+/// dot-notation. Creates the file if it doesn't exist.
+/// Example: `aegis config set pilot.stall.timeout_secs 60`
+pub fn set(key: &str, value: &str) -> Result<()> {
+    let workspace_path = std::path::PathBuf::from(".aegis/config.toml");
+
+    // Read existing workspace config or start from empty table
+    let mut toml_value = if workspace_path.exists() {
+        let content = fs::read_to_string(&workspace_path)
+            .with_context(|| format!("failed to read {}", workspace_path.display()))?;
+        content
+            .parse::<toml::Value>()
+            .map_err(|e| anyhow::anyhow!("invalid workspace config: {e}"))?
+    } else {
+        // Ensure parent directory exists
+        if let Some(parent) = workspace_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    set_dot_value(&mut toml_value, key, value)
+        .map_err(|e| anyhow::anyhow!("failed to set value: {e}"))?;
+
+    // Serialize back to TOML
+    let output = toml::to_string_pretty(&toml_value)
+        .map_err(|e| anyhow::anyhow!("failed to serialize config: {e}"))?;
+    fs::write(&workspace_path, &output)
+        .with_context(|| format!("failed to write {}", workspace_path.display()))?;
+
+    println!("Set {key} = {value} in {}", workspace_path.display());
+    Ok(())
+}
+
+/// Run `aegis config list`.
+///
+/// Shows all effective configuration values as dot-separated key-value pairs.
+/// Sensitive fields (tokens, keys) are masked.
+pub fn list() -> Result<()> {
+    let loader = ConfigLoader::new();
+    let effective = loader
+        .load()
+        .map_err(|e| anyhow::anyhow!("failed to load config: {e}"))?;
+
+    let toml_value = toml::Value::try_from(&effective.config)
+        .map_err(|e| anyhow::anyhow!("failed to serialize config: {e}"))?;
+
+    let mut entries = Vec::new();
+    flatten_toml(&toml_value, "", &mut entries);
+
+    if entries.is_empty() {
+        println!("(no configuration values)");
+        return Ok(());
+    }
+
+    // Find the longest key for alignment
+    let max_key_len = entries.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+
+    for (key, value) in &entries {
+        let source_tag = effective
+            .sources
+            .get(key)
+            .map(|s| format!("  [{s}]"))
+            .unwrap_or_default();
+        println!("{key:<max_key_len$}  {value}{source_tag}");
+    }
+
+    Ok(())
+}
+
+/// Run `aegis config layers`.
+///
+/// Shows which config files exist and how many keys each defines.
+pub fn layers() -> Result<()> {
+    let loader = ConfigLoader::new();
+    let layer_infos = loader.discover_layers();
+
+    println!("Config layers (lowest to highest priority):\n");
+
+    for (i, info) in layer_infos.iter().enumerate() {
+        let priority = i + 1;
+        let status = if info.exists {
+            format!("active ({} keys)", info.key_count)
+        } else {
+            "not found".to_string()
+        };
+        println!("  {priority}. {}", info.source);
+        println!("     Status: {status}");
+        println!();
+    }
+
+    // Also show env var overrides
+    let env_count = aegis_types::config_loader::ENV_MAPPINGS
+        .iter()
+        .filter(|m| std::env::var(m.env_var).is_ok())
+        .count();
+    if env_count > 0 {
+        println!("  4. Environment variables");
+        println!("     Status: {env_count} override(s) active");
+        println!();
     }
 
     Ok(())

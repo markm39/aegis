@@ -1506,6 +1506,60 @@ impl FleetApp {
             FleetCommand::Config => {
                 self.spawn_terminal("aegis daemon config edit", "Opened config in editor");
             }
+            FleetCommand::ConfigGet { key } => {
+                // Show result in status bar
+                match aegis_types::ConfigLoader::new().load() {
+                    Ok(effective) => {
+                        match toml::Value::try_from(&effective.config) {
+                            Ok(toml_val) => {
+                                match aegis_types::get_dot_value(&toml_val, &key) {
+                                    Some(val) => {
+                                        let display = if aegis_types::is_sensitive_field(&key) {
+                                            match &val {
+                                                toml::Value::String(s) => aegis_types::mask_sensitive(s),
+                                                other => aegis_types::format_toml_value(other),
+                                            }
+                                        } else {
+                                            aegis_types::format_toml_value(&val)
+                                        };
+                                        let source = effective
+                                            .sources
+                                            .get(&key)
+                                            .map(|s| format!("  [{s}]"))
+                                            .unwrap_or_default();
+                                        self.command_result = Some(format!("{key} = {display}{source}"));
+                                    }
+                                    None => {
+                                        self.last_error = Some(format!("Key '{key}' not found in effective config"));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.last_error = Some(format!("Failed to serialize config: {e}"));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.last_error = Some(format!("Failed to load config: {e}"));
+                    }
+                }
+            }
+            FleetCommand::ConfigSet { key, value } => {
+                match crate::commands::config::set(&key, &value) {
+                    Ok(()) => {
+                        self.command_result = Some(format!("Set {key} = {value}"));
+                    }
+                    Err(e) => {
+                        self.last_error = Some(format!("Failed to set config: {e}"));
+                    }
+                }
+            }
+            FleetCommand::ConfigList => {
+                self.spawn_terminal("aegis config list", "Showing effective config");
+            }
+            FleetCommand::ConfigLayers => {
+                self.spawn_terminal("aegis config layers", "Showing config layers");
+            }
             FleetCommand::Telegram => {
                 use aegis_types::daemon::daemon_config_path;
                 use aegis_types::daemon::DaemonConfig;

@@ -211,6 +211,66 @@ impl ConfigLoader {
             source_files,
         })
     }
+
+    /// Discover all config layer files and their status.
+    ///
+    /// Returns information about each layer in precedence order (lowest to highest).
+    pub fn discover_layers(&self) -> Vec<ConfigLayerInfo> {
+        let mut layers = Vec::new();
+
+        // System
+        let system_path = self
+            .system_config_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/etc/aegis/config.toml"));
+        let system_exists = system_path.exists();
+        let system_keys = if system_exists {
+            count_top_level_keys(&system_path)
+        } else {
+            0
+        };
+        layers.push(ConfigLayerInfo {
+            source: ConfigSource::SystemFile(system_path),
+            exists: system_exists,
+            key_count: system_keys,
+        });
+
+        // User
+        let user_path = self.user_config_path.clone().unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            PathBuf::from(home).join(".aegis").join("config.toml")
+        });
+        let user_exists = user_path.exists();
+        let user_keys = if user_exists {
+            count_top_level_keys(&user_path)
+        } else {
+            0
+        };
+        layers.push(ConfigLayerInfo {
+            source: ConfigSource::UserFile(user_path),
+            exists: user_exists,
+            key_count: user_keys,
+        });
+
+        // Workspace
+        let workspace_path = self
+            .workspace_config_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(".aegis/config.toml"));
+        let workspace_exists = workspace_path.exists();
+        let workspace_keys = if workspace_exists {
+            count_top_level_keys(&workspace_path)
+        } else {
+            0
+        };
+        layers.push(ConfigLayerInfo {
+            source: ConfigSource::WorkspaceFile(workspace_path),
+            exists: workspace_exists,
+            key_count: workspace_keys,
+        });
+
+        layers
+    }
 }
 
 /// Read a config file with security checks: size limit, no null bytes.
@@ -325,15 +385,15 @@ fn record_nested_sources(
 }
 
 /// Known environment variable mappings.
-struct EnvMapping {
+pub struct EnvMapping {
     /// Environment variable name.
-    env_var: &'static str,
+    pub env_var: &'static str,
     /// Dot-separated TOML path segments.
-    toml_path: &'static [&'static str],
+    pub toml_path: &'static [&'static str],
 }
 
 /// All supported AEGIS_* environment variable mappings.
-const ENV_MAPPINGS: &[EnvMapping] = &[
+pub const ENV_MAPPINGS: &[EnvMapping] = &[
     EnvMapping {
         env_var: "AEGIS_SANDBOX_DIR",
         toml_path: &["sandbox_dir"],
@@ -592,6 +652,192 @@ pub fn is_sensitive_field(field_name: &str) -> bool {
         || lower.contains("password")
         || lower.contains("webhook_url")
 }
+
+/// Retrieve a value from a TOML tree using dot-separated key path.
+///
+/// For example, `"pilot.stall.timeout_secs"` navigates into `[pilot]` ->
+/// `[stall]` -> `timeout_secs`. Returns `None` if any segment is missing.
+pub fn get_dot_value(root: &toml::Value, path: &str) -> Option<toml::Value> {
+    let segments: Vec<&str> = path.split('.').collect();
+    let mut current = root;
+    for segment in &segments {
+        match current {
+            toml::Value::Table(table) => {
+                current = table.get(*segment)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(current.clone())
+}
+
+/// Set a value in a TOML tree using dot-separated key path.
+///
+/// Creates intermediate tables as needed. The value is parsed from a string
+/// using TOML literal syntax: integers, floats, booleans, quoted strings, and
+/// arrays are detected automatically. Bare strings are stored as TOML strings.
+pub fn set_dot_value(
+    root: &mut toml::Value,
+    path: &str,
+    raw_value: &str,
+) -> Result<(), AegisError> {
+    let segments: Vec<&str> = path.split('.').collect();
+    if segments.is_empty() || segments.iter().any(|s| s.is_empty()) {
+        return Err(AegisError::ConfigError(
+            "config key path must be non-empty with no empty segments".into(),
+        ));
+    }
+
+    let parsed = parse_toml_literal(raw_value);
+    set_nested_value(root, &segments, parsed);
+    Ok(())
+}
+
+/// Parse a string as a TOML literal value.
+///
+/// Attempts, in order: integer, float, boolean, TOML inline value (arrays,
+/// inline tables, quoted strings). Falls back to a plain string.
+fn parse_toml_literal(raw: &str) -> toml::Value {
+    // Boolean
+    if raw == "true" {
+        return toml::Value::Boolean(true);
+    }
+    if raw == "false" {
+        return toml::Value::Boolean(false);
+    }
+    // Integer (only if it looks like one -- avoid parsing floats as int)
+    if !raw.contains('.') {
+        if let Ok(n) = raw.parse::<i64>() {
+            return toml::Value::Integer(n);
+        }
+    }
+    // Float
+    if let Ok(f) = raw.parse::<f64>() {
+        return toml::Value::Float(f);
+    }
+    // Try parsing as a TOML value expression (handles arrays, inline tables, quoted strings).
+    // We wrap it as `v = <raw>` to get a valid TOML document.
+    let attempt = format!("v = {raw}");
+    if let Ok(table) = attempt.parse::<toml::Table>() {
+        if let Some(val) = table.get("v") {
+            return val.clone();
+        }
+    }
+    // Fallback: plain string
+    toml::Value::String(raw.to_string())
+}
+
+/// Format a TOML value as a human-readable string for display.
+pub fn format_toml_value(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Integer(n) => n.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Datetime(d) => d.to_string(),
+        toml::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(format_toml_value).collect();
+            format!("[{}]", items.join(", "))
+        }
+        toml::Value::Table(table) => {
+            let entries: Vec<String> = table
+                .iter()
+                .map(|(k, v)| format!("{k} = {}", format_toml_value(v)))
+                .collect();
+            format!("{{{}}}", entries.join(", "))
+        }
+    }
+}
+
+/// Flatten a TOML value into dot-separated key-value pairs.
+///
+/// Used by `config list` to show all effective config values.
+pub fn flatten_toml(
+    value: &toml::Value,
+    prefix: &str,
+    out: &mut Vec<(String, String)>,
+) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, val) in table {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten_toml(val, &path, out);
+            }
+        }
+        _ => {
+            let display = if is_sensitive_field(prefix) {
+                match value {
+                    toml::Value::String(s) => mask_sensitive(s),
+                    other => format_toml_value(other),
+                }
+            } else {
+                format_toml_value(value)
+            };
+            out.push((prefix.to_string(), display));
+        }
+    }
+}
+
+/// Information about a config layer (file or source) for the `config layers` command.
+#[derive(Debug, Clone)]
+pub struct ConfigLayerInfo {
+    /// The source type and path.
+    pub source: ConfigSource,
+    /// Whether the file exists.
+    pub exists: bool,
+    /// Number of top-level keys defined in this layer.
+    pub key_count: usize,
+}
+
+/// Discover all config layer files and their status.
+///
+/// Returns information about each layer in precedence order (lowest to highest).
+pub fn discover_layers(loader: &ConfigLoader) -> Vec<ConfigLayerInfo> {
+    loader.discover_layers()
+}
+
+/// Count top-level keys in a TOML config file. Returns 0 on any error.
+fn count_top_level_keys(path: &Path) -> usize {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| content.parse::<toml::Table>().ok())
+        .map(|table| table.len())
+        .unwrap_or(0)
+}
+
+/// All known top-level config key names for tab completion.
+pub const CONFIG_KEY_NAMES: &[&str] = &[
+    "alerts",
+    "allowed_network",
+    "channel",
+    "isolation",
+    "ledger_path",
+    "name",
+    "observer",
+    "pilot",
+    "pilot.adapter",
+    "pilot.control",
+    "pilot.control.api_key",
+    "pilot.control.http_listen",
+    "pilot.control.poll_endpoint",
+    "pilot.control.poll_interval_secs",
+    "pilot.output_buffer_lines",
+    "pilot.stall",
+    "pilot.stall.max_nudges",
+    "pilot.stall.nudge_message",
+    "pilot.stall.timeout_secs",
+    "pilot.uncertain_action",
+    "policy_paths",
+    "sandbox_dir",
+    "schema_path",
+    "usage_proxy",
+    "usage_proxy.enabled",
+    "usage_proxy.port",
+];
 
 /// Default `AegisConfig` used as the base layer in hierarchical loading.
 impl Default for AegisConfig {
@@ -1121,5 +1367,196 @@ mod tests {
         assert_eq!(arr[0].as_str().unwrap(), "/path/a");
         assert_eq!(arr[1].as_str().unwrap(), "/path/b");
         assert_eq!(arr[2].as_str().unwrap(), "/path/c");
+    }
+
+    #[test]
+    fn get_dot_value_simple() {
+        let root: toml::Value = toml::from_str(
+            r#"
+            name = "test"
+            sandbox_dir = "/tmp/sandbox"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            get_dot_value(&root, "name"),
+            Some(toml::Value::String("test".into()))
+        );
+        assert_eq!(
+            get_dot_value(&root, "sandbox_dir"),
+            Some(toml::Value::String("/tmp/sandbox".into()))
+        );
+        assert_eq!(get_dot_value(&root, "nonexistent"), None);
+    }
+
+    #[test]
+    fn get_dot_value_nested() {
+        let root: toml::Value = toml::from_str(
+            r#"
+            [pilot]
+            output_buffer_lines = 500
+            [pilot.stall]
+            timeout_secs = 120
+            max_nudges = 3
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            get_dot_value(&root, "pilot.output_buffer_lines"),
+            Some(toml::Value::Integer(500))
+        );
+        assert_eq!(
+            get_dot_value(&root, "pilot.stall.timeout_secs"),
+            Some(toml::Value::Integer(120))
+        );
+        assert_eq!(
+            get_dot_value(&root, "pilot.stall.max_nudges"),
+            Some(toml::Value::Integer(3))
+        );
+        assert_eq!(get_dot_value(&root, "pilot.stall.missing"), None);
+        assert_eq!(get_dot_value(&root, "pilot.missing.deep"), None);
+    }
+
+    #[test]
+    fn set_dot_value_creates_nested() {
+        let mut root = toml::Value::Table(toml::map::Map::new());
+        set_dot_value(&mut root, "pilot.stall.timeout_secs", "60").unwrap();
+        assert_eq!(
+            get_dot_value(&root, "pilot.stall.timeout_secs"),
+            Some(toml::Value::Integer(60))
+        );
+    }
+
+    #[test]
+    fn set_dot_value_overwrites() {
+        let mut root: toml::Value = toml::from_str(
+            r#"
+            name = "old"
+            "#,
+        )
+        .unwrap();
+        set_dot_value(&mut root, "name", "new").unwrap();
+        assert_eq!(
+            get_dot_value(&root, "name"),
+            Some(toml::Value::String("new".into()))
+        );
+    }
+
+    #[test]
+    fn set_dot_value_rejects_empty_path() {
+        let mut root = toml::Value::Table(toml::map::Map::new());
+        assert!(set_dot_value(&mut root, "", "val").is_err());
+        assert!(set_dot_value(&mut root, "a..b", "val").is_err());
+    }
+
+    #[test]
+    fn parse_toml_literal_types() {
+        assert_eq!(parse_toml_literal("true"), toml::Value::Boolean(true));
+        assert_eq!(parse_toml_literal("false"), toml::Value::Boolean(false));
+        assert_eq!(parse_toml_literal("42"), toml::Value::Integer(42));
+        assert_eq!(parse_toml_literal("-7"), toml::Value::Integer(-7));
+        assert_eq!(parse_toml_literal("3.14"), toml::Value::Float(3.14));
+        assert_eq!(
+            parse_toml_literal("hello"),
+            toml::Value::String("hello".into())
+        );
+        // Quoted string
+        assert_eq!(
+            parse_toml_literal("\"quoted\""),
+            toml::Value::String("quoted".into())
+        );
+        // Array
+        let arr = parse_toml_literal("[1, 2, 3]");
+        assert!(arr.is_array());
+        assert_eq!(arr.as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn flatten_toml_basic() {
+        let root: toml::Value = toml::from_str(
+            r#"
+            name = "test"
+            [pilot]
+            output_buffer_lines = 500
+            [pilot.stall]
+            timeout_secs = 120
+            "#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        flatten_toml(&root, "", &mut out);
+        // Should contain at least these keys
+        let keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"name"));
+        assert!(keys.contains(&"pilot.output_buffer_lines"));
+        assert!(keys.contains(&"pilot.stall.timeout_secs"));
+    }
+
+    #[test]
+    fn flatten_toml_masks_sensitive() {
+        let root: toml::Value = toml::from_str(
+            r#"
+            [channel]
+            bot_token = "xoxb-secret-1234567890"
+            "#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        flatten_toml(&root, "", &mut out);
+        let token_entry = out.iter().find(|(k, _)| k == "channel.bot_token");
+        assert!(token_entry.is_some());
+        let (_, display) = token_entry.unwrap();
+        assert!(display.contains("***"), "should mask token, got: {display}");
+        assert!(!display.contains("1234567890"), "should not show full token");
+    }
+
+    #[test]
+    fn format_toml_value_all_types() {
+        assert_eq!(
+            format_toml_value(&toml::Value::String("hello".into())),
+            "hello"
+        );
+        assert_eq!(format_toml_value(&toml::Value::Integer(42)), "42");
+        assert_eq!(format_toml_value(&toml::Value::Boolean(true)), "true");
+        assert_eq!(format_toml_value(&toml::Value::Float(2.5)), "2.5");
+        let arr = toml::Value::Array(vec![
+            toml::Value::String("a".into()),
+            toml::Value::String("b".into()),
+        ]);
+        assert_eq!(format_toml_value(&arr), "[a, b]");
+    }
+
+    #[test]
+    fn discover_layers_returns_three_entries() {
+        let tmp = TempDir::new().unwrap();
+        let loader = ConfigLoader::new()
+            .with_system_path(tmp.path().join("nonexistent/config.toml"))
+            .with_user_path(tmp.path().join("nonexistent/config.toml"))
+            .with_workspace_path(tmp.path().join("nonexistent/config.toml"));
+        let layers = loader.discover_layers();
+        // Always returns 3 layers: system, user, workspace
+        assert_eq!(layers.len(), 3);
+        // None exist since they're nonexistent paths
+        assert!(!layers[0].exists);
+        assert!(!layers[1].exists);
+        assert!(!layers[2].exists);
+    }
+
+    #[test]
+    fn discover_layers_detects_existing_files() {
+        let tmp = TempDir::new().unwrap();
+        let user_dir = tmp.path().join("user");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        let user_path = write_config(&user_dir, "name = \"test\"\nsandbox_dir = \"/tmp\"\n");
+
+        let loader = ConfigLoader::new()
+            .with_system_path(tmp.path().join("nonexistent/config.toml"))
+            .with_user_path(user_path)
+            .with_workspace_path(tmp.path().join("nonexistent/config.toml"));
+        let layers = loader.discover_layers();
+        assert!(!layers[0].exists); // system
+        assert!(layers[1].exists); // user
+        assert_eq!(layers[1].key_count, 2); // name + sandbox_dir
+        assert!(!layers[2].exists); // workspace
     }
 }
