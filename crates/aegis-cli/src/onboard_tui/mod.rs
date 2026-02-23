@@ -6,6 +6,8 @@
 //! success or cancellation.
 
 pub mod app;
+mod auth_flow;
+mod callback_server;
 mod ui;
 
 use std::io;
@@ -58,6 +60,9 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
                 app.handle_key(key);
             }
         }
+
+        // Poll for background auth flow completions (device flow, PKCE).
+        app.tick();
     }
 
     // Restore terminal.

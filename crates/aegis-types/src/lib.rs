@@ -13,6 +13,7 @@ pub mod error;
 pub mod google_ai;
 pub mod llm;
 pub mod oauth;
+pub mod provider_auth;
 pub mod providers;
 pub mod tool_classification;
 pub mod verdict;
@@ -44,5 +45,9 @@ pub use error::AegisError;
 pub use providers::{
     scan_providers, provider_by_id, providers_by_tier, DetectedProvider, ProviderInfo,
     ProviderTier, ALL_PROVIDERS,
+};
+pub use provider_auth::{
+    auth_flows_for, has_multiple_auth_flows, needs_auth, AuthFlowKind, ClientIdSource,
+    CredentialType, DeviceFlowPollStyle, TokenExtraction,
 };
 pub use verdict::{Decision, Verdict};

@@ -10,8 +10,13 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_types::daemon::{DaemonConfig, DaemonControlConfig, DashboardConfig, PersistenceConfig};
+use aegis_types::provider_auth::{
+    auth_flows_for, has_multiple_auth_flows, needs_auth, AuthFlowKind,
+};
 use aegis_types::providers::{scan_providers, ProviderInfo, ProviderTier, ALL_PROVIDERS};
 use aegis_types::CredentialStore;
+
+use super::auth_flow::{self, AuthToken, AuthTokenType, DevicePollResult};
 
 // ---------------------------------------------------------------------------
 // Step enum
@@ -74,10 +79,20 @@ impl OnboardStep {
 pub enum ProviderSubStep {
     /// Select a provider from the list.
     SelectProvider,
-    /// Select a model for the chosen provider.
-    SelectModel,
+    /// Choose between multiple auth methods for this provider.
+    SelectAuthMethod,
     /// Enter API key manually.
     EnterApiKey,
+    /// Paste a setup token (e.g., `claude setup-token` output).
+    SetupTokenInput,
+    /// Show result of CLI token extraction attempt.
+    CliExtractResult,
+    /// Device flow in progress -- shows user code, polls for auth.
+    DeviceFlowWaiting,
+    /// PKCE browser flow in progress -- browser opened, waiting for callback.
+    PkceBrowserWaiting,
+    /// Select a model for the chosen provider.
+    SelectModel,
 }
 
 /// What to do with existing configuration.
@@ -190,6 +205,19 @@ pub struct OnboardApp {
     pub model_selected: usize,
     pub api_key_input: String,
     pub api_key_cursor: usize,
+
+    // Auth flow state
+    pub auth_flow_selected: usize,
+    pub device_flow: Option<auth_flow::DeviceFlowState>,
+    pub device_flow_error: Option<String>,
+    pub pkce_receiver: Option<std::sync::mpsc::Receiver<anyhow::Result<AuthToken>>>,
+    pub pkce_auth_url: Option<String>,
+    pub pkce_error: Option<String>,
+    pub setup_token_input: String,
+    pub setup_token_cursor: usize,
+    pub setup_token_instructions: String,
+    pub cli_extract_result: Option<(String, Option<AuthToken>)>,
+    pub auth_token: Option<AuthToken>,
 
     // Step 3: Workspace Config
     pub workspace_path: String,
@@ -454,6 +482,18 @@ impl OnboardApp {
             api_key_input: String::new(),
             api_key_cursor: 0,
 
+            auth_flow_selected: 0,
+            device_flow: None,
+            device_flow_error: None,
+            pkce_receiver: None,
+            pkce_auth_url: None,
+            pkce_error: None,
+            setup_token_input: String::new(),
+            setup_token_cursor: 0,
+            setup_token_instructions: String::new(),
+            cli_extract_result: None,
+            auth_token: None,
+
             workspace_path,
             workspace_cursor: 0,
 
@@ -620,8 +660,13 @@ impl OnboardApp {
     fn handle_provider_selection(&mut self, key: KeyEvent) {
         match self.provider_sub_step {
             ProviderSubStep::SelectProvider => self.handle_provider_list(key),
-            ProviderSubStep::SelectModel => self.handle_model_selection(key),
+            ProviderSubStep::SelectAuthMethod => self.handle_auth_method_selection(key),
             ProviderSubStep::EnterApiKey => self.handle_api_key_input(key),
+            ProviderSubStep::SetupTokenInput => self.handle_setup_token_input(key),
+            ProviderSubStep::CliExtractResult => self.handle_cli_extract_result(key),
+            ProviderSubStep::DeviceFlowWaiting => self.handle_device_flow_waiting(key),
+            ProviderSubStep::PkceBrowserWaiting => self.handle_pkce_browser_waiting(key),
+            ProviderSubStep::SelectModel => self.handle_model_selection(key),
         }
     }
 
@@ -696,22 +741,25 @@ impl OnboardApp {
                     return;
                 }
                 let provider = &self.providers[self.provider_selected];
+                let provider_id = provider.info.id;
+
                 if provider.available {
-                    // Provider is available -- go to model selection.
+                    // Provider already available -- go to model selection.
+                    self.model_selected = 0;
+                    self.provider_sub_step = ProviderSubStep::SelectModel;
+                } else if !needs_auth(provider_id) {
+                    // No auth needed (local provider) -- go to model selection.
                     self.model_selected = 0;
                     self.provider_sub_step = ProviderSubStep::SelectModel;
                 } else {
-                    // Provider not available -- offer to enter API key.
-                    self.api_key_input.clear();
-                    self.api_key_cursor = 0;
-                    self.provider_sub_step = ProviderSubStep::EnterApiKey;
+                    self.route_to_auth_flow();
                 }
             }
             KeyCode::Char('a') => {
-                // Quick jump to API key entry for selected provider.
-                self.api_key_input.clear();
-                self.api_key_cursor = 0;
-                self.provider_sub_step = ProviderSubStep::EnterApiKey;
+                // Quick jump to auth for selected provider.
+                if count > 0 {
+                    self.route_to_auth_flow();
+                }
             }
             KeyCode::Esc => {
                 self.step = OnboardStep::ConfigDetection;
@@ -813,13 +861,36 @@ impl OnboardApp {
         let provider = &self.providers[self.provider_selected];
         let model = self.selected_model();
 
-        // If we have a manually entered API key, store it.
         let base = if provider.info.base_url.is_empty() {
             None
         } else {
             Some(provider.info.base_url.to_string())
         };
-        if !self.api_key_input.is_empty() {
+
+        if let Some(ref token) = self.auth_token {
+            // Store token obtained from an auth flow.
+            let base_override = token.base_url_override.clone().or(base);
+            let cred_type = match token.token_type {
+                AuthTokenType::ApiKey => aegis_types::provider_auth::CredentialType::ApiKey,
+                AuthTokenType::OAuthAccess => {
+                    aegis_types::provider_auth::CredentialType::OAuthToken
+                }
+                AuthTokenType::SetupToken => {
+                    aegis_types::provider_auth::CredentialType::SetupToken
+                }
+                AuthTokenType::CliExtracted => {
+                    aegis_types::provider_auth::CredentialType::CliExtracted
+                }
+            };
+            self.credential_store.set_with_type(
+                provider.info.id,
+                token.token.clone(),
+                Some(model),
+                base_override,
+                cred_type,
+            );
+            self.auth_token = None;
+        } else if !self.api_key_input.is_empty() {
             self.credential_store.set(
                 provider.info.id,
                 self.api_key_input.clone(),
@@ -838,6 +909,289 @@ impl OnboardApp {
 
         // Save credentials to disk (best effort).
         let _ = self.credential_store.save_default();
+    }
+
+    // -----------------------------------------------------------------------
+    // Auth flow routing and handlers
+    // -----------------------------------------------------------------------
+
+    /// Route the user to the appropriate auth flow for the selected provider.
+    fn route_to_auth_flow(&mut self) {
+        let provider_id = self.providers[self.provider_selected].info.id;
+        let flows = auth_flows_for(provider_id);
+
+        if flows.len() > 1 {
+            self.auth_flow_selected = 0;
+            self.provider_sub_step = ProviderSubStep::SelectAuthMethod;
+        } else if flows.len() == 1 {
+            self.start_auth_flow(&flows[0]);
+        } else {
+            // Fallback: API key entry.
+            self.api_key_input.clear();
+            self.api_key_cursor = 0;
+            self.provider_sub_step = ProviderSubStep::EnterApiKey;
+        }
+    }
+
+    /// Go back from an auth sub-step to the right parent.
+    fn go_back_from_auth(&mut self) {
+        let provider_id = self.providers[self.provider_selected].info.id;
+        if has_multiple_auth_flows(provider_id) {
+            self.provider_sub_step = ProviderSubStep::SelectAuthMethod;
+        } else {
+            self.provider_sub_step = ProviderSubStep::SelectProvider;
+        }
+    }
+
+    /// Start a specific auth flow.
+    fn start_auth_flow(&mut self, flow: &'static AuthFlowKind) {
+        match flow {
+            AuthFlowKind::ApiKey => {
+                self.api_key_input.clear();
+                self.api_key_cursor = 0;
+                self.provider_sub_step = ProviderSubStep::EnterApiKey;
+            }
+            AuthFlowKind::SetupToken { instructions } => {
+                self.setup_token_input.clear();
+                self.setup_token_cursor = 0;
+                self.setup_token_instructions = instructions.to_string();
+                self.provider_sub_step = ProviderSubStep::SetupTokenInput;
+            }
+            AuthFlowKind::CliExtract { cli_name, .. } => {
+                let name = cli_name.to_string();
+                match auth_flow::extract_cli_token(flow) {
+                    Ok(token) => {
+                        self.cli_extract_result = Some((name, token));
+                    }
+                    Err(e) => {
+                        self.cli_extract_result = Some((name, None));
+                        self.error_message = Some(format!("Extraction failed: {e}"));
+                    }
+                }
+                self.provider_sub_step = ProviderSubStep::CliExtractResult;
+            }
+            AuthFlowKind::DeviceFlow { .. } => {
+                match auth_flow::start_device_flow(flow) {
+                    Ok(state) => {
+                        self.device_flow = Some(state);
+                        self.device_flow_error = None;
+                        self.provider_sub_step = ProviderSubStep::DeviceFlowWaiting;
+                    }
+                    Err(e) => {
+                        self.error_message =
+                            Some(format!("Failed to start device flow: {e}"));
+                    }
+                }
+            }
+            AuthFlowKind::PkceBrowser { .. } => {
+                match auth_flow::start_pkce_browser_flow(flow) {
+                    Ok(state) => {
+                        let auth_url = state.auth_url.clone();
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let result = auth_flow::complete_pkce_browser_flow(&state);
+                            let _ = tx.send(result);
+                        });
+                        self.pkce_auth_url = Some(auth_url);
+                        self.pkce_receiver = Some(rx);
+                        self.pkce_error = None;
+                        self.provider_sub_step = ProviderSubStep::PkceBrowserWaiting;
+                    }
+                    Err(e) => {
+                        self.error_message =
+                            Some(format!("Failed to start browser auth: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_auth_method_selection(&mut self, key: KeyEvent) {
+        let provider_id = self.providers[self.provider_selected].info.id;
+        let flows = auth_flows_for(provider_id);
+        let count = flows.len();
+
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.auth_flow_selected = (self.auth_flow_selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.auth_flow_selected = self.auth_flow_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if self.auth_flow_selected < count {
+                    self.start_auth_flow(&flows[self.auth_flow_selected]);
+                }
+            }
+            KeyCode::Esc => {
+                self.provider_sub_step = ProviderSubStep::SelectProvider;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_setup_token_input(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                if self.setup_token_input.is_empty() {
+                    self.error_message = Some("Token cannot be empty".into());
+                    return;
+                }
+                self.auth_token = Some(AuthToken {
+                    token: self.setup_token_input.clone(),
+                    token_type: AuthTokenType::SetupToken,
+                    refresh_token: None,
+                    base_url_override: None,
+                });
+                self.providers[self.provider_selected].available = true;
+                self.providers[self.provider_selected].detection_label = "[Token]";
+                self.save_provider_credential();
+                self.model_selected = 0;
+                self.provider_sub_step = ProviderSubStep::SelectModel;
+            }
+            KeyCode::Esc => {
+                self.go_back_from_auth();
+            }
+            _ => {
+                self.handle_text_input(key.code, TextInputTarget::SetupToken);
+            }
+        }
+    }
+
+    fn handle_cli_extract_result(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                if let Some((_, Some(ref token))) = self.cli_extract_result {
+                    self.auth_token = Some(token.clone());
+                    self.providers[self.provider_selected].available = true;
+                    self.providers[self.provider_selected].detection_label = "[Token]";
+                    self.save_provider_credential();
+                    self.model_selected = 0;
+                    self.cli_extract_result = None;
+                    self.provider_sub_step = ProviderSubStep::SelectModel;
+                } else {
+                    // No token found -- go back to try another method.
+                    self.cli_extract_result = None;
+                    self.go_back_from_auth();
+                }
+            }
+            KeyCode::Esc => {
+                self.cli_extract_result = None;
+                self.go_back_from_auth();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_device_flow_waiting(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Esc {
+            self.device_flow = None;
+            self.device_flow_error = None;
+            self.go_back_from_auth();
+        }
+    }
+
+    fn handle_pkce_browser_waiting(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Esc {
+            self.pkce_receiver = None;
+            self.pkce_auth_url = None;
+            self.pkce_error = None;
+            self.go_back_from_auth();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Background polling (called on each tick)
+    // -----------------------------------------------------------------------
+
+    /// Handle background polling for device flows and PKCE browser flows.
+    pub fn tick(&mut self) {
+        if self.step != OnboardStep::ProviderSelection {
+            return;
+        }
+        match self.provider_sub_step {
+            ProviderSubStep::DeviceFlowWaiting => self.tick_device_flow(),
+            ProviderSubStep::PkceBrowserWaiting => self.tick_pkce_browser(),
+            _ => {}
+        }
+    }
+
+    fn tick_device_flow(&mut self) {
+        let flow = match self.device_flow.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        let result = flow.poll_tick();
+        match result {
+            DevicePollResult::Pending | DevicePollResult::TooSoon => {}
+            DevicePollResult::Success(token) => {
+                let provider_id = self.providers[self.provider_selected].info.id;
+                // For GitHub Copilot, exchange the GitHub token for a Copilot session token.
+                let final_token = if provider_id == "github-copilot" {
+                    match auth_flow::exchange_copilot_token(&token.token) {
+                        Ok(copilot_token) => copilot_token,
+                        Err(e) => {
+                            self.device_flow_error =
+                                Some(format!("Copilot token exchange failed: {e}"));
+                            return;
+                        }
+                    }
+                } else {
+                    token
+                };
+
+                self.auth_token = Some(final_token);
+                self.device_flow = None;
+                self.providers[self.provider_selected].available = true;
+                self.providers[self.provider_selected].detection_label = "[OAuth]";
+                self.save_provider_credential();
+                self.model_selected = 0;
+                self.provider_sub_step = ProviderSubStep::SelectModel;
+            }
+            DevicePollResult::Expired => {
+                self.device_flow_error =
+                    Some("Device code expired. Press Esc and try again.".into());
+            }
+            DevicePollResult::Denied => {
+                self.device_flow_error = Some("Authorization denied.".into());
+            }
+            DevicePollResult::Error(msg) => {
+                self.device_flow_error = Some(msg);
+            }
+        }
+    }
+
+    fn tick_pkce_browser(&mut self) {
+        let rx = match self.pkce_receiver.as_ref() {
+            Some(r) => r,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(token)) => {
+                self.auth_token = Some(token);
+                self.pkce_receiver = None;
+                self.pkce_auth_url = None;
+                self.providers[self.provider_selected].available = true;
+                self.providers[self.provider_selected].detection_label = "[OAuth]";
+                self.save_provider_credential();
+                self.model_selected = 0;
+                self.provider_sub_step = ProviderSubStep::SelectModel;
+            }
+            Ok(Err(e)) => {
+                self.pkce_error = Some(format!("OAuth failed: {e}"));
+                self.pkce_receiver = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // Still waiting for callback.
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pkce_error =
+                    Some("OAuth callback thread terminated unexpectedly.".into());
+                self.pkce_receiver = None;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1272,6 +1626,9 @@ impl OnboardApp {
             TextInputTarget::GatewayToken => {
                 (&mut self.gateway_token, &mut self.gateway_token_cursor)
             }
+            TextInputTarget::SetupToken => {
+                (&mut self.setup_token_input, &mut self.setup_token_cursor)
+            }
         };
 
         match code {
@@ -1319,6 +1676,7 @@ impl OnboardApp {
 enum TextInputTarget {
     GatewayPort,
     GatewayToken,
+    SetupToken,
 }
 
 // ---------------------------------------------------------------------------

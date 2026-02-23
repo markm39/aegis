@@ -9,6 +9,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use aegis_types::provider_auth::{auth_flows_for, AuthFlowKind};
+
 use super::app::{
     filtered_providers, ConfigAction, GatewayField, OnboardApp, OnboardStep, ProviderSubStep,
     BIND_OPTIONS,
@@ -98,11 +100,16 @@ fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
                 if app.provider_searching {
                     "Type to search  Enter: confirm  Esc: cancel search"
                 } else {
-                    "j/k: navigate  /: search  a: enter API key  Enter: select  Esc: back"
+                    "j/k: navigate  /: search  a: authenticate  Enter: select  Esc: back"
                 }
             }
-            ProviderSubStep::SelectModel => "j/k: navigate  Enter: confirm  Esc: back",
+            ProviderSubStep::SelectAuthMethod => "j/k: navigate  Enter: select  Esc: back",
             ProviderSubStep::EnterApiKey => "Enter: save key  Esc: cancel",
+            ProviderSubStep::SetupTokenInput => "Enter: save token  Esc: cancel",
+            ProviderSubStep::CliExtractResult => "Enter: continue  Esc: back",
+            ProviderSubStep::DeviceFlowWaiting => "Waiting for authorization...  Esc: cancel",
+            ProviderSubStep::PkceBrowserWaiting => "Waiting for browser callback...  Esc: cancel",
+            ProviderSubStep::SelectModel => "j/k: navigate  Enter: confirm  Esc: back",
         },
         OnboardStep::WorkspaceConfig => "Enter: confirm  Esc: back",
         OnboardStep::GatewayConfig => "Tab/Shift+Tab: next/prev field  Enter: continue  Esc: back",
@@ -216,8 +223,13 @@ fn draw_config_detection(f: &mut Frame, app: &OnboardApp, area: Rect) {
 fn draw_provider_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
     match app.provider_sub_step {
         ProviderSubStep::SelectProvider => draw_provider_list(f, app, area),
-        ProviderSubStep::SelectModel => draw_model_selection(f, app, area),
+        ProviderSubStep::SelectAuthMethod => draw_auth_method_selection(f, app, area),
         ProviderSubStep::EnterApiKey => draw_api_key_input(f, app, area),
+        ProviderSubStep::SetupTokenInput => draw_setup_token_input(f, app, area),
+        ProviderSubStep::CliExtractResult => draw_cli_extract_result(f, app, area),
+        ProviderSubStep::DeviceFlowWaiting => draw_device_flow_waiting(f, app, area),
+        ProviderSubStep::PkceBrowserWaiting => draw_pkce_browser_waiting(f, app, area),
+        ProviderSubStep::SelectModel => draw_model_selection(f, app, area),
     }
 }
 
@@ -392,6 +404,317 @@ fn draw_api_key_input(f: &mut Frame, app: &OnboardApp, area: Rect) {
 
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Auth method selection
+// ---------------------------------------------------------------------------
+
+fn draw_auth_method_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Authentication Method");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Choose how to authenticate:",
+            Style::default().fg(WHITE),
+        )));
+        lines.push(Line::from(""));
+
+        let flows = auth_flows_for(provider.info.id);
+        for (i, flow) in flows.iter().enumerate() {
+            let is_selected = i == app.auth_flow_selected;
+            let marker = if is_selected { "> " } else { "  " };
+            let (label, desc) = auth_flow_label(flow);
+
+            let style = if is_selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(WHITE)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {marker}{label}"), style),
+                Span::styled(format!("  {desc}"), Style::default().fg(DIM)),
+            ]));
+        }
+    }
+
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_setup_token_input(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Setup Token");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", app.setup_token_instructions),
+        Style::default().fg(YELLOW),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Paste the resulting token below:",
+        Style::default().fg(WHITE),
+    )));
+    lines.push(Line::from(""));
+
+    // Masked token input with cursor.
+    let masked: String = "*".repeat(app.setup_token_input.len());
+    let cursor_spans = build_cursor_spans(&masked, app.setup_token_cursor);
+    let mut input_line = vec![Span::styled("  ", Style::default())];
+    input_line.extend(cursor_spans);
+    lines.push(Line::from(input_line));
+
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_cli_extract_result(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Token Extraction");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    match &app.cli_extract_result {
+        Some((cli_name, Some(_token))) => {
+            lines.push(Line::from(Span::styled(
+                format!("  [OK] Found token from {cli_name}"),
+                Style::default().fg(GREEN),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Press Enter to continue.",
+                Style::default().fg(WHITE),
+            )));
+        }
+        Some((cli_name, None)) => {
+            lines.push(Line::from(Span::styled(
+                format!("  [!!] Could not extract token from {cli_name}"),
+                Style::default().fg(RED),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  The CLI may not be installed or configured.",
+                Style::default().fg(DIM),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Press Esc to try another authentication method.",
+                Style::default().fg(WHITE),
+            )));
+        }
+        None => {
+            lines.push(Line::from(Span::styled(
+                "  Checking...",
+                Style::default().fg(DIM),
+            )));
+        }
+    }
+
+    if let Some(ref err) = app.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_device_flow_waiting(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Device Authorization");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    if let Some(ref state) = app.device_flow {
+        lines.push(Line::from(Span::styled(
+            "  Visit this URL in your browser:",
+            Style::default().fg(WHITE),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", state.response.verification_uri),
+            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Enter this code:",
+            Style::default().fg(WHITE),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", state.response.user_code),
+            Style::default()
+                .fg(GREEN)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        // Spinner animation based on poll count.
+        let spinner = match state.poll_count % 4 {
+            0 => "|",
+            1 => "/",
+            2 => "-",
+            _ => "\\",
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {spinner} Waiting for authorization..."),
+            Style::default().fg(DIM),
+        )));
+    }
+
+    if let Some(ref err) = app.device_flow_error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_pkce_browser_waiting(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Browser Authorization");
+
+    let mut lines = vec![Line::from("")];
+
+    if let Some(provider) = app.selected_provider() {
+        lines.push(Line::from(Span::styled(
+            format!("  Provider: {}", provider.info.display_name),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  A browser window has been opened.",
+        Style::default().fg(WHITE),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Complete authorization in your browser.",
+        Style::default().fg(WHITE),
+    )));
+    lines.push(Line::from(""));
+
+    if let Some(ref url) = app.pkce_auth_url {
+        lines.push(Line::from(Span::styled(
+            "  If the browser didn't open, visit:",
+            Style::default().fg(DIM),
+        )));
+        // Truncate long URLs for display.
+        let display_url = if url.len() > 70 {
+            format!("{}...", &url[..67])
+        } else {
+            url.clone()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {display_url}"),
+            Style::default().fg(YELLOW),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Waiting for callback...",
+        Style::default().fg(DIM),
+    )));
+
+    if let Some(ref err) = app.pkce_error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(RED),
+        )));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+/// Get a human-readable label and description for an auth flow kind.
+fn auth_flow_label(flow: &AuthFlowKind) -> (String, String) {
+    match flow {
+        AuthFlowKind::ApiKey => ("Paste API Key".into(), "Enter your key manually".into()),
+        AuthFlowKind::SetupToken { .. } => {
+            ("Setup Token".into(), "Paste a setup token".into())
+        }
+        AuthFlowKind::CliExtract { cli_name, .. } => (
+            format!("Extract from {cli_name}"),
+            "Auto-detect from installed CLI".into(),
+        ),
+        AuthFlowKind::DeviceFlow { .. } => (
+            "OAuth Device Flow".into(),
+            "Authorize via browser with a code".into(),
+        ),
+        AuthFlowKind::PkceBrowser { .. } => (
+            "Browser OAuth".into(),
+            "Authorize directly in your browser".into(),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

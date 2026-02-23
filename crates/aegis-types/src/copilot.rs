@@ -837,6 +837,107 @@ pub fn ensure_valid_copilot_token(
 }
 
 // ---------------------------------------------------------------------------
+// Copilot session token exchange
+// ---------------------------------------------------------------------------
+
+/// A Copilot session token obtained by exchanging a GitHub OAuth token.
+///
+/// The token is a semicolon-delimited string containing metadata like
+/// `tid=...;exp=...;sku=...;proxy-ep=...`. The `proxy_endpoint` is the
+/// base URL for Copilot API requests (e.g., `https://api.individual.githubcopilot.com`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopilotSessionToken {
+    /// The raw Copilot session token string.
+    pub token: String,
+    /// When the session token expires.
+    pub expires_at: DateTime<Utc>,
+    /// The proxy endpoint extracted from the token's `proxy-ep` field.
+    /// Used as the base URL for Copilot API requests.
+    pub proxy_endpoint: String,
+}
+
+/// Exchange a GitHub OAuth token for a Copilot session token.
+///
+/// Sends the GitHub token to `https://api.github.com/copilot_internal/v2/token`
+/// and receives a Copilot-specific session token with an endpoint URL.
+///
+/// The returned `CopilotSessionToken` contains:
+/// - The session token for Copilot API authorization
+/// - The proxy endpoint (base URL) for routing API requests
+/// - The token expiration time
+pub fn exchange_for_copilot_token(github_token: &str) -> Result<CopilotSessionToken, AegisError> {
+    if github_token.is_empty() {
+        return Err(AegisError::ConfigError(
+            "GitHub token is empty -- cannot exchange for Copilot token".into(),
+        ));
+    }
+
+    let exchange_url = "https://api.github.com/copilot_internal/v2/token";
+    validate_github_url(exchange_url)?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
+
+    let resp = client
+        .get(exchange_url)
+        .header("Authorization", format!("token {github_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|e| {
+            AegisError::ConfigError(format!("Copilot token exchange request failed: {e}"))
+        })?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().map_err(|e| {
+        AegisError::ConfigError(format!("failed to parse Copilot exchange response: {e}"))
+    })?;
+
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(AegisError::ConfigError(format!(
+            "Copilot token exchange failed (HTTP {status}): {msg}"
+        )));
+    }
+
+    let token = body
+        .get("token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            AegisError::ConfigError("missing 'token' in Copilot exchange response".into())
+        })?
+        .to_string();
+
+    // Parse expires_at from the response (Unix timestamp)
+    let expires_at = body
+        .get("expires_at")
+        .and_then(|v| v.as_i64())
+        .map(|ts| {
+            chrono::DateTime::from_timestamp(ts, 0)
+                .unwrap_or_else(|| Utc::now() + chrono::Duration::hours(1))
+        })
+        .unwrap_or_else(|| Utc::now() + chrono::Duration::hours(1));
+
+    // Extract proxy-ep from the semicolon-delimited token metadata.
+    // Token format: "tid=...;exp=...;sku=...;proxy-ep=https://..."
+    let proxy_endpoint = token
+        .split(';')
+        .find_map(|part| part.strip_prefix("proxy-ep="))
+        .unwrap_or(DEFAULT_COPILOT_UPSTREAM_URL)
+        .to_string();
+
+    Ok(CopilotSessionToken {
+        token,
+        expires_at,
+        proxy_endpoint,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 

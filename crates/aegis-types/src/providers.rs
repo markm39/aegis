@@ -138,10 +138,26 @@ pub fn scan_providers() -> Vec<DetectedProvider> {
 }
 
 /// Detect availability of a single provider.
+///
+/// Checks (in priority order):
+/// 1. Environment variables (API key or OAuth token)
+/// 2. OAuth token stores (`~/.aegis/oauth/{provider}/token.json`)
+/// 3. CLI-specific token files (e.g., Claude Code config)
+/// 4. Credential store (`~/.aegis/credentials.toml`)
+/// 5. TCP probe for local services (Ollama, vLLM, LiteLLM)
 pub fn detect_provider(info: &'static ProviderInfo) -> DetectedProvider {
     // Check environment variable
     let key_set = has_env_var(info.env_var)
         || info.alt_env_vars.iter().any(|v| has_env_var(v));
+
+    // Check OAuth token store
+    let has_oauth_token = check_oauth_token_store(info.id);
+
+    // Check CLI-specific token files (e.g., Claude Code for Anthropic)
+    let has_cli_token = check_cli_token(info.id);
+
+    // Check credential store
+    let has_stored_credential = check_credential_store(info.id);
 
     // Check TCP probe for local services
     let probe_ok = if !info.probe_addr.is_empty() {
@@ -150,10 +166,16 @@ pub fn detect_provider(info: &'static ProviderInfo) -> DetectedProvider {
         false
     };
 
-    let available = key_set || probe_ok;
+    let available = key_set || has_oauth_token || has_cli_token || has_stored_credential || probe_ok;
 
     let status_label = if key_set {
-        "[API Key Set]".to_string()
+        "[API Key]".to_string()
+    } else if has_oauth_token {
+        "[OAuth]".to_string()
+    } else if has_cli_token {
+        "[Token]".to_string()
+    } else if has_stored_credential {
+        "[Saved]".to_string()
     } else if probe_ok {
         "[Running]".to_string()
     } else {
@@ -166,6 +188,61 @@ pub fn detect_provider(info: &'static ProviderInfo) -> DetectedProvider {
         status_label,
         discovered_models: Vec::new(),
     }
+}
+
+/// Check if a valid OAuth token exists in `~/.aegis/oauth/{provider}/token.json`.
+fn check_oauth_token_store(provider_id: &str) -> bool {
+    use crate::oauth::{FileTokenStore, OAuthTokenStore};
+    FileTokenStore::new(provider_id)
+        .ok()
+        .and_then(|store| store.load().ok().flatten())
+        .map(|token| !token.is_expired())
+        .unwrap_or(false)
+}
+
+/// Check for CLI-specific token files (provider-specific).
+fn check_cli_token(provider_id: &str) -> bool {
+    match provider_id {
+        "anthropic" => check_claude_code_token(),
+        "github-copilot" => check_copilot_token_file(),
+        _ => false,
+    }
+}
+
+/// Check if Claude Code has a stored OAuth token at `~/.claude/.credentials.json`.
+fn check_claude_code_token() -> bool {
+    let home = match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() => h,
+        _ => return false,
+    };
+    let path = std::path::PathBuf::from(home).join(".claude/.credentials.json");
+    if !path.exists() {
+        return false;
+    }
+    // Just check that the file exists and contains something --
+    // actual token extraction happens during the auth flow.
+    std::fs::metadata(&path)
+        .map(|m| m.len() > 2) // More than just "{}"
+        .unwrap_or(false)
+}
+
+/// Check if a Copilot token file exists at `~/.aegis/providers/copilot/tokens.json`.
+fn check_copilot_token_file() -> bool {
+    let home = match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() => h,
+        _ => return false,
+    };
+    let path = std::path::PathBuf::from(home)
+        .join(".aegis/providers/copilot/tokens.json");
+    path.exists()
+}
+
+/// Check if the credential store has a saved credential for this provider.
+fn check_credential_store(provider_id: &str) -> bool {
+    crate::credentials::CredentialStore::load_default()
+        .ok()
+        .and_then(|store| store.get(provider_id).map(|c| !c.api_key.is_empty()))
+        .unwrap_or(false)
 }
 
 /// Look up a provider by its ID.

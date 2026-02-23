@@ -994,6 +994,216 @@ pub fn poll_device_code(
 }
 
 // ---------------------------------------------------------------------------
+// PKCE device flow variants
+// ---------------------------------------------------------------------------
+
+/// Request a device code with PKCE parameters (for Qwen, MiniMax).
+///
+/// Like `request_device_code()` but also sends a PKCE code_challenge and
+/// code_challenge_method. The returned `DeviceCodeResponse` should be polled
+/// with `poll_device_code_with_pkce()`.
+pub fn request_device_code_with_pkce(
+    device_code_url: &str,
+    client_id: &str,
+    scope: &str,
+    pkce: &PkceChallenge,
+) -> Result<DeviceCodeResponse, AegisError> {
+    if !device_code_url.starts_with("https://") {
+        return Err(AegisError::ConfigError(format!(
+            "device code URL must use HTTPS, got: {device_code_url}"
+        )));
+    }
+
+    if client_id.is_empty() {
+        return Err(AegisError::ConfigError(
+            "client_id must not be empty for device code request".into(),
+        ));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
+
+    let resp = client
+        .post(device_code_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id),
+            ("scope", scope),
+            ("code_challenge", pkce.code_challenge.as_str()),
+            ("code_challenge_method", "S256"),
+        ])
+        .send()
+        .map_err(|e| AegisError::ConfigError(format!("device code request failed: {e}")))?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse device code response: {e}")))?;
+
+    if !status.is_success() {
+        let error_desc = body
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .or_else(|| body.get("error").and_then(|v| v.as_str()))
+            .unwrap_or("unknown error");
+        return Err(AegisError::ConfigError(format!(
+            "device code request failed: {error_desc}"
+        )));
+    }
+
+    serde_json::from_value(body).map_err(|e| {
+        AegisError::ConfigError(format!("failed to parse device code response: {e}"))
+    })
+}
+
+/// Poll a token endpoint with PKCE code_verifier during a device code flow.
+///
+/// Used by Qwen which requires PKCE on both the device code request and the
+/// token poll.
+pub fn poll_device_code_with_pkce(
+    token_url: &str,
+    client_id: &str,
+    device_code: &str,
+    code_verifier: &str,
+    grant_type: &str,
+) -> Result<DeviceFlowPollState, AegisError> {
+    if !token_url.starts_with("https://") {
+        return Err(AegisError::ConfigError(format!(
+            "token URL must use HTTPS, got: {token_url}"
+        )));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
+
+    let resp = client
+        .post(token_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id),
+            ("device_code", device_code),
+            ("grant_type", grant_type),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .map_err(|e| AegisError::ConfigError(format!("device code poll request failed: {e}")))?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse poll response: {e}")))?;
+
+    if let Some(error) = body.get("error").and_then(|v| v.as_str()) {
+        return Ok(match error {
+            "authorization_pending" => DeviceFlowPollState::AuthorizationPending,
+            "slow_down" => DeviceFlowPollState::SlowDown,
+            "expired_token" => DeviceFlowPollState::ExpiredToken,
+            "access_denied" => DeviceFlowPollState::AccessDenied,
+            other => {
+                return Err(AegisError::ConfigError(format!(
+                    "unexpected device flow error: {other}"
+                )));
+            }
+        });
+    }
+
+    let token = parse_token_response(&body)?;
+    Ok(DeviceFlowPollState::Success(token))
+}
+
+/// MiniMax-specific device flow poll result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MiniMaxPollState {
+    /// User has not yet authorized. Keep polling.
+    Pending,
+    /// Authorization succeeded.
+    Success(OAuthToken),
+    /// Flow failed with an error message.
+    Error(String),
+}
+
+/// Poll MiniMax's token endpoint using their custom user_code grant type.
+///
+/// MiniMax uses a non-standard flow:
+/// - Polls with `user_code` (not `device_code`)
+/// - Grant type: `urn:ietf:params:oauth:grant-type:user_code`
+/// - Response status field: `"success"`, `"pending"`, or `"error"`
+/// - Exponential backoff: caller should multiply interval by 1.5 on pending
+pub fn poll_minimax_device_code(
+    token_url: &str,
+    client_id: &str,
+    user_code: &str,
+    code_verifier: &str,
+) -> Result<MiniMaxPollState, AegisError> {
+    if !token_url.starts_with("https://") {
+        return Err(AegisError::ConfigError(format!(
+            "token URL must use HTTPS, got: {token_url}"
+        )));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
+
+    let resp = client
+        .post(token_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id),
+            ("user_code", user_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:user_code"),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .map_err(|e| AegisError::ConfigError(format!("MiniMax poll request failed: {e}")))?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse MiniMax poll response: {e}")))?;
+
+    // MiniMax uses a "status" field instead of standard OAuth error codes
+    let status = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    match status {
+        "success" => {
+            let token = parse_token_response(&body)?;
+            Ok(MiniMaxPollState::Success(token))
+        }
+        "pending" => Ok(MiniMaxPollState::Pending),
+        "error" => {
+            let msg = body
+                .get("error_description")
+                .or_else(|| body.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error")
+                .to_string();
+            Ok(MiniMaxPollState::Error(msg))
+        }
+        _ => {
+            // No status field -- check for standard OAuth error or treat as token response
+            if let Some(error) = body.get("error").and_then(|v| v.as_str()) {
+                match error {
+                    "authorization_pending" => Ok(MiniMaxPollState::Pending),
+                    other => Ok(MiniMaxPollState::Error(other.to_string())),
+                }
+            } else if body.get("access_token").is_some() {
+                let token = parse_token_response(&body)?;
+                Ok(MiniMaxPollState::Success(token))
+            } else {
+                Ok(MiniMaxPollState::Pending)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Extended token methods
 // ---------------------------------------------------------------------------
 
