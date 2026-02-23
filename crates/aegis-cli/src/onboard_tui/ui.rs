@@ -258,61 +258,93 @@ fn draw_provider_list(f: &mut Frame, app: &OnboardApp, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // Tier grouping.
-    let mut current_tier = None;
-    for &idx in &filtered {
-        let provider = &app.providers[idx];
-        let tier = provider.info.tier;
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No providers match search.",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        // Windowed rendering -- only show providers in the visible range.
+        let visible_height = area.height.saturating_sub(7) as usize;
+        let visible_height = visible_height.max(5);
+        let end = (app.provider_scroll_offset + visible_height).min(filtered.len());
 
-        if current_tier != Some(tier) {
-            current_tier = Some(tier);
-            if lines.len() > 2 {
-                lines.push(Line::from(""));
+        let mut current_tier = None;
+        for (pos, &idx) in filtered.iter().enumerate().take(end).skip(app.provider_scroll_offset) {
+            let provider = &app.providers[idx];
+            let tier = provider.info.tier;
+
+            if current_tier != Some(tier) {
+                current_tier = Some(tier);
+                if pos > app.provider_scroll_offset {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("  {:?}", tier),
+                    Style::default()
+                        .fg(YELLOW)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                )));
             }
-            lines.push(Line::from(Span::styled(
-                format!("  {:?}", tier),
-                Style::default()
-                    .fg(YELLOW)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
+
+            let is_selected = idx == app.provider_selected;
+            let marker = if is_selected { "> " } else { "  " };
+
+            let name_style = if !provider.available {
+                Style::default().fg(DIM)
+            } else if is_selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(WHITE)
+            };
+
+            let status_style = if provider.available {
+                Style::default().fg(GREEN)
+            } else {
+                Style::default().fg(DIM)
+            };
+
+            let name = format!("  {marker}{:<20}", provider.info.display_name);
+            let model_with_ctx = {
+                let dm = provider.info.default_model;
+                if dm.is_empty() {
+                    "(dynamic)".to_string()
+                } else if let Some(mi) = provider.info.models.iter().find(|m| m.id == dm) {
+                    format!("{} {}", dm, format_context_window(mi.context_window))
+                } else {
+                    dm.to_string()
+                }
+            };
+            let model = format!("{:<32}", model_with_ctx);
+            let status = provider.detection_label;
+
+            lines.push(Line::from(vec![
+                Span::styled(name, name_style),
+                Span::styled(
+                    model,
+                    if provider.available {
+                        name_style
+                    } else {
+                        Style::default().fg(DIM)
+                    },
+                ),
+                Span::styled(status, status_style),
+            ]));
         }
 
-        let is_selected = idx == app.provider_selected;
-        let marker = if is_selected { "> " } else { "  " };
-
-        let name_style = if !provider.available {
-            Style::default().fg(DIM)
-        } else if is_selected {
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(WHITE)
-        };
-
-        let status_style = if provider.available {
-            Style::default().fg(GREEN)
-        } else {
-            Style::default().fg(DIM)
-        };
-
-        let name = format!("  {marker}{:<20}", provider.info.display_name);
-        let model_with_ctx = {
-            let dm = provider.info.default_model;
-            if dm.is_empty() {
-                "(dynamic)".to_string()
-            } else if let Some(mi) = provider.info.models.iter().find(|m| m.id == dm) {
-                format!("{} {}", dm, format_context_window(mi.context_window))
-            } else {
-                dm.to_string()
-            }
-        };
-        let model = format!("{:<32}", model_with_ctx);
-        let status = provider.detection_label;
-
-        lines.push(Line::from(vec![
-            Span::styled(name, name_style),
-            Span::styled(model, if provider.available { name_style } else { Style::default().fg(DIM) }),
-            Span::styled(status, status_style),
-        ]));
+        // Position indicator.
+        if filtered.len() > visible_height {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  Showing {}-{} of {}",
+                    app.provider_scroll_offset + 1,
+                    end,
+                    filtered.len()
+                ),
+                Style::default().fg(DIM),
+            )));
+        }
     }
 
     // Error message.
@@ -1248,9 +1280,16 @@ fn draw_skill_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
                 Style::default().fg(WHITE)
             };
 
+            let desc = if skill.description.is_empty() {
+                String::new()
+            } else {
+                truncate_description(&skill.description, 40)
+            };
+
             lines.push(Line::from(vec![
                 Span::styled(format!("  {marker}{checkbox} "), style),
-                Span::styled(format!("{:<24}", skill.name), style),
+                Span::styled(format!("{:<22}", skill.name), style),
+                Span::styled(format!("{:<42}", desc), Style::default().fg(DIM)),
                 Span::styled(installed_tag, Style::default().fg(GREEN)),
             ]));
         }
@@ -1364,6 +1403,16 @@ fn draw_finish(f: &mut Frame, app: &OnboardApp, area: Rect) {
 // ---------------------------------------------------------------------------
 
 /// Build spans for a text input with a visible cursor block.
+/// Truncate a description string to fit within `max_len` characters.
+fn truncate_description(desc: &str, max_len: usize) -> String {
+    if desc.len() <= max_len {
+        desc.to_string()
+    } else {
+        let truncated: String = desc.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{truncated}...")
+    }
+}
+
 ///
 /// Characters before the cursor are yellow, the character at the cursor is
 /// rendered with inverted colors (black on yellow), and characters after are

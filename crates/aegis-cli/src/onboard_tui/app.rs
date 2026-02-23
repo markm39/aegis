@@ -199,7 +199,6 @@ pub struct OnboardApp {
     // Step 2: Provider Selection
     pub providers: Vec<ProviderEntry>,
     pub provider_selected: usize,
-    #[allow(dead_code)]
     pub provider_scroll_offset: usize,
     pub provider_search: String,
     pub provider_search_cursor: usize,
@@ -709,6 +708,7 @@ impl OnboardApp {
                     self.provider_searching = false;
                     self.provider_search.clear();
                     self.provider_search_cursor = 0;
+                    self.provider_scroll_offset = 0;
                 }
                 KeyCode::Enter => {
                     self.provider_searching = false;
@@ -717,6 +717,7 @@ impl OnboardApp {
                     self.provider_search
                         .insert(self.provider_search_cursor, c);
                     self.provider_search_cursor += c.len_utf8();
+                    self.provider_scroll_offset = 0;
                 }
                 KeyCode::Backspace => {
                     if self.provider_search_cursor > 0 {
@@ -727,6 +728,7 @@ impl OnboardApp {
                             .unwrap_or(0);
                         self.provider_search.remove(prev);
                         self.provider_search_cursor = prev;
+                        self.provider_scroll_offset = 0;
                     }
                 }
                 _ => {}
@@ -755,6 +757,9 @@ impl OnboardApp {
                         .unwrap_or(0);
                     let next_pos = (current_pos + 1).min(count - 1);
                     self.provider_selected = filtered[next_pos];
+                    if next_pos >= self.provider_scroll_offset + 15 {
+                        self.provider_scroll_offset = next_pos.saturating_sub(14);
+                    }
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
@@ -765,6 +770,9 @@ impl OnboardApp {
                         .unwrap_or(0);
                     let next_pos = current_pos.saturating_sub(1);
                     self.provider_selected = filtered[next_pos];
+                    if next_pos < self.provider_scroll_offset {
+                        self.provider_scroll_offset = next_pos;
+                    }
                 }
             }
             KeyCode::Enter => {
