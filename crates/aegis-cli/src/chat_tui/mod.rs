@@ -234,6 +234,36 @@ fn approval_context_for_prompt(profile: &ApprovalProfile) -> &'static str {
     }
 }
 
+/// Seed workspace with bootstrap template files if they don't exist.
+///
+/// Writes SOUL.md, IDENTITY.md, USER.md, TOOLS.md, and BOOTSTRAP.md to
+/// `~/.aegis/workspace/`. Returns `true` if BOOTSTRAP.md was just created
+/// (indicates first run -- the bootstrap conversation should be triggered).
+fn seed_workspace() -> bool {
+    let dir = aegis_types::daemon::workspace_dir();
+    let _ = std::fs::create_dir_all(&dir);
+
+    let templates: &[(&str, &str)] = &[
+        ("BOOTSTRAP.md", include_str!("templates/BOOTSTRAP.md")),
+        ("SOUL.md", include_str!("templates/SOUL.md")),
+        ("IDENTITY.md", include_str!("templates/IDENTITY.md")),
+        ("USER.md", include_str!("templates/USER.md")),
+        ("TOOLS.md", include_str!("templates/TOOLS.md")),
+    ];
+
+    let mut is_first_run = false;
+    for (name, content) in templates {
+        let path = dir.join(name);
+        if !path.exists() {
+            let _ = std::fs::write(&path, content);
+            if *name == "BOOTSTRAP.md" {
+                is_first_run = true;
+            }
+        }
+    }
+    is_first_run
+}
+
 /// Top-level application state for the chat TUI.
 pub struct ChatApp {
     /// Whether the main loop should keep running.
@@ -250,6 +280,9 @@ pub struct ChatApp {
     // -- Session persistence --
     /// Unique identifier for this conversation session.
     pub session_id: String,
+    /// Audit ledger session UUID, obtained from daemon on connect.
+    /// Used to link tool execution audit entries to this chat session.
+    pub audit_session_id: Option<String>,
 
     // -- LLM conversation --
     /// Full LLM conversation history (sent with each request).
@@ -272,6 +305,8 @@ pub struct ChatApp {
     pub approval_profile: ApprovalProfile,
     /// Extended thinking budget in tokens (Anthropic only). None = disabled.
     pub thinking_budget: Option<u32>,
+    /// Whether a bootstrap conversation should be auto-triggered on first connect.
+    pub bootstrap_pending: bool,
 
     // -- Input --
     /// Text buffer for chat input.
@@ -347,6 +382,7 @@ impl ChatApp {
             scroll_offset: 0,
 
             session_id: persistence::generate_conversation_id(),
+            audit_session_id: None,
 
             conversation: Vec::new(),
             model,
@@ -358,6 +394,7 @@ impl ChatApp {
             auto_approve_turn: false,
             approval_profile: ApprovalProfile::Manual,
             thinking_budget: None,
+            bootstrap_pending: false,
 
             input_buffer: String::new(),
             input_cursor: 0,
@@ -420,8 +457,20 @@ impl ChatApp {
         // Ping
         match client.send(&DaemonCommand::Ping) {
             Ok(resp) if resp.ok => {
+                let was_disconnected = !self.connected;
                 self.connected = true;
                 self.last_error = None;
+
+                // Register an audit session on first connect (or reconnect).
+                if was_disconnected && self.audit_session_id.is_none() {
+                    self.register_audit_session();
+                }
+
+                // Trigger bootstrap conversation on first connect if this is a fresh workspace.
+                if was_disconnected && self.bootstrap_pending {
+                    self.bootstrap_pending = false;
+                    self.trigger_bootstrap();
+                }
             }
             Ok(resp) => {
                 self.connected = false;
@@ -430,6 +479,30 @@ impl ChatApp {
             Err(e) => {
                 self.connected = false;
                 self.last_error = Some(e);
+            }
+        }
+    }
+
+    /// Register an audit session in the daemon's audit ledger.
+    ///
+    /// Sends `RegisterChatSession` and stores the returned UUID so
+    /// subsequent tool executions are linked in the audit trail.
+    fn register_audit_session(&mut self) {
+        let client = match &self.client {
+            Some(c) => c,
+            None => return,
+        };
+        match client.send(&DaemonCommand::RegisterChatSession) {
+            Ok(resp) if resp.ok => {
+                if let Some(data) = &resp.data {
+                    if let Some(sid) = data.get("session_id").and_then(|v| v.as_str()) {
+                        self.audit_session_id = Some(sid.to_string());
+                    }
+                }
+            }
+            _ => {
+                // Non-fatal: audit linkage is best-effort.
+                // Tool execution still works; entries just won't have session linkage.
             }
         }
     }
@@ -586,6 +659,32 @@ impl ChatApp {
         }
     }
 
+    /// Trigger the bootstrap "getting to know you" conversation.
+    ///
+    /// Reads BOOTSTRAP.md from the workspace and sends it as the first user
+    /// message. The LLM will follow the bootstrap instructions to discover
+    /// its identity and learn about the user.
+    fn trigger_bootstrap(&mut self) {
+        let bootstrap_path = aegis_types::daemon::workspace_dir().join("BOOTSTRAP.md");
+        let content = match std::fs::read_to_string(&bootstrap_path) {
+            Ok(c) => c,
+            Err(_) => return, // BOOTSTRAP.md missing or unreadable; skip
+        };
+
+        // Inject as the first user message
+        let msg = format!(
+            "[First run -- reading BOOTSTRAP.md]\n\n{content}"
+        );
+        self.conversation.push(LlmMessage::user(msg.clone()));
+        self.messages.push(ChatMessage::new(
+            MessageRole::System,
+            "Starting bootstrap -- getting to know you...".to_string(),
+        ));
+        self.scroll_offset = 0;
+        self.awaiting_response = true;
+        self.send_llm_request();
+    }
+
     /// Send the current conversation to the LLM and run the agentic loop.
     ///
     /// The loop runs in a background thread. It sends the conversation + tool
@@ -612,6 +711,7 @@ impl ChatApp {
         let auto_approve = self.auto_approve_turn;
         let approval_profile = self.approval_profile.clone();
         let thinking_budget = self.thinking_budget;
+        let audit_session_id = self.audit_session_id.clone();
 
         // Build tool descriptions for the system prompt.
         let tool_descs = get_tool_descriptions();
@@ -640,6 +740,7 @@ impl ChatApp {
                     auto_approve,
                     approval_profile,
                     thinking_budget,
+                    audit_session_id,
                 },
                 event_tx,
                 approval_rx,
@@ -1267,6 +1368,9 @@ impl ChatApp {
                             self.conversation = messages;
                             self.model = meta.model.clone();
                             self.session_id = meta.id.clone();
+                            // New audit session for the resumed conversation.
+                            self.audit_session_id = None;
+                            self.register_audit_session();
                             self.rebuild_display_messages();
                             self.set_result(format!(
                                 "Resumed {} ({}, {} messages)",
@@ -1345,6 +1449,9 @@ impl ChatApp {
                 self.conversation.clear();
                 self.scroll_offset = 0;
                 self.session_id = persistence::generate_conversation_id();
+                // Register a fresh audit session for the new conversation.
+                self.audit_session_id = None;
+                self.register_audit_session();
                 self.set_result("New conversation started");
             }
             "compact" => {
@@ -1851,6 +1958,8 @@ struct AgentLoopParams {
     auto_approve: bool,
     approval_profile: ApprovalProfile,
     thinking_budget: Option<u32>,
+    /// Audit ledger session UUID for tool execution linkage.
+    audit_session_id: Option<String>,
 }
 
 /// Run the agentic loop in a background thread.
@@ -1959,7 +2068,13 @@ fn run_agent_loop(
                 &params.approval_profile,
             ) {
                 // Auto-approved -- execute directly.
-                execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input)
+                execute_tool_via_daemon(
+                    &params.socket_path,
+                    &tc.name,
+                    &tc.input,
+                    params.audit_session_id.as_deref(),
+                    "chat-tui",
+                )
             } else {
                 // Need user approval.
                 let _ = event_tx.send(AgentLoopEvent::ToolApprovalNeeded {
@@ -1968,7 +2083,13 @@ fn run_agent_loop(
 
                 // Wait for approval decision (blocks this thread).
                 match approval_rx.recv() {
-                    Ok(true) => execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input),
+                    Ok(true) => execute_tool_via_daemon(
+                        &params.socket_path,
+                        &tc.name,
+                        &tc.input,
+                        params.audit_session_id.as_deref(),
+                        "chat-tui",
+                    ),
                     Ok(false) => {
                         // Tool denied by user.
                         Ok("Tool execution denied by user.".to_string())
@@ -2047,16 +2168,23 @@ fn parse_llm_response(
 }
 
 /// Execute a tool via the daemon's ExecuteTool command.
+///
+/// Passes `session_id` and `principal` so the daemon can create audit entries
+/// linked to this chat session and identify the caller.
 fn execute_tool_via_daemon(
     socket_path: &std::path::Path,
     tool_name: &str,
     tool_input: &serde_json::Value,
+    audit_session_id: Option<&str>,
+    principal: &str,
 ) -> Result<String, String> {
     let client = DaemonClient::new(socket_path.to_path_buf());
 
     let cmd = DaemonCommand::ExecuteTool {
         name: tool_name.to_string(),
         input: tool_input.clone(),
+        session_id: audit_session_id.map(|s| s.to_string()),
+        principal: Some(principal.to_string()),
     };
 
     let result = send_with_timeout(&client, &cmd, 60);
@@ -2113,6 +2241,7 @@ fn run_subagent_task(
         auto_approve: true,
         approval_profile: ApprovalProfile::FullAuto, // Subagents auto-approve everything.
         thinking_budget: params.thinking_budget,
+        audit_session_id: params.audit_session_id.clone(), // Share parent's audit session.
     };
 
     const MAX_SUBAGENT_ITERATIONS: usize = 30;
@@ -2152,8 +2281,14 @@ fn run_subagent_task(
 
         // Execute tools (all auto-approved in subagent context).
         for tc in &resp.tool_calls {
-            let result = execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input)
-                .unwrap_or_else(|e| format!("Error: {e}"));
+            let result = execute_tool_via_daemon(
+                &params.socket_path,
+                &tc.name,
+                &tc.input,
+                params.audit_session_id.as_deref(),
+                "subagent",
+            )
+            .unwrap_or_else(|e| format!("Error: {e}"));
 
             // Show subagent tool activity in parent UI.
             let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
@@ -2199,6 +2334,7 @@ fn run_background_task(
         auto_approve: true,
         approval_profile: ApprovalProfile::FullAuto, // Background tasks auto-approve everything.
         thinking_budget: params.thinking_budget,
+        audit_session_id: params.audit_session_id.clone(), // Share parent's audit session.
     };
     let prompt = task_prompt.to_string();
     let desc = description.to_string();
@@ -2406,8 +2542,12 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
+    // Seed workspace with template files; detect first run.
+    let is_first_run = seed_workspace();
+
     let events = EventHandler::new(TICK_RATE_MS);
     let mut app = ChatApp::new(Some(client), model);
+    app.bootstrap_pending = is_first_run;
 
     // Apply --auto CLI flag if provided.
     if let Some(mode) = auto_mode {

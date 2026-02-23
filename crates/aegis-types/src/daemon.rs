@@ -893,6 +893,12 @@ pub fn daemon_dir() -> PathBuf {
     PathBuf::from(home).join(".aegis").join("daemon")
 }
 
+/// Default workspace directory for user context files (SOUL.md, IDENTITY.md, etc.).
+pub fn workspace_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".aegis").join("workspace")
+}
+
 /// Default daemon config file path.
 pub fn daemon_config_path() -> PathBuf {
     daemon_dir().join("daemon.toml")

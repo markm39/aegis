@@ -121,23 +121,71 @@ pub fn build_system_prompt(
          unless explicitly instructed otherwise.\n",
     );
 
-    // 10. Project context files
+    // 10. Workspace context files (~/.aegis/workspace/)
+    //
+    // These are the agent's persistent identity and personality files,
+    // seeded on first run and updated by the agent over time.
+    // Session-type filtering: subagents only get IDENTITY.md + TOOLS.md.
+    let ws = aegis_types::daemon::workspace_dir();
+    let workspace_files: &[(&str, &str, bool)] = &[
+        // (filename, label, full_only)
+        ("SOUL.md", "SOUL.md", true),         // full only -- personality
+        ("IDENTITY.md", "IDENTITY.md", false), // always -- agent name
+        ("USER.md", "USER.md", true),          // full only -- personal
+        ("TOOLS.md", "TOOLS.md", false),       // always -- environment
+    ];
+
+    let mut has_ws_context = false;
+    let mut has_soul = false;
+    for &(filename, label, full_only) in workspace_files {
+        if full_only && !is_full {
+            continue;
+        }
+        let path = ws.join(filename);
+        if let Some(contents) = read_file_capped(&path, MAX_FILE_CHARS) {
+            if !has_ws_context {
+                prompt.push_str("\n# Agent Context\n\n");
+                prompt.push_str(
+                    "The following workspace context files define your identity \
+                     and personality. They persist across sessions.\n",
+                );
+                has_ws_context = true;
+            }
+            if filename == "SOUL.md" {
+                has_soul = true;
+            }
+            let _ = writeln!(prompt, "\n## {label}\n");
+            prompt.push_str(&contents);
+            prompt.push('\n');
+        }
+    }
+
+    // Special instruction when SOUL.md is present
+    if has_soul {
+        prompt.push_str(
+            "\nIf SOUL.md is present above, embody its persona and tone. \
+             Avoid stiff, generic replies; follow its guidance unless \
+             higher-priority instructions override it.\n",
+        );
+    }
+
+    // 11. Project context files (from CWD)
     let cwd = std::env::current_dir().unwrap_or_default();
-    let context_files: &[(&str, std::path::PathBuf)] = &[
+    let project_files: &[(&str, std::path::PathBuf)] = &[
         ("AGENTS.md", cwd.join("AGENTS.md")),
         ("CLAUDE.md", cwd.join("CLAUDE.md")),
         (".aegis/AGENTS.md", cwd.join(".aegis/AGENTS.md")),
     ];
 
-    let mut has_context = false;
-    for (label, path) in context_files {
+    let mut has_project_context = false;
+    for (label, path) in project_files {
         if let Some(contents) = read_file_capped(path, MAX_FILE_CHARS) {
-            if !has_context {
+            if !has_project_context {
                 prompt.push_str("\n# Project Context\n\n");
                 prompt.push_str(
                     "The following project context files have been loaded.\n\n",
                 );
-                has_context = true;
+                has_project_context = true;
             }
             let _ = writeln!(prompt, "## {label}\n");
             prompt.push_str(&contents);
@@ -145,7 +193,7 @@ pub fn build_system_prompt(
         }
     }
 
-    // 11. Git info
+    // 12. Git info
     if let Some(git_section) = build_git_section(&cwd) {
         prompt.push_str(&git_section);
     }
