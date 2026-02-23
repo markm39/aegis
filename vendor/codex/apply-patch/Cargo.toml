@@ -1,0 +1,27 @@
+[package]
+name = "aegis-apply-patch"
+version.workspace = true
+edition = "2024"
+license = "Apache-2.0"
+description = "V4A structured file patching from OpenAI Codex CLI (vendored)"
+
+[lib]
+name = "aegis_apply_patch"
+path = "src/lib.rs"
+
+[[bin]]
+name = "apply_patch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+similar = "2.7"
+thiserror = { workspace = true }
+tree-sitter = "0.25"
+tree-sitter-bash = "0.23"
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+assert_matches = "1.5"
+pretty_assertions = "1"
+tempfile = { workspace = true }

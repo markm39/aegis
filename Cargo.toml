@@ -24,6 +24,11 @@ members = [
     "crates/aegis-browser",
     "crates/aegis-hooks",
     "tests",
+    # Vendored from OpenAI Codex CLI (Apache-2.0)
+    "vendor/codex/apply-patch",
+    "vendor/codex/file-search",
+    "vendor/codex/execpolicy",
+    "vendor/codex/git",
 ]
 
 [workspace.package]
