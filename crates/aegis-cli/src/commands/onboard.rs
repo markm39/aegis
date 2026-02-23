@@ -29,7 +29,7 @@ pub fn run() -> anyhow::Result<()> {
 
     // Config was written and daemon started by the wizard's health check step.
     // Open the chat TUI.
-    crate::chat_tui::run_chat_tui()
+    crate::chat_tui::run_chat_tui(None)
 }
 
 /// Prompt for agent tool type from a numbered menu.

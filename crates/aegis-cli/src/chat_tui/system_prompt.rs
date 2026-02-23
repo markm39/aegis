@@ -24,8 +24,12 @@ pub struct ToolDescription {
 /// Build the system prompt for chat TUI LLM requests.
 ///
 /// Includes: identity, available tools, working directory, OS info,
-/// project files (AGENTS.md, CLAUDE.md), and git status.
-pub fn build_system_prompt(tool_descriptions: &[ToolDescription]) -> String {
+/// project files (AGENTS.md, CLAUDE.md), git status, and the current
+/// approval mode context.
+pub fn build_system_prompt(
+    tool_descriptions: &[ToolDescription],
+    approval_context: Option<&str>,
+) -> String {
     let mut prompt = String::with_capacity(4096);
 
     // 1. Identity
@@ -42,7 +46,14 @@ pub fn build_system_prompt(tool_descriptions: &[ToolDescription]) -> String {
         }
     }
 
-    // 3. Environment
+    // 3. Approval mode
+    if let Some(ctx) = approval_context {
+        prompt.push_str("\n# Approval Mode\n\n");
+        prompt.push_str(ctx);
+        prompt.push('\n');
+    }
+
+    // 4. Environment
     prompt.push_str("\n# Environment\n\n");
     if let Ok(cwd) = std::env::current_dir() {
         let _ = writeln!(prompt, "- Working directory: {}", cwd.display());
@@ -50,7 +61,7 @@ pub fn build_system_prompt(tool_descriptions: &[ToolDescription]) -> String {
     let _ = writeln!(prompt, "- OS: {}", std::env::consts::OS);
     let _ = writeln!(prompt, "- Architecture: {}", std::env::consts::ARCH);
 
-    // 4. Project context files
+    // 5. Project context files
     let cwd = std::env::current_dir().unwrap_or_default();
     let context_files: &[(&str, std::path::PathBuf)] = &[
         ("AGENTS.md", cwd.join("AGENTS.md")),
@@ -66,7 +77,7 @@ pub fn build_system_prompt(tool_descriptions: &[ToolDescription]) -> String {
         }
     }
 
-    // 5. Git info
+    // 6. Git info
     if let Some(git_section) = build_git_section(&cwd) {
         prompt.push_str(&git_section);
     }
@@ -142,20 +153,20 @@ mod tests {
 
     #[test]
     fn build_system_prompt_returns_non_empty() {
-        let prompt = build_system_prompt(&[]);
+        let prompt = build_system_prompt(&[], None);
         assert!(!prompt.is_empty());
     }
 
     #[test]
     fn prompt_contains_identity() {
-        let prompt = build_system_prompt(&[]);
+        let prompt = build_system_prompt(&[], None);
         assert!(prompt.contains("You are Aegis"));
         assert!(prompt.contains("helpful coding assistant"));
     }
 
     #[test]
     fn prompt_contains_environment() {
-        let prompt = build_system_prompt(&[]);
+        let prompt = build_system_prompt(&[], None);
         assert!(prompt.contains("# Environment"));
         assert!(prompt.contains("OS:"));
         assert!(prompt.contains("Architecture:"));
@@ -173,7 +184,7 @@ mod tests {
                 description: "Run a shell command".into(),
             },
         ];
-        let prompt = build_system_prompt(&tools);
+        let prompt = build_system_prompt(&tools, None);
         assert!(prompt.contains("# Available Tools"));
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("Run a shell command"));
@@ -181,7 +192,7 @@ mod tests {
 
     #[test]
     fn prompt_omits_tools_section_when_empty() {
-        let prompt = build_system_prompt(&[]);
+        let prompt = build_system_prompt(&[], None);
         assert!(!prompt.contains("# Available Tools"));
     }
 
@@ -212,7 +223,20 @@ mod tests {
     #[test]
     fn prompt_respects_max_length() {
         // With no tools and no project files, the prompt should be well under the cap.
-        let prompt = build_system_prompt(&[]);
+        let prompt = build_system_prompt(&[], None);
         assert!(prompt.len() <= MAX_PROMPT_CHARS + 100); // small margin for truncation suffix
+    }
+
+    #[test]
+    fn prompt_includes_approval_context() {
+        let prompt = build_system_prompt(&[], Some("All tools auto-approved."));
+        assert!(prompt.contains("# Approval Mode"));
+        assert!(prompt.contains("All tools auto-approved."));
+    }
+
+    #[test]
+    fn prompt_omits_approval_section_when_none() {
+        let prompt = build_system_prompt(&[], None);
+        assert!(!prompt.contains("# Approval Mode"));
     }
 }

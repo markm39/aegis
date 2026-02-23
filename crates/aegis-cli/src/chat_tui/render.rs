@@ -195,6 +195,7 @@ pub fn render_header(
     provider: Option<&str>,
     connected: bool,
     thinking: bool,
+    approval_mode: Option<&str>,
     _width: u16,
 ) -> Line<'static> {
     let (status_text, status_color) = if thinking {
@@ -210,7 +211,7 @@ pub fn render_header(
         None => model.to_string(),
     };
 
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             " Aegis".to_string(),
             Style::default()
@@ -226,7 +227,26 @@ pub fn render_header(
         ),
         Span::styled(" | ".to_string(), Style::default().fg(Color::DarkGray)),
         Span::styled(status_text, Style::default().fg(status_color)),
-    ])
+    ];
+
+    // Show approval mode indicator (only when not in default manual mode).
+    if let Some(mode) = approval_mode {
+        if mode != "manual" {
+            let (label, color) = match mode {
+                "full-auto" => ("FULL AUTO", Color::Red),
+                "auto-edits" => ("Auto-edits", Color::Yellow),
+                "auto-high" => ("Auto-high", Color::Yellow),
+                _ => (mode, Color::Yellow),
+            };
+            spans.push(Span::styled(" | ".to_string(), Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                label.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
+    Line::from(spans)
 }
 
 /// Render the status bar (single line at the bottom of the TUI).
@@ -406,7 +426,7 @@ mod tests {
 
     #[test]
     fn render_header_connected() {
-        let line = render_header("claude-sonnet-4-20250514", Some("anthropic"), true, false, 80);
+        let line = render_header("claude-sonnet-4-20250514", Some("anthropic"), true, false, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Aegis"));
         assert!(text.contains("claude-sonnet-4-20250514"));
@@ -416,7 +436,7 @@ mod tests {
 
     #[test]
     fn render_header_disconnected() {
-        let line = render_header("gpt-4o", Some("openai"), false, false, 80);
+        let line = render_header("gpt-4o", Some("openai"), false, false, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Disconnected"));
         assert!(text.contains("(openai)"));
@@ -424,7 +444,7 @@ mod tests {
 
     #[test]
     fn render_header_no_provider() {
-        let line = render_header("custom-model", None, true, false, 80);
+        let line = render_header("custom-model", None, true, false, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("custom-model"));
         assert!(!text.contains("("));
@@ -432,14 +452,14 @@ mod tests {
 
     #[test]
     fn render_header_thinking() {
-        let line = render_header("claude-sonnet-4-20250514", None, true, true, 80);
+        let line = render_header("claude-sonnet-4-20250514", None, true, true, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Thinking..."));
     }
 
     #[test]
     fn render_header_thinking_is_yellow() {
-        let line = render_header("model", None, true, true, 80);
+        let line = render_header("model", None, true, true, None, 80);
         let status_span = line
             .spans
             .iter()
@@ -450,13 +470,35 @@ mod tests {
 
     #[test]
     fn render_header_connected_is_green() {
-        let line = render_header("model", None, true, false, 80);
+        let line = render_header("model", None, true, false, None, 80);
         let status_span = line
             .spans
             .iter()
             .find(|s| s.content.contains("Connected"))
             .unwrap();
         assert_eq!(status_span.style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn render_header_full_auto_shown() {
+        let line = render_header("model", None, true, false, Some("full-auto"), 80);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("FULL AUTO"));
+    }
+
+    #[test]
+    fn render_header_auto_edits_shown() {
+        let line = render_header("model", None, true, false, Some("auto-edits"), 80);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("Auto-edits"));
+    }
+
+    #[test]
+    fn render_header_manual_hidden() {
+        let line = render_header("model", None, true, false, Some("manual"), 80);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        // "manual" mode should not add an extra indicator
+        assert!(!text.contains("Manual"));
     }
 
     // -- Status bar ---------------------------------------------------------

@@ -20,7 +20,7 @@ use crate::commands::init::{dirs_from_env, load_config_from_dir};
 /// 1. daemon.toml exists OR daemon running -> chat TUI (works offline, auto-reconnects)
 /// 2. Legacy audit configs (no daemon.toml) -> monitor dashboard
 /// 3. Nothing configured -> onboard wizard (which transitions to chat TUI when done)
-pub fn run() -> Result<()> {
+pub fn run(auto_mode: Option<&str>) -> Result<()> {
     let home = dirs_from_env()?;
     let aegis_dir = home.join(".aegis");
 
@@ -29,7 +29,7 @@ pub fn run() -> Result<()> {
 
     if has_daemon_config || daemon_running {
         // Chat TUI -- works in offline mode, auto-connects when daemon starts
-        return crate::chat_tui::run_chat_tui();
+        return crate::chat_tui::run_chat_tui(auto_mode);
     }
 
     // Legacy audit-only configs (no daemon.toml): monitor dashboard

@@ -53,11 +53,13 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
 /// Draw the header bar.
 fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
     let provider = resolve_provider_for_display(&app.model);
+    let approval_label = super::approval_profile_label(&app.approval_profile);
     let header = render::render_header(
         &app.model,
         provider.as_deref(),
         app.connected,
         app.awaiting_response,
+        Some(approval_label),
         area.width,
     );
     let para = Paragraph::new(vec![header])

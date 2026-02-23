@@ -24,6 +24,10 @@ struct Cli {
     #[arg(long, short, global = true)]
     quiet: bool,
 
+    /// Auto-approval mode for the chat TUI: off, edits, high, full
+    #[arg(long)]
+    auto: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -1238,7 +1242,7 @@ fn main() -> anyhow::Result<()> {
 
     let command = match cli.command {
         Some(cmd) => cmd,
-        None => return commands::default_action::run(),
+        None => return commands::default_action::run(cli.auto.as_deref()),
     };
 
     match command {

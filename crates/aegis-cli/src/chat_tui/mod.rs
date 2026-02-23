@@ -23,6 +23,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{DaemonClient, DaemonCommand, DaemonResponse};
 use aegis_types::llm::{LlmMessage, LlmResponse, LlmToolCall, StopReason};
+use aegis_types::tool_classification::ActionRisk;
 
 use self::event::{AppEvent, EventHandler};
 use self::message::{ChatMessage, MessageRole};
@@ -93,6 +94,146 @@ fn is_safe_tool(name: &str) -> bool {
     SAFE_TOOLS.contains(&name)
 }
 
+/// Approval profile controlling which tool calls are auto-approved.
+///
+/// Inspired by Codex's suggest/auto-edit/full-auto modes and Claude Code's
+/// permission profiles. Wires the existing `ActionRisk` classification into
+/// the chat TUI's agentic loop.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApprovalProfile {
+    /// Default: only SAFE_TOOLS auto-approved. Everything else asks.
+    Manual,
+    /// Auto-approve tools whose classified risk is at or below the given tier.
+    AutoApprove(ActionRisk),
+    /// Full-auto: approve everything without asking.
+    FullAuto,
+}
+
+/// Classify the risk of a tool call for approval profile decisions.
+fn classify_tool_risk(tool_name: &str, input: &serde_json::Value) -> ActionRisk {
+    match tool_name {
+        "read_file" | "glob_search" | "grep_search" | "file_search" => ActionRisk::Informational,
+        "write_file" | "edit_file" | "apply_patch" => ActionRisk::Medium,
+        "bash" => classify_bash_risk(input),
+        "task" => ActionRisk::Medium,
+        _ => ActionRisk::High,
+    }
+}
+
+/// Classify bash command risk by inspecting the command string.
+///
+/// Read-only commands (ls, cat, git status) are Low risk.
+/// Destructive commands (rm -rf, force push, sudo) are High risk.
+/// Git mutations and general commands default to Medium.
+fn classify_bash_risk(input: &serde_json::Value) -> ActionRisk {
+    let cmd = input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let read_only_prefixes = [
+        "cat ", "ls ", "ls\n", "pwd", "echo ", "head ", "tail ", "wc ",
+        "grep ", "rg ", "find ", "which ", "type ", "file ",
+        "git status", "git log", "git diff", "git branch",
+        "git show", "git rev-parse", "cargo clippy", "cargo check",
+        "cargo test", "cargo build", "npm test", "npm run",
+        "python -c", "node -e",
+    ];
+    if read_only_prefixes.iter().any(|p| cmd.starts_with(p)) {
+        return ActionRisk::Low;
+    }
+
+    let destructive_patterns = [
+        "rm -rf", "rm -r", "rmdir", "git push --force", "git push -f",
+        "git reset --hard", "git clean", "drop table", "drop database",
+        "docker rm", "kill -9", "sudo ", "chmod 777",
+    ];
+    if destructive_patterns.iter().any(|p| cmd.contains(p)) {
+        return ActionRisk::High;
+    }
+
+    let git_write = ["git add", "git commit", "git push", "git checkout", "git stash"];
+    if git_write.iter().any(|p| cmd.starts_with(p)) {
+        return ActionRisk::Medium;
+    }
+
+    ActionRisk::Medium
+}
+
+/// Check if a tool call should be auto-approved given the current profile.
+fn should_auto_approve_tool(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    auto_approve_all: bool,
+    profile: &ApprovalProfile,
+) -> bool {
+    match profile {
+        ApprovalProfile::FullAuto => true,
+        ApprovalProfile::Manual => is_safe_tool(tool_name) || auto_approve_all,
+        ApprovalProfile::AutoApprove(max_risk) => {
+            if is_safe_tool(tool_name) || auto_approve_all {
+                true
+            } else {
+                classify_tool_risk(tool_name, tool_input) <= *max_risk
+            }
+        }
+    }
+}
+
+/// Return a display label for the current approval profile.
+fn approval_profile_label(profile: &ApprovalProfile) -> &'static str {
+    match profile {
+        ApprovalProfile::Manual => "manual",
+        ApprovalProfile::AutoApprove(ActionRisk::Medium) => "auto-edits",
+        ApprovalProfile::AutoApprove(ActionRisk::High) => "auto-high",
+        ApprovalProfile::AutoApprove(_) => "auto-custom",
+        ApprovalProfile::FullAuto => "full-auto",
+    }
+}
+
+/// Parse an approval mode string into an `ApprovalProfile`.
+///
+/// Accepts: "off", "manual", "edits", "high", "full"
+fn parse_approval_mode(mode: &str) -> ApprovalProfile {
+    match mode {
+        "off" | "manual" => ApprovalProfile::Manual,
+        "edits" | "medium" => ApprovalProfile::AutoApprove(ActionRisk::Medium),
+        "high" => ApprovalProfile::AutoApprove(ActionRisk::High),
+        "full" | "full-auto" => ApprovalProfile::FullAuto,
+        _ => {
+            eprintln!("Warning: unknown --auto mode '{mode}', using 'manual'. Options: off, edits, high, full");
+            ApprovalProfile::Manual
+        }
+    }
+}
+
+/// Return the approval context string for the system prompt.
+fn approval_context_for_prompt(profile: &ApprovalProfile) -> &'static str {
+    match profile {
+        ApprovalProfile::Manual => {
+            "Tools that modify files or run commands require user approval before execution. \
+             Read-only tools (read_file, glob_search, grep_search, file_search) are auto-approved."
+        }
+        ApprovalProfile::AutoApprove(ActionRisk::Medium) => {
+            "File edits, writes, and normal bash commands are auto-approved. \
+             Destructive operations (rm -rf, force push, sudo, etc.) still require user approval. \
+             You can work autonomously for most coding tasks."
+        }
+        ApprovalProfile::AutoApprove(ActionRisk::High) => {
+            "Almost all tools are auto-approved, including high-risk operations. \
+             Only critical/destructive commands require approval. You can work very autonomously."
+        }
+        ApprovalProfile::AutoApprove(_) => {
+            "Tools are auto-approved up to the configured risk tier. \
+             Higher-risk operations require user approval."
+        }
+        ApprovalProfile::FullAuto => {
+            "All tools are auto-approved. You can work fully autonomously without waiting \
+             for approval on any tool call. Execute multi-step plans without interruption."
+        }
+    }
+}
+
 /// Top-level application state for the chat TUI.
 pub struct ChatApp {
     /// Whether the main loop should keep running.
@@ -127,6 +268,8 @@ pub struct ChatApp {
     pub pending_tool_desc: Option<String>,
     /// Whether to auto-approve all remaining tools in this turn.
     pub auto_approve_turn: bool,
+    /// Approval profile controlling risk-based auto-approval.
+    pub approval_profile: ApprovalProfile,
     /// Extended thinking budget in tokens (Anthropic only). None = disabled.
     pub thinking_budget: Option<u32>,
 
@@ -187,6 +330,7 @@ pub struct ChatApp {
 const COMMANDS: &[&str] = &[
     "quit", "q", "clear", "new", "compact", "model", "provider", "help", "usage",
     "think", "think off", "think low", "think medium", "think high",
+    "auto", "auto off", "auto edits", "auto high", "auto full",
     "save", "resume", "sessions",
     "daemon start", "daemon stop", "daemon status",
     "daemon restart", "daemon reload", "daemon init",
@@ -212,6 +356,7 @@ impl ChatApp {
             awaiting_approval: false,
             pending_tool_desc: None,
             auto_approve_turn: false,
+            approval_profile: ApprovalProfile::Manual,
             thinking_budget: None,
 
             input_buffer: String::new(),
@@ -465,11 +610,13 @@ impl ChatApp {
         let conv = self.conversation.clone();
         let model = self.model.clone();
         let auto_approve = self.auto_approve_turn;
+        let approval_profile = self.approval_profile.clone();
         let thinking_budget = self.thinking_budget;
 
         // Build tool descriptions for the system prompt.
         let tool_descs = get_tool_descriptions();
-        let sys_prompt = system_prompt::build_system_prompt(&tool_descs);
+        let approval_ctx = approval_context_for_prompt(&approval_profile);
+        let sys_prompt = system_prompt::build_system_prompt(&tool_descs, Some(approval_ctx));
 
         // Get LLM tool definitions via the daemon.
         let tool_defs = get_tool_definitions_json();
@@ -490,6 +637,7 @@ impl ChatApp {
                     sys_prompt,
                     tool_defs,
                     auto_approve,
+                    approval_profile,
                     thinking_budget,
                 },
                 event_tx,
@@ -1044,7 +1192,7 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    "/quit  /clear  /new  /compact  /model <name>  /provider  /usage  /think off|low|medium|high|<n>  /save  /resume <id>  /sessions  /daemon ...",
+                    "/quit  /clear  /new  /compact  /model <name>  /provider  /usage  /think off|low|medium|high|<n>  /auto off|edits|high|full  /save  /resume <id>  /sessions  /daemon ...",
                 );
             }
             "usage" => {
@@ -1256,6 +1404,40 @@ impl ChatApp {
                         ));
                     }
                 }
+            }
+            "auto off" | "auto manual" => {
+                self.approval_profile = ApprovalProfile::Manual;
+                self.set_result("Auto-approve: OFF (manual approval for non-safe tools)");
+            }
+            "auto edits" => {
+                self.approval_profile = ApprovalProfile::AutoApprove(ActionRisk::Medium);
+                self.set_result(
+                    "Auto-approve: edits + bash (up to Medium risk). Destructive commands still ask.",
+                );
+            }
+            "auto high" => {
+                self.approval_profile = ApprovalProfile::AutoApprove(ActionRisk::High);
+                self.set_result("Auto-approve: up to High risk. Only Critical actions ask.");
+            }
+            "auto full" => {
+                self.approval_profile = ApprovalProfile::FullAuto;
+                self.set_result("FULL AUTO: all tools auto-approved. Use with caution.");
+            }
+            "auto" => {
+                let current = match &self.approval_profile {
+                    ApprovalProfile::Manual => "manual (safe tools only)",
+                    ApprovalProfile::AutoApprove(ActionRisk::Medium) => {
+                        "auto-edits (up to medium risk)"
+                    }
+                    ApprovalProfile::AutoApprove(ActionRisk::High) => {
+                        "auto-high (up to high risk)"
+                    }
+                    ApprovalProfile::AutoApprove(_) => "auto-custom",
+                    ApprovalProfile::FullAuto => "full-auto (everything)",
+                };
+                self.set_result(format!(
+                    "Current: {current}. Options: /auto off | /auto edits | /auto high | /auto full"
+                ));
             }
             other => {
                 self.set_result(format!("Unknown command: '{other}'. Type /help for commands."));
@@ -1665,6 +1847,7 @@ struct AgentLoopParams {
     sys_prompt: String,
     tool_defs: Option<serde_json::Value>,
     auto_approve: bool,
+    approval_profile: ApprovalProfile,
     thinking_budget: Option<u32>,
 }
 
@@ -1767,7 +1950,12 @@ fn run_agent_loop(
                     )));
                     run_subagent_task(&params, prompt, &event_tx)
                 }
-            } else if is_safe_tool(&tc.name) || auto_approve_all {
+            } else if should_auto_approve_tool(
+                &tc.name,
+                &tc.input,
+                auto_approve_all,
+                &params.approval_profile,
+            ) {
                 // Auto-approved -- execute directly.
                 execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input)
             } else {
@@ -1907,7 +2095,10 @@ fn run_subagent_task(
         .into_iter()
         .filter(|t| t.name != "task")
         .collect();
-    let sys_prompt = system_prompt::build_system_prompt(&tool_descs);
+    let sys_prompt = system_prompt::build_system_prompt(
+        &tool_descs,
+        Some(approval_context_for_prompt(&ApprovalProfile::FullAuto)),
+    );
     let tool_defs = build_tool_definitions(&tool_descs);
 
     let subagent_params = AgentLoopParams {
@@ -1917,6 +2108,7 @@ fn run_subagent_task(
         sys_prompt,
         tool_defs,
         auto_approve: true,
+        approval_profile: ApprovalProfile::FullAuto, // Subagents auto-approve everything.
         thinking_budget: params.thinking_budget,
     };
 
@@ -2002,6 +2194,7 @@ fn run_background_task(
         sys_prompt: String::new(), // built inside run_subagent_task
         tool_defs: None,
         auto_approve: true,
+        approval_profile: ApprovalProfile::FullAuto, // Background tasks auto-approve everything.
         thinking_budget: params.thinking_budget,
     };
     let prompt = task_prompt.to_string();
@@ -2177,13 +2370,13 @@ fn detect_model() -> String {
 }
 
 /// Run the chat TUI, connecting to the daemon at the default socket path.
-pub fn run_chat_tui() -> Result<()> {
+pub fn run_chat_tui(auto_mode: Option<&str>) -> Result<()> {
     let client = DaemonClient::default_path();
-    run_chat_tui_with_client(client)
+    run_chat_tui_with_options(client, auto_mode)
 }
 
-/// Run the chat TUI with a specific client.
-pub fn run_chat_tui_with_client(client: DaemonClient) -> Result<()> {
+/// Run the chat TUI with a specific client and optional auto-approval mode.
+pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) -> Result<()> {
     let model = detect_model();
 
     // Install panic hook to restore terminal on panic
@@ -2212,6 +2405,11 @@ pub fn run_chat_tui_with_client(client: DaemonClient) -> Result<()> {
 
     let events = EventHandler::new(TICK_RATE_MS);
     let mut app = ChatApp::new(Some(client), model);
+
+    // Apply --auto CLI flag if provided.
+    if let Some(mode) = auto_mode {
+        app.approval_profile = parse_approval_mode(mode);
+    }
 
     let result = run_event_loop(&mut terminal, &events, &mut app);
 
@@ -2762,5 +2960,199 @@ mod tests {
         // non-empty string.
         let model = detect_model();
         assert!(!model.is_empty());
+    }
+
+    // -- Risk classification ------------------------------------------------
+
+    #[test]
+    fn classify_read_file_is_informational() {
+        let input = serde_json::json!({"file_path": "/tmp/test.rs"});
+        assert_eq!(classify_tool_risk("read_file", &input), ActionRisk::Informational);
+    }
+
+    #[test]
+    fn classify_write_file_is_medium() {
+        let input = serde_json::json!({"file_path": "/tmp/test.rs", "content": "hello"});
+        assert_eq!(classify_tool_risk("write_file", &input), ActionRisk::Medium);
+    }
+
+    #[test]
+    fn classify_edit_file_is_medium() {
+        let input = serde_json::json!({"file_path": "/tmp/test.rs"});
+        assert_eq!(classify_tool_risk("edit_file", &input), ActionRisk::Medium);
+    }
+
+    #[test]
+    fn classify_bash_ls_is_low() {
+        let input = serde_json::json!({"command": "ls -la /tmp"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::Low);
+    }
+
+    #[test]
+    fn classify_bash_git_status_is_low() {
+        let input = serde_json::json!({"command": "git status"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::Low);
+    }
+
+    #[test]
+    fn classify_bash_cargo_test_is_low() {
+        let input = serde_json::json!({"command": "cargo test --workspace"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::Low);
+    }
+
+    #[test]
+    fn classify_bash_rm_rf_is_high() {
+        let input = serde_json::json!({"command": "rm -rf /tmp/project"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::High);
+    }
+
+    #[test]
+    fn classify_bash_force_push_is_high() {
+        let input = serde_json::json!({"command": "git push --force origin main"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::High);
+    }
+
+    #[test]
+    fn classify_bash_sudo_is_high() {
+        let input = serde_json::json!({"command": "sudo apt install foo"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::High);
+    }
+
+    #[test]
+    fn classify_bash_git_commit_is_medium() {
+        let input = serde_json::json!({"command": "git commit -m \"fix\""});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::Medium);
+    }
+
+    #[test]
+    fn classify_bash_general_command_is_medium() {
+        let input = serde_json::json!({"command": "make build"});
+        assert_eq!(classify_tool_risk("bash", &input), ActionRisk::Medium);
+    }
+
+    #[test]
+    fn classify_unknown_tool_is_high() {
+        let input = serde_json::json!({});
+        assert_eq!(classify_tool_risk("some_new_tool", &input), ActionRisk::High);
+    }
+
+    // -- Approval profile logic ---------------------------------------------
+
+    #[test]
+    fn manual_profile_only_approves_safe_tools() {
+        let profile = ApprovalProfile::Manual;
+        let bash_input = serde_json::json!({"command": "ls"});
+        assert!(!should_auto_approve_tool("bash", &bash_input, false, &profile));
+        assert!(should_auto_approve_tool("read_file", &serde_json::json!({}), false, &profile));
+    }
+
+    #[test]
+    fn full_auto_approves_everything() {
+        let profile = ApprovalProfile::FullAuto;
+        let input = serde_json::json!({"command": "rm -rf /"});
+        assert!(should_auto_approve_tool("bash", &input, false, &profile));
+    }
+
+    #[test]
+    fn auto_edits_approves_medium_risk() {
+        let profile = ApprovalProfile::AutoApprove(ActionRisk::Medium);
+        let write_input = serde_json::json!({"file_path": "/tmp/x", "content": "y"});
+        assert!(should_auto_approve_tool("write_file", &write_input, false, &profile));
+    }
+
+    #[test]
+    fn auto_edits_blocks_high_risk() {
+        let profile = ApprovalProfile::AutoApprove(ActionRisk::Medium);
+        let rm_input = serde_json::json!({"command": "rm -rf /tmp"});
+        assert!(!should_auto_approve_tool("bash", &rm_input, false, &profile));
+    }
+
+    #[test]
+    fn auto_edits_approves_low_risk_bash() {
+        let profile = ApprovalProfile::AutoApprove(ActionRisk::Medium);
+        let ls_input = serde_json::json!({"command": "ls -la"});
+        assert!(should_auto_approve_tool("bash", &ls_input, false, &profile));
+    }
+
+    #[test]
+    fn auto_approve_all_overrides_profile() {
+        let profile = ApprovalProfile::Manual;
+        let bash_input = serde_json::json!({"command": "rm -rf /"});
+        // When user pressed 'a', auto_approve_all is true -- overrides profile.
+        assert!(should_auto_approve_tool("bash", &bash_input, true, &profile));
+    }
+
+    // -- Parse approval mode ------------------------------------------------
+
+    #[test]
+    fn parse_approval_mode_variants() {
+        assert_eq!(parse_approval_mode("off"), ApprovalProfile::Manual);
+        assert_eq!(parse_approval_mode("manual"), ApprovalProfile::Manual);
+        assert_eq!(
+            parse_approval_mode("edits"),
+            ApprovalProfile::AutoApprove(ActionRisk::Medium)
+        );
+        assert_eq!(
+            parse_approval_mode("high"),
+            ApprovalProfile::AutoApprove(ActionRisk::High)
+        );
+        assert_eq!(parse_approval_mode("full"), ApprovalProfile::FullAuto);
+        assert_eq!(parse_approval_mode("full-auto"), ApprovalProfile::FullAuto);
+    }
+
+    #[test]
+    fn parse_approval_mode_unknown_defaults_to_manual() {
+        assert_eq!(parse_approval_mode("bogus"), ApprovalProfile::Manual);
+    }
+
+    // -- Approval profile label ---------------------------------------------
+
+    #[test]
+    fn approval_profile_labels() {
+        assert_eq!(approval_profile_label(&ApprovalProfile::Manual), "manual");
+        assert_eq!(
+            approval_profile_label(&ApprovalProfile::AutoApprove(ActionRisk::Medium)),
+            "auto-edits"
+        );
+        assert_eq!(
+            approval_profile_label(&ApprovalProfile::AutoApprove(ActionRisk::High)),
+            "auto-high"
+        );
+        assert_eq!(approval_profile_label(&ApprovalProfile::FullAuto), "full-auto");
+    }
+
+    // -- /auto commands -----------------------------------------------------
+
+    #[test]
+    fn auto_command_sets_profile() {
+        let mut app = make_app();
+        assert_eq!(app.approval_profile, ApprovalProfile::Manual);
+
+        app.execute_command("auto edits");
+        assert_eq!(
+            app.approval_profile,
+            ApprovalProfile::AutoApprove(ActionRisk::Medium)
+        );
+
+        app.execute_command("auto high");
+        assert_eq!(
+            app.approval_profile,
+            ApprovalProfile::AutoApprove(ActionRisk::High)
+        );
+
+        app.execute_command("auto full");
+        assert_eq!(app.approval_profile, ApprovalProfile::FullAuto);
+
+        app.execute_command("auto off");
+        assert_eq!(app.approval_profile, ApprovalProfile::Manual);
+    }
+
+    #[test]
+    fn auto_command_shows_status() {
+        let mut app = make_app();
+        app.execute_command("auto");
+        assert!(app.command_result.is_some());
+        let result = app.command_result.unwrap();
+        assert!(result.contains("manual"));
     }
 }
