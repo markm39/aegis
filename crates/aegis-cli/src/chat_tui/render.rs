@@ -192,6 +192,7 @@ pub fn render_message(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
 /// ```
 pub fn render_header(
     model: &str,
+    provider: Option<&str>,
     connected: bool,
     thinking: bool,
     _width: u16,
@@ -204,6 +205,11 @@ pub fn render_header(
         ("Disconnected".to_string(), Color::DarkGray)
     };
 
+    let model_display = match provider {
+        Some(p) => format!("{model} ({p})"),
+        None => model.to_string(),
+    };
+
     Line::from(vec![
         Span::styled(
             " Aegis".to_string(),
@@ -213,7 +219,7 @@ pub fn render_header(
         ),
         Span::styled(" | ".to_string(), Style::default().fg(Color::DarkGray)),
         Span::styled(
-            model.to_string(),
+            model_display,
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -227,7 +233,7 @@ pub fn render_header(
 ///
 /// Format:
 /// ```text
-///  model-name  :help
+///  model-name  /help
 /// ```
 /// Optional usage info for the status bar.
 pub struct UsageInfo {
@@ -254,7 +260,7 @@ pub fn render_status_bar(model: &str, _width: u16, usage: Option<&UsageInfo>) ->
     }
 
     spans.push(Span::raw("  ".to_string()));
-    spans.push(Span::styled(":help".to_string(), Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled("/help".to_string(), Style::default().fg(Color::DarkGray)));
 
     Line::from(spans)
 }
@@ -400,30 +406,40 @@ mod tests {
 
     #[test]
     fn render_header_connected() {
-        let line = render_header("claude-sonnet-4-20250514", true, false, 80);
+        let line = render_header("claude-sonnet-4-20250514", Some("anthropic"), true, false, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Aegis"));
         assert!(text.contains("claude-sonnet-4-20250514"));
+        assert!(text.contains("(anthropic)"));
         assert!(text.contains("Connected"));
     }
 
     #[test]
     fn render_header_disconnected() {
-        let line = render_header("gpt-4o", false, false, 80);
+        let line = render_header("gpt-4o", Some("openai"), false, false, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Disconnected"));
+        assert!(text.contains("(openai)"));
+    }
+
+    #[test]
+    fn render_header_no_provider() {
+        let line = render_header("custom-model", None, true, false, 80);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("custom-model"));
+        assert!(!text.contains("("));
     }
 
     #[test]
     fn render_header_thinking() {
-        let line = render_header("claude-sonnet-4-20250514", true, true, 80);
+        let line = render_header("claude-sonnet-4-20250514", None, true, true, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Thinking..."));
     }
 
     #[test]
     fn render_header_thinking_is_yellow() {
-        let line = render_header("model", true, true, 80);
+        let line = render_header("model", None, true, true, 80);
         let status_span = line
             .spans
             .iter()
@@ -434,7 +450,7 @@ mod tests {
 
     #[test]
     fn render_header_connected_is_green() {
-        let line = render_header("model", true, false, 80);
+        let line = render_header("model", None, true, false, 80);
         let status_span = line
             .spans
             .iter()
@@ -450,7 +466,7 @@ mod tests {
         let line = render_status_bar("claude-sonnet-4-20250514", 80, None);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("claude-sonnet-4-20250514"));
-        assert!(text.contains(":help"));
+        assert!(text.contains("/help"));
     }
 
     #[test]

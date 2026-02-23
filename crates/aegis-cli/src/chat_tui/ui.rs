@@ -52,8 +52,10 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
 
 /// Draw the header bar.
 fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
+    let provider = resolve_provider_for_display(&app.model);
     let header = render::render_header(
         &app.model,
+        provider.as_deref(),
         app.connected,
         app.awaiting_response,
         area.width,
@@ -63,13 +65,41 @@ fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
     f.render_widget(para, area);
 }
 
+/// Look up the provider name for a model, for display in the header bar.
+fn resolve_provider_for_display(model: &str) -> Option<String> {
+    // Check exact match in the static provider catalog.
+    for provider in aegis_types::providers::ALL_PROVIDERS {
+        for m in provider.models {
+            if m.id == model {
+                return Some(provider.id.to_string());
+            }
+        }
+    }
+    // Fall back to prefix heuristic.
+    let lower = model.to_lowercase();
+    if lower.starts_with("claude-") {
+        return Some("anthropic".into());
+    }
+    if lower.starts_with("gpt-")
+        || lower.starts_with("o1-")
+        || lower.starts_with("o3-")
+        || lower.starts_with("o4-")
+    {
+        return Some("openai".into());
+    }
+    if lower.starts_with("gemini-") {
+        return Some("google".into());
+    }
+    None
+}
+
 /// Draw the scrollable chat message area.
 fn draw_chat_area(f: &mut Frame, app: &ChatApp, area: Rect) {
     if app.messages.is_empty() {
         let placeholder = if app.connected {
             "Type a message to start chatting..."
         } else {
-            "Starting daemon... (or :daemon start)"
+            "Starting daemon... (or /daemon start)"
         };
         let para = Paragraph::new(Line::from(Span::styled(
             format!("  {placeholder}"),
@@ -132,7 +162,7 @@ fn draw_input_area(f: &mut Frame, app: &ChatApp, area: Rect) {
     let mode_indicator = match app.input_mode {
         InputMode::Chat => "> ",
         InputMode::Scroll => "SCROLL ",
-        InputMode::Command => ": ",
+        InputMode::Command => "/ ",
     };
 
     let mut spans = vec![Span::styled(
@@ -204,7 +234,7 @@ fn draw_status_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
 /// Draw the command bar (replaces status bar when active).
 fn draw_command_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
     let mut spans = vec![Span::styled(
-        ":".to_string(),
+        "/".to_string(),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),

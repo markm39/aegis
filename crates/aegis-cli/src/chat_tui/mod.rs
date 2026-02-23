@@ -46,7 +46,7 @@ pub enum InputMode {
     Chat,
     /// Escape when input empty: navigate message history.
     Scroll,
-    /// `:` when input empty: command bar.
+    /// `/` when input empty: command bar.
     Command,
 }
 
@@ -174,7 +174,7 @@ pub struct ChatApp {
 
 /// Commands recognized by the minimal command bar.
 const COMMANDS: &[&str] = &[
-    "quit", "q", "clear", "new", "compact", "model", "help", "usage",
+    "quit", "q", "clear", "new", "compact", "model", "provider", "help", "usage",
     "think", "think off", "think low", "think medium", "think high",
     "save", "resume", "sessions",
     "daemon start", "daemon stop", "daemon status",
@@ -611,7 +611,7 @@ impl ChatApp {
                     None => {}
                 }
             }
-            KeyCode::Char(':') if self.input_buffer.is_empty() => {
+            KeyCode::Char('/') if self.input_buffer.is_empty() => {
                 self.enter_command_mode();
             }
             KeyCode::Esc if self.input_buffer.is_empty() => {
@@ -709,7 +709,7 @@ impl ChatApp {
             KeyCode::Esc => {
                 self.input_mode = InputMode::Chat;
             }
-            KeyCode::Char(':') => {
+            KeyCode::Char('/') => {
                 self.enter_command_mode();
             }
             KeyCode::Char(c) => {
@@ -734,7 +734,7 @@ impl ChatApp {
         self.command_history_index = None;
     }
 
-    /// Handle keys in Command mode (: bar).
+    /// Handle keys in Command mode (/ bar).
     fn handle_command_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
@@ -1011,7 +1011,7 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    ":quit  :clear  :new  :compact  :model <name>  :usage  :think off|low|medium|high|<n>  :save  :resume <id>  :sessions  :daemon ...",
+                    "/quit  /clear  /new  /compact  /model <name>  /provider  /usage  /think off|low|medium|high|<n>  /save  /resume <id>  /sessions  /daemon ...",
                 );
             }
             "usage" => {
@@ -1025,24 +1025,60 @@ impl ChatApp {
                 ));
             }
             _ if trimmed.starts_with("model ") => {
-                let new_model = trimmed.strip_prefix("model ").unwrap().trim();
-                if new_model.is_empty() {
-                    self.set_result(format!("Current model: {}", self.model));
+                let input = trimmed.strip_prefix("model ").unwrap().trim();
+                if input.is_empty() {
+                    self.show_model_info();
                 } else {
-                    self.model = new_model.to_string();
-                    self.set_result(format!("Model set to: {}", self.model));
+                    let (model_name, provider_id) = resolve_model_input(input);
+
+                    // Warn (but don't block) if the provider has no visible auth.
+                    let mut warning = String::new();
+                    if let Some(pid) = provider_id {
+                        if let Some(pinfo) = aegis_types::providers::provider_by_id(pid) {
+                            let detected = aegis_types::providers::detect_provider(pinfo);
+                            if !detected.available {
+                                warning = format!(
+                                    " (warning: {} not set)",
+                                    pinfo.env_var,
+                                );
+                            }
+                        }
+                    }
+
+                    let old = self.model.clone();
+                    self.model = model_name.clone();
+                    let suffix = provider_id
+                        .map(|p| format!(" ({p})"))
+                        .unwrap_or_default();
+                    self.set_result(format!(
+                        "Model: {old} -> {model_name}{suffix}{warning}"
+                    ));
                 }
             }
             "model" => {
-                self.set_result(format!("Current model: {}", self.model));
+                self.show_model_info();
+            }
+            "provider" => {
+                let all: Vec<String> = aegis_types::providers::scan_providers()
+                    .into_iter()
+                    .filter(|d| d.available)
+                    .map(|d| format!("{} ({})", d.info.id, d.status_label))
+                    .collect();
+                if all.is_empty() {
+                    self.set_result(
+                        "No providers available. Set an API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)",
+                    );
+                } else {
+                    self.set_result(format!("Providers: {}", all.join(", ")));
+                }
             }
             "resume" => {
-                self.set_result("Usage: :resume <id>  (use :sessions to list saved conversations)");
+                self.set_result("Usage: /resume <id>  (use /sessions to list saved conversations)");
             }
             _ if trimmed.starts_with("resume ") => {
                 let resume_id = trimmed.strip_prefix("resume ").unwrap().trim();
                 if resume_id.is_empty() {
-                    self.set_result("Usage: :resume <id>");
+                    self.set_result("Usage: /resume <id>");
                 } else {
                     match persistence::load_conversation(resume_id) {
                         Ok((messages, meta)) => {
@@ -1095,7 +1131,7 @@ impl ChatApp {
             }
             "daemon restart" => {
                 if !self.connected {
-                    self.set_result("Daemon is not running. Use :daemon start.");
+                    self.set_result("Daemon is not running. Use /daemon start.");
                 } else {
                     match crate::commands::daemon::restart_quiet() {
                         Ok(msg) => {
@@ -1189,8 +1225,29 @@ impl ChatApp {
                 }
             }
             other => {
-                self.set_result(format!("Unknown command: '{other}'. Type :help for commands."));
+                self.set_result(format!("Unknown command: '{other}'. Type /help for commands."));
             }
+        }
+    }
+
+    /// Show current model and available providers.
+    fn show_model_info(&mut self) {
+        let providers: Vec<String> = aegis_types::providers::scan_providers()
+            .into_iter()
+            .filter(|d| d.available)
+            .map(|d| format!("{} {}", d.info.id, d.status_label))
+            .collect();
+        if providers.is_empty() {
+            self.set_result(format!(
+                "Model: {}  |  No providers configured. Set an API key env var.",
+                self.model,
+            ));
+        } else {
+            self.set_result(format!(
+                "Model: {}  |  Available: {}",
+                self.model,
+                providers.join(", "),
+            ));
         }
     }
 
@@ -1222,7 +1279,7 @@ impl ChatApp {
     /// Send a command to the daemon and show the response message.
     fn send_and_show_result(&mut self, cmd: DaemonCommand) {
         let Some(client) = &self.client else {
-            self.last_error = Some("Not connected to daemon. Use :daemon start".into());
+            self.last_error = Some("Not connected to daemon. Use /daemon start".into());
             return;
         };
         match client.send(&cmd) {
@@ -1737,9 +1794,52 @@ fn apply_completion(_buffer: &str, completion: &str) -> String {
     completion.to_string()
 }
 
-/// Detect the default model from daemon config or environment variables.
+/// Resolve user input to a valid model + provider pair.
+///
+/// Handles: provider names ("openai" -> default model), known model names,
+/// prefix-matched models (e.g., "gpt-custom" -> openai), and unknown
+/// strings (passed through).
+fn resolve_model_input(input: &str) -> (String, Option<&'static str>) {
+    let input = input.trim();
+
+    // Case 1: provider name -> default model
+    if let Some(provider) = aegis_types::providers::provider_by_id(input) {
+        if !provider.default_model.is_empty() {
+            return (provider.default_model.to_string(), Some(provider.id));
+        }
+    }
+
+    // Case 2: exact model in a provider's catalog
+    for provider in aegis_types::providers::ALL_PROVIDERS {
+        for model in provider.models {
+            if model.id == input {
+                return (input.to_string(), Some(provider.id));
+            }
+        }
+    }
+
+    // Case 3: prefix match for custom/unlisted models
+    let lower = input.to_lowercase();
+    let provider_id = if lower.starts_with("claude-") {
+        Some("anthropic")
+    } else if lower.starts_with("gpt-")
+        || lower.starts_with("o1-")
+        || lower.starts_with("o3-")
+        || lower.starts_with("o4-")
+    {
+        Some("openai")
+    } else if lower.starts_with("gemini-") {
+        Some("google")
+    } else {
+        None
+    };
+
+    (input.to_string(), provider_id)
+}
+
+/// Detect the default model from daemon config or available providers.
 fn detect_model() -> String {
-    // 1. Read daemon.toml for default_model
+    // 1. Check daemon.toml for default_model.
     let config_path = aegis_types::daemon::daemon_config_path();
     if let Ok(config_str) = std::fs::read_to_string(config_path) {
         if let Ok(config) = aegis_types::daemon::DaemonConfig::from_toml(&config_str) {
@@ -1749,21 +1849,14 @@ fn detect_model() -> String {
         }
     }
 
-    // 2. Detect from environment
-    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-        return "claude-sonnet-4-20250514".to_string();
-    }
-    if std::env::var("OPENAI_API_KEY").is_ok() {
-        return "gpt-4o".to_string();
-    }
-    if std::env::var("GOOGLE_API_KEY").is_ok() || std::env::var("GEMINI_API_KEY").is_ok() {
-        return "gemini-2.0-flash".to_string();
-    }
-    if std::env::var("OPENROUTER_API_KEY").is_ok() {
-        return "anthropic/claude-sonnet-4-20250514".to_string();
+    // 2. Scan providers and pick the first available with a default model.
+    for detected in aegis_types::providers::scan_providers() {
+        if detected.available && !detected.info.default_model.is_empty() {
+            return detected.info.default_model.to_string();
+        }
     }
 
-    // 3. Default fallback
+    // 3. Fallback.
     "claude-sonnet-4-20250514".to_string()
 }
 
@@ -1898,25 +1991,25 @@ mod tests {
     }
 
     #[test]
-    fn input_mode_colon_enters_command() {
+    fn input_mode_slash_enters_command() {
         let mut app = make_app();
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         assert_eq!(app.input_mode, InputMode::Command);
     }
 
     #[test]
-    fn input_mode_colon_inserts_when_buffer_not_empty() {
+    fn input_mode_slash_inserts_when_buffer_not_empty() {
         let mut app = make_app();
         app.handle_key(press(KeyCode::Char('a')));
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         assert_eq!(app.input_mode, InputMode::Chat);
-        assert_eq!(app.input_buffer, "a:");
+        assert_eq!(app.input_buffer, "a/");
     }
 
     #[test]
     fn command_mode_escape_returns_to_chat() {
         let mut app = make_app();
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         assert_eq!(app.input_mode, InputMode::Command);
         app.handle_key(press(KeyCode::Esc));
         assert_eq!(app.input_mode, InputMode::Chat);
@@ -1943,10 +2036,10 @@ mod tests {
     }
 
     #[test]
-    fn scroll_mode_colon_enters_command() {
+    fn scroll_mode_slash_enters_command() {
         let mut app = make_app();
         app.handle_key(press(KeyCode::Esc)); // -> Scroll
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         assert_eq!(app.input_mode, InputMode::Command);
     }
 
@@ -1993,7 +2086,7 @@ mod tests {
     #[test]
     fn command_text_input() {
         let mut app = make_app();
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         app.handle_key(press(KeyCode::Char('h')));
         app.handle_key(press(KeyCode::Char('e')));
         app.handle_key(press(KeyCode::Char('l')));
@@ -2004,7 +2097,7 @@ mod tests {
     #[test]
     fn command_enter_executes_and_returns_to_chat() {
         let mut app = make_app();
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         app.handle_key(press(KeyCode::Char('q')));
         app.handle_key(press(KeyCode::Char('u')));
         app.handle_key(press(KeyCode::Char('i')));
@@ -2110,7 +2203,7 @@ mod tests {
     #[test]
     fn paste_inserts_in_command_mode() {
         let mut app = make_app();
-        app.handle_key(press(KeyCode::Char(':')));
+        app.handle_key(press(KeyCode::Char('/')));
         app.handle_paste("status");
         assert_eq!(app.command_buffer, "status");
     }
