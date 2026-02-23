@@ -82,6 +82,21 @@ pub struct ModelInfo {
     pub supports_thinking: bool,
 }
 
+/// A model discovered dynamically from a provider API at runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredModel {
+    /// Model identifier used in API calls.
+    pub id: String,
+    /// Human-readable display name.
+    pub display_name: String,
+    /// Maximum context window in tokens (0 = unknown).
+    pub context_window: u64,
+    /// Whether this model supports vision/image input.
+    pub supports_vision: bool,
+    /// Whether this model supports extended thinking / reasoning.
+    pub supports_thinking: bool,
+}
+
 /// An LLM provider with its configuration and model catalog.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderInfo {
@@ -1299,6 +1314,140 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
     },
 ];
 
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+/// Format a token count for display: 128000 -> "128k", 1000000 -> "1M".
+pub fn format_context_window(tokens: u64) -> String {
+    if tokens == 0 {
+        return "?".into();
+    }
+    if tokens >= 1_000_000 {
+        if tokens.is_multiple_of(1_000_000) {
+            format!("{}M", tokens / 1_000_000)
+        } else {
+            format!("{:.1}M", tokens as f64 / 1_000_000.0)
+        }
+    } else if tokens >= 1_000 {
+        format!("{}k", tokens / 1_000)
+    } else {
+        format!("{tokens}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic model discovery
+// ---------------------------------------------------------------------------
+
+/// Discover models from an Ollama instance via `GET {base_url}/api/tags`.
+///
+/// Returns an empty vec on any error (network, parse, timeout).
+pub fn discover_ollama_models(base_url: &str) -> Vec<DiscoveredModel> {
+    #[derive(Deserialize)]
+    struct OllamaTagsResponse {
+        models: Option<Vec<OllamaModel>>,
+    }
+
+    #[derive(Deserialize)]
+    struct OllamaModel {
+        name: String,
+    }
+
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let resp = match client.get(&url).send() {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let body: OllamaTagsResponse = match resp.json() {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    body.models
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| DiscoveredModel {
+            display_name: m.name.clone(),
+            id: m.name,
+            context_window: 0,
+            supports_vision: false,
+            supports_thinking: false,
+        })
+        .collect()
+}
+
+/// Discover models from an OpenAI-compatible API via `GET {base_url}/models`.
+///
+/// Used for vLLM, LiteLLM, HuggingFace Inference, and Bedrock.
+/// Returns an empty vec on any error (network, parse, timeout).
+pub fn discover_openai_compat_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Vec<DiscoveredModel> {
+    #[derive(Deserialize)]
+    struct ModelsResponse {
+        data: Option<Vec<ModelEntry>>,
+    }
+
+    #[derive(Deserialize)]
+    struct ModelEntry {
+        id: String,
+    }
+
+    // Normalize: ensure we hit {base}/models (handle both /v1 and /v1/ endings).
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    };
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let mut req = client.get(&url);
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key);
+    }
+
+    let resp = match req.send() {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let body: ModelsResponse = match resp.json() {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    body.data
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| DiscoveredModel {
+            display_name: m.id.clone(),
+            id: m.id,
+            context_window: 0,
+            supports_vision: false,
+            supports_thinking: false,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1366,5 +1515,33 @@ mod tests {
             "expected 25+ providers, got {}",
             ALL_PROVIDERS.len()
         );
+    }
+
+    #[test]
+    fn format_context_window_unknown() {
+        assert_eq!(format_context_window(0), "?");
+    }
+
+    #[test]
+    fn format_context_window_thousands() {
+        assert_eq!(format_context_window(128_000), "128k");
+        assert_eq!(format_context_window(200_000), "200k");
+        assert_eq!(format_context_window(4_000), "4k");
+    }
+
+    #[test]
+    fn format_context_window_millions() {
+        assert_eq!(format_context_window(1_000_000), "1M");
+        assert_eq!(format_context_window(2_000_000), "2M");
+    }
+
+    #[test]
+    fn format_context_window_fractional_millions() {
+        assert_eq!(format_context_window(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn format_context_window_small() {
+        assert_eq!(format_context_window(512), "512");
     }
 }

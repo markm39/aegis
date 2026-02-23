@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use aegis_types::provider_auth::{auth_flows_for, AuthFlowKind};
+use aegis_types::providers::format_context_window;
 
 use super::app::{
     filtered_providers, ConfigAction, GatewayField, OnboardApp, OnboardStep, ProviderSubStep,
@@ -109,7 +110,13 @@ fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
             ProviderSubStep::CliExtractResult => "Enter: continue  Esc: back",
             ProviderSubStep::DeviceFlowWaiting => "Waiting for authorization...  Esc: cancel",
             ProviderSubStep::PkceBrowserWaiting => "Waiting for browser callback...  Esc: cancel",
-            ProviderSubStep::SelectModel => "j/k: navigate  Enter: confirm  Esc: back",
+            ProviderSubStep::SelectModel => {
+                if app.model_manual_active {
+                    "Enter: confirm  Esc: back to list"
+                } else {
+                    "j/k: navigate  r: refresh  Enter: confirm  Esc: back"
+                }
+            }
         },
         OnboardStep::WorkspaceConfig => "Enter: confirm  Esc: back",
         OnboardStep::GatewayConfig => "Tab/Shift+Tab: next/prev field  Enter: continue  Esc: back",
@@ -288,7 +295,17 @@ fn draw_provider_list(f: &mut Frame, app: &OnboardApp, area: Rect) {
         };
 
         let name = format!("  {marker}{:<20}", provider.info.display_name);
-        let model = format!("{:<28}", provider.info.default_model);
+        let model_with_ctx = {
+            let dm = provider.info.default_model;
+            if dm.is_empty() {
+                "(dynamic)".to_string()
+            } else if let Some(mi) = provider.info.models.iter().find(|m| m.id == dm) {
+                format!("{} {}", dm, format_context_window(mi.context_window))
+            } else {
+                dm.to_string()
+            }
+        };
+        let model = format!("{:<32}", model_with_ctx);
         let status = provider.detection_label;
 
         lines.push(Line::from(vec![
@@ -319,38 +336,167 @@ fn draw_model_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
 
     let mut lines = vec![Line::from("")];
 
-    if let Some(provider) = app.selected_provider() {
+    let provider = match app.selected_provider() {
+        Some(p) => p,
+        None => {
+            let para = Paragraph::new(lines).block(block);
+            f.render_widget(para, area);
+            return;
+        }
+    };
+
+    lines.push(Line::from(Span::styled(
+        format!("  Provider: {}", provider.info.display_name),
+        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Manual input mode -- show text input instead of list.
+    if app.model_manual_active {
         lines.push(Line::from(Span::styled(
-            format!("  Provider: {}", provider.info.display_name),
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            "  Model ID:",
+            Style::default().fg(WHITE),
         )));
         lines.push(Line::from(""));
 
-        if provider.info.models.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("  Default: {}", provider.info.default_model),
-                Style::default().fg(WHITE),
-            )));
+        let cursor_spans = build_cursor_spans(&app.model_manual_input, app.model_manual_cursor);
+        let mut input_line = vec![Span::styled("  ", Style::default())];
+        input_line.extend(cursor_spans);
+        lines.push(Line::from(input_line));
+
+        let para = Paragraph::new(lines).block(block);
+        f.render_widget(para, area);
+        return;
+    }
+
+    // Column headers.
+    lines.push(Line::from(vec![
+        Span::styled("    ", Style::default()),
+        Span::styled(
+            format!("{:<36}", "MODEL"),
+            Style::default().fg(DIM),
+        ),
+        Span::styled(
+            format!("{:<8}", "CTX"),
+            Style::default().fg(DIM),
+        ),
+        Span::styled("FLAGS", Style::default().fg(DIM)),
+    ]));
+
+    let mut row_idx: usize = 0;
+
+    // Static models.
+    for model in provider.info.models.iter() {
+        let is_selected = row_idx == app.model_selected;
+        let marker = if is_selected { "> " } else { "  " };
+        let is_default = model.id == provider.info.default_model;
+
+        let name = if is_default {
+            format!("{} *", model.display_name)
         } else {
-            for (i, model) in provider.info.models.iter().enumerate() {
-                let is_selected = i == app.model_selected;
-                let marker = if is_selected { "> " } else { "  " };
-                let is_default = model.id == provider.info.default_model;
-                let default_tag = if is_default { " (default)" } else { "" };
+            model.display_name.to_string()
+        };
 
-                let style = if is_selected {
-                    Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(WHITE)
-                };
+        let ctx = format_context_window(model.context_window);
 
-                lines.push(Line::from(Span::styled(
-                    format!("  {marker}{}{default_tag}", model.id),
-                    style,
-                )));
+        let mut flags = String::new();
+        if model.supports_thinking {
+            flags.push_str("[R] ");
+        }
+        if model.supports_vision {
+            flags.push_str("[V]");
+        }
+
+        let style = if is_selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WHITE)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker}"), style),
+            Span::styled(format!("{:<36}", name), style),
+            Span::styled(format!("{:<8}", ctx), style),
+            Span::styled(flags, style),
+        ]));
+
+        row_idx += 1;
+    }
+
+    // Discovered models.
+    if !app.discovered_models.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Discovered from API:",
+            Style::default().fg(DIM),
+        )));
+
+        for model in &app.discovered_models {
+            let is_selected = row_idx == app.model_selected;
+            let marker = if is_selected { "> " } else { "  " };
+            let ctx = format_context_window(model.context_window);
+
+            let mut flags = String::new();
+            if model.supports_thinking {
+                flags.push_str("[R] ");
             }
+            if model.supports_vision {
+                flags.push_str("[V]");
+            }
+
+            let style = if is_selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(WHITE)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {marker}"), style),
+                Span::styled(format!("{:<36}", model.display_name), style),
+                Span::styled(format!("{:<8}", ctx), style),
+                Span::styled(flags, style),
+            ]));
+
+            row_idx += 1;
         }
     }
+
+    // Loading / error state.
+    if app.model_loading {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Loading models from provider...",
+            Style::default().fg(DIM),
+        )));
+    }
+    if let Some(ref err) = app.model_loading_error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(YELLOW),
+        )));
+    }
+
+    // Manual entry row (always last).
+    lines.push(Line::from(""));
+    let is_manual_selected = row_idx == app.model_selected;
+    let manual_marker = if is_manual_selected { "> " } else { "  " };
+    let manual_style = if is_manual_selected {
+        Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DIM)
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  {manual_marker}Enter custom model ID..."),
+        manual_style,
+    )));
+
+    // Legend.
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [R] Reasoning  [V] Vision  * Default",
+        Style::default().fg(DIM),
+    )));
 
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, area);

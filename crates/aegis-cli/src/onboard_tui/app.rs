@@ -13,7 +13,10 @@ use aegis_types::daemon::{DaemonConfig, DaemonControlConfig, DashboardConfig, Pe
 use aegis_types::provider_auth::{
     auth_flows_for, has_multiple_auth_flows, needs_auth, AuthFlowKind,
 };
-use aegis_types::providers::{scan_providers, ProviderInfo, ProviderTier, ALL_PROVIDERS};
+use aegis_types::providers::{
+    scan_providers, ApiType, DiscoveredModel, ProviderInfo, ProviderTier, ALL_PROVIDERS,
+    discover_ollama_models, discover_openai_compat_models,
+};
 use aegis_types::CredentialStore;
 
 use super::auth_flow::{self, AuthToken, AuthTokenType, DevicePollResult};
@@ -203,6 +206,12 @@ pub struct OnboardApp {
     pub provider_searching: bool,
     pub provider_sub_step: ProviderSubStep,
     pub model_selected: usize,
+    pub model_manual_input: String,
+    pub model_manual_cursor: usize,
+    pub model_manual_active: bool,
+    pub model_loading: bool,
+    pub model_loading_error: Option<String>,
+    pub discovered_models: Vec<DiscoveredModel>,
     pub api_key_input: String,
     pub api_key_cursor: usize,
 
@@ -479,6 +488,12 @@ impl OnboardApp {
             provider_searching: false,
             provider_sub_step: ProviderSubStep::SelectProvider,
             model_selected: 0,
+            model_manual_input: String::new(),
+            model_manual_cursor: 0,
+            model_manual_active: false,
+            model_loading: false,
+            model_loading_error: None,
+            discovered_models: vec![],
             api_key_input: String::new(),
             api_key_cursor: 0,
 
@@ -560,10 +575,26 @@ impl OnboardApp {
 
     /// Get the selected model name.
     pub fn selected_model(&self) -> String {
+        // Manual input takes priority.
+        if self.model_manual_active && !self.model_manual_input.is_empty() {
+            return self.model_manual_input.clone();
+        }
+
         if let Some(provider) = self.selected_provider() {
-            if let Some(model) = provider.info.models.get(self.model_selected) {
-                return model.id.to_string();
+            let static_count = provider.info.models.len();
+
+            if self.model_selected < static_count {
+                // Selected a static model.
+                return provider.info.models[self.model_selected].id.to_string();
             }
+
+            let discovered_idx = self.model_selected - static_count;
+            if discovered_idx < self.discovered_models.len() {
+                // Selected a discovered model.
+                return self.discovered_models[discovered_idx].id.clone();
+            }
+
+            // Fallback to default model.
             provider.info.default_model.to_string()
         } else {
             String::new()
@@ -745,12 +776,12 @@ impl OnboardApp {
 
                 if provider.available {
                     // Provider already available -- go to model selection.
-                    self.model_selected = 0;
                     self.provider_sub_step = ProviderSubStep::SelectModel;
+                    self.start_model_discovery();
                 } else if !needs_auth(provider_id) {
                     // No auth needed (local provider) -- go to model selection.
-                    self.model_selected = 0;
                     self.provider_sub_step = ProviderSubStep::SelectModel;
+                    self.start_model_discovery();
                 } else {
                     self.route_to_auth_flow();
                 }
@@ -768,26 +799,108 @@ impl OnboardApp {
         }
     }
 
-    fn handle_model_selection(&mut self, key: KeyEvent) {
-        let model_count = self
+    /// Total number of entries in the model list (static + discovered + 1 manual row).
+    pub fn model_entry_count(&self) -> usize {
+        let static_count = self
             .selected_provider()
-            .map(|p| p.info.models.len().max(1))
-            .unwrap_or(1);
+            .map(|p| p.info.models.len())
+            .unwrap_or(0);
+        static_count + self.discovered_models.len() + 1
+    }
 
+    /// Run model discovery for the current provider (synchronous, bounded timeout).
+    fn start_model_discovery(&mut self) {
+        self.discovered_models.clear();
+        self.model_loading_error = None;
+        self.model_manual_active = false;
+        self.model_manual_input.clear();
+        self.model_manual_cursor = 0;
+        self.model_selected = 0;
+
+        // Extract provider info before mutating self.
+        let (dynamic_discovery, api_type, base_url, provider_id, static_empty) =
+            match self.selected_provider() {
+                Some(p) => (
+                    p.info.dynamic_discovery,
+                    p.info.api_type,
+                    p.info.base_url,
+                    p.info.id,
+                    p.info.models.is_empty(),
+                ),
+                None => return,
+            };
+
+        if !dynamic_discovery {
+            return;
+        }
+
+        self.model_loading = true;
+
+        let models = match api_type {
+            ApiType::Ollama => discover_ollama_models(base_url),
+            _ => {
+                let api_key = self.credential_store.get(provider_id).map(|c| c.api_key.clone());
+                discover_openai_compat_models(base_url, api_key.as_deref())
+            }
+        };
+
+        self.model_loading = false;
+
+        if models.is_empty() && static_empty {
+            self.model_loading_error =
+                Some("No models discovered. Enter a model ID manually or check the service.".into());
+        }
+
+        self.discovered_models = models;
+    }
+
+    fn handle_model_selection(&mut self, key: KeyEvent) {
+        if self.model_manual_active {
+            // Manual input mode.
+            match key.code {
+                KeyCode::Enter => {
+                    if self.model_manual_input.is_empty() {
+                        self.error_message = Some("Model ID cannot be empty".into());
+                        return;
+                    }
+                    self.save_provider_credential();
+                    self.step = OnboardStep::WorkspaceConfig;
+                }
+                KeyCode::Esc => {
+                    self.model_manual_active = false;
+                }
+                _ => {
+                    self.handle_text_input(key.code, TextInputTarget::ModelManual);
+                }
+            }
+            return;
+        }
+
+        // List mode.
+        let count = self.model_entry_count();
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.model_selected = (self.model_selected + 1).min(model_count - 1);
+                self.model_selected = (self.model_selected + 1).min(count.saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.model_selected = self.model_selected.saturating_sub(1);
             }
+            KeyCode::Char('r') => {
+                self.start_model_discovery();
+            }
             KeyCode::Enter => {
-                // Model selected -- proceed to workspace config.
-                self.save_provider_credential();
-                self.step = OnboardStep::WorkspaceConfig;
+                // Check if the manual entry row is selected (last row).
+                if self.model_selected == count - 1 {
+                    self.model_manual_active = true;
+                    self.model_manual_input.clear();
+                    self.model_manual_cursor = 0;
+                } else {
+                    self.save_provider_credential();
+                    self.step = OnboardStep::WorkspaceConfig;
+                }
             }
             KeyCode::Esc => {
-                self.provider_sub_step = ProviderSubStep::SelectProvider;
+                self.go_back_from_auth();
             }
             _ => {}
         }
@@ -811,8 +924,8 @@ impl OnboardApp {
                 self.providers[self.provider_selected].available = true;
                 self.providers[self.provider_selected].detection_label = "[Key Set]";
                 // Go to model selection.
-                self.model_selected = 0;
                 self.provider_sub_step = ProviderSubStep::SelectModel;
+                self.start_model_discovery();
             }
             KeyCode::Esc => {
                 self.provider_sub_step = ProviderSubStep::SelectProvider;
@@ -1046,8 +1159,8 @@ impl OnboardApp {
                 self.providers[self.provider_selected].available = true;
                 self.providers[self.provider_selected].detection_label = "[Token]";
                 self.save_provider_credential();
-                self.model_selected = 0;
                 self.provider_sub_step = ProviderSubStep::SelectModel;
+                self.start_model_discovery();
             }
             KeyCode::Esc => {
                 self.go_back_from_auth();
@@ -1066,9 +1179,9 @@ impl OnboardApp {
                     self.providers[self.provider_selected].available = true;
                     self.providers[self.provider_selected].detection_label = "[Token]";
                     self.save_provider_credential();
-                    self.model_selected = 0;
                     self.cli_extract_result = None;
                     self.provider_sub_step = ProviderSubStep::SelectModel;
+                    self.start_model_discovery();
                 } else {
                     // No token found -- go back to try another method.
                     self.cli_extract_result = None;
@@ -1146,8 +1259,8 @@ impl OnboardApp {
                 self.providers[self.provider_selected].available = true;
                 self.providers[self.provider_selected].detection_label = "[OAuth]";
                 self.save_provider_credential();
-                self.model_selected = 0;
                 self.provider_sub_step = ProviderSubStep::SelectModel;
+                self.start_model_discovery();
             }
             DevicePollResult::Expired => {
                 self.device_flow_error =
@@ -1176,8 +1289,8 @@ impl OnboardApp {
                 self.providers[self.provider_selected].available = true;
                 self.providers[self.provider_selected].detection_label = "[OAuth]";
                 self.save_provider_credential();
-                self.model_selected = 0;
                 self.provider_sub_step = ProviderSubStep::SelectModel;
+                self.start_model_discovery();
             }
             Ok(Err(e)) => {
                 self.pkce_error = Some(format!("OAuth failed: {e}"));
@@ -1629,6 +1742,9 @@ impl OnboardApp {
             TextInputTarget::SetupToken => {
                 (&mut self.setup_token_input, &mut self.setup_token_cursor)
             }
+            TextInputTarget::ModelManual => {
+                (&mut self.model_manual_input, &mut self.model_manual_cursor)
+            }
         };
 
         match code {
@@ -1677,6 +1793,7 @@ enum TextInputTarget {
     GatewayPort,
     GatewayToken,
     SetupToken,
+    ModelManual,
 }
 
 // ---------------------------------------------------------------------------
@@ -1873,7 +1990,8 @@ mod tests {
         app.step = OnboardStep::ProviderSelection;
         app.provider_sub_step = ProviderSubStep::SelectModel;
         app.handle_key(press(KeyCode::Esc));
-        assert_eq!(app.provider_sub_step, ProviderSubStep::SelectProvider);
+        // Goes back to auth method selection or provider list depending on provider.
+        assert_ne!(app.provider_sub_step, ProviderSubStep::SelectModel);
     }
 
     #[test]

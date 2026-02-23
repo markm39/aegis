@@ -43,8 +43,9 @@ pub use daemon::{
 pub use credentials::CredentialStore;
 pub use error::AegisError;
 pub use providers::{
-    scan_providers, provider_by_id, providers_by_tier, DetectedProvider, ProviderInfo,
-    ProviderTier, ALL_PROVIDERS,
+    scan_providers, provider_by_id, providers_by_tier, DetectedProvider, DiscoveredModel,
+    ProviderInfo, ProviderTier, ALL_PROVIDERS, discover_ollama_models,
+    discover_openai_compat_models, format_context_window,
 };
 pub use provider_auth::{
     auth_flows_for, has_multiple_auth_flows, needs_auth, AuthFlowKind, ClientIdSource,
