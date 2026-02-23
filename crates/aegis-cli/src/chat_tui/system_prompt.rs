@@ -1,7 +1,8 @@
 //! System prompt construction for chat TUI LLM requests.
 //!
-//! Builds a rich system prompt that includes identity, available tools,
-//! environment info, project context files, and git status.
+//! Builds a modular system prompt with sections adapted from OpenClaw's
+//! architecture and Codex's coding agent instructions. Sections are stored
+//! as static markdown files and included at compile time.
 
 use std::fmt::Write;
 use std::path::Path;
@@ -13,6 +14,24 @@ const MAX_FILE_CHARS: usize = 20_000;
 /// Maximum total characters for the entire system prompt.
 const MAX_PROMPT_CHARS: usize = 100_000;
 
+// Static prompt sections included at compile time.
+const IDENTITY: &str = include_str!("prompts/identity.md");
+const TOOLING_STYLE: &str = include_str!("prompts/tooling.md");
+const SAFETY: &str = include_str!("prompts/safety.md");
+const CODING: &str = include_str!("prompts/coding.md");
+const OUTPUT_FORMATTING: &str = include_str!("prompts/output_formatting.md");
+const APPLY_PATCH_INSTRUCTIONS: &str =
+    include_str!("../../../../vendor/codex/apply-patch/apply_patch_tool_instructions.md");
+
+/// Controls which sections are included in the system prompt.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PromptMode {
+    /// Full prompt (main agent): all sections included.
+    Full,
+    /// Minimal prompt (subagents): only tooling, workspace, and runtime info.
+    Minimal,
+}
+
 /// Minimal tool description for system prompt construction.
 pub struct ToolDescription {
     /// Tool name (e.g. "read_file", "bash").
@@ -23,45 +42,86 @@ pub struct ToolDescription {
 
 /// Build the system prompt for chat TUI LLM requests.
 ///
-/// Includes: identity, available tools, working directory, OS info,
-/// project files (AGENTS.md, CLAUDE.md), git status, and the current
-/// approval mode context.
+/// Assembles modular sections in order:
+/// 1. Identity (always)
+/// 2. Available tools (always)
+/// 3. Tool call style (full only)
+/// 4. Safety (full only)
+/// 5. Coding agent instructions (full only)
+/// 6. apply_patch format spec (always -- subagents use it too)
+/// 7. Output formatting (full only)
+/// 8. Approval mode (always, if provided)
+/// 9. Workspace / environment (always)
+/// 10. Project context files (always)
+/// 11. Git info (always)
 pub fn build_system_prompt(
     tool_descriptions: &[ToolDescription],
     approval_context: Option<&str>,
+    mode: PromptMode,
 ) -> String {
-    let mut prompt = String::with_capacity(4096);
+    let is_full = mode == PromptMode::Full;
+    let mut prompt = String::with_capacity(if is_full { 16384 } else { 4096 });
 
     // 1. Identity
-    prompt.push_str(
-        "You are Aegis, a helpful coding assistant. You have access to tools \
-         for reading files, editing code, running commands, and searching the codebase.\n",
-    );
+    prompt.push_str(IDENTITY);
 
     // 2. Available tools
     if !tool_descriptions.is_empty() {
         prompt.push_str("\n# Available Tools\n\n");
+        prompt.push_str("Tool names are case-sensitive. Call tools exactly as listed.\n\n");
         for tool in tool_descriptions {
             let _ = writeln!(prompt, "- **{}**: {}", tool.name, tool.description);
         }
     }
 
-    // 3. Approval mode
+    // 3. Tool call style (full only)
+    if is_full {
+        prompt.push('\n');
+        prompt.push_str(TOOLING_STYLE);
+    }
+
+    // 4. Safety (full only)
+    if is_full {
+        prompt.push('\n');
+        prompt.push_str(SAFETY);
+    }
+
+    // 5. Coding agent instructions (full only)
+    if is_full {
+        prompt.push('\n');
+        prompt.push_str(CODING);
+    }
+
+    // 6. apply_patch format spec (always -- subagents need it too)
+    prompt.push('\n');
+    prompt.push_str(APPLY_PATCH_INSTRUCTIONS);
+
+    // 7. Output formatting (full only)
+    if is_full {
+        prompt.push('\n');
+        prompt.push_str(OUTPUT_FORMATTING);
+    }
+
+    // 8. Approval mode
     if let Some(ctx) = approval_context {
         prompt.push_str("\n# Approval Mode\n\n");
         prompt.push_str(ctx);
         prompt.push('\n');
     }
 
-    // 4. Environment
-    prompt.push_str("\n# Environment\n\n");
+    // 9. Workspace / environment
+    prompt.push_str("\n# Workspace\n\n");
     if let Ok(cwd) = std::env::current_dir() {
-        let _ = writeln!(prompt, "- Working directory: {}", cwd.display());
+        let _ = writeln!(prompt, "- Working directory: `{}`", cwd.display());
     }
     let _ = writeln!(prompt, "- OS: {}", std::env::consts::OS);
     let _ = writeln!(prompt, "- Architecture: {}", std::env::consts::ARCH);
+    prompt.push_str(
+        "\nTreat this directory as the workspace for file operations \
+         unless explicitly instructed otherwise.\n",
+    );
 
-    // 5. Project context files
+    // 10. Project context files
     let cwd = std::env::current_dir().unwrap_or_default();
     let context_files: &[(&str, std::path::PathBuf)] = &[
         ("AGENTS.md", cwd.join("AGENTS.md")),
@@ -69,15 +129,23 @@ pub fn build_system_prompt(
         (".aegis/AGENTS.md", cwd.join(".aegis/AGENTS.md")),
     ];
 
+    let mut has_context = false;
     for (label, path) in context_files {
         if let Some(contents) = read_file_capped(path, MAX_FILE_CHARS) {
-            let _ = writeln!(prompt, "\n# Project Context: {label}\n");
+            if !has_context {
+                prompt.push_str("\n# Project Context\n\n");
+                prompt.push_str(
+                    "The following project context files have been loaded.\n\n",
+                );
+                has_context = true;
+            }
+            let _ = writeln!(prompt, "## {label}\n");
             prompt.push_str(&contents);
             prompt.push('\n');
         }
     }
 
-    // 6. Git info
+    // 11. Git info
     if let Some(git_section) = build_git_section(&cwd) {
         prompt.push_str(&git_section);
     }
@@ -107,7 +175,6 @@ fn read_file_capped(path: &Path, max_chars: usize) -> Option<String> {
 /// Build the git information section, or `None` if git is unavailable or
 /// the current directory is not a git repository.
 fn build_git_section(cwd: &Path) -> Option<String> {
-    // Check if we're in a git repo by getting the current branch.
     let branch_output = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(cwd)
@@ -123,9 +190,8 @@ fn build_git_section(cwd: &Path) -> Option<String> {
         .to_string();
 
     let mut section = String::from("\n# Git Info\n\n");
-    let _ = writeln!(section, "- Branch: {branch}");
+    let _ = writeln!(section, "- Branch: `{branch}`");
 
-    // Get brief status
     if let Ok(status_output) = Command::new("git")
         .args(["status", "--short"])
         .current_dir(cwd)
@@ -153,21 +219,21 @@ mod tests {
 
     #[test]
     fn build_system_prompt_returns_non_empty() {
-        let prompt = build_system_prompt(&[], None);
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
         assert!(!prompt.is_empty());
     }
 
     #[test]
     fn prompt_contains_identity() {
-        let prompt = build_system_prompt(&[], None);
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
         assert!(prompt.contains("You are Aegis"));
-        assert!(prompt.contains("helpful coding assistant"));
+        assert!(prompt.contains("autonomous coding agent"));
     }
 
     #[test]
-    fn prompt_contains_environment() {
-        let prompt = build_system_prompt(&[], None);
-        assert!(prompt.contains("# Environment"));
+    fn prompt_contains_workspace() {
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
+        assert!(prompt.contains("# Workspace"));
         assert!(prompt.contains("OS:"));
         assert!(prompt.contains("Architecture:"));
     }
@@ -184,7 +250,7 @@ mod tests {
                 description: "Run a shell command".into(),
             },
         ];
-        let prompt = build_system_prompt(&tools, None);
+        let prompt = build_system_prompt(&tools, None, PromptMode::Full);
         assert!(prompt.contains("# Available Tools"));
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("Run a shell command"));
@@ -192,8 +258,68 @@ mod tests {
 
     #[test]
     fn prompt_omits_tools_section_when_empty() {
-        let prompt = build_system_prompt(&[], None);
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
         assert!(!prompt.contains("# Available Tools"));
+    }
+
+    #[test]
+    fn prompt_full_includes_coding_instructions() {
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
+        assert!(prompt.contains("AGENTS.md"));
+        assert!(prompt.contains("Keep going until"));
+        assert!(prompt.contains("apply_patch"));
+    }
+
+    #[test]
+    fn prompt_full_includes_safety() {
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
+        assert!(prompt.contains("# Safety"));
+        assert!(prompt.contains("self-preservation"));
+    }
+
+    #[test]
+    fn prompt_full_includes_output_formatting() {
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
+        assert!(prompt.contains("# Output Formatting"));
+        assert!(prompt.contains("concise"));
+    }
+
+    #[test]
+    fn prompt_includes_apply_patch_format() {
+        // apply_patch format is included in both modes
+        let full = build_system_prompt(&[], None, PromptMode::Full);
+        assert!(full.contains("Begin Patch"));
+        assert!(full.contains("End Patch"));
+
+        let minimal = build_system_prompt(&[], None, PromptMode::Minimal);
+        assert!(minimal.contains("Begin Patch"));
+        assert!(minimal.contains("End Patch"));
+    }
+
+    #[test]
+    fn prompt_minimal_omits_full_sections() {
+        let prompt = build_system_prompt(&[], None, PromptMode::Minimal);
+        // Minimal should not include coding, safety, or output formatting
+        assert!(!prompt.contains("# Coding Agent Instructions"));
+        assert!(!prompt.contains("# Safety"));
+        assert!(!prompt.contains("# Output Formatting"));
+        assert!(!prompt.contains("# Tool Call Style"));
+    }
+
+    #[test]
+    fn prompt_minimal_includes_essentials() {
+        let tools = vec![ToolDescription {
+            name: "bash".into(),
+            description: "Run a shell command".into(),
+        }];
+        let prompt = build_system_prompt(&tools, Some("Full auto."), PromptMode::Minimal);
+        // Minimal still includes identity, tools, apply_patch, workspace, approval
+        assert!(prompt.contains("You are Aegis"));
+        assert!(prompt.contains("# Available Tools"));
+        assert!(prompt.contains("Begin Patch"));
+        assert!(prompt.contains("# Workspace"));
+        assert!(prompt.contains("# Approval Mode"));
+        assert!(prompt.contains("Full auto."));
     }
 
     #[test]
@@ -204,7 +330,6 @@ mod tests {
 
     #[test]
     fn read_file_capped_truncates_long_content() {
-        // Create a temp file with known content
         let dir = std::env::temp_dir().join("aegis_test_system_prompt");
         let _ = std::fs::create_dir_all(&dir);
         let file_path = dir.join("long_file.txt");
@@ -215,28 +340,26 @@ mod tests {
         assert!(result.len() < long_content.len());
         assert!(result.contains("[...truncated]"));
 
-        // Cleanup
         let _ = std::fs::remove_file(&file_path);
         let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
     fn prompt_respects_max_length() {
-        // With no tools and no project files, the prompt should be well under the cap.
-        let prompt = build_system_prompt(&[], None);
-        assert!(prompt.len() <= MAX_PROMPT_CHARS + 100); // small margin for truncation suffix
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
+        assert!(prompt.len() <= MAX_PROMPT_CHARS + 100);
     }
 
     #[test]
     fn prompt_includes_approval_context() {
-        let prompt = build_system_prompt(&[], Some("All tools auto-approved."));
+        let prompt = build_system_prompt(&[], Some("All tools auto-approved."), PromptMode::Full);
         assert!(prompt.contains("# Approval Mode"));
         assert!(prompt.contains("All tools auto-approved."));
     }
 
     #[test]
     fn prompt_omits_approval_section_when_none() {
-        let prompt = build_system_prompt(&[], None);
+        let prompt = build_system_prompt(&[], None, PromptMode::Full);
         assert!(!prompt.contains("# Approval Mode"));
     }
 }

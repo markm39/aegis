@@ -27,7 +27,7 @@ use aegis_types::tool_classification::ActionRisk;
 
 use self::event::{AppEvent, EventHandler};
 use self::message::{ChatMessage, MessageRole};
-use self::system_prompt::ToolDescription;
+use self::system_prompt::{PromptMode, ToolDescription};
 use crate::tui_utils::delete_word_backward_pos;
 
 /// How often to poll crossterm for events (milliseconds).
@@ -616,7 +616,8 @@ impl ChatApp {
         // Build tool descriptions for the system prompt.
         let tool_descs = get_tool_descriptions();
         let approval_ctx = approval_context_for_prompt(&approval_profile);
-        let sys_prompt = system_prompt::build_system_prompt(&tool_descs, Some(approval_ctx));
+        let sys_prompt =
+            system_prompt::build_system_prompt(&tool_descs, Some(approval_ctx), PromptMode::Full);
 
         // Get LLM tool definitions via the daemon.
         let tool_defs = get_tool_definitions_json();
@@ -1528,7 +1529,9 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
     vec![
         ToolDescription {
             name: "bash".into(),
-            description: "Execute a shell command and return stdout/stderr".into(),
+            description: "Run shell commands. Use for tests, builds, git, and system operations. \
+                          Prefer `rg` for code search, `rg --files` for file search."
+                .into(),
         },
         ToolDescription {
             name: "read_file".into(),
@@ -1536,7 +1539,9 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
         },
         ToolDescription {
             name: "write_file".into(),
-            description: "Write content to a file, creating parent directories if needed".into(),
+            description: "Create new files or fully replace file contents. For modifying existing \
+                          files, prefer apply_patch."
+                .into(),
         },
         ToolDescription {
             name: "edit_file".into(),
@@ -1553,8 +1558,8 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
         },
         ToolDescription {
             name: "apply_patch".into(),
-            description: "Apply a V4A structured patch to create, update, or delete files. \
-                          Supports context hunks for precise multi-line edits."
+            description: "Edit existing files using V4A patches. Preferred over write_file for \
+                          modifications. See apply_patch instructions section for the required format."
                 .into(),
         },
         ToolDescription {
@@ -1565,11 +1570,8 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
         },
         ToolDescription {
             name: "task".into(),
-            description: "Spawn an autonomous subagent to handle a complex task. The subagent \
-                          runs its own conversation with full tool access and returns a summary \
-                          when done. Use for multi-step research, parallel work, or tasks that \
-                          benefit from a fresh context. Set run_in_background to true for \
-                          concurrent execution."
+            description: "Spawn a subagent for complex or parallel work. Returns a summary when \
+                          done. Use run_in_background for concurrent tasks."
                 .into(),
         },
     ]
@@ -1667,7 +1669,7 @@ fn tool_schema_for(name: &str) -> serde_json::Value {
             "properties": {
                 "patch": {
                     "type": "string",
-                    "description": "V4A patch content (*** Begin Patch ... *** End Patch)"
+                    "description": "V4A patch content. Must start with '*** Begin Patch' and end with '*** End Patch'.\nExample:\n*** Begin Patch\n*** Update File: src/main.rs\n@@ fn main():\n- old_line\n+ new_line\n*** End Patch"
                 }
             },
             "required": ["patch"]
@@ -2098,6 +2100,7 @@ fn run_subagent_task(
     let sys_prompt = system_prompt::build_system_prompt(
         &tool_descs,
         Some(approval_context_for_prompt(&ApprovalProfile::FullAuto)),
+        PromptMode::Minimal,
     );
     let tool_defs = build_tool_definitions(&tool_descs);
 
