@@ -4214,7 +4214,62 @@ impl DaemonRuntime {
                 }
             }
 
-            DaemonCommand::ExecuteTool { ref name, input } => {
+            DaemonCommand::ExecuteTool {
+                ref name,
+                input,
+                ref session_id,
+                ref principal,
+            } => {
+                // 1. Build audit Action.
+                let principal_str = principal.as_deref().unwrap_or("chat-tui");
+                let audit_action = Action::new(
+                    principal_str.to_string(),
+                    ActionKind::ToolCall {
+                        tool: name.clone(),
+                        args: input.clone(),
+                    },
+                );
+
+                // 2. Cedar policy evaluation (if engine loaded).
+                let verdict = match &self.policy_engine {
+                    Some(engine) => engine.evaluate(&audit_action),
+                    None => Verdict::allow(
+                        audit_action.id,
+                        "no policy engine; audit-only",
+                        None,
+                    ),
+                };
+
+                // 3. Audit log -- always, regardless of verdict.
+                let session_uuid = session_id
+                    .as_deref()
+                    .and_then(|s| uuid::Uuid::parse_str(s).ok());
+                if let Some(uuid) = session_uuid {
+                    match AuditStore::open(&self.aegis_config.ledger_path) {
+                        Ok(mut store) => {
+                            if let Err(e) =
+                                store.append_with_session(&audit_action, &verdict, &uuid)
+                            {
+                                warn!(?e, "failed to append session-linked audit entry");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(?e, "failed to open audit ledger for tool execution");
+                        }
+                    }
+                } else {
+                    self.append_audit_entry(&audit_action, &verdict);
+                }
+
+                // 4. If denied by policy, return denial before executing.
+                if verdict.decision == Decision::Deny {
+                    return DaemonResponse::error(format!(
+                        "denied by policy: {}",
+                        verdict.reason
+                    ));
+                }
+
+                // 5. Execute tool.
                 let Some(ref registry) = self.tool_registry else {
                     return DaemonResponse::error("tool registry not initialized");
                 };
@@ -4222,22 +4277,42 @@ impl DaemonRuntime {
                     return DaemonResponse::error(format!("tool not found: {name}"));
                 };
 
-                // Execute tool via tokio runtime handle.
                 let rt = tokio::runtime::Handle::try_current()
                     .or_else(|_| {
                         tokio::runtime::Runtime::new().map(|rt| rt.handle().clone())
                     });
                 match rt {
-                    Ok(handle) => {
-                        match handle.block_on(tool.execute(input)) {
-                            Ok(output) => {
-                                let data = serde_json::to_value(&output).unwrap_or_default();
-                                DaemonResponse::ok_with_data("tool executed", data)
+                    Ok(handle) => match handle.block_on(tool.execute(input)) {
+                        Ok(output) => {
+                            let data = serde_json::to_value(&output).unwrap_or_default();
+                            DaemonResponse::ok_with_data("tool executed", data)
+                        }
+                        Err(e) => {
+                            DaemonResponse::error(format!("tool execution failed: {e}"))
+                        }
+                    },
+                    Err(e) => {
+                        DaemonResponse::error(format!("no async runtime available: {e}"))
+                    }
+                }
+            }
+
+            DaemonCommand::RegisterChatSession => {
+                match AuditStore::open(&self.aegis_config.ledger_path) {
+                    Ok(mut store) => {
+                        match store.begin_session("chat-tui", "chat", &[], Some("chat-tui")) {
+                            Ok(uuid) => {
+                                let data = serde_json::json!({
+                                    "session_id": uuid.to_string()
+                                });
+                                DaemonResponse::ok_with_data("chat session registered", data)
                             }
-                            Err(e) => DaemonResponse::error(format!("tool execution failed: {e}")),
+                            Err(e) => DaemonResponse::error(format!(
+                                "session registration failed: {e}"
+                            )),
                         }
                     }
-                    Err(e) => DaemonResponse::error(format!("no async runtime available: {e}")),
+                    Err(e) => DaemonResponse::error(format!("ledger open failed: {e}")),
                 }
             }
 

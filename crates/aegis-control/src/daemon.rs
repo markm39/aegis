@@ -1005,7 +1005,22 @@ pub enum DaemonCommand {
         name: String,
         /// Tool input as JSON.
         input: serde_json::Value,
+        /// Chat session ID for audit linkage. Optional for backwards compat.
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Principal identifier (e.g., "chat-tui", "subagent").
+        #[serde(default)]
+        principal: Option<String>,
     },
+
+    // -- Chat session lifecycle --
+    /// Register a chat TUI session in the audit ledger for tool-call linkage.
+    ///
+    /// Creates a session row so subsequent `ExecuteTool` calls with the
+    /// returned session ID can be linked in compliance queries.
+    ///
+    /// Cedar policy gate: `daemon:register_chat_session`.
+    RegisterChatSession,
 }
 
 fn default_true() -> bool {
@@ -1162,6 +1177,7 @@ impl DaemonCommand {
             DaemonCommand::StopVoiceSession { .. } => "daemon:stop_voice_session",
             DaemonCommand::ListVoiceSessions => "daemon:list_voice_sessions",
             DaemonCommand::ExecuteTool { .. } => "daemon:execute_tool",
+            DaemonCommand::RegisterChatSession => "daemon:register_chat_session",
         }
     }
 }
