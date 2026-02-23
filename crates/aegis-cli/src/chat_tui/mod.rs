@@ -14,8 +14,9 @@ pub mod streaming;
 pub mod system_prompt;
 mod ui;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -307,6 +308,9 @@ pub struct ChatApp {
     pub thinking_budget: Option<u32>,
     /// Whether a bootstrap conversation should be auto-triggered on first connect.
     pub bootstrap_pending: bool,
+    /// Abort flag shared with the background agent loop thread.
+    /// Setting this to `true` causes the loop to stop at the next check point.
+    abort_flag: Arc<AtomicBool>,
 
     // -- Input --
     /// Text buffer for chat input.
@@ -363,7 +367,7 @@ pub struct ChatApp {
 
 /// Commands recognized by the minimal command bar.
 const COMMANDS: &[&str] = &[
-    "quit", "q", "clear", "new", "compact", "model", "provider", "help", "usage",
+    "quit", "q", "clear", "new", "compact", "abort", "model", "provider", "help", "usage",
     "think", "think off", "think low", "think medium", "think high",
     "auto", "auto off", "auto edits", "auto high", "auto full",
     "save", "resume", "sessions",
@@ -395,6 +399,7 @@ impl ChatApp {
             approval_profile: ApprovalProfile::Manual,
             thinking_budget: None,
             bootstrap_pending: false,
+            abort_flag: Arc::new(AtomicBool::new(false)),
 
             input_buffer: String::new(),
             input_cursor: 0,
@@ -687,6 +692,29 @@ impl ChatApp {
 
     /// Send the current conversation to the LLM and run the agentic loop.
     ///
+    /// Abort the currently running LLM request/agent loop.
+    fn abort_current_request(&mut self) {
+        if !self.awaiting_response && !self.awaiting_approval {
+            self.set_result("Nothing to abort.");
+            return;
+        }
+        // Signal the background thread to stop.
+        self.abort_flag.store(true, Ordering::Relaxed);
+        // Drop the approval channel so a blocking recv() in the agent loop unblocks.
+        self.approval_tx = None;
+        self.awaiting_response = false;
+        self.awaiting_approval = false;
+        self.pending_tool_desc = None;
+        self.agent_rx = None;
+        // Reset the flag for the next request.
+        self.abort_flag = Arc::new(AtomicBool::new(false));
+        self.messages.push(ChatMessage::new(
+            MessageRole::System,
+            "[Aborted]".to_string(),
+        ));
+        self.scroll_offset = 0;
+    }
+
     /// The loop runs in a background thread. It sends the conversation + tool
     /// definitions to the LLM, and if the LLM returns `StopReason::ToolUse`,
     /// it executes each tool and loops. Tool approvals are handled via a
@@ -729,6 +757,10 @@ impl ChatApp {
         self.agent_rx = Some(event_rx);
         self.approval_tx = Some(approval_tx);
 
+        // Reset abort flag for new request.
+        self.abort_flag.store(false, Ordering::Relaxed);
+        let abort_flag = self.abort_flag.clone();
+
         std::thread::spawn(move || {
             run_agent_loop(
                 AgentLoopParams {
@@ -741,6 +773,7 @@ impl ChatApp {
                     approval_profile,
                     thinking_budget,
                     audit_session_id,
+                    abort_flag,
                 },
                 event_tx,
                 approval_rx,
@@ -848,6 +881,16 @@ impl ChatApp {
                 if !self.input_buffer.is_empty() {
                     let text = self.input_buffer.clone();
 
+                    // Bang command: !<cmd> runs locally, not through the LLM.
+                    if text.starts_with('!') && text.len() > 1 {
+                        self.execute_bang_command(&text[1..]);
+                        self.input_history.push(text);
+                        self.history_index = None;
+                        self.input_buffer.clear();
+                        self.input_cursor = 0;
+                        return;
+                    }
+
                     // Add to conversation and display
                     self.conversation.push(LlmMessage::user(text.clone()));
                     self.messages
@@ -896,6 +939,9 @@ impl ChatApp {
             }
             KeyCode::Char('/') if self.input_buffer.is_empty() => {
                 self.enter_command_mode();
+            }
+            KeyCode::Esc if self.awaiting_response => {
+                self.abort_current_request();
             }
             KeyCode::Esc if self.input_buffer.is_empty() => {
                 self.input_mode = InputMode::Scroll;
@@ -1220,6 +1266,68 @@ impl ChatApp {
         self.scroll_offset = 0;
     }
 
+    /// Execute a bang command (`!<cmd>`) -- runs a shell command locally and
+    /// displays the output inline as a system message.
+    fn execute_bang_command(&mut self, cmd: &str) {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            return;
+        }
+
+        // Show the command in chat.
+        self.messages.push(ChatMessage::new(
+            MessageRole::User,
+            format!("!{cmd}"),
+        ));
+
+        // Run locally via the user's shell.
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .output();
+
+        let result = match output {
+            Ok(out) => {
+                let mut text = String::new();
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if !stdout.is_empty() {
+                    text.push_str(&stdout);
+                }
+                if !stderr.is_empty() {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str("[stderr] ");
+                    text.push_str(&stderr);
+                }
+                if !out.status.success() {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(&format!("[exit {}]", out.status));
+                }
+                if text.is_empty() {
+                    text.push_str("[no output]");
+                }
+                // Truncate very long output.
+                const MAX_BANG_OUTPUT: usize = 40_000;
+                if text.len() > MAX_BANG_OUTPUT {
+                    text.truncate(MAX_BANG_OUTPUT);
+                    text.push_str("\n[...truncated]");
+                }
+                text
+            }
+            Err(e) => format!("[error] {e}"),
+        };
+
+        self.messages.push(ChatMessage::new(
+            MessageRole::System,
+            result,
+        ));
+        self.scroll_offset = 0;
+    }
+
     /// Execute a command string.
     fn execute_command(&mut self, input: &str) {
         let trimmed = input.trim();
@@ -1294,7 +1402,7 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    "/quit  /clear  /new  /compact  /model <name>  /provider  /usage  /think off|low|medium|high|<n>  /auto off|edits|high|full  /save  /resume <id>  /sessions  /daemon ...",
+                    "/quit  /clear  /new  /compact  /abort  /model <name>  /provider  /usage  /think off|low|medium|high|<n>  /auto off|edits|high|full  /save  /resume <id>  /sessions  /daemon ...  !<cmd>",
                 );
             }
             "usage" => {
@@ -1445,6 +1553,14 @@ impl ChatApp {
                 }
             },
             "new" => {
+                // Auto-save old conversation if non-empty.
+                if !self.conversation.is_empty() {
+                    let _ = persistence::save_conversation(
+                        &self.session_id,
+                        &self.conversation,
+                        &self.model,
+                    );
+                }
                 self.messages.clear();
                 self.conversation.clear();
                 self.scroll_offset = 0;
@@ -1452,7 +1568,11 @@ impl ChatApp {
                 // Register a fresh audit session for the new conversation.
                 self.audit_session_id = None;
                 self.register_audit_session();
-                self.set_result("New conversation started");
+                // Reset token counters.
+                self.total_input_tokens = 0;
+                self.total_output_tokens = 0;
+                self.total_cost_usd = 0.0;
+                self.set_result("New session started");
             }
             "compact" => {
                 if self.conversation.is_empty() {
@@ -1479,6 +1599,9 @@ impl ChatApp {
                         }
                     }
                 }
+            }
+            "abort" => {
+                self.abort_current_request();
             }
             "think off" | "think" => {
                 self.thinking_budget = None;
@@ -1960,6 +2083,8 @@ struct AgentLoopParams {
     thinking_budget: Option<u32>,
     /// Audit ledger session UUID for tool execution linkage.
     audit_session_id: Option<String>,
+    /// Flag checked between iterations -- if true, the loop exits early.
+    abort_flag: Arc<AtomicBool>,
 }
 
 /// Run the agentic loop in a background thread.
@@ -1980,6 +2105,12 @@ fn run_agent_loop(
     const MAX_ITERATIONS: usize = 50;
 
     for _iteration in 0..MAX_ITERATIONS {
+        // Check abort flag before each iteration.
+        if params.abort_flag.load(Ordering::Relaxed) {
+            let _ = event_tx.send(AgentLoopEvent::Done);
+            return;
+        }
+
         // Try streaming first, fall back to daemon if unsupported.
         let resp = match try_streaming_call(&params, &conversation, &event_tx) {
             Ok(r) => r,
@@ -2033,8 +2164,12 @@ fn run_agent_loop(
         // Display all tool calls.
         let _ = event_tx.send(AgentLoopEvent::ToolCalls(resp.tool_calls.clone()));
 
-        // Execute each tool call.
+        // Execute each tool call (checking abort between calls).
         for tc in &resp.tool_calls {
+            if params.abort_flag.load(Ordering::Relaxed) {
+                let _ = event_tx.send(AgentLoopEvent::Done);
+                return;
+            }
             let tool_result = if tc.name == "task" {
                 // Subagent task: foreground or background.
                 let prompt = tc
@@ -2242,6 +2377,7 @@ fn run_subagent_task(
         approval_profile: ApprovalProfile::FullAuto, // Subagents auto-approve everything.
         thinking_budget: params.thinking_budget,
         audit_session_id: params.audit_session_id.clone(), // Share parent's audit session.
+        abort_flag: params.abort_flag.clone(),
     };
 
     const MAX_SUBAGENT_ITERATIONS: usize = 30;
@@ -2335,6 +2471,7 @@ fn run_background_task(
         approval_profile: ApprovalProfile::FullAuto, // Background tasks auto-approve everything.
         thinking_budget: params.thinking_budget,
         audit_session_id: params.audit_session_id.clone(), // Share parent's audit session.
+        abort_flag: params.abort_flag.clone(),
     };
     let prompt = task_prompt.to_string();
     let desc = description.to_string();
