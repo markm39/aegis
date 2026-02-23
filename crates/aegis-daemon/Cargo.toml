@@ -18,6 +18,9 @@ aegis-channel = { path = "../aegis-channel" }
 aegis-proxy = { workspace = true }
 aegis-sandbox = { workspace = true }
 aegis-tools = { workspace = true }
+aegis-apply-patch = { path = "../../vendor/codex/apply-patch" }
+aegis-file-search = { path = "../../vendor/codex/file-search" }
+aegis-execpolicy = { path = "../../vendor/codex/execpolicy" }
 
 async-trait = { workspace = true }
 rusqlite = { workspace = true }
@@ -46,6 +49,7 @@ subtle = { workspace = true }
 hex = { workspace = true }
 qrcode = "0.14"
 glob = { workspace = true }
+shlex = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

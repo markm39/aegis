@@ -86,7 +86,7 @@ enum AgentLoopEvent {
 static NEXT_TASK_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Tools that are auto-approved (read-only, safe operations).
-const SAFE_TOOLS: &[&str] = &["read_file", "glob_search", "grep_search", "task"];
+const SAFE_TOOLS: &[&str] = &["read_file", "glob_search", "grep_search", "file_search", "task"];
 
 /// Check whether a tool should be auto-approved.
 fn is_safe_tool(name: &str) -> bool {
@@ -1370,6 +1370,18 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
             description: "Search file contents for a regex pattern".into(),
         },
         ToolDescription {
+            name: "apply_patch".into(),
+            description: "Apply a V4A structured patch to create, update, or delete files. \
+                          Supports context hunks for precise multi-line edits."
+                .into(),
+        },
+        ToolDescription {
+            name: "file_search".into(),
+            description: "Fuzzy search for files by name across the project. Respects .gitignore. \
+                          Returns ranked matches with relevance scores."
+                .into(),
+        },
+        ToolDescription {
             name: "task".into(),
             description: "Spawn an autonomous subagent to handle a complex task. The subagent \
                           runs its own conversation with full tool access and returns a summary \
@@ -1468,6 +1480,30 @@ fn tool_schema_for(name: &str) -> serde_json::Value {
             },
             "required": ["pattern"]
         }),
+        "apply_patch" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "patch": {
+                    "type": "string",
+                    "description": "V4A patch content (*** Begin Patch ... *** End Patch)"
+                }
+            },
+            "required": ["patch"]
+        }),
+        "file_search" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Fuzzy search query for file names"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory to search in (defaults to current directory)"
+                }
+            },
+            "required": ["query"]
+        }),
         "task" => serde_json::json!({
             "type": "object",
             "properties": {
@@ -1560,6 +1596,27 @@ fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
+        "apply_patch" => {
+            let patch = input
+                .get("patch")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            // Show the first file operation from the patch.
+            patch
+                .lines()
+                .find(|l| {
+                    l.starts_with("*** Add File:")
+                        || l.starts_with("*** Update File:")
+                        || l.starts_with("*** Delete File:")
+                })
+                .unwrap_or("patch")
+                .to_string()
+        }
+        "file_search" => input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
         "task" => input
             .get("description")
             .and_then(|v| v.as_str())
@@ -1583,6 +1640,16 @@ fn format_tool_call_content(name: &str, input: &serde_json::Value) -> String {
             .to_string(),
         "read_file" | "edit_file" => input
             .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "apply_patch" => input
+            .get("patch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "file_search" => input
+            .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),

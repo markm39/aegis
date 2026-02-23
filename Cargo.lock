@@ -197,8 +197,11 @@ name = "aegis-daemon"
 version = "0.1.0"
 dependencies = [
  "aegis-alert",
+ "aegis-apply-patch",
  "aegis-channel",
  "aegis-control",
+ "aegis-execpolicy",
+ "aegis-file-search",
  "aegis-ledger",
  "aegis-observer",
  "aegis-pilot",
@@ -227,6 +230,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "shlex",
  "subtle",
  "tempfile",
  "tokio",
