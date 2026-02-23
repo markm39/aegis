@@ -126,6 +126,7 @@ impl AuthFlowKind {
                 match *cli_name {
                     "Claude Code" => "Extract from Claude Code",
                     "Gemini CLI" => "Extract from Gemini CLI",
+                    "OpenAI Codex CLI" => "Extract from Codex CLI",
                     _ => "Extract from CLI",
                 }
             }
@@ -174,6 +175,17 @@ static ANTHROPIC_FLOWS: &[AuthFlowKind] = &[
     },
     AuthFlowKind::SetupToken {
         instructions: "In a separate terminal, run:\n\n  claude setup-token\n\nThen paste the token here.",
+    },
+    AuthFlowKind::PkceBrowser {
+        client_id_source: ClientIdSource::Static {
+            client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+            client_secret: None,
+        },
+        auth_url: "https://console.anthropic.com/oauth/authorize",
+        token_url: "https://console.anthropic.com/api/oauth/token",
+        scopes: &[],
+        redirect_port: 8160,
+        redirect_path: "/oauth/callback",
     },
     AuthFlowKind::ApiKey,
 ];
@@ -228,6 +240,36 @@ static GOOGLE_FLOWS: &[AuthFlowKind] = &[
     AuthFlowKind::ApiKey,
 ];
 
+/// OpenAI auth flows (ordered: most convenient first).
+static OPENAI_FLOWS: &[AuthFlowKind] = &[
+    AuthFlowKind::CliExtract {
+        cli_name: "OpenAI Codex CLI",
+        config_rel_path: ".codex/auth.json",
+        extraction: TokenExtraction::JsonField("access_token"),
+    },
+    AuthFlowKind::PkceBrowser {
+        client_id_source: ClientIdSource::Static {
+            client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+            client_secret: None,
+        },
+        auth_url: "https://auth.openai.com/authorize",
+        token_url: "https://auth.openai.com/oauth/token",
+        scopes: &["openid", "profile"],
+        redirect_port: 1455,
+        redirect_path: "/auth/callback",
+    },
+    AuthFlowKind::DeviceFlow {
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        device_code_url: "https://auth.openai.com/oauth/device/code",
+        token_url: "https://auth.openai.com/oauth/token",
+        scope: "openid profile",
+        use_pkce: true,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        poll_style: DeviceFlowPollStyle::Standard,
+    },
+    AuthFlowKind::ApiKey,
+];
+
 /// Default: API key only.
 static API_KEY_ONLY: &[AuthFlowKind] = &[AuthFlowKind::ApiKey];
 
@@ -241,6 +283,7 @@ static NO_AUTH: &[AuthFlowKind] = &[];
 pub fn auth_flows_for(provider_id: &str) -> &'static [AuthFlowKind] {
     match provider_id {
         "anthropic" => ANTHROPIC_FLOWS,
+        "openai" => OPENAI_FLOWS,
         "github-copilot" => COPILOT_FLOWS,
         "qwen" => QWEN_FLOWS,
         "minimax" => MINIMAX_FLOWS,
@@ -279,12 +322,13 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_has_three_flows() {
+    fn anthropic_has_four_flows() {
         let flows = auth_flows_for("anthropic");
-        assert_eq!(flows.len(), 3);
+        assert_eq!(flows.len(), 4);
         assert!(matches!(flows[0], AuthFlowKind::CliExtract { .. }));
         assert!(matches!(flows[1], AuthFlowKind::SetupToken { .. }));
-        assert!(matches!(flows[2], AuthFlowKind::ApiKey));
+        assert!(matches!(flows[2], AuthFlowKind::PkceBrowser { .. }));
+        assert!(matches!(flows[3], AuthFlowKind::ApiKey));
     }
 
     #[test]
@@ -316,10 +360,13 @@ mod tests {
     }
 
     #[test]
-    fn openai_is_api_key_only() {
+    fn openai_has_four_flows() {
         let flows = auth_flows_for("openai");
-        assert_eq!(flows.len(), 1);
-        assert!(matches!(flows[0], AuthFlowKind::ApiKey));
+        assert_eq!(flows.len(), 4);
+        assert!(matches!(flows[0], AuthFlowKind::CliExtract { .. }));
+        assert!(matches!(flows[1], AuthFlowKind::PkceBrowser { .. }));
+        assert!(matches!(flows[2], AuthFlowKind::DeviceFlow { .. }));
+        assert!(matches!(flows[3], AuthFlowKind::ApiKey));
     }
 
     #[test]
@@ -331,10 +378,10 @@ mod tests {
     #[test]
     fn multiple_auth_flows_check() {
         assert!(has_multiple_auth_flows("anthropic"));
+        assert!(has_multiple_auth_flows("openai"));
         assert!(has_multiple_auth_flows("qwen"));
         assert!(has_multiple_auth_flows("minimax"));
         assert!(has_multiple_auth_flows("google"));
-        assert!(!has_multiple_auth_flows("openai"));
         assert!(!has_multiple_auth_flows("github-copilot"));
     }
 
