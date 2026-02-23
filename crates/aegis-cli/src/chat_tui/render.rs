@@ -18,7 +18,7 @@ pub fn tool_color(name: &str) -> Color {
         "Bash" => Color::Rgb(253, 93, 177), // hot pink (Claude Code bash border)
         "Read" | "Write" | "Edit" | "Glob" | "NotebookRead" | "NotebookEdit" => Color::Cyan,
         "Grep" | "WebSearch" | "WebFetch" => Color::Rgb(177, 185, 249), // light purple-blue
-        "Task" => Color::Rgb(215, 119, 87),                             // Claude brand color
+        "Task" | "task" => Color::Rgb(215, 119, 87),                      // Claude brand color
         "LSP" => Color::Rgb(177, 185, 249),
         _ => Color::White,
     }

@@ -156,6 +156,19 @@ impl LlmMessage {
             tool_calls: Vec::new(),
         }
     }
+
+    /// Create an assistant message that includes tool calls.
+    pub fn assistant_with_tools(
+        content: impl Into<String>,
+        tool_calls: Vec<LlmToolCall>,
+    ) -> Self {
+        Self {
+            role: LlmRole::Assistant,
+            content: content.into(),
+            tool_use_id: None,
+            tool_calls,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

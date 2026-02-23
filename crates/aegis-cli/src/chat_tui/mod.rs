@@ -14,6 +14,7 @@ pub mod streaming;
 pub mod system_prompt;
 mod ui;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -72,10 +73,20 @@ enum AgentLoopEvent {
     Error(String),
     /// The agentic loop finished (all tool calls done, final response received).
     Done,
+    /// A background subagent task completed.
+    SubagentComplete {
+        task_id: String,
+        description: String,
+        result: String,
+        output_file: String,
+    },
 }
 
+/// Global counter for background task IDs.
+static NEXT_TASK_ID: AtomicUsize = AtomicUsize::new(1);
+
 /// Tools that are auto-approved (read-only, safe operations).
-const SAFE_TOOLS: &[&str] = &["read_file", "glob_search", "grep_search"];
+const SAFE_TOOLS: &[&str] = &["read_file", "glob_search", "grep_search", "task"];
 
 /// Check whether a tool should be auto-approved.
 fn is_safe_tool(name: &str) -> bool {
@@ -403,6 +414,28 @@ impl ChatApp {
                 AgentLoopEvent::Done => {
                     self.awaiting_response = false;
                     self.auto_approve_turn = false;
+                }
+                AgentLoopEvent::SubagentComplete {
+                    task_id,
+                    description,
+                    result,
+                    output_file,
+                } => {
+                    let summary = if result.len() > 300 {
+                        format!("{}...", &result[..300])
+                    } else {
+                        result
+                    };
+                    self.messages.push(ChatMessage::new(
+                        MessageRole::Result {
+                            summary: format!(
+                                "Task \"{description}\" (id: {task_id}) completed. \
+                                 Full output: {output_file}"
+                            ),
+                        },
+                        summary,
+                    ));
+                    self.scroll_offset = 0;
                 }
             }
         }
@@ -1336,7 +1369,141 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
             name: "grep_search".into(),
             description: "Search file contents for a regex pattern".into(),
         },
+        ToolDescription {
+            name: "task".into(),
+            description: "Spawn an autonomous subagent to handle a complex task. The subagent \
+                          runs its own conversation with full tool access and returns a summary \
+                          when done. Use for multi-step research, parallel work, or tasks that \
+                          benefit from a fresh context. Set run_in_background to true for \
+                          concurrent execution."
+                .into(),
+        },
     ]
+}
+
+/// Get the JSON Schema for a tool by name.
+fn tool_schema_for(name: &str) -> serde_json::Value {
+    match name {
+        "bash" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute"
+                }
+            },
+            "required": ["command"]
+        }),
+        "read_file" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to read"
+                }
+            },
+            "required": ["file_path"]
+        }),
+        "write_file" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to write"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content to write to the file"
+                }
+            },
+            "required": ["file_path", "content"]
+        }),
+        "edit_file" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to edit"
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact string to find and replace"
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The replacement string"
+                }
+            },
+            "required": ["file_path", "old_string", "new_string"]
+        }),
+        "glob_search" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern to match files (e.g., \"**/*.rs\")"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Base directory to search in (defaults to current directory)"
+                }
+            },
+            "required": ["pattern"]
+        }),
+        "grep_search" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regular expression pattern to search for"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (defaults to current directory)"
+                },
+                "include": {
+                    "type": "string",
+                    "description": "Glob pattern to filter files (e.g., \"*.rs\")"
+                }
+            },
+            "required": ["pattern"]
+        }),
+        "task" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Short (3-5 word) description of the task"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed instructions for the subagent"
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "If true, run in background and return immediately. Default: false."
+                }
+            },
+            "required": ["description", "prompt"]
+        }),
+        _ => serde_json::json!({"type": "object", "properties": {}}),
+    }
+}
+
+/// Build LLM tool definitions from a list of tool descriptions.
+fn build_tool_definitions(descs: &[ToolDescription]) -> Option<serde_json::Value> {
+    use aegis_types::llm::LlmToolDefinition;
+
+    let defs: Vec<LlmToolDefinition> = descs
+        .iter()
+        .map(|td| LlmToolDefinition {
+            name: td.name.clone(),
+            description: td.description.clone(),
+            input_schema: tool_schema_for(&td.name),
+        })
+        .collect();
+
+    serde_json::to_value(&defs).ok()
 }
 
 /// Get tool definitions as JSON for the LLM request.
@@ -1344,107 +1511,7 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
 /// Returns the serialized tool definitions that will be passed to
 /// `DaemonCommand::LlmComplete { tools }`.
 fn get_tool_definitions_json() -> Option<serde_json::Value> {
-    use aegis_types::llm::LlmToolDefinition;
-
-    let defs: Vec<LlmToolDefinition> = get_tool_descriptions()
-        .into_iter()
-        .map(|td| {
-            let schema = match td.name.as_str() {
-                "bash" => serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The shell command to execute"
-                        }
-                    },
-                    "required": ["command"]
-                }),
-                "read_file" => serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Absolute path to the file to read"
-                        }
-                    },
-                    "required": ["file_path"]
-                }),
-                "write_file" => serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Absolute path to the file to write"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Content to write to the file"
-                        }
-                    },
-                    "required": ["file_path", "content"]
-                }),
-                "edit_file" => serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Absolute path to the file to edit"
-                        },
-                        "old_string": {
-                            "type": "string",
-                            "description": "The exact string to find and replace"
-                        },
-                        "new_string": {
-                            "type": "string",
-                            "description": "The replacement string"
-                        }
-                    },
-                    "required": ["file_path", "old_string", "new_string"]
-                }),
-                "glob_search" => serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Glob pattern to match files (e.g., \"**/*.rs\")"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Base directory to search in (defaults to current directory)"
-                        }
-                    },
-                    "required": ["pattern"]
-                }),
-                "grep_search" => serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Regular expression pattern to search for"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Directory or file to search in (defaults to current directory)"
-                        },
-                        "include": {
-                            "type": "string",
-                            "description": "Glob pattern to filter files (e.g., \"*.rs\")"
-                        }
-                    },
-                    "required": ["pattern"]
-                }),
-                _ => serde_json::json!({"type": "object", "properties": {}}),
-            };
-            LlmToolDefinition {
-                name: td.name,
-                description: td.description,
-                input_schema: schema,
-            }
-        })
-        .collect();
-
-    serde_json::to_value(&defs).ok()
+    build_tool_definitions(&get_tool_descriptions())
 }
 
 /// Create a short summary of a tool call's input for display.
@@ -1492,6 +1559,11 @@ fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
             .get("pattern")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
+            .to_string(),
+        "task" => input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("subagent task")
             .to_string(),
         _ => serde_json::to_string(input)
             .unwrap_or_default()
@@ -1602,7 +1674,33 @@ fn run_agent_loop(
 
         // Execute each tool call.
         for tc in &resp.tool_calls {
-            let tool_result = if is_safe_tool(&tc.name) || auto_approve_all {
+            let tool_result = if tc.name == "task" {
+                // Subagent task: foreground or background.
+                let prompt = tc
+                    .input
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("No task specified");
+                let desc = tc
+                    .input
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("subagent");
+                let background = tc
+                    .input
+                    .get("run_in_background")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if background {
+                    run_background_task(&params, desc, prompt, &event_tx)
+                } else {
+                    let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+                        "\n  [Task: {desc} ...]\n"
+                    )));
+                    run_subagent_task(&params, prompt, &event_tx)
+                }
+            } else if is_safe_tool(&tc.name) || auto_approve_all {
                 // Auto-approved -- execute directly.
                 execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input)
             } else {
@@ -1722,6 +1820,157 @@ fn execute_tool_via_daemon(
         Ok(resp) => Err(resp.message),
         Err(e) => Err(e),
     }
+}
+
+/// Run a foreground subagent task as a nested agentic loop.
+///
+/// Creates a fresh conversation with the task prompt, gives it the same
+/// tools as the parent (minus `task` to prevent recursion), and runs until
+/// the LLM produces a final response or hits the iteration limit.
+/// All tools are auto-approved within the subagent context.
+fn run_subagent_task(
+    params: &AgentLoopParams,
+    task_prompt: &str,
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+) -> Result<String, String> {
+    let mut conversation = vec![LlmMessage::user(task_prompt)];
+
+    // Build subagent tools (everything except "task" -- no recursive spawning).
+    let tool_descs: Vec<ToolDescription> = get_tool_descriptions()
+        .into_iter()
+        .filter(|t| t.name != "task")
+        .collect();
+    let sys_prompt = system_prompt::build_system_prompt(&tool_descs);
+    let tool_defs = build_tool_definitions(&tool_descs);
+
+    let subagent_params = AgentLoopParams {
+        socket_path: params.socket_path.clone(),
+        conversation: Vec::new(),
+        model: params.model.clone(),
+        sys_prompt,
+        tool_defs,
+        auto_approve: true,
+        thinking_budget: params.thinking_budget,
+    };
+
+    const MAX_SUBAGENT_ITERATIONS: usize = 30;
+
+    for _iter in 0..MAX_SUBAGENT_ITERATIONS {
+        // Try streaming first, fall back to daemon.
+        let resp = match try_streaming_call(&subagent_params, &conversation, event_tx) {
+            Ok(r) => r,
+            Err(_) => {
+                let messages = serde_json::to_value(&conversation)
+                    .map_err(|e| format!("serialize error: {e}"))?;
+                let cmd = DaemonCommand::LlmComplete {
+                    model: params.model.clone(),
+                    messages,
+                    temperature: None,
+                    max_tokens: None,
+                    system_prompt: Some(subagent_params.sys_prompt.clone()),
+                    tools: subagent_params.tool_defs.clone(),
+                };
+                let client = DaemonClient::new(params.socket_path.clone());
+                parse_llm_response(send_with_timeout(&client, &cmd, LLM_TIMEOUT_SECS))?
+            }
+        };
+
+        let wants_tools =
+            resp.stop_reason == Some(StopReason::ToolUse) && !resp.tool_calls.is_empty();
+
+        if !wants_tools {
+            return Ok(resp.content);
+        }
+
+        // Add assistant message (with tool_calls) to subagent conversation.
+        conversation.push(LlmMessage::assistant_with_tools(
+            resp.content.clone(),
+            resp.tool_calls.clone(),
+        ));
+
+        // Execute tools (all auto-approved in subagent context).
+        for tc in &resp.tool_calls {
+            let result = execute_tool_via_daemon(&params.socket_path, &tc.name, &tc.input)
+                .unwrap_or_else(|e| format!("Error: {e}"));
+
+            // Show subagent tool activity in parent UI.
+            let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+                "  [subagent > {}: {}]\n",
+                tc.name,
+                summarize_tool_input(&tc.name, &tc.input)
+            )));
+
+            conversation.push(LlmMessage::tool_result(&tc.id, result));
+        }
+    }
+
+    Err("Subagent exceeded maximum iterations (30)".into())
+}
+
+/// Run a background subagent task in a separate thread.
+///
+/// Returns immediately with a JSON response containing the task ID and
+/// output file path. The subagent runs its own agentic loop in a new
+/// thread and sends a `SubagentComplete` event when done.
+fn run_background_task(
+    params: &AgentLoopParams,
+    description: &str,
+    task_prompt: &str,
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+) -> Result<String, String> {
+    let task_id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
+    let task_id_str = format!("task-{task_id}");
+
+    // Output file for results.
+    let output_dir = aegis_types::daemon::daemon_dir().join("tasks");
+    let _ = std::fs::create_dir_all(&output_dir);
+    let output_file = output_dir.join(format!("{task_id_str}.txt"));
+    let output_path = output_file.display().to_string();
+
+    // Clone what the background thread needs.
+    let bg_params = AgentLoopParams {
+        socket_path: params.socket_path.clone(),
+        conversation: Vec::new(),
+        model: params.model.clone(),
+        sys_prompt: String::new(), // built inside run_subagent_task
+        tool_defs: None,
+        auto_approve: true,
+        thinking_budget: params.thinking_budget,
+    };
+    let prompt = task_prompt.to_string();
+    let desc = description.to_string();
+    let tx = event_tx.clone();
+    let tid = task_id_str.clone();
+    let ofile = output_file.clone();
+
+    std::thread::spawn(move || {
+        let result = run_subagent_task(&bg_params, &prompt, &tx);
+        let result_text = match &result {
+            Ok(text) => text.clone(),
+            Err(e) => format!("Error: {e}"),
+        };
+        // Write result to output file.
+        let _ = std::fs::write(&ofile, &result_text);
+        // Notify parent UI.
+        let _ = tx.send(AgentLoopEvent::SubagentComplete {
+            task_id: tid,
+            description: desc,
+            result: result_text,
+            output_file: ofile.display().to_string(),
+        });
+    });
+
+    // Return immediately to parent agentic loop.
+    Ok(serde_json::json!({
+        "task_id": task_id_str,
+        "status": "running",
+        "output_file": output_path,
+        "message": format!(
+            "Background task spawned. Results will be written to {output_path}. \
+             Use read_file to check output when notified."
+        )
+    })
+    .to_string())
 }
 
 /// Send a command to the daemon with a custom read timeout.
