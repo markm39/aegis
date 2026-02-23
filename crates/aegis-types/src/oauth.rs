@@ -773,10 +773,10 @@ impl OAuthProviderRegistry {
         providers.insert(
             "openai".to_string(),
             ProviderEndpoints {
-                authorize_url: "https://auth.openai.com/authorize".to_string(),
+                authorize_url: "https://auth.openai.com/oauth/authorize".to_string(),
                 token_url: "https://auth.openai.com/oauth/token".to_string(),
                 device_code_url: Some("https://auth.openai.com/oauth/device/code".to_string()),
-                default_scopes: vec!["openid".to_string(), "profile".to_string()],
+                default_scopes: vec!["openid".to_string(), "profile".to_string(), "email".to_string(), "offline_access".to_string()],
                 client_id_env: "OPENAI_OAUTH_CLIENT_ID".to_string(),
                 client_secret_env: Some("OPENAI_OAUTH_CLIENT_SECRET".to_string()),
             },

@@ -182,8 +182,8 @@ static ANTHROPIC_FLOWS: &[AuthFlowKind] = &[
             client_secret: None,
         },
         auth_url: "https://console.anthropic.com/oauth/authorize",
-        token_url: "https://console.anthropic.com/api/oauth/token",
-        scopes: &[],
+        token_url: "https://console.anthropic.com/oauth/token",
+        scopes: &["api"],
         redirect_port: 8160,
         redirect_path: "/oauth/callback",
     },
@@ -245,27 +245,18 @@ static OPENAI_FLOWS: &[AuthFlowKind] = &[
     AuthFlowKind::CliExtract {
         cli_name: "OpenAI Codex CLI",
         config_rel_path: ".codex/auth.json",
-        extraction: TokenExtraction::JsonField("access_token"),
+        extraction: TokenExtraction::JsonField("tokens.access_token"),
     },
     AuthFlowKind::PkceBrowser {
         client_id_source: ClientIdSource::Static {
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
             client_secret: None,
         },
-        auth_url: "https://auth.openai.com/authorize",
+        auth_url: "https://auth.openai.com/oauth/authorize",
         token_url: "https://auth.openai.com/oauth/token",
-        scopes: &["openid", "profile"],
+        scopes: &["openid", "profile", "email", "offline_access"],
         redirect_port: 1455,
         redirect_path: "/auth/callback",
-    },
-    AuthFlowKind::DeviceFlow {
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        device_code_url: "https://auth.openai.com/oauth/device/code",
-        token_url: "https://auth.openai.com/oauth/token",
-        scope: "openid profile",
-        use_pkce: true,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        poll_style: DeviceFlowPollStyle::Standard,
     },
     AuthFlowKind::ApiKey,
 ];
@@ -360,13 +351,12 @@ mod tests {
     }
 
     #[test]
-    fn openai_has_four_flows() {
+    fn openai_has_three_flows() {
         let flows = auth_flows_for("openai");
-        assert_eq!(flows.len(), 4);
+        assert_eq!(flows.len(), 3);
         assert!(matches!(flows[0], AuthFlowKind::CliExtract { .. }));
         assert!(matches!(flows[1], AuthFlowKind::PkceBrowser { .. }));
-        assert!(matches!(flows[2], AuthFlowKind::DeviceFlow { .. }));
-        assert!(matches!(flows[3], AuthFlowKind::ApiKey));
+        assert!(matches!(flows[2], AuthFlowKind::ApiKey));
     }
 
     #[test]
