@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AegisError;
+use crate::oauth::OAuthTokenStore;
+use crate::provider_auth::CredentialType;
 use crate::providers::ProviderInfo;
 
 // ---------------------------------------------------------------------------
@@ -28,6 +30,9 @@ pub struct ProviderCredential {
     /// Custom base URL override (if user provided one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// What kind of credential this is (API key, OAuth token, etc.).
+    #[serde(default)]
+    pub credential_type: CredentialType,
 }
 
 /// The full credential store, serialized as TOML.
@@ -127,12 +132,25 @@ impl CredentialStore {
         model: Option<String>,
         base_url: Option<String>,
     ) {
+        self.set_with_type(provider_id, api_key, model, base_url, CredentialType::ApiKey);
+    }
+
+    /// Set a provider's credential with an explicit credential type.
+    pub fn set_with_type(
+        &mut self,
+        provider_id: &str,
+        api_key: String,
+        model: Option<String>,
+        base_url: Option<String>,
+        credential_type: CredentialType,
+    ) {
         self.providers.insert(
             provider_id.to_string(),
             ProviderCredential {
                 api_key,
                 model,
                 base_url,
+                credential_type,
             },
         );
     }
@@ -163,8 +181,24 @@ impl CredentialStore {
                 }
             }
         }
-        // Fall back to stored credential.
-        self.get(provider.id).map(|c| c.api_key.clone())
+
+        // Check stored credential.
+        if let Some(cred) = self.get(provider.id) {
+            if !cred.api_key.is_empty() {
+                return Some(cred.api_key.clone());
+            }
+        }
+
+        // Check OAuth token store as a last resort.
+        if let Ok(Some(token)) = crate::oauth::FileTokenStore::new(provider.id)
+            .and_then(|store| store.load())
+        {
+            if !token.is_expired() {
+                return Some(token.access_token);
+            }
+        }
+
+        None
     }
 
     /// Resolve the model for a provider. Returns stored selection, or the
