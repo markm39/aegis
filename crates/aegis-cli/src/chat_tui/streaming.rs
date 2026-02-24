@@ -12,10 +12,11 @@ use std::sync::mpsc;
 
 use serde_json::Value;
 
-use aegis_types::credentials::CredentialStore;
+use aegis_types::credentials::{CredentialStore, ResolvedKey};
 use aegis_types::llm::{
     LlmMessage, LlmResponse, LlmRole, LlmToolCall, LlmUsage, StopReason, to_anthropic_message,
 };
+use aegis_types::provider_auth::CredentialType;
 use aegis_types::providers::{provider_by_id, read_codex_cli_token};
 
 use super::AgentLoopEvent;
@@ -32,20 +33,19 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 /// 1. Environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
 /// 2. Credential store (`~/.aegis/credentials.toml`)
 /// 3. OAuth token store (`~/.aegis/oauth/{provider}/token.json`)
-fn resolve_provider_key(provider_id: &str) -> Result<String, String> {
+fn resolve_provider_key(provider_id: &str) -> Result<ResolvedKey, String> {
     let provider =
         provider_by_id(provider_id).ok_or_else(|| format!("unknown provider: {provider_id}"))?;
 
     let store = CredentialStore::load_default().unwrap_or_default();
 
-    if let Some(key) = store.resolve_api_key(provider) {
-        return Ok(key);
+    if let Some(resolved) = store.resolve_api_key(provider) {
+        return Ok(resolved);
     }
 
     // Backward-compat shim: older builds stored Codex OAuth credentials under
     // `openai` instead of `openai-codex`.
     if provider_id == "openai-codex" {
-        use aegis_types::provider_auth::CredentialType;
         if let Some(legacy) = store.get("openai") {
             let is_legacy_codex_oauth = legacy.credential_type == CredentialType::OAuthToken
                 && legacy
@@ -55,11 +55,17 @@ fn resolve_provider_key(provider_id: &str) -> Result<String, String> {
                     .unwrap_or(false)
                 && !legacy.api_key.is_empty();
             if is_legacy_codex_oauth {
-                return Ok(legacy.api_key.clone());
+                return Ok(ResolvedKey {
+                    key: legacy.api_key.clone(),
+                    credential_type: CredentialType::OAuthToken,
+                });
             }
         }
         if let Some(token) = read_codex_cli_token() {
-            return Ok(token);
+            return Ok(ResolvedKey {
+                key: token,
+                credential_type: CredentialType::CliExtracted,
+            });
         }
     }
 
@@ -121,12 +127,13 @@ pub(super) fn stream_llm_call(
         stream_anthropic(params, event_tx)
     } else if is_openai_model(&params.model) {
         let provider_id = openai_provider_for_model(&params.model);
+        let cred = resolve_provider_key(provider_id)?;
         // Route to Responses API for OAuth users (ChatGPT backend) or always
         // for models that only exist on the Responses API.
-        if provider_id == "openai-codex" || should_use_responses_api(provider_id) {
-            stream_openai_responses(params, event_tx, provider_id)
+        if provider_id == "openai-codex" || cred.is_bearer() {
+            stream_openai_responses(params, event_tx, provider_id, &cred.key)
         } else {
-            stream_openai(params, event_tx)
+            stream_openai(params, event_tx, &cred.key)
         }
     } else {
         Err(format!(
@@ -134,17 +141,6 @@ pub(super) fn stream_llm_call(
             params.model
         ))
     }
-}
-
-/// Check if the OpenAI credential is an OAuth token, which requires the
-/// Responses API (ChatGPT backend) instead of Chat Completions.
-fn should_use_responses_api(provider_id: &str) -> bool {
-    use aegis_types::provider_auth::CredentialType;
-    let store = CredentialStore::load_default().unwrap_or_default();
-    store
-        .get(provider_id)
-        .map(|c| c.credential_type == CredentialType::OAuthToken)
-        .unwrap_or(false)
 }
 
 /// Check if this is an Anthropic model name.
@@ -175,7 +171,7 @@ fn stream_anthropic(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
 ) -> Result<StreamingCallResult, String> {
-    let api_key = resolve_provider_key("anthropic")?;
+    let cred = resolve_provider_key("anthropic")?;
     let base_url = resolve_provider_base_url("anthropic");
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
@@ -230,9 +226,13 @@ fn stream_anthropic(
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
-    let resp = client
-        .post(&url)
-        .header("x-api-key", &api_key)
+    let mut req = client.post(&url);
+    if cred.is_bearer() {
+        req = req.header("Authorization", format!("Bearer {}", cred.key));
+    } else {
+        req = req.header("x-api-key", &cred.key);
+    }
+    let resp = req
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
         .json(&body)
@@ -410,8 +410,8 @@ struct PartialToolCall {
 fn stream_openai(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
+    api_key: &str,
 ) -> Result<StreamingCallResult, String> {
-    let api_key = resolve_provider_key("openai")?;
     let base_url = resolve_provider_base_url("openai");
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
@@ -685,8 +685,8 @@ fn stream_openai_responses(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
     provider_id: &str,
+    api_key: &str,
 ) -> Result<StreamingCallResult, String> {
-    let api_key = resolve_provider_key(provider_id)?;
     let base_url = resolve_provider_base_url(provider_id);
 
     // ChatGPT backend uses /codex/responses, public API uses /v1/responses.
@@ -971,8 +971,8 @@ mod tests {
         )
         .unwrap();
 
-        let key = resolve_provider_key("openai-codex").unwrap();
-        assert_eq!(key, "codex-cli-token");
+        let resolved = resolve_provider_key("openai-codex").unwrap();
+        assert_eq!(resolved.key, "codex-cli-token");
 
         if let Some(h) = old_home {
             std::env::set_var("HOME", h);
