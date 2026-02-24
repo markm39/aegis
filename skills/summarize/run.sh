@@ -32,10 +32,13 @@ if [ -z "$CONTENT" ]; then
   exit 0
 fi
 
-# Use python for extractive summary
-RESULT=$(python3 << 'PYEOF'
-import sys
-text = """$CONTENT"""
+# Use python for extractive summary (temp file avoids heredoc-in-subshell quoting)
+PYTMP=$(mktemp /tmp/aegis_summarize_XXXXXX.py)
+trap "rm -f $PYTMP" EXIT
+cat > "$PYTMP" << 'PYEOF'
+import os, sys
+
+text = os.environ.get('SUMMARIZE_CONTENT', '')
 
 # Simple extractive summarization: score sentences by word frequency
 sentences = [s.strip() for s in text.replace('\n', ' ').split('.') if len(s.strip()) > 20]
@@ -62,7 +65,7 @@ top_sentences = [s for _, s in sorted(top, key=lambda x: sentences.index(x[1]))]
 summary = '. '.join(top_sentences) + '.'
 print(f"## Summary\n\n{summary}\n\n---\nOriginal: {len(text)} chars -> Summary: {len(summary)} chars")
 PYEOF
-)
+RESULT=$(SUMMARIZE_CONTENT="$CONTENT" python3 "$PYTMP")
 
 RESULT_JSON=$(echo "$RESULT" | jq -Rs .)
 echo "{\"result\": $RESULT_JSON, \"artifacts\": [], \"messages\": []}"

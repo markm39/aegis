@@ -17,7 +17,7 @@ case "$SUBCMD" in
     if [ -z "$REST" ]; then
       RESULT="Usage: /tweet search <query>"
     else
-      ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$REST'))")
+      ENCODED=$(echo -n "$REST" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
       RESULT=$(curl -s -H "$AUTH" "$API/tweets/search/recent?query=$ENCODED&max_results=10&tweet.fields=author_id,created_at" | \
         jq -r '.data[]? | "\(.created_at): \(.text)"' 2>/dev/null | head -20 || echo "Search failed")
     fi

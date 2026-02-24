@@ -30,7 +30,8 @@ case "$SUBCMD" in
     if [ -z "$CHANNEL" ] || [ -z "$MSG" ]; then
       RESULT="Usage: /discord send <channel_id> <message>"
     else
-      RESP=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" -d "{\"content\":\"$MSG\"}" "$API/channels/$CHANNEL/messages")
+      BODY=$(jq -n --arg content "$MSG" '{content: $content}')
+      RESP=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$BODY" "$API/channels/$CHANNEL/messages")
       if echo "$RESP" | jq -e '.id' &>/dev/null; then
         RESULT="Message sent to channel $CHANNEL"
       else

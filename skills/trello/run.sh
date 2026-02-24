@@ -30,7 +30,8 @@ case "$SUBCMD" in
     if [ -z "$LIST_ID" ] || [ -z "$NAME" ]; then
       RESULT="Usage: /trello create <list_id> <card_name>"
     else
-      RESP=$(curl -s -X POST "$API/cards?$AUTH&idList=$LIST_ID&name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$NAME'))")")
+      CARD_NAME_ENC=$(echo -n "$NAME" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
+      RESP=$(curl -s -X POST "$API/cards?$AUTH&idList=$LIST_ID&name=$CARD_NAME_ENC")
       if echo "$RESP" | jq -e '.id' &>/dev/null; then
         RESULT="Card created: $NAME"
       else

@@ -4,7 +4,7 @@ INPUT=$(cat)
 SUBCMD=$(echo "$INPUT" | jq -r '.parameters.args[0] // "search"')
 TEXT=$(echo "$INPUT" | jq -r '.parameters.args[1:] | join(" ")')
 
-ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${TEXT}'))" 2>/dev/null || echo "$TEXT")
+ENCODED=$(echo -n "$TEXT" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || echo "$TEXT")
 
 case "$SUBCMD" in
   create|new)

@@ -8,10 +8,13 @@ if [ -z "$DESC" ]; then
   exit 0
 fi
 
-# Simple ASCII diagram generator
-RESULT=$(python3 << 'PYEOF'
-import sys
-desc = """$DESC"""
+# Simple ASCII diagram generator (temp file avoids heredoc-in-subshell quoting)
+PYTMP=$(mktemp /tmp/aegis_canvas_XXXXXX.py)
+trap "rm -f $PYTMP" EXIT
+cat > "$PYTMP" << 'PYEOF'
+import os, sys, re
+
+desc = os.environ.get('CANVAS_DESC', '')
 
 def box(text, width=None):
     lines = text.split('\\n') if '\\n' in text else [text]
@@ -47,7 +50,6 @@ if 'flowchart' in dl or '->' in dl:
     content = desc.split(':', 1)[-1] if ':' in desc else desc
     print(flowchart(content))
 elif 'table' in dl:
-    import re
     m = re.search(r'(\d+)x(\d+)', desc)
     if m:
         print(table(int(m.group(1)), int(m.group(2))))
@@ -59,7 +61,7 @@ elif 'box' in dl:
 else:
     print(box(desc, 40))
 PYEOF
-)
+RESULT=$(CANVAS_DESC="$DESC" python3 "$PYTMP")
 
 RESULT_JSON=$(echo "$RESULT" | jq -Rs .)
 echo "{\"result\": $RESULT_JSON, \"artifacts\": [], \"messages\": []}"

@@ -13,7 +13,7 @@ if [ -z "${GOOGLE_MAPS_API_KEY:-}" ]; then
   exit 0
 fi
 
-ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
+ENCODED=$(echo -n "$QUERY" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
 RESP=$(curl -s "https://maps.googleapis.com/maps/api/place/textsearch/json?query=$ENCODED&key=$GOOGLE_MAPS_API_KEY" 2>&1)
 
 RESULT=$(echo "$RESP" | jq -r '.results[:8][] | "\(.name)\n  Rating: \(.rating // "N/A") | \(.formatted_address)\n"' 2>/dev/null || echo "Search failed")

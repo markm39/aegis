@@ -13,7 +13,7 @@ if [ -z "${OPENWEATHER_API_KEY:-}" ]; then
   exit 0
 fi
 
-ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$LOCATION'))")
+ENCODED=$(echo -n "$LOCATION" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
 RESP=$(curl -s "https://api.openweathermap.org/data/2.5/weather?q=$ENCODED&appid=$OPENWEATHER_API_KEY&units=imperial" 2>&1)
 
 COD=$(echo "$RESP" | jq -r '.cod' 2>/dev/null)

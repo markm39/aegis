@@ -22,7 +22,8 @@ case "$SUBCMD" in
     if [ -z "$CHANNEL" ] || [ -z "$MSG" ]; then
       RESULT="Usage: /slack send <channel> <message>"
     else
-      RESP=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" -d "{\"channel\":\"$CHANNEL\",\"text\":\"$MSG\"}" "$API/chat.postMessage")
+      BODY=$(jq -n --arg ch "$CHANNEL" --arg txt "$MSG" '{channel:$ch,text:$txt}')
+      RESP=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$BODY" "$API/chat.postMessage")
       OK=$(echo "$RESP" | jq -r '.ok')
       if [ "$OK" = "true" ]; then
         RESULT="Message sent to #$CHANNEL"
@@ -44,7 +45,7 @@ case "$SUBCMD" in
     if [ -z "$REST" ]; then
       RESULT="Usage: /slack search <query>"
     else
-      ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$REST'))")
+      ENCODED=$(echo -n "$REST" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
       RESULT=$(curl -s -H "$AUTH" "$API/search.messages?query=$ENCODED&count=5" | jq -r '.messages.matches[]? | "\(.channel.name): \(.text)"' 2>/dev/null | head -15 || echo "Search failed")
     fi
     ;;

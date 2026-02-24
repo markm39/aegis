@@ -16,7 +16,7 @@ fi
 
 RESP=$(curl -s -X POST "https://api.banana.dev/start/v4" \
   -H "Content-Type: application/json" \
-  -d "{\"apiKey\":\"$BANANA_API_KEY\",\"modelKey\":\"$MODEL_KEY\",\"modelInputs\":{\"prompt\":\"$MODEL_INPUT\"}}" 2>&1)
+  -d "$(jq -n --arg key "$BANANA_API_KEY" --arg model "$MODEL_KEY" --arg prompt "$MODEL_INPUT" '{apiKey:$key,modelKey:$model,modelInputs:{prompt:$prompt}}')" 2>&1)
 
 RESULT=$(echo "$RESP" | jq -r '.modelOutputs[0] // .message // "No output"' 2>/dev/null || echo "$RESP")
 RESULT_JSON=$(echo "$RESULT" | jq -Rs .)

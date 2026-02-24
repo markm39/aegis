@@ -16,7 +16,7 @@ fi
 RESP=$(curl -s -X POST "https://api.openai.com/v1/images/generations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"dall-e-3\",\"prompt\":\"$PROMPT\",\"n\":1,\"size\":\"1024x1024\"}" 2>&1)
+  -d "$(jq -n --arg p "$PROMPT" '{model:"dall-e-3",prompt:$p,n:1,size:"1024x1024"}')" 2>&1)
 
 URL=$(echo "$RESP" | jq -r '.data[0].url // empty' 2>/dev/null)
 if [ -n "$URL" ]; then

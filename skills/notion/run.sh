@@ -17,7 +17,8 @@ case "$SUBCMD" in
     if [ -z "$REST" ]; then
       RESULT="Usage: /notion search <query>"
     else
-      RESULT=$(curl -s -X POST "${HEADERS[@]}" -d "{\"query\":\"$REST\",\"page_size\":10}" "$API/search" | jq -r '.results[] | "\(.object): \(.properties.title.title[0].plain_text // .properties.Name.title[0].plain_text // "Untitled")  [id: \(.id)]"' 2>/dev/null | head -15 || echo "Search failed")
+      BODY=$(jq -n --arg q "$REST" '{query: $q, page_size: 10}')
+      RESULT=$(curl -s -X POST "${HEADERS[@]}" -d "$BODY" "$API/search" | jq -r '.results[] | "\(.object): \(.properties.title.title[0].plain_text // .properties.Name.title[0].plain_text // "Untitled")  [id: \(.id)]"' 2>/dev/null | head -15 || echo "Search failed")
     fi
     ;;
   page)

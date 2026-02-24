@@ -9,7 +9,7 @@ case "$SUBCMD" in
     if [ -z "$TEXT" ]; then
       RESULT="Usage: /things add <task title>"
     else
-      ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TEXT'))")
+      ENCODED=$(echo -n "$TEXT" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
       open "things:///add?title=$ENCODED" 2>/dev/null
       RESULT="Added to Things: $TEXT"
     fi
@@ -46,14 +46,15 @@ case "$SUBCMD" in
     if [ -z "$TEXT" ]; then
       RESULT="Usage: /things search <query>"
     else
+      ESCAPED_TEXT=$(echo "$TEXT" | sed 's/"/\\"/g')
       RESULT=$(osascript -e "
         tell application \"Things3\"
           set output to \"\"
-          set matches to (every to do whose name contains \"$TEXT\" and status is open)
+          set matches to (every to do whose name contains \"$ESCAPED_TEXT\" and status is open)
           repeat with t in matches
             set output to output & \"[ ] \" & name of t & linefeed
           end repeat
-          if output is \"\" then return \"No tasks matching: $TEXT\"
+          if output is \"\" then return \"No tasks matching: $ESCAPED_TEXT\"
           return output
         end tell
       " 2>&1)

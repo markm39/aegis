@@ -8,7 +8,7 @@ if [ -z "$QUERY" ]; then
   exit 0
 fi
 
-ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
+ENCODED=$(echo -n "$QUERY" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
 # Use Tenor's free API (with default key for anonymous access)
 TENOR_KEY="${TENOR_API_KEY:-AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCYQ}"
 RESP=$(curl -s "https://tenor.googleapis.com/v2/search?q=$ENCODED&key=$TENOR_KEY&limit=5&media_filter=gif" 2>&1)

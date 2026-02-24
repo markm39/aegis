@@ -14,14 +14,18 @@ if [ -z "${TWILIO_ACCOUNT_SID:-}" ] || [ -z "${TWILIO_AUTH_TOKEN:-}" ] || [ -z "
   exit 0
 fi
 
-TWIML="<Response><Say>$MSG</Say></Response>"
-ENCODED_TWIML=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TWIML'))")
+TWIML=$(echo "$MSG" | python3 -c "
+import sys
+from xml.sax.saxutils import escape
+msg = escape(sys.stdin.read().strip())
+print(f'<Response><Say>{msg}</Say></Response>')
+")
 
 RESP=$(curl -s -X POST "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Calls.json" \
   -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
-  -d "To=$TO" \
-  -d "From=$TWILIO_PHONE_NUMBER" \
-  -d "Twiml=$TWIML" 2>&1)
+  --data-urlencode "To=$TO" \
+  --data-urlencode "From=$TWILIO_PHONE_NUMBER" \
+  --data-urlencode "Twiml=$TWIML" 2>&1)
 
 SID=$(echo "$RESP" | jq -r '.sid // empty' 2>/dev/null)
 if [ -n "$SID" ]; then

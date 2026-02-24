@@ -17,7 +17,7 @@ fi
 RESP=$(curl -s -X POST "https://graph.facebook.com/v18.0/$WHATSAPP_PHONE_ID/messages" \
   -H "Authorization: Bearer $WHATSAPP_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"messaging_product\":\"whatsapp\",\"to\":\"$TO\",\"type\":\"text\",\"text\":{\"body\":\"$MSG\"}}" 2>&1)
+  -d "$(jq -n --arg to "$TO" --arg msg "$MSG" '{messaging_product:"whatsapp",to:$to,type:"text",text:{body:$msg}}')" 2>&1)
 
 if echo "$RESP" | jq -e '.messages[0].id' &>/dev/null; then
   RESULT="Message sent to $TO"

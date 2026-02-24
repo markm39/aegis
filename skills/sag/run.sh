@@ -20,7 +20,7 @@ HTTP_CODE=$(curl -s -o "$OUTFILE" -w "%{http_code}" \
   -X POST "https://api.elevenlabs.io/v1/text-to-speech/$VOICE_ID" \
   -H "xi-api-key: $ELEVENLABS_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"text\":\"$TEXT\",\"model_id\":\"eleven_monolingual_v1\"}")
+  -d "$(jq -n --arg t "$TEXT" '{text:$t,model_id:"eleven_monolingual_v1"}')")
 
 if [ "$HTTP_CODE" = "200" ] && [ -f "$OUTFILE" ]; then
   SIZE=$(stat -f%z "$OUTFILE" 2>/dev/null || stat -c%s "$OUTFILE" 2>/dev/null || echo "unknown")
