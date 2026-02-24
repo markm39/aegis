@@ -213,6 +213,35 @@ pub enum Overlay {
         /// Index of the selected setting.
         selected: usize,
     },
+    /// Login overlay: manage provider credentials.
+    Login {
+        /// All provider entries for display.
+        providers: Vec<LoginProviderEntry>,
+        /// Index of the selected provider.
+        selected: usize,
+        /// If set, showing the key input sub-view for a specific provider.
+        key_input: Option<LoginKeyInput>,
+    },
+}
+
+/// Entry for a provider in the login overlay.
+#[derive(Debug, Clone)]
+pub(crate) struct LoginProviderEntry {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub status_label: String,
+    pub masked_key: Option<String>,
+}
+
+/// State for the API key text input sub-view.
+#[derive(Debug, Clone)]
+pub(crate) struct LoginKeyInput {
+    pub provider_id: &'static str,
+    pub display_name: &'static str,
+    pub buffer: String,
+    pub cursor: usize,
+    pub masked: bool,
+    pub error: Option<String>,
 }
 
 /// Incremental events from the agentic loop running in a background thread.
@@ -998,6 +1027,7 @@ const COMMANDS: &[&str] = &[
     "perf",
     "panel-review",
     "link-worktree",
+    "login",
 ];
 
 impl ChatApp {
@@ -2168,6 +2198,206 @@ impl ChatApp {
                     self.overlay = Some(Overlay::SessionPicker { items, selected });
                 }
             },
+            Overlay::Login {
+                providers,
+                selected,
+                key_input,
+            } => {
+                if let Some(mut input) = key_input {
+                    // Key input sub-view
+                    match key.code {
+                        KeyCode::Esc => {
+                            // Cancel key input, go back to provider list.
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: None,
+                            });
+                        }
+                        KeyCode::Enter => {
+                            let trimmed_key = input.buffer.trim().to_string();
+                            if trimmed_key.is_empty() {
+                                input.error = Some("Key cannot be empty".to_string());
+                                self.overlay = Some(Overlay::Login {
+                                    providers,
+                                    selected,
+                                    key_input: Some(input),
+                                });
+                            } else {
+                                let mut store = aegis_types::credentials::CredentialStore::load_default()
+                                    .unwrap_or_default();
+                                store.set(input.provider_id, trimmed_key, None, None);
+                                if let Err(e) = store.save_default() {
+                                    input.error = Some(format!("Save failed: {e}"));
+                                    self.overlay = Some(Overlay::Login {
+                                        providers,
+                                        selected,
+                                        key_input: Some(input),
+                                    });
+                                } else {
+                                    let name = input.display_name.to_string();
+                                    self.open_login(None);
+                                    self.set_result(format!("Saved credential for {name}"));
+                                }
+                            }
+                        }
+                        KeyCode::Char('m')
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
+                            input.masked = !input.masked;
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        KeyCode::Char(c) => {
+                            input.buffer.insert(input.cursor, c);
+                            input.cursor += c.len_utf8();
+                            input.error = None;
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        KeyCode::Backspace => {
+                            if input.cursor > 0 {
+                                let prev = input.buffer[..input.cursor]
+                                    .char_indices()
+                                    .next_back()
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(0);
+                                input.buffer.drain(prev..input.cursor);
+                                input.cursor = prev;
+                            }
+                            input.error = None;
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        KeyCode::Left => {
+                            if input.cursor > 0 {
+                                input.cursor = input.buffer[..input.cursor]
+                                    .char_indices()
+                                    .next_back()
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(0);
+                            }
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        KeyCode::Right => {
+                            if input.cursor < input.buffer.len() {
+                                input.cursor = input.buffer[input.cursor..]
+                                    .char_indices()
+                                    .nth(1)
+                                    .map(|(i, _)| input.cursor + i)
+                                    .unwrap_or(input.buffer.len());
+                            }
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        KeyCode::Home => {
+                            input.cursor = 0;
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        KeyCode::End => {
+                            input.cursor = input.buffer.len();
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                        _ => {
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: Some(input),
+                            });
+                        }
+                    }
+                } else {
+                    // Provider list mode
+                    let mut selected = selected;
+                    match key.code {
+                        KeyCode::Esc => {
+                            // Close login overlay.
+                        }
+                        KeyCode::Up => {
+                            selected = selected.saturating_sub(1);
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: None,
+                            });
+                        }
+                        KeyCode::Down => {
+                            if selected + 1 < providers.len() {
+                                selected += 1;
+                            }
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: None,
+                            });
+                        }
+                        KeyCode::Enter => {
+                            if let Some(p) = providers.get(selected) {
+                                let id = p.id;
+                                let display_name = p.display_name;
+                                self.overlay = Some(Overlay::Login {
+                                    providers,
+                                    selected,
+                                    key_input: Some(LoginKeyInput {
+                                        provider_id: id,
+                                        display_name,
+                                        buffer: String::new(),
+                                        cursor: 0,
+                                        masked: true,
+                                        error: None,
+                                    }),
+                                });
+                            }
+                        }
+                        KeyCode::Char('d') => {
+                            // Delete credential.
+                            if let Some(p) = providers.get(selected) {
+                                let mut store =
+                                    aegis_types::credentials::CredentialStore::load_default()
+                                        .unwrap_or_default();
+                                store.remove(p.id);
+                                let _ = store.save_default();
+                                let name = p.display_name.to_string();
+                                self.open_login(None);
+                                self.set_result(format!("Removed credential for {name}"));
+                            }
+                        }
+                        _ => {
+                            self.overlay = Some(Overlay::Login {
+                                providers,
+                                selected,
+                                key_input: None,
+                            });
+                        }
+                    }
+                }
+            }
             Overlay::Settings { mut selected } => match key.code {
                 KeyCode::Esc => {
                     // Close settings.
@@ -2326,6 +2556,62 @@ impl ChatApp {
         self.overlay = Some(Overlay::Settings { selected: 0 });
     }
 
+    /// Open the login overlay for managing provider credentials.
+    ///
+    /// If `provider_arg` is given, jumps directly to the key input for that
+    /// provider. Otherwise shows the provider list.
+    fn open_login(&mut self, provider_arg: Option<&str>) {
+        use aegis_types::credentials::CredentialStore;
+        use aegis_types::providers::scan_providers;
+
+        let store = CredentialStore::load_default().unwrap_or_default();
+        let providers: Vec<LoginProviderEntry> = scan_providers()
+            .into_iter()
+            .map(|d| {
+                let masked = store
+                    .get(d.info.id)
+                    .filter(|c| !c.api_key.is_empty())
+                    .map(|c| CredentialStore::mask_key(&c.api_key));
+                LoginProviderEntry {
+                    id: d.info.id,
+                    display_name: d.info.display_name,
+                    status_label: d.status_label.clone(),
+                    masked_key: masked,
+                }
+            })
+            .collect();
+
+        if let Some(arg) = provider_arg {
+            let found = providers.iter().position(|p| p.id == arg);
+            if let Some(idx) = found {
+                let id = providers[idx].id;
+                let display_name = providers[idx].display_name;
+                self.overlay = Some(Overlay::Login {
+                    providers,
+                    selected: idx,
+                    key_input: Some(LoginKeyInput {
+                        provider_id: id,
+                        display_name,
+                        buffer: String::new(),
+                        cursor: 0,
+                        masked: true,
+                        error: None,
+                    }),
+                });
+            } else {
+                self.set_result(format!(
+                    "Unknown provider: {arg}. Use /login to see all."
+                ));
+            }
+        } else {
+            self.overlay = Some(Overlay::Login {
+                providers,
+                selected: 0,
+                key_input: None,
+            });
+        }
+    }
+
     /// Execute a command string.
     fn execute_command(&mut self, input: &str) {
         let trimmed = input.trim();
@@ -2385,7 +2671,7 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /mode [auto|chat|code]  /engine [auto|provider|native]  /usage  /think  /auto  /save  /resume <id>  /sessions  /settings  /daemon ...  !<cmd>  |  Skills: /debug /doc /explain /refactor /test /review /security /perf /panel-review /link-worktree",
+                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /login [provider]  /mode [auto|chat|code]  /engine [auto|provider|native]  /usage  /think  /auto  /save  /resume <id>  /sessions  /settings  /daemon ...  !<cmd>  |  Skills: /debug /doc /explain /refactor /test /review /security /perf /panel-review /link-worktree",
                 );
             }
             "usage" => {
@@ -2466,17 +2752,37 @@ impl ChatApp {
                 self.open_model_picker();
             }
             "provider" => {
+                use aegis_types::credentials::CredentialStore;
+                let store = CredentialStore::load_default().unwrap_or_default();
                 let all: Vec<String> = aegis_types::providers::scan_providers()
                     .into_iter()
                     .filter(|d| d.available)
-                    .map(|d| format!("{} ({})", d.info.id, d.status_label))
+                    .map(|d| {
+                        let masked = store
+                            .get(d.info.id)
+                            .filter(|c| !c.api_key.is_empty())
+                            .map(|c| format!(" {}", CredentialStore::mask_key(&c.api_key)))
+                            .unwrap_or_default();
+                        format!("{} [{}]{masked}", d.info.id, d.status_label)
+                    })
                     .collect();
                 if all.is_empty() {
                     self.set_result(
-                        "No providers available. Set an API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)",
+                        "No providers available. Use /login to add credentials.",
                     );
                 } else {
-                    self.set_result(format!("Providers: {}", all.join(", ")));
+                    self.set_result(format!(
+                        "Providers: {}  (use /login to manage)",
+                        all.join(", ")
+                    ));
+                }
+            }
+            cmd if cmd == "login" || cmd.starts_with("login ") => {
+                let provider_arg = cmd.strip_prefix("login").unwrap().trim();
+                if provider_arg.is_empty() {
+                    self.open_login(None);
+                } else {
+                    self.open_login(Some(provider_arg));
                 }
             }
             "resume" => {

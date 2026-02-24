@@ -428,6 +428,13 @@ fn draw_overlay(f: &mut Frame, app: &ChatApp, overlay: &Overlay, area: Rect) {
         Overlay::Settings { selected } => {
             draw_settings(f, app, *selected, area);
         }
+        Overlay::Login {
+            providers,
+            selected,
+            key_input,
+        } => {
+            draw_login(f, providers, *selected, key_input.as_ref(), area);
+        }
     }
 }
 
@@ -664,6 +671,133 @@ fn draw_settings(f: &mut Frame, app: &ChatApp, selected: usize, area: Rect) {
         .collect();
 
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Draw the login overlay for managing provider credentials.
+fn draw_login(
+    f: &mut Frame,
+    providers: &[super::LoginProviderEntry],
+    selected: usize,
+    key_input: Option<&super::LoginKeyInput>,
+    area: Rect,
+) {
+    let popup = centered_rect(60, 60, area);
+    f.render_widget(Clear, popup);
+
+    if let Some(input) = key_input {
+        // Key input sub-view
+        let title = format!(
+            " {} -- Enter API key/token (Enter to save, Esc to cancel) ",
+            input.display_name
+        );
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Rgb(25, 25, 25)));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+
+        if inner.height < 2 {
+            return;
+        }
+
+        // Input line
+        let input_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        let display_text = if input.masked && !input.buffer.is_empty() {
+            let chars: Vec<char> = input.buffer.chars().collect();
+            if chars.len() > 4 {
+                let hidden: String = "\u{2022}".repeat(chars.len() - 4);
+                let visible: String = chars[chars.len() - 4..].iter().collect();
+                format!("{hidden}{visible}")
+            } else {
+                input.buffer.clone()
+            }
+        } else {
+            input.buffer.clone()
+        };
+
+        let mut spans = vec![Span::styled(
+            "> ".to_string(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )];
+        let cursor_spans = build_cursor_spans(
+            &display_text,
+            input.cursor.min(display_text.len()),
+        );
+        spans.extend(cursor_spans);
+        f.render_widget(Paragraph::new(Line::from(spans)), input_area);
+
+        // Error line
+        if let Some(ref err) = input.error {
+            if inner.height > 2 {
+                let err_area = Rect {
+                    x: inner.x,
+                    y: inner.y + 2,
+                    width: inner.width,
+                    height: 1,
+                };
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!("  {err}"),
+                        Style::default().fg(Color::Red),
+                    ))),
+                    err_area,
+                );
+            }
+        }
+    } else {
+        // Provider list view
+        let block = Block::default()
+            .title(" Login -- Manage Credentials (Enter to edit, d to delete, Esc to close) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Rgb(25, 25, 25)));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+
+        let visible = inner.height as usize;
+        let scroll_offset = if selected >= visible {
+            selected - visible + 1
+        } else {
+            0
+        };
+
+        let lines: Vec<Line<'static>> = providers
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible)
+            .map(|(i, p)| {
+                let marker = if i == selected { "> " } else { "  " };
+                let key_display = p.masked_key.as_deref().unwrap_or("");
+                let text = format!(
+                    "{marker}{:<20} [{:<8}] {key_display}",
+                    p.display_name, p.status_label
+                );
+                let style = if i == selected {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else if p.masked_key.is_some() {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(Span::styled(text, style))
+            })
+            .collect();
+
+        f.render_widget(Paragraph::new(lines), inner);
+    }
 }
 
 #[cfg(test)]
