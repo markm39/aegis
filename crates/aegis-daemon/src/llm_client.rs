@@ -436,11 +436,15 @@ impl LlmClient {
             };
 
             let result = match provider_config.clone() {
-                ProviderConfig::Anthropic(config) => self.complete_anthropic(&req, &config),
+                ProviderConfig::Anthropic(config) => {
+                    self.complete_anthropic(&req, provider_name, &config)
+                }
                 ProviderConfig::OpenAi(config) => {
                     self.complete_openai(&req, provider_name, &config)
                 }
-                ProviderConfig::Gemini(config) => self.complete_gemini(&req, &config),
+                ProviderConfig::Gemini(config) => {
+                    self.complete_gemini(&req, provider_name, &config)
+                }
                 ProviderConfig::Ollama(config) => self.complete_ollama(&req, &config),
                 ProviderConfig::OpenRouter(config) => self.complete_openrouter(&req, &config),
                 ProviderConfig::Generic(config) => {
@@ -469,14 +473,15 @@ impl LlmClient {
     fn complete_anthropic(
         &self,
         request: &LlmRequest,
+        provider_name: &str,
         config: &AnthropicConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let resolved = self.resolve_api_key_with_oauth("anthropic", || {
+        let resolved = self.resolve_api_key_with_oauth(provider_name, || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
         let masked = MaskedApiKey(resolved.key.clone());
-        debug!(provider = "anthropic", key = %masked, "resolved API key");
+        debug!(provider = provider_name, key = %masked, "resolved API key");
 
         // Validate endpoint for SSRF.
         config.validate_endpoint().map_err(|e| e.to_string())?;
@@ -833,14 +838,15 @@ impl LlmClient {
     fn complete_gemini(
         &self,
         request: &LlmRequest,
+        provider_name: &str,
         config: &GeminiProviderConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let resolved = self.resolve_api_key_with_oauth("google", || {
+        let resolved = self.resolve_api_key_with_oauth(provider_name, || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
         let masked = MaskedApiKey(resolved.key.clone());
-        debug!(provider = "gemini", key = %masked, "resolved API key");
+        debug!(provider = provider_name, key = %masked, "resolved API key");
 
         // Build the URL. Bearer tokens use the endpoint without a key query
         // parameter; API keys are appended as `?key=...`.
@@ -1347,7 +1353,7 @@ impl LlmClient {
                     base_url: config.base_url.clone(),
                     default_model: config.default_model.clone(),
                 };
-                self.complete_anthropic(request, &ac)
+                self.complete_anthropic(request, provider_name, &ac)
             }
             ApiType::OpenaiCompletions => {
                 let oc = OpenAiConfig {
@@ -1365,7 +1371,7 @@ impl LlmClient {
             }
             ApiType::GoogleGenerativeAi => {
                 let gc = GeminiProviderConfig::default();
-                self.complete_gemini(request, &gc)
+                self.complete_gemini(request, provider_name, &gc)
             }
             ApiType::Ollama => {
                 let oc = OllamaConfig {
