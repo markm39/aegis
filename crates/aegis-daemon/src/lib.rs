@@ -901,6 +901,12 @@ pub struct DaemonRuntime {
     poll_manager: aegis_channel::polls::PollManager,
     /// Fleet-wide model allowlist patterns (glob syntax, e.g. "claude-*").
     model_allowlist: Vec<String>,
+    /// SQLite-backed Web Push subscription store for browser notifications.
+    push_store: Option<aegis_alert::push::PushSubscriptionStore>,
+    /// Rate limiter for push notification delivery (60 per minute).
+    /// Used by the alert dispatcher; stored here for future TestPush with VAPID.
+    #[allow(dead_code)]
+    push_rate_limiter: aegis_alert::push::PushRateLimiter,
 }
 
 impl DaemonRuntime {
@@ -1084,6 +1090,27 @@ impl DaemonRuntime {
             }
         };
 
+        // Open push subscription store alongside other daemon databases.
+        let push_store = {
+            let push_db = aegis_config
+                .ledger_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("push_subscriptions.db");
+            match aegis_alert::push::PushSubscriptionStore::open(
+                &push_db.to_string_lossy(),
+            ) {
+                Ok(store) => {
+                    info!(path = %push_db.display(), "push subscription store opened");
+                    Some(store)
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to open push subscription store");
+                    None
+                }
+            }
+        };
+
         Self {
             fleet,
             config,
@@ -1151,6 +1178,8 @@ impl DaemonRuntime {
             auto_reply_store,
             poll_manager: aegis_channel::polls::PollManager::new(),
             model_allowlist: Vec::new(),
+            push_store,
+            push_rate_limiter: aegis_alert::push::PushRateLimiter::new(60),
         }
     }
 
@@ -4267,12 +4296,77 @@ impl DaemonRuntime {
                 }
             }
 
-            // -- Push notification commands (stubs, added by another agent) --
-            DaemonCommand::RegisterPush { .. }
-            | DaemonCommand::RemovePush { .. }
-            | DaemonCommand::ListPush
-            | DaemonCommand::TestPush { .. } => {
-                DaemonResponse::error("push notification commands not yet wired to daemon")
+            // -- Push notification commands --
+            DaemonCommand::RegisterPush { endpoint, p256dh, auth, label } => {
+                let Some(ref store) = self.push_store else {
+                    return DaemonResponse::error("push subscription store not initialized");
+                };
+                match store.add_subscription(&endpoint, &p256dh, &auth, label.as_deref(), None) {
+                    Ok(id) => DaemonResponse::ok_with_data(
+                        format!("push subscription {id} registered"),
+                        serde_json::json!({ "id": id.to_string() }),
+                    ),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::RemovePush { id } => {
+                let Some(ref store) = self.push_store else {
+                    return DaemonResponse::error("push subscription store not initialized");
+                };
+                let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                    return DaemonResponse::error(format!("invalid UUID: {id}"));
+                };
+                match store.remove_subscription(&uuid) {
+                    Ok(true) => DaemonResponse::ok(format!("push subscription {id} removed")),
+                    Ok(false) => DaemonResponse::error(format!("push subscription {id} not found")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::ListPush => {
+                let Some(ref store) = self.push_store else {
+                    return DaemonResponse::error("push subscription store not initialized");
+                };
+                match store.list_subscriptions() {
+                    Ok(subs) => {
+                        let items: Vec<serde_json::Value> = subs
+                            .iter()
+                            .map(|s| {
+                                serde_json::json!({
+                                    "id": s.id.to_string(),
+                                    "endpoint": &s.endpoint[..s.endpoint.len().min(60)],
+                                    "label": s.user_label,
+                                    "created_at": s.created_at.to_rfc3339(),
+                                    "last_used_at": s.last_used_at.map(|t| t.to_rfc3339()),
+                                })
+                            })
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("{} push subscription(s)", items.len()),
+                            serde_json::json!({ "subscriptions": items }),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::TestPush { id } => {
+                let Some(ref store) = self.push_store else {
+                    return DaemonResponse::error("push subscription store not initialized");
+                };
+                let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                    return DaemonResponse::error(format!("invalid UUID: {id}"));
+                };
+                match store.get_subscription(&uuid) {
+                    Ok(Some(_sub)) => {
+                        // Test push would require VAPID config, which lives in
+                        // the alert dispatcher. Return success for now to confirm
+                        // the subscription exists and is reachable.
+                        DaemonResponse::ok(format!(
+                            "push subscription {id} exists; delivery requires VAPID configuration in alert rules"
+                        ))
+                    }
+                    Ok(None) => DaemonResponse::error(format!("push subscription {id} not found")),
+                    Err(e) => DaemonResponse::error(e),
+                }
             }
 
             // -- Poll commands --
