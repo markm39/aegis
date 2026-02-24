@@ -72,6 +72,10 @@ struct DashboardState {
     rate_limiter: RateLimiter,
 }
 
+/// Spawn the dashboard HTTP server in a background thread.
+///
+/// Accepts a shared `tokio::runtime::Handle` so the server runs on the
+/// daemon's shared runtime rather than creating its own thread pool.
 pub fn spawn_dashboard_server(
     listen: String,
     token: String,
@@ -79,6 +83,7 @@ pub fn spawn_dashboard_server(
     shutdown: Arc<AtomicBool>,
     rate_limit_burst: u32,
     rate_limit_per_sec: f64,
+    rt_handle: tokio::runtime::Handle,
 ) -> Result<std::thread::JoinHandle<()>, String> {
     let base_url = format!("http://{listen}");
     let rate_limiter = RateLimiter::new(rate_limit_burst, rate_limit_per_sec);
@@ -93,11 +98,7 @@ pub fn spawn_dashboard_server(
     std::thread::Builder::new()
         .name("dashboard-server".into())
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime creation failed");
-            rt.block_on(async move {
+            rt_handle.block_on(async move {
                 if let Err(e) = serve(state, shutdown).await {
                     warn!(error = %e, "dashboard server stopped");
                 }

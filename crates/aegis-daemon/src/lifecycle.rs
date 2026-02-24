@@ -75,6 +75,9 @@ pub fn run_agent_slot(
     command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
     child_pid: Arc<AtomicU32>,
     shared_session_id: Arc<Mutex<Option<uuid::Uuid>>>,
+    // Shared tokio runtime handle. When provided, the usage proxy runs on the
+    // daemon's shared runtime instead of creating a per-agent runtime.
+    rt_handle: Option<tokio::runtime::Handle>,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
@@ -90,6 +93,7 @@ pub fn run_agent_slot(
         command_rx.as_ref(),
         &child_pid,
         &shared_session_id,
+        rt_handle.as_ref(),
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -118,6 +122,7 @@ fn run_agent_slot_inner(
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
     child_pid: &AtomicU32,
     shared_session_id: &Mutex<Option<uuid::Uuid>>,
+    rt_handle: Option<&tokio::runtime::Handle>,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
     // `name_str` is used for APIs that expect `&str` and for tracing fields.
@@ -198,30 +203,38 @@ fn run_agent_slot_inner(
                 proxy_config.port,
             );
 
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| format!("failed to create tokio runtime for usage proxy: {e}"))?;
-
-            let handle = rt
-                .block_on(proxy.start())
-                .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?;
+            // Use the shared daemon runtime handle when available (normal operation),
+            // or create a minimal current-thread runtime as a fallback (tests, isolated
+            // invocations). The shared handle avoids spawning an extra OS thread pool.
+            let handle = if let Some(h) = rt_handle {
+                h.block_on(proxy.start())
+                    .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?
+            } else {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        format!("failed to create tokio runtime for usage proxy: {e}")
+                    })?;
+                let proxy_handle = rt
+                    .block_on(proxy.start())
+                    .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?;
+                // Keep the per-agent runtime alive in a background thread until the
+                // proxy shuts down (only reached when no shared handle is provided).
+                let mut shutdown_sub = proxy_handle.shutdown_tx.subscribe();
+                std::thread::Builder::new()
+                    .name(format!("usage-proxy-rt-{name}"))
+                    .spawn(move || {
+                        rt.block_on(async move {
+                            let _ = shutdown_sub.wait_for(|&v| v).await;
+                        });
+                    })
+                    .map_err(|e| format!("failed to spawn usage proxy runtime thread: {e}"))?;
+                proxy_handle
+            };
 
             let port = handle.port;
             info!(agent = name_str, port, "usage proxy started");
-
-            // Subscribe to the proxy's shutdown signal so the runtime thread
-            // exits cleanly when the agent stops (instead of blocking on ctrl_c
-            // which never arrives in a background thread).
-            let mut shutdown_sub = handle.shutdown_tx.subscribe();
-
-            std::thread::Builder::new()
-                .name(format!("usage-proxy-rt-{name}"))
-                .spawn(move || {
-                    rt.block_on(async move {
-                        let _ = shutdown_sub.wait_for(|&v| v).await;
-                    });
-                })
-                .map_err(|e| format!("failed to spawn usage proxy runtime thread: {e}"))?;
-
             Some(handle)
         } else {
             None

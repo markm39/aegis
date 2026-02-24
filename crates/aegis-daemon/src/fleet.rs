@@ -38,6 +38,9 @@ pub struct Fleet {
     audit_writer: AuditWriter,
     /// JoinHandle for the audit writer thread, kept alive until fleet shutdown.
     audit_writer_thread: Option<thread::JoinHandle<()>>,
+    /// Shared tokio runtime handle, injected by the daemon after the runtime is created.
+    /// Propagated into each agent lifecycle thread for async subsystems (e.g. usage proxy).
+    rt_handle: Option<tokio::runtime::Handle>,
 }
 
 impl Fleet {
@@ -68,7 +71,18 @@ impl Fleet {
             toolkit_config: config.toolkit.clone(),
             audit_writer,
             audit_writer_thread: Some(audit_writer_thread),
+            rt_handle: None,
         }
+    }
+
+    /// Inject a shared tokio runtime handle into the fleet.
+    ///
+    /// Must be called before `start_all()` or `start_agent()` for the handle to
+    /// be available to agent lifecycle threads. The handle is propagated into
+    /// each agent thread so async subsystems (e.g. usage proxy) share the
+    /// daemon's single multi-thread runtime instead of creating their own.
+    pub fn set_rt_handle(&mut self, handle: tokio::runtime::Handle) {
+        self.rt_handle = Some(handle);
     }
 
     /// Shut down the fleet's audit writer thread cleanly.
@@ -212,6 +226,8 @@ impl Fleet {
         let child_pid = slot.child_pid.clone();
         // Clone the writer handle so this agent thread has its own sender.
         let audit_writer = self.audit_writer.clone();
+        // Clone the shared runtime handle (None if not injected, e.g. in tests).
+        let rt_handle = self.rt_handle.clone();
 
         // Clear session_id before spawning the next run.
         *slot.session_id.lock() = None;
@@ -232,6 +248,7 @@ impl Fleet {
                     Some(cmd_rx),
                     child_pid,
                     shared_session_id,
+                    rt_handle,
                 )
             });
 

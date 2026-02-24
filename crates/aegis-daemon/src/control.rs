@@ -35,11 +35,15 @@ pub fn daemon_cmd_channel() -> (DaemonCmdTx, DaemonCmdRx) {
 
 /// Spawn the control socket server in a background thread.
 ///
+/// Accepts a shared `tokio::runtime::Handle` so the server runs on the
+/// daemon's shared runtime rather than creating its own thread pool.
+///
 /// Returns the receiver end of the command channel. The daemon main loop
 /// should call `rx.try_recv()` on each tick to process incoming commands.
 pub fn spawn_control_server(
     socket_path: PathBuf,
     shutdown: Arc<AtomicBool>,
+    rt_handle: tokio::runtime::Handle,
 ) -> Result<(DaemonCmdTx, DaemonCmdRx), String> {
     let (tx, rx) = daemon_cmd_channel();
     let thread_tx = tx.clone();
@@ -47,11 +51,7 @@ pub fn spawn_control_server(
     std::thread::Builder::new()
         .name("daemon-control".into())
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime creation failed (out of memory?)");
-            rt.block_on(serve(&socket_path, thread_tx, shutdown));
+            rt_handle.block_on(serve(&socket_path, thread_tx, shutdown));
         })
         .map_err(|e| format!("failed to spawn control server thread: {e}"))?;
 

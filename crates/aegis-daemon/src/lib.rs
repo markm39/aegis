@@ -845,6 +845,12 @@ fn parity_verify_report() -> Result<ParityVerifyReport, String> {
 
 /// The daemon runtime: main loop managing the fleet and control plane.
 pub struct DaemonRuntime {
+    /// Shared tokio multi-thread runtime for all async subsystems.
+    ///
+    /// All async work in the daemon (control socket, dashboard, usage proxy,
+    /// tool execution) runs on this single runtime, avoiding per-subsystem
+    /// thread-pool creation and enabling work-stealing across tasks.
+    tokio_rt: Arc<tokio::runtime::Runtime>,
     /// Fleet of managed agents.
     pub fleet: Fleet,
     /// Daemon configuration.
@@ -930,7 +936,19 @@ pub struct DaemonRuntime {
 impl DaemonRuntime {
     /// Create a new daemon runtime from configuration.
     pub fn new(config: DaemonConfig, aegis_config: AegisConfig) -> Self {
-        let fleet = Fleet::new(&config, aegis_config.clone());
+        // Build the shared runtime first so the handle can be injected into
+        // all subsystems (fleet, control socket, dashboard, tool execution).
+        let tokio_rt = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_name("aegis-async")
+                .enable_all()
+                .build()
+                .expect("failed to create shared tokio runtime"),
+        );
+
+        let mut fleet = Fleet::new(&config, aegis_config.clone());
+        fleet.set_rt_handle(tokio_rt.handle().clone());
 
         // Load Cedar policy engine for hook-based tool use evaluation.
         // Only loads if a policy directory exists AND contains .cedar files.
@@ -1128,6 +1146,7 @@ impl DaemonRuntime {
         };
 
         Self {
+            tokio_rt,
             fleet,
             config,
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -1738,6 +1757,7 @@ impl DaemonRuntime {
         let (cmd_tx, mut cmd_rx) = control::spawn_control_server(
             self.config.control.socket_path.clone(),
             Arc::clone(&self.shutdown),
+            self.tokio_rt.handle().clone(),
         )?;
 
         // Start dashboard server (read-only web UI)
@@ -1755,6 +1775,7 @@ impl DaemonRuntime {
                 Arc::clone(&self.shutdown),
                 self.config.dashboard.rate_limit_burst,
                 self.config.dashboard.rate_limit_per_sec,
+                self.tokio_rt.handle().clone(),
             ) {
                 warn!(error = %e, "failed to start dashboard server");
             } else {
@@ -5213,23 +5234,12 @@ impl DaemonRuntime {
                     return DaemonResponse::error(format!("tool not found: {name}"));
                 };
 
-                let rt = tokio::runtime::Handle::try_current()
-                    .or_else(|_| {
-                        tokio::runtime::Runtime::new().map(|rt| rt.handle().clone())
-                    });
-                match rt {
-                    Ok(handle) => match handle.block_on(tool.execute(input)) {
-                        Ok(output) => {
-                            let data = serde_json::to_value(&output).unwrap_or_default();
-                            DaemonResponse::ok_with_data("tool executed", data)
-                        }
-                        Err(e) => {
-                            DaemonResponse::error(format!("tool execution failed: {e}"))
-                        }
-                    },
-                    Err(e) => {
-                        DaemonResponse::error(format!("no async runtime available: {e}"))
+                match self.tokio_rt.handle().block_on(tool.execute(input)) {
+                    Ok(output) => {
+                        let data = serde_json::to_value(&output).unwrap_or_default();
+                        DaemonResponse::ok_with_data("tool executed", data)
                     }
+                    Err(e) => DaemonResponse::error(format!("tool execution failed: {e}")),
                 }
             }
 
