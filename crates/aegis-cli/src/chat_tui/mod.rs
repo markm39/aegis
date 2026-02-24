@@ -172,8 +172,6 @@ const POLL_INTERVAL_MS: u128 = 2000;
 /// LLM responses can take a while, so this is much longer than the default
 /// 5-second DaemonClient timeout.
 const LLM_TIMEOUT_SECS: u64 = 120;
-const MIN_NATIVE_RUSTC_MAJOR: u32 = 1;
-const MIN_NATIVE_RUSTC_MINOR: u32 = 91;
 
 /// The current input mode in the chat TUI.
 #[derive(Debug, Clone, PartialEq)]
@@ -281,6 +279,7 @@ enum AgentLoopEvent {
     /// An error occurred in the loop.
     Error(String),
     /// Non-fatal informational status.
+    #[allow(dead_code)]
     Notice(String),
     /// The agentic loop finished (all tool calls done, final response received).
     Done,
@@ -291,12 +290,6 @@ enum AgentLoopEvent {
         result: String,
         output_file: String,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RequestRoute {
-    ProviderLoop,
-    NativeRuntime,
 }
 
 /// Global counter for background task IDs.
@@ -329,66 +322,6 @@ pub enum ApprovalProfile {
     AutoApprove(ActionRisk),
     /// Full-auto: approve everything without asking.
     FullAuto,
-}
-
-/// Execution engine selection for coding turns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatEngine {
-    /// Auto-select based on conversation mode and model classification.
-    Auto,
-    /// Always use provider-backed chat loop.
-    Provider,
-    /// Always use vendored native Codex runtime for coding turns.
-    Native,
-}
-
-impl ChatEngine {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Provider => "provider",
-            Self::Native => "native",
-        }
-    }
-
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
-            "provider" => Some(Self::Provider),
-            "native" => Some(Self::Native),
-            _ => None,
-        }
-    }
-}
-
-/// Conversation mode selection for regular chat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatMode {
-    /// Auto-detect coding intent per turn.
-    Auto,
-    /// Force normal chat behavior.
-    Chat,
-    /// Force coding behavior.
-    Code,
-}
-
-impl ChatMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Chat => "chat",
-            Self::Code => "code",
-        }
-    }
-
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
-            "chat" => Some(Self::Chat),
-            "code" => Some(Self::Code),
-            _ => None,
-        }
-    }
 }
 
 /// Classify the risk of a tool call for approval profile decisions.
@@ -553,6 +486,7 @@ fn approval_context_for_prompt(profile: &ApprovalProfile) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn latest_user_turn(conversation: &[LlmMessage]) -> Option<&str> {
     conversation
         .iter()
@@ -561,290 +495,7 @@ fn latest_user_turn(conversation: &[LlmMessage]) -> Option<&str> {
         .map(|m| m.content.as_str())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TurnTaskType {
-    Chat,
-    Code,
-    Automation,
-}
 
-#[derive(Debug)]
-struct RouteDecision {
-    route: RequestRoute,
-    notice: Option<String>,
-    allow_native_fallback: bool,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct TurnClassifierOutput {
-    task_type: String,
-    engine: String,
-}
-
-fn native_wrapper_path() -> Option<std::path::PathBuf> {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir.parent()?.parent()?;
-    let wrapper = repo_root.join("scripts").join("coding-runtime-codex.sh");
-    if wrapper.exists() {
-        Some(wrapper)
-    } else {
-        None
-    }
-}
-
-fn parse_rustc_version(version: &str) -> Option<(u32, u32)> {
-    // "rustc 1.91.0 (....)"
-    let semver = version.split_whitespace().nth(1)?;
-    let mut parts = semver.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    Some((major, minor))
-}
-
-fn native_runtime_ready() -> Result<(), String> {
-    let wrapper = native_wrapper_path()
-        .ok_or_else(|| "native wrapper missing at scripts/coding-runtime-codex.sh".to_string())?;
-    let manifest_dir = wrapper
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("vendor/coding-runtime/codex-rs/Cargo.toml"))
-        .ok_or_else(|| "failed to resolve native runtime manifest path".to_string())?;
-
-    if !manifest_dir.exists() {
-        return Err(format!(
-            "native runtime manifest missing: {}",
-            manifest_dir.display()
-        ));
-    }
-
-    let cargo_ok = std::process::Command::new("cargo")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !cargo_ok {
-        return Err("native runtime requires cargo on PATH".to_string());
-    }
-
-    let rustc_output = std::process::Command::new("rustc")
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("failed to run rustc --version: {e}"))?;
-    if !rustc_output.status.success() {
-        return Err("rustc --version failed".to_string());
-    }
-    let rustc_text = String::from_utf8_lossy(&rustc_output.stdout)
-        .trim()
-        .to_string();
-    let (major, minor) = parse_rustc_version(&rustc_text)
-        .ok_or_else(|| format!("unable to parse rustc version output: {rustc_text}"))?;
-    if major < MIN_NATIVE_RUSTC_MAJOR
-        || (major == MIN_NATIVE_RUSTC_MAJOR && minor < MIN_NATIVE_RUSTC_MINOR)
-    {
-        return Err(format!(
-            "native runtime requires rustc >= {MIN_NATIVE_RUSTC_MAJOR}.{MIN_NATIVE_RUSTC_MINOR} (found {major}.{minor}); upgrade Rust toolchain"
-        ));
-    }
-    Ok(())
-}
-
-fn run_native_codex_turn(model: &str, prompt: &str) -> Result<String, String> {
-    let wrapper = native_wrapper_path().ok_or_else(|| "native wrapper not found".to_string())?;
-
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let output_file = std::env::temp_dir().join(format!("aegis-codex-last-{stamp}.txt"));
-
-    let mut cmd = std::process::Command::new(&wrapper);
-    cmd.arg("exec")
-        .arg("-m")
-        .arg(model)
-        .arg("--full-auto")
-        .arg("--skip-git-repo-check")
-        .arg("-o")
-        .arg(&output_file)
-        .arg(prompt);
-    let out = cmd
-        .output()
-        .map_err(|e| format!("failed to run native codex runtime: {e}"))?;
-
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(format!(
-            "native codex runtime failed (exit {}): {}",
-            out.status,
-            stderr.trim()
-        ));
-    }
-
-    let text = std::fs::read_to_string(&output_file)
-        .map_err(|e| format!("native codex completed but output file read failed: {e}"))?;
-    let _ = std::fs::remove_file(&output_file);
-
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Err("native codex returned empty output".to_string());
-    }
-    Ok(trimmed.to_string())
-}
-
-fn extract_first_json_object(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        return Some(trimmed.to_string());
-    }
-
-    let fence_stripped = if trimmed.starts_with("```") {
-        let mut lines = trimmed.lines();
-        let _ = lines.next();
-        let rest = lines.collect::<Vec<_>>().join("\n");
-        rest.strip_suffix("```").unwrap_or(&rest).trim().to_string()
-    } else {
-        trimmed.to_string()
-    };
-
-    let start = fence_stripped.find('{')?;
-    let end = fence_stripped.rfind('}')?;
-    (start < end).then_some(fence_stripped[start..=end].to_string())
-}
-
-fn classify_turn_with_model(
-    socket_path: &std::path::Path,
-    model: &str,
-    input: &str,
-) -> Result<(TurnTaskType, ChatEngine), String> {
-    let messages = serde_json::to_value(vec![LlmMessage::user(input)])
-        .map_err(|e| format!("failed to serialize classifier input: {e}"))?;
-    let classifier_prompt = "Classify the user request for execution routing.
-Return ONLY JSON with this exact schema:
-{\"task_type\":\"chat|code|automation\",\"engine\":\"provider|native\"}
-
-task_type meanings:
-- chat: conversational, no substantive agentic work
-- code: software engineering task
-- automation: workflow/operations task that should run agentically
-
-engine meanings:
-- provider: normal provider-backed chat loop
-- native: vendored native Codex runtime
-";
-    let cmd = DaemonCommand::LlmComplete {
-        model: model.to_string(),
-        messages,
-        temperature: Some(0.0),
-        max_tokens: Some(120),
-        system_prompt: Some(classifier_prompt.to_string()),
-        tools: None,
-    };
-    let client = DaemonClient::new(socket_path.to_path_buf());
-    let resp = parse_llm_response(send_with_timeout(&client, &cmd, 30))?;
-    let json_str = extract_first_json_object(&resp.content)
-        .ok_or_else(|| format!("classifier returned non-JSON content: {}", resp.content))?;
-    let parsed: TurnClassifierOutput = serde_json::from_str(&json_str)
-        .map_err(|e| format!("classifier JSON parse failed: {e}; payload={json_str}"))?;
-    let task_type = match parsed.task_type.trim().to_ascii_lowercase().as_str() {
-        "chat" => TurnTaskType::Chat,
-        "code" => TurnTaskType::Code,
-        "automation" => TurnTaskType::Automation,
-        other => return Err(format!("classifier returned invalid task_type: {other}")),
-    };
-    let engine = match parsed.engine.trim().to_ascii_lowercase().as_str() {
-        "provider" => ChatEngine::Provider,
-        "native" => ChatEngine::Native,
-        other => return Err(format!("classifier returned invalid engine: {other}")),
-    };
-    Ok((task_type, engine))
-}
-
-fn decide_request_route(
-    socket_path: &std::path::Path,
-    conversation: &[LlmMessage],
-    model: &str,
-    requested_mode: ChatMode,
-    requested_engine: ChatEngine,
-) -> Result<RouteDecision, String> {
-    let latest_input = latest_user_turn(conversation)
-        .unwrap_or_default()
-        .to_string();
-    let mut notice = None;
-    let mut classifier_engine: Option<ChatEngine> = None;
-
-    let task_type = match requested_mode {
-        ChatMode::Chat => TurnTaskType::Chat,
-        ChatMode::Code => TurnTaskType::Code,
-        ChatMode::Auto => match classify_turn_with_model(socket_path, model, &latest_input) {
-            Ok((task_type, model_engine)) => {
-                classifier_engine = Some(model_engine);
-                notice = Some(format!(
-                    "Turn classified as '{}' (engine hint: {}).",
-                    match task_type {
-                        TurnTaskType::Chat => "chat",
-                        TurnTaskType::Code => "code",
-                        TurnTaskType::Automation => "automation",
-                    },
-                    model_engine.as_str()
-                ));
-                task_type
-            }
-            Err(e) => {
-                notice = Some(format!(
-                    "Turn classification failed ({e}); defaulting to provider chat loop."
-                ));
-                TurnTaskType::Chat
-            }
-        },
-    };
-
-    if task_type == TurnTaskType::Chat {
-        return Ok(RouteDecision {
-            route: RequestRoute::ProviderLoop,
-            notice,
-            allow_native_fallback: false,
-        });
-    }
-
-    let chosen_engine = match requested_engine {
-        ChatEngine::Provider => ChatEngine::Provider,
-        ChatEngine::Native => ChatEngine::Native,
-        ChatEngine::Auto => match requested_mode {
-            ChatMode::Auto => classifier_engine.unwrap_or(ChatEngine::Provider),
-            ChatMode::Code => ChatEngine::Native,
-            ChatMode::Chat => ChatEngine::Provider,
-        },
-    };
-
-    if chosen_engine == ChatEngine::Native {
-        if let Err(e) = native_runtime_ready() {
-            if requested_engine == ChatEngine::Native {
-                return Err(format!("Native runtime unavailable: {e}"));
-            }
-            let fallback = RouteDecision {
-                route: RequestRoute::ProviderLoop,
-                notice: Some(format!(
-                    "Native runtime unavailable ({e}); falling back to provider engine."
-                )),
-                allow_native_fallback: false,
-            };
-            return Ok(fallback);
-        }
-        return Ok(RouteDecision {
-            route: RequestRoute::NativeRuntime,
-            notice: Some("Using native runtime for this turn.".to_string()),
-            allow_native_fallback: requested_engine == ChatEngine::Auto,
-        });
-    }
-
-    Ok(RouteDecision {
-        route: RequestRoute::ProviderLoop,
-        notice,
-        allow_native_fallback: false,
-    })
-}
 
 /// Seed workspace with bootstrap template files if they don't exist.
 ///
@@ -907,10 +558,6 @@ pub struct ChatApp {
     pub conversation: Vec<LlmMessage>,
     /// Model identifier (from daemon config or environment detection).
     pub model: String,
-    /// Engine selection for coding turns.
-    pub engine: ChatEngine,
-    /// Mode selection for coding vs regular chat behavior.
-    pub mode: ChatMode,
     /// Whether we're waiting for an LLM response or tool execution.
     pub awaiting_response: bool,
     /// Channel for receiving agentic loop events from background thread.
@@ -1080,8 +727,6 @@ impl ChatApp {
 
             conversation: Vec::new(),
             model,
-            engine: ChatEngine::Auto,
-            mode: ChatMode::Auto,
             awaiting_response: false,
             agent_rx: None,
             approval_tx: None,
@@ -1492,8 +1137,6 @@ impl ChatApp {
         let approval_profile = self.approval_profile.clone();
         let thinking_budget = self.thinking_budget;
         let audit_session_id = self.audit_session_id.clone();
-        let requested_mode = self.mode;
-        let requested_engine = self.engine;
 
         // Build tool descriptions for the system prompt.
         let tool_descs = get_tool_descriptions();
@@ -1532,61 +1175,9 @@ impl ChatApp {
                 audit_session_id,
                 abort_flag,
             };
-            let decision = decide_request_route(
-                &params.socket_path,
-                &params.conversation,
-                &params.model,
-                requested_mode,
-                requested_engine,
-            );
-            let decision = match decision {
-                Ok(decision) => decision,
-                Err(e) => {
-                    let _ = event_tx.send(AgentLoopEvent::Error(e));
-                    let _ = event_tx.send(AgentLoopEvent::Done);
-                    return;
-                }
-            };
-            if let Some(note) = decision.notice.as_ref() {
-                let _ = event_tx.send(AgentLoopEvent::Notice(note.clone()));
-            }
-            let native_prompt = latest_user_turn(&params.conversation)
-                .unwrap_or("Continue with the current coding task.")
-                .to_string();
-
-            match decision.route {
-                RequestRoute::ProviderLoop => run_agent_loop(params, event_tx, approval_rx),
-                RequestRoute::NativeRuntime => {
-                    match run_native_codex_turn(&params.model, &native_prompt) {
-                        Ok(content) => {
-                            let _ = event_tx.send(AgentLoopEvent::Response(LlmResponse {
-                                content,
-                                model: params.model.clone(),
-                                usage: aegis_types::llm::LlmUsage {
-                                    input_tokens: 0,
-                                    output_tokens: 0,
-                                },
-                                tool_calls: vec![],
-                                stop_reason: None,
-                            }));
-                            let _ = event_tx.send(AgentLoopEvent::Done);
-                        }
-                        Err(e) => {
-                            if decision.allow_native_fallback {
-                                let _ = event_tx.send(AgentLoopEvent::Notice(format!(
-                                    "Native runtime failed ({e}); retrying with provider engine."
-                                )));
-                                run_agent_loop(params, event_tx, approval_rx);
-                            } else {
-                                let _ = event_tx.send(AgentLoopEvent::Error(format!(
-                                    "native runtime failed: {e}"
-                                )));
-                                let _ = event_tx.send(AgentLoopEvent::Done);
-                            }
-                        }
-                    }
-                }
-            }
+            // Orchestrator always uses the provider-backed agentic loop.
+            // Coding work is delegated to subagents via the "task" tool.
+            run_agent_loop(params, event_tx, approval_rx);
             })); // end catch_unwind closure
             if result.is_err() {
                 let _ = panic_tx.send(AgentLoopEvent::Error(
@@ -1659,8 +1250,6 @@ impl ChatApp {
                             &self.session_id,
                             &self.conversation,
                             &self.model,
-                            self.mode.as_str(),
-                            self.engine.as_str(),
                         );
                     }
                     hooks::fire_hook_event(hooks::ChatHookEvent::SessionEnd {
@@ -2268,14 +1857,6 @@ impl ChatApp {
                             Ok((messages, meta)) => {
                                 self.conversation = messages;
                                 self.model = meta.model.clone();
-                                if let Some(mode) = meta.mode.as_deref().and_then(ChatMode::parse) {
-                                    self.mode = mode;
-                                }
-                                if let Some(engine) =
-                                    meta.engine.as_deref().and_then(ChatEngine::parse)
-                                {
-                                    self.engine = engine;
-                                }
                                 self.session_id = meta.id.clone();
                                 self.audit_session_id = None;
                                 self.register_audit_session();
@@ -2641,34 +2222,6 @@ impl ChatApp {
                 };
                 self.approval_profile = profiles[next].clone();
             }
-            3 => {
-                let modes = [ChatMode::Auto, ChatMode::Chat, ChatMode::Code];
-                let current = modes.iter().position(|m| *m == self.mode).unwrap_or(0);
-                let next = if reverse {
-                    if current == 0 {
-                        modes.len() - 1
-                    } else {
-                        current - 1
-                    }
-                } else {
-                    (current + 1) % modes.len()
-                };
-                self.mode = modes[next];
-            }
-            4 => {
-                let engines = [ChatEngine::Auto, ChatEngine::Provider, ChatEngine::Native];
-                let current = engines.iter().position(|e| *e == self.engine).unwrap_or(0);
-                let next = if reverse {
-                    if current == 0 {
-                        engines.len() - 1
-                    } else {
-                        current - 1
-                    }
-                } else {
-                    (current + 1) % engines.len()
-                };
-                self.engine = engines[next];
-            }
             _ => {}
         }
     }
@@ -2789,8 +2342,6 @@ impl ChatApp {
                         &self.session_id,
                         &self.conversation,
                         &self.model,
-                        self.mode.as_str(),
-                        self.engine.as_str(),
                     );
                 }
                 hooks::fire_hook_event(hooks::ChatHookEvent::SessionEnd {
@@ -2813,8 +2364,6 @@ impl ChatApp {
                         &self.session_id,
                         &self.conversation,
                         &self.model,
-                        self.mode.as_str(),
-                        self.engine.as_str(),
                     ) {
                         Ok(()) => {
                             self.set_result(format!("Saved as {}", self.session_id));
@@ -2845,46 +2394,6 @@ impl ChatApp {
                     self.total_output_tokens,
                     self.total_cost_usd,
                 ));
-            }
-            "mode" => {
-                self.set_result(format!(
-                    "Mode: {}. Options: /mode auto | /mode chat | /mode code",
-                    self.mode.as_str()
-                ));
-            }
-            _ if trimmed.starts_with("mode ") => {
-                let arg = trimmed.strip_prefix("mode ").unwrap_or("").trim();
-                match ChatMode::parse(arg) {
-                    Some(mode) => {
-                        let old = self.mode.as_str();
-                        self.mode = mode;
-                        self.set_result(format!("Mode: {old} -> {}", self.mode.as_str()));
-                    }
-                    None => {
-                        self.set_result(format!("Invalid mode '{arg}'. Options: auto, chat, code"));
-                    }
-                }
-            }
-            "engine" => {
-                self.set_result(format!(
-                    "Engine: {}. Options: /engine auto | /engine provider | /engine native",
-                    self.engine.as_str()
-                ));
-            }
-            _ if trimmed.starts_with("engine ") => {
-                let arg = trimmed.strip_prefix("engine ").unwrap_or("").trim();
-                match ChatEngine::parse(arg) {
-                    Some(engine) => {
-                        let old = self.engine.as_str();
-                        self.engine = engine;
-                        self.set_result(format!("Engine: {old} -> {}", self.engine.as_str()));
-                    }
-                    None => {
-                        self.set_result(format!(
-                            "Invalid engine '{arg}'. Options: auto, provider, native"
-                        ));
-                    }
-                }
             }
             _ if trimmed.starts_with("model ") => {
                 let input = trimmed.strip_prefix("model ").unwrap().trim();
@@ -2959,13 +2468,6 @@ impl ChatApp {
                         Ok((messages, meta)) => {
                             self.conversation = messages;
                             self.model = meta.model.clone();
-                            if let Some(mode) = meta.mode.as_deref().and_then(ChatMode::parse) {
-                                self.mode = mode;
-                            }
-                            if let Some(engine) = meta.engine.as_deref().and_then(ChatEngine::parse)
-                            {
-                                self.engine = engine;
-                            }
                             self.session_id = meta.id.clone();
                             // New audit session for the resumed conversation.
                             self.audit_session_id = None;
@@ -3011,10 +2513,8 @@ impl ChatApp {
                     self.set_result("Daemon is not running (offline mode).");
                 } else {
                     self.set_result(format!(
-                        "Daemon is running. Model: {} | Mode: {} | Engine: {}",
+                        "Daemon is running. Model: {}",
                         self.model,
-                        self.mode.as_str(),
-                        self.engine.as_str()
                     ));
                 }
             }
@@ -3058,8 +2558,6 @@ impl ChatApp {
                         &self.session_id,
                         &self.conversation,
                         &self.model,
-                        self.mode.as_str(),
-                        self.engine.as_str(),
                     );
                 }
                 self.messages.clear();
@@ -3333,17 +2831,13 @@ impl ChatApp {
             .collect();
         if providers.is_empty() {
             self.set_result(format!(
-                "Model: {}  |  Mode: {}  |  Engine: {}  |  No providers configured. Set an API key env var.",
+                "Model: {}  |  No providers configured. Set an API key env var.",
                 self.model,
-                self.mode.as_str(),
-                self.engine.as_str(),
             ));
         } else {
             self.set_result(format!(
-                "Model: {}  |  Mode: {}  |  Engine: {}  |  Available: {}",
+                "Model: {}  |  Available: {}",
                 self.model,
-                self.mode.as_str(),
-                self.engine.as_str(),
                 providers.join(", "),
             ));
         }
@@ -4516,8 +4010,6 @@ mod tests {
         assert_eq!(app.input_cursor, 0);
         assert!(!app.connected);
         assert_eq!(app.model, "claude-sonnet-4-20250514");
-        assert_eq!(app.mode, ChatMode::Auto);
-        assert_eq!(app.engine, ChatEngine::Auto);
         assert!(app.conversation.is_empty());
         assert!(!app.awaiting_response);
     }
@@ -5226,30 +4718,4 @@ mod tests {
         assert!(result.contains("manual"));
     }
 
-    #[test]
-    fn mode_command_sets_mode() {
-        let mut app = make_app();
-        assert_eq!(app.mode, ChatMode::Auto);
-        app.execute_command("mode code");
-        assert_eq!(app.mode, ChatMode::Code);
-        app.execute_command("mode chat");
-        assert_eq!(app.mode, ChatMode::Chat);
-    }
-
-    #[test]
-    fn engine_command_sets_engine() {
-        let mut app = make_app();
-        assert_eq!(app.engine, ChatEngine::Auto);
-        app.execute_command("engine provider");
-        assert_eq!(app.engine, ChatEngine::Provider);
-        app.execute_command("engine native");
-        assert_eq!(app.engine, ChatEngine::Native);
-    }
-
-    #[test]
-    fn extract_first_json_object_handles_fenced_output() {
-        let raw = "```json\n{\"task_type\":\"code\",\"engine\":\"native\"}\n```";
-        let extracted = extract_first_json_object(raw).unwrap();
-        assert_eq!(extracted, "{\"task_type\":\"code\",\"engine\":\"native\"}");
-    }
 }
