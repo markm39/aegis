@@ -1867,10 +1867,25 @@ impl DaemonRuntime {
             let (feedback_tx, feedback_rx) = mpsc::channel();
             let config = channel_config.clone();
 
+            // Build channel command router from config (if present)
+            let router = self
+                .config
+                .channel_routing
+                .as_ref()
+                .and_then(|routing_cfg| {
+                    match aegis_channel::channel_routing::router_from_config(routing_cfg) {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            warn!(error = %e, "invalid channel routing config; routing disabled");
+                            None
+                        }
+                    }
+                });
+
             match std::thread::Builder::new()
                 .name("channel".to_string())
                 .spawn(move || {
-                    aegis_channel::run_fleet(config, input_rx, Some(feedback_tx));
+                    aegis_channel::run_fleet(config, input_rx, Some(feedback_tx), router);
                 }) {
                 Ok(handle) => {
                     self.channel_tx = Some(input_tx);

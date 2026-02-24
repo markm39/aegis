@@ -17,6 +17,7 @@ use aegis_types::ChannelConfig;
 
 use crate::active_hours;
 use crate::channel::{InboundAction, OutboundPhoto};
+use crate::channel_routing::ChannelCommandRouter;
 use crate::format;
 use crate::slack;
 use crate::telegram;
@@ -47,7 +48,7 @@ pub enum ChannelInput {
 ///
 /// Call this from a dedicated `std::thread::spawn`.
 pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
-    run_fleet(config, input_rx, None);
+    run_fleet(config, input_rx, None, None);
 }
 
 /// Run the channel with fleet-aware inbound command forwarding.
@@ -61,6 +62,7 @@ pub fn run_fleet(
     config: ChannelConfig,
     input_rx: Receiver<ChannelInput>,
     feedback_tx: Option<Sender<DaemonCommand>>,
+    router: Option<ChannelCommandRouter>,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -74,12 +76,13 @@ pub fn run_fleet(
     };
 
     rt.block_on(async move {
+        let channel_type = config.channel_type_name();
         match config {
             ChannelConfig::Telegram(tg_config) => {
-                run_telegram(tg_config, input_rx, feedback_tx).await;
+                run_telegram(tg_config, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Slack(slack_config) => {
-                run_slack(slack_config, input_rx, feedback_tx).await;
+                run_slack(slack_config, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Webhook(cfg) => {
                 let channel = crate::webhook::WebhookChannel::new(crate::webhook::WebhookConfig {
@@ -89,7 +92,7 @@ pub fn run_fleet(
                     auth_header: cfg.auth_header,
                     payload_template: cfg.payload_template,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Discord(cfg) => {
                 let channel = crate::discord::DiscordChannel::new(crate::discord::DiscordConfig {
@@ -102,7 +105,7 @@ pub fn run_fleet(
                     authorized_user_ids: cfg.authorized_user_ids,
                     command_channel_id: cfg.command_channel_id,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Whatsapp(cfg) => {
                 let channel =
@@ -115,7 +118,7 @@ pub fn run_fleet(
                         webhook_port: None,
                         template_namespace: None,
                     });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Signal(cfg) => {
                 let channel = match crate::signal::SignalChannel::new(crate::signal::SignalConfig {
@@ -132,7 +135,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Matrix(cfg) => {
                 let channel = crate::matrix::MatrixChannel::new(crate::matrix::MatrixConfig {
@@ -140,7 +143,7 @@ pub fn run_fleet(
                     access_token: cfg.access_token,
                     room_id: cfg.room_id,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Imessage(cfg) => {
                 let channel =
@@ -158,7 +161,7 @@ pub fn run_fleet(
                             return;
                         }
                     };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Irc(cfg) => {
                 let channel = crate::irc::IrcChannel::new(crate::irc::IrcConfig {
@@ -166,13 +169,13 @@ pub fn run_fleet(
                     channel: cfg.channel,
                     nick: cfg.nick,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Msteams(cfg) => {
                 let channel = crate::msteams::MsteamsChannel::new(crate::msteams::MsteamsConfig {
                     webhook_url: cfg.webhook_url,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Googlechat(cfg) => {
                 let channel = crate::googlechat::GooglechatChannel::new(
@@ -180,14 +183,14 @@ pub fn run_fleet(
                         webhook_url: cfg.webhook_url,
                     },
                 );
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Feishu(cfg) => {
                 let channel = crate::feishu::FeishuChannel::new(crate::feishu::FeishuConfig {
                     webhook_url: cfg.webhook_url,
                     secret: cfg.secret,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Line(cfg) => {
                 let channel = crate::line::LineChannel::new(crate::line::LineConfig {
@@ -198,14 +201,14 @@ pub fn run_fleet(
                     oauth_channel_id: None,
                     multicast_enabled: false,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Nostr(cfg) => {
                 let channel = crate::nostr::NostrChannel::new(crate::nostr::NostrConfig {
                     relay_url: cfg.relay_url,
                     private_key_hex: cfg.private_key_hex,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Mattermost(cfg) => {
                 let channel = crate::mattermost::MattermostChannel::new(
@@ -214,7 +217,7 @@ pub fn run_fleet(
                         channel_id: cfg.channel_id,
                     },
                 );
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::VoiceCall(cfg) => {
                 let channel =
@@ -223,7 +226,7 @@ pub fn run_fleet(
                         from_number: cfg.from_number,
                         to_number: cfg.to_number,
                     });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Twitch(cfg) => {
                 let channel = match crate::twitch::TwitchChannel::new(crate::twitch::TwitchConfig {
@@ -237,7 +240,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Nextcloud(cfg) => {
                 let channel = match crate::nextcloud::NextcloudChannel::new(
@@ -254,7 +257,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Zalo(cfg) => {
                 let channel = match crate::zalo::ZaloChannel::new(crate::zalo::ZaloConfig {
@@ -268,7 +271,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Tlon(cfg) => {
                 let channel = match crate::tlon::TlonChannel::new(crate::tlon::TlonConfig {
@@ -281,7 +284,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Lobster(cfg) => {
                 let channel =
@@ -295,7 +298,7 @@ pub fn run_fleet(
                             return;
                         }
                     };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
             }
             ChannelConfig::Gmail(_cfg) => {
                 // Gmail channel trait implementation is not yet available (task 2).
@@ -315,6 +318,8 @@ async fn run_generic_channel(
     active_hours_cfg: Option<aegis_types::ActiveHoursConfig>,
     input_rx: Receiver<ChannelInput>,
     feedback_tx: Option<Sender<DaemonCommand>>,
+    channel_type: &str,
+    router: Option<&ChannelCommandRouter>,
 ) {
     let channel_name = channel.name().to_string();
     let has_typing = channel.capabilities().typing_indicators;
@@ -393,7 +398,7 @@ async fn run_generic_channel(
                             }
                         }
 
-                        handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
+                        handle_inbound_action(&channel, action, feedback_tx.as_ref(), channel_type, router).await;
                     }
                     Ok(None) => {}
                     Err(crate::channel::ChannelError::Shutdown) => {
@@ -416,6 +421,8 @@ async fn run_slack(
     config: aegis_types::SlackConfig,
     input_rx: Receiver<ChannelInput>,
     feedback_tx: Option<Sender<DaemonCommand>>,
+    channel_type: &str,
+    router: Option<&ChannelCommandRouter>,
 ) {
     use crate::channel::Channel;
 
@@ -497,7 +504,7 @@ async fn run_slack(
                             }
                         }
 
-                        handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
+                        handle_inbound_action(&channel, action, feedback_tx.as_ref(), channel_type, router).await;
                     }
                     Ok(None) => {}
                     Err(crate::channel::ChannelError::Shutdown) => {
@@ -520,6 +527,8 @@ async fn run_telegram(
     config: aegis_types::TelegramConfig,
     input_rx: Receiver<ChannelInput>,
     feedback_tx: Option<Sender<DaemonCommand>>,
+    channel_type: &str,
+    router: Option<&ChannelCommandRouter>,
 ) {
     use crate::channel::Channel;
 
@@ -618,7 +627,7 @@ async fn run_telegram(
                             }
                         }
 
-                        handle_inbound_action(&channel, action, feedback_tx.as_ref()).await;
+                        handle_inbound_action(&channel, action, feedback_tx.as_ref(), channel_type, router).await;
                     }
                     Ok(None) => {} // No pending action
                     Err(crate::channel::ChannelError::Shutdown) => {
@@ -655,6 +664,8 @@ async fn handle_inbound_action(
     channel: &impl crate::channel::Channel,
     action: InboundAction,
     feedback_tx: Option<&Sender<DaemonCommand>>,
+    channel_type: &str,
+    router: Option<&ChannelCommandRouter>,
 ) {
     match action {
         InboundAction::Command(ref cmd) => {
@@ -678,6 +689,18 @@ async fn handle_inbound_action(
                     warn!("failed to send help text: {e}");
                 }
                 return;
+            }
+
+            // Apply channel routing restrictions before parsing
+            if let Some(router) = router {
+                if let Err(e) = router.resolve_command(channel_type, text) {
+                    info!(channel = channel_type, error = %e, "command denied by channel routing");
+                    let msg = crate::channel::OutboundMessage::text(format!("Command denied: {e}"));
+                    if let Err(send_err) = channel.send(msg).await {
+                        warn!("failed to send routing denial: {send_err}");
+                    }
+                    return;
+                }
             }
 
             // Try fleet command parsing if feedback channel is available

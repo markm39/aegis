@@ -511,6 +511,36 @@ pub enum ChannelConfig {
     Gmail(GmailChannelConfig),
 }
 
+impl ChannelConfig {
+    /// Returns the channel type as a lowercase string matching the serde tag.
+    pub fn channel_type_name(&self) -> &'static str {
+        match self {
+            Self::Telegram(_) => "telegram",
+            Self::Slack(_) => "slack",
+            Self::Webhook(_) => "webhook",
+            Self::Discord(_) => "discord",
+            Self::Whatsapp(_) => "whatsapp",
+            Self::Signal(_) => "signal",
+            Self::Matrix(_) => "matrix",
+            Self::Imessage(_) => "imessage",
+            Self::Irc(_) => "irc",
+            Self::Msteams(_) => "msteams",
+            Self::Googlechat(_) => "googlechat",
+            Self::Feishu(_) => "feishu",
+            Self::Line(_) => "line",
+            Self::Nostr(_) => "nostr",
+            Self::Mattermost(_) => "mattermost",
+            Self::VoiceCall(_) => "voicecall",
+            Self::Twitch(_) => "twitch",
+            Self::Nextcloud(_) => "nextcloud",
+            Self::Zalo(_) => "zalo",
+            Self::Tlon(_) => "tlon",
+            Self::Lobster(_) => "lobster",
+            Self::Gmail(_) => "gmail",
+        }
+    }
+}
+
 /// Configuration for the Telegram messaging channel.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TelegramConfig {
