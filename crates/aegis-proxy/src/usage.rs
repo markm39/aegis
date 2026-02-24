@@ -34,6 +34,8 @@ struct ProxyState {
     client: reqwest::Client,
     anthropic_api_key: Option<String>,
     openai_api_key: Option<String>,
+    rate_limiter: Option<Arc<Mutex<crate::rate_limit::ProviderRateLimiter>>>,
+    budget_tracker: Option<Arc<Mutex<crate::budget::BudgetTracker>>>,
 }
 
 /// An HTTP reverse proxy for API usage tracking.
@@ -44,6 +46,8 @@ pub struct UsageProxy {
     port: u16,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
+    rate_limiter: Option<Arc<Mutex<crate::rate_limit::ProviderRateLimiter>>>,
+    budget_tracker: Option<Arc<Mutex<crate::budget::BudgetTracker>>>,
 }
 
 /// Result of starting the proxy.
@@ -70,7 +74,32 @@ impl UsageProxy {
             port,
             shutdown_tx,
             shutdown_rx,
+            rate_limiter: None,
+            budget_tracker: None,
         }
+    }
+
+    /// Enable per-provider rate limiting with default provider limits.
+    pub fn with_rate_limiting(mut self) -> Self {
+        self.rate_limiter = Some(Arc::new(Mutex::new(
+            crate::rate_limit::ProviderRateLimiter::with_defaults(),
+        )));
+        self
+    }
+
+    /// Enable budget enforcement with the given ceiling in USD.
+    pub fn with_budget(mut self, budget_usd: f64) -> Self {
+        if budget_usd > 0.0 {
+            let config = crate::budget::BudgetConfig {
+                budget_usd,
+                warn_threshold: 0.8,
+                action_on_exceed: crate::budget::BudgetAction::Warn,
+            };
+            self.budget_tracker = Some(Arc::new(Mutex::new(
+                crate::budget::BudgetTracker::new(config),
+            )));
+        }
+        self
     }
 
     /// Start the proxy. Returns a handle with the actual bound port and shutdown sender.
@@ -100,6 +129,8 @@ impl UsageProxy {
                 .unwrap_or_else(|_| reqwest::Client::new()),
             anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
+            rate_limiter: self.rate_limiter,
+            budget_tracker: self.budget_tracker,
         };
 
         let app = Router::new()
@@ -179,6 +210,45 @@ async fn proxy_request(
     headers: &HeaderMap,
     body: Body,
 ) -> Response {
+    // Check rate limit before forwarding
+    if let Some(ref rl) = state.rate_limiter {
+        match rl.lock() {
+            Ok(mut limiter) => {
+                if let Err(e) = limiter.check_request(provider.name()) {
+                    let retry_after_ms = match &e {
+                        crate::rate_limit::RateLimitError::RequestsExceeded {
+                            retry_after_ms,
+                            ..
+                        }
+                        | crate::rate_limit::RateLimitError::TokensExceeded {
+                            retry_after_ms,
+                            ..
+                        } => *retry_after_ms,
+                    };
+                    warn!(
+                        provider = provider.name(),
+                        error = %e,
+                        "rate limit exceeded, returning 429"
+                    );
+                    let retry_secs = (retry_after_ms / 1000).max(1);
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        [(
+                            "retry-after",
+                            HeaderValue::from_str(&retry_secs.to_string())
+                                .unwrap_or_else(|_| HeaderValue::from_static("60")),
+                        )],
+                        format!("Rate limit exceeded: {e}"),
+                    )
+                        .into_response();
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "rate limiter lock poisoned, skipping rate check");
+            }
+        }
+    }
+
     let upstream_url = format!("{}/{path}", provider.upstream_base());
 
     // Read the request body
@@ -715,6 +785,52 @@ fn log_usage(
         }
         Err(e) => {
             warn!(error = %e, "audit store lock poisoned, cannot log usage");
+        }
+    }
+
+    // Record tokens for rate limiting
+    let total_tokens = usage.input_tokens + usage.output_tokens;
+    if let Some(ref rl) = state.rate_limiter {
+        if let Ok(mut limiter) = rl.lock() {
+            limiter.record_tokens(provider.name(), total_tokens);
+        }
+    }
+
+    // Record cost for budget tracking
+    if let Some(ref bt) = state.budget_tracker {
+        let pricing = PricingTable::default();
+        let cost = pricing
+            .calculate_cost(
+                &usage.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_input_tokens,
+                usage.cache_creation_input_tokens,
+            )
+            .unwrap_or(0.0);
+        if cost > 0.0 {
+            if let Ok(mut tracker) = bt.lock() {
+                match tracker.record_cost(cost) {
+                    crate::budget::BudgetStatus::Ok => {}
+                    crate::budget::BudgetStatus::Warning { utilization } => {
+                        warn!(
+                            principal = state.principal,
+                            utilization = format!("{:.0}%", utilization * 100.0),
+                            spent_usd = format!("{:.4}", tracker.spent()),
+                            remaining_usd = format!("{:.4}", tracker.remaining()),
+                            "budget warning threshold reached"
+                        );
+                    }
+                    crate::budget::BudgetStatus::Exceeded { overage, action } => {
+                        warn!(
+                            principal = state.principal,
+                            overage_usd = format!("{:.4}", overage),
+                            action = ?action,
+                            "budget exceeded"
+                        );
+                    }
+                }
+            }
         }
     }
 }

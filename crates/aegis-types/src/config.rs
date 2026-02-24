@@ -1047,6 +1047,14 @@ pub struct UsageProxyConfig {
     /// Port to bind the proxy to. 0 means OS-assigned random port.
     #[serde(default)]
     pub port: u16,
+    /// Whether to enforce per-provider rate limiting (RPM/TPM).
+    /// Uses sensible defaults per provider (e.g., Anthropic: 60 RPM, 100K TPM).
+    #[serde(default = "default_true")]
+    pub rate_limiting: bool,
+    /// Maximum budget in USD cents per agent session. 0 = unlimited.
+    /// Example: 500 = $5.00.
+    #[serde(default)]
+    pub budget_cents: u64,
 }
 
 fn default_true() -> bool {
@@ -1058,6 +1066,8 @@ impl Default for UsageProxyConfig {
         Self {
             enabled: true,
             port: 0,
+            rate_limiting: true,
+            budget_cents: 0,
         }
     }
 }

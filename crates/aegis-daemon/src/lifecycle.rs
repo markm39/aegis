@@ -202,12 +202,19 @@ fn run_agent_slot_inner(
     // 3b. Start usage proxy if configured
     let usage_proxy_handle =
         if let Some(proxy_config) = aegis_config.usage_proxy.as_ref().filter(|p| p.enabled) {
-            let proxy = aegis_proxy::UsageProxy::new(
+            let mut proxy = aegis_proxy::UsageProxy::new(
                 Arc::clone(&store),
                 name.to_string(),
                 Some(session_id),
                 proxy_config.port,
             );
+            if proxy_config.rate_limiting {
+                proxy = proxy.with_rate_limiting();
+            }
+            if proxy_config.budget_cents > 0 {
+                let budget_usd = proxy_config.budget_cents as f64 / 100.0;
+                proxy = proxy.with_budget(budget_usd);
+            }
 
             // Use the shared daemon runtime handle when available (normal operation),
             // or create a minimal current-thread runtime as a fallback (tests, isolated
