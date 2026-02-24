@@ -873,6 +873,18 @@ pub struct DaemonRuntime {
     llm_client: Option<crate::llm_client::LlmClient>,
     /// Tool registry for builtin tool execution (bash, read_file, etc.).
     tool_registry: Option<aegis_tools::ToolRegistry>,
+    /// SQLite-backed key-value memory store for agent context.
+    memory_store: Option<crate::memory::MemoryStore>,
+    /// Cron job scheduler for periodic daemon tasks.
+    cron_scheduler: crate::cron::CronScheduler,
+    /// Plugin manifest registry for external process plugins.
+    plugin_registry: crate::plugins::PluginRegistry,
+    /// SQLite-backed auto-reply rule store for inbound messages.
+    auto_reply_store: Option<aegis_channel::auto_reply::AutoReplyStore>,
+    /// In-memory interactive poll manager for messaging channels.
+    poll_manager: aegis_channel::polls::PollManager,
+    /// Fleet-wide model allowlist patterns (glob syntax, e.g. "claude-*").
+    model_allowlist: Vec<String>,
 }
 
 impl DaemonRuntime {
@@ -942,6 +954,120 @@ impl DaemonRuntime {
             }
         };
 
+        // Initialize memory store if enabled.
+        let memory_store = if config.memory.enabled {
+            let daemon_dir = aegis_config
+                .ledger_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let db_path = config
+                .memory
+                .db_path
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| daemon_dir.join("memory.db"));
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match crate::memory::MemoryStore::new(&db_path) {
+                Ok(store) => {
+                    info!(db_path = %db_path.display(), "memory store initialized");
+                    Some(store)
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to initialize memory store");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Initialize cron scheduler from config.
+        let cron_scheduler = {
+            let jobs: Vec<crate::cron::CronJob> = config
+                .cron
+                .jobs
+                .iter()
+                .filter_map(|jc| {
+                    let schedule = match crate::cron::Schedule::parse(&jc.schedule) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(name = %jc.name, error = %e, "skipping cron job with invalid schedule");
+                            return None;
+                        }
+                    };
+                    Some(crate::cron::CronJob {
+                        name: jc.name.clone(),
+                        schedule,
+                        command: jc.command.clone(),
+                        enabled: jc.enabled,
+                    })
+                })
+                .collect();
+            let count = jobs.len();
+            let scheduler = crate::cron::CronScheduler::new(jobs);
+            if count > 0 {
+                info!(count, "cron scheduler initialized with pre-configured jobs");
+            }
+            scheduler
+        };
+
+        // Discover plugins if enabled.
+        let plugin_registry = {
+            let aegis_dir = aegis_config
+                .ledger_path
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let plugin_dir = config
+                .plugins
+                .plugin_dir
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| aegis_dir.join("plugins"));
+            if config.plugins.enabled && plugin_dir.is_dir() {
+                match crate::plugins::PluginRegistry::discover(&plugin_dir) {
+                    Ok(registry) => {
+                        info!(
+                            plugin_dir = %plugin_dir.display(),
+                            count = registry.list().len(),
+                            "plugin registry initialized"
+                        );
+                        registry
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to discover plugins, starting with empty registry");
+                        crate::plugins::PluginRegistry::new()
+                    }
+                }
+            } else {
+                crate::plugins::PluginRegistry::new()
+            }
+        };
+
+        // Initialize auto-reply store.
+        let auto_reply_store = {
+            let daemon_dir = aegis_config
+                .ledger_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let db_path = daemon_dir.join("auto_replies.db");
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match aegis_channel::auto_reply::AutoReplyStore::open(&db_path) {
+                Ok(store) => {
+                    info!(db_path = %db_path.display(), "auto-reply store initialized");
+                    Some(store)
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to initialize auto-reply store");
+                    None
+                }
+            }
+        };
+
         Self {
             fleet,
             config,
@@ -1003,6 +1129,12 @@ impl DaemonRuntime {
                     None
                 }
             },
+            memory_store,
+            cron_scheduler,
+            plugin_registry,
+            auto_reply_store,
+            poll_manager: aegis_channel::polls::PollManager::new(),
+            model_allowlist: Vec::new(),
         }
     }
 
@@ -3563,30 +3695,184 @@ impl DaemonRuntime {
                 DaemonResponse::ok("shutdown initiated")
             }
 
-            // Wave 3 infrastructure stubs -- handled minimally until full implementation.
-            DaemonCommand::MemoryGet { .. }
-            | DaemonCommand::MemorySet { .. }
-            | DaemonCommand::MemoryDelete { .. }
-            | DaemonCommand::MemoryList { .. }
-            | DaemonCommand::MemorySearch { .. } => {
-                DaemonResponse::error("memory store not yet initialized")
+            // -- Memory store commands --
+            DaemonCommand::MemoryGet { namespace, key } => {
+                let Some(ref store) = self.memory_store else {
+                    return DaemonResponse::error("memory store not enabled (set memory.enabled = true in daemon.toml)");
+                };
+                match store.get(&namespace, &key) {
+                    Ok(Some(value)) => DaemonResponse::ok_with_data(
+                        format!("{namespace}/{key}"),
+                        serde_json::json!({ "namespace": namespace, "key": key, "value": value }),
+                    ),
+                    Ok(None) => DaemonResponse::error(format!("key not found: {namespace}/{key}")),
+                    Err(e) => DaemonResponse::error(format!("memory get failed: {e}")),
+                }
             }
-            DaemonCommand::CronList
-            | DaemonCommand::CronAdd { .. }
-            | DaemonCommand::CronRemove { .. }
-            | DaemonCommand::CronTrigger { .. } => {
-                DaemonResponse::error("cron scheduler not yet initialized")
+            DaemonCommand::MemorySet { namespace, key, value } => {
+                let Some(ref store) = self.memory_store else {
+                    return DaemonResponse::error("memory store not enabled (set memory.enabled = true in daemon.toml)");
+                };
+                match store.set(&namespace, &key, &value) {
+                    Ok(()) => DaemonResponse::ok(format!("stored {namespace}/{key}")),
+                    Err(e) => DaemonResponse::error(format!("memory set failed: {e}")),
+                }
             }
-            DaemonCommand::LoadPlugin { .. }
-            | DaemonCommand::ListPlugins
-            | DaemonCommand::UnloadPlugin { .. } => {
-                DaemonResponse::error("plugin system not yet initialized")
+            DaemonCommand::MemoryDelete { namespace, key } => {
+                let Some(ref store) = self.memory_store else {
+                    return DaemonResponse::error("memory store not enabled (set memory.enabled = true in daemon.toml)");
+                };
+                match store.delete(&namespace, &key) {
+                    Ok(true) => DaemonResponse::ok(format!("deleted {namespace}/{key}")),
+                    Ok(false) => DaemonResponse::error(format!("key not found: {namespace}/{key}")),
+                    Err(e) => DaemonResponse::error(format!("memory delete failed: {e}")),
+                }
             }
-            DaemonCommand::BroadcastToFleet { .. } => {
-                DaemonResponse::error("broadcast not yet implemented")
+            DaemonCommand::MemoryList { namespace, limit } => {
+                let Some(ref store) = self.memory_store else {
+                    return DaemonResponse::error("memory store not enabled (set memory.enabled = true in daemon.toml)");
+                };
+                let limit = limit.unwrap_or(100);
+                match store.list(&namespace, limit) {
+                    Ok(entries) => {
+                        let data: Vec<serde_json::Value> = entries
+                            .iter()
+                            .map(|(k, v)| serde_json::json!({ "key": k, "value": v }))
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("{} entries in {namespace}", data.len()),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(format!("memory list failed: {e}")),
+                }
+            }
+            DaemonCommand::MemorySearch { namespace, query, limit } => {
+                let Some(ref store) = self.memory_store else {
+                    return DaemonResponse::error("memory store not enabled (set memory.enabled = true in daemon.toml)");
+                };
+                let limit = limit.unwrap_or(20);
+                let half_life = if self.config.memory.decay_enabled {
+                    Some(self.config.memory.default_half_life_hours)
+                } else {
+                    None
+                };
+                match store.search(&namespace, &query, limit, half_life) {
+                    Ok(results) => {
+                        let data: Vec<serde_json::Value> = results
+                            .iter()
+                            .map(|(k, v, score)| serde_json::json!({ "key": k, "value": v, "score": score }))
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("{} results for '{query}' in {namespace}", data.len()),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(format!("memory search failed: {e}")),
+                }
+            }
+            DaemonCommand::CronList => {
+                let jobs = self.cron_scheduler.list();
+                match serde_json::to_value(jobs) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} cron job(s)", jobs.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+            DaemonCommand::CronAdd { name, schedule, command } => {
+                let parsed_schedule = match crate::cron::Schedule::parse(&schedule) {
+                    Ok(s) => s,
+                    Err(e) => return DaemonResponse::error(format!("invalid schedule '{schedule}': {e}")),
+                };
+                self.cron_scheduler.add(crate::cron::CronJob {
+                    name: name.clone(),
+                    schedule: parsed_schedule,
+                    command,
+                    enabled: true,
+                });
+                DaemonResponse::ok(format!("cron job '{name}' added (schedule: {schedule})"))
+            }
+            DaemonCommand::CronRemove { name } => {
+                if self.cron_scheduler.remove(&name) {
+                    DaemonResponse::ok(format!("cron job '{name}' removed"))
+                } else {
+                    DaemonResponse::error(format!("cron job '{name}' not found"))
+                }
+            }
+            DaemonCommand::CronTrigger { name } => {
+                match self.cron_scheduler.trigger(&name) {
+                    Some(cmd) => {
+                        let cmd_json = cmd.clone();
+                        DaemonResponse::ok_with_data(
+                            format!("triggered cron job '{name}'"),
+                            cmd_json,
+                        )
+                    }
+                    None => DaemonResponse::error(format!("cron job '{name}' not found")),
+                }
+            }
+            DaemonCommand::LoadPlugin { path } => {
+                let manifest_path = std::path::Path::new(&path);
+                match crate::plugins::PluginRegistry::load_manifest(manifest_path) {
+                    Ok(manifest) => {
+                        let name = manifest.name.clone();
+                        self.plugin_registry.add(manifest);
+                        DaemonResponse::ok(format!("plugin '{name}' loaded from {path}"))
+                    }
+                    Err(e) => DaemonResponse::error(format!("failed to load plugin manifest: {e}")),
+                }
+            }
+            DaemonCommand::ListPlugins => {
+                let plugins = self.plugin_registry.list();
+                match serde_json::to_value(plugins) {
+                    Ok(data) => DaemonResponse::ok_with_data(
+                        format!("{} plugin(s)", plugins.len()),
+                        data,
+                    ),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
+            }
+            DaemonCommand::UnloadPlugin { name } => {
+                if self.plugin_registry.unload(&name) {
+                    DaemonResponse::ok(format!("plugin '{name}' unloaded"))
+                } else {
+                    DaemonResponse::error(format!("plugin '{name}' not found"))
+                }
+            }
+            DaemonCommand::BroadcastToFleet { message, exclude_agents } => {
+                let agents: Vec<String> = self.fleet.agent_names()
+                    .into_iter()
+                    .filter(|name| !exclude_agents.contains(name))
+                    .collect();
+                if agents.is_empty() {
+                    return DaemonResponse::error("no agents to broadcast to");
+                }
+                let mut sent = 0usize;
+                for agent_name in &agents {
+                    if self.fleet.send_to_agent(agent_name, &message).is_ok() {
+                        sent += 1;
+                    }
+                }
+                DaemonResponse::ok(format!("broadcast sent to {sent}/{} agent(s)", agents.len()))
             }
             DaemonCommand::ListModels => {
-                DaemonResponse::error("model listing not yet implemented")
+                match &self.llm_client {
+                    Some(client) => {
+                        let registry = client.registry();
+                        let providers = registry.provider_names();
+                        let data = serde_json::json!({
+                            "providers": providers,
+                            "allowlist": self.model_allowlist,
+                        });
+                        DaemonResponse::ok_with_data(
+                            format!("{} provider(s) configured", providers.len()),
+                            data,
+                        )
+                    }
+                    None => DaemonResponse::error("LLM client not initialized"),
+                }
             }
             DaemonCommand::CopilotModels => {
                 let catalog = aegis_types::copilot::CopilotModelCatalog::with_defaults();
@@ -3601,8 +3887,10 @@ impl DaemonRuntime {
                     )),
                 }
             }
-            DaemonCommand::ModelAllowlist { .. } => {
-                DaemonResponse::error("model allowlist not yet implemented")
+            DaemonCommand::ModelAllowlist { patterns } => {
+                let count = patterns.len();
+                self.model_allowlist = patterns;
+                DaemonResponse::ok(format!("model allowlist updated ({count} pattern(s))"))
             }
             DaemonCommand::AddAlias { alias, command, args } => {
                 match self.alias_registry.add(alias, command, args) {
@@ -3673,9 +3961,15 @@ impl DaemonRuntime {
                 request_id,
                 delegate_to,
             } => {
-                DaemonResponse::error(format!(
-                    "delegate approval not yet implemented (request={request_id}, to={delegate_to})"
-                ))
+                let msg = format!("[delegated-approval] request_id={request_id} -- please review and approve/deny");
+                match self.fleet.send_to_agent(&delegate_to, &msg) {
+                    Ok(()) => DaemonResponse::ok(format!(
+                        "approval {request_id} delegated to {delegate_to}"
+                    )),
+                    Err(e) => DaemonResponse::error(format!(
+                        "failed to delegate approval to {delegate_to}: {e}"
+                    )),
+                }
             }
 
             // -- Session lifecycle commands --
@@ -3704,13 +3998,99 @@ impl DaemonRuntime {
                 DaemonResponse::error("persistent session commands require direct audit store access; use the CLI")
             }
 
-            // -- Auto-reply commands (added by another agent, stub handlers) --
-            DaemonCommand::AddAutoReply { .. }
-            | DaemonCommand::RemoveAutoReply { .. }
-            | DaemonCommand::ListAutoReplies
-            | DaemonCommand::ToggleAutoReply { .. }
-            | DaemonCommand::SetAutoReplyChat { .. } => {
-                DaemonResponse::error("auto-reply commands not yet wired to daemon")
+            // -- Auto-reply commands --
+            DaemonCommand::AddAutoReply {
+                pattern,
+                response,
+                chat_id,
+                priority,
+                response_type,
+                media_path: _,
+                language,
+            } => {
+                let Some(ref store) = self.auto_reply_store else {
+                    return DaemonResponse::error("auto-reply store not initialized");
+                };
+                // Parse response_type from JSON string if provided.
+                let parsed_type: Option<aegis_channel::auto_reply::MediaResponseType> =
+                    response_type.as_deref().and_then(|s| {
+                        serde_json::from_str(s).ok()
+                    });
+                match store.add_rule_full(
+                    &pattern,
+                    &response,
+                    chat_id,
+                    priority,
+                    parsed_type,
+                    language.as_deref(),
+                ) {
+                    Ok(id) => DaemonResponse::ok_with_data(
+                        format!("auto-reply rule added: {id}"),
+                        serde_json::json!({ "id": id }),
+                    ),
+                    Err(e) => DaemonResponse::error(format!("failed to add auto-reply rule: {e}")),
+                }
+            }
+            DaemonCommand::RemoveAutoReply { id } => {
+                let Some(ref store) = self.auto_reply_store else {
+                    return DaemonResponse::error("auto-reply store not initialized");
+                };
+                match store.remove_rule(&id) {
+                    Ok(true) => DaemonResponse::ok(format!("auto-reply rule {id} removed")),
+                    Ok(false) => DaemonResponse::error(format!("auto-reply rule {id} not found")),
+                    Err(e) => DaemonResponse::error(format!("failed to remove auto-reply rule: {e}")),
+                }
+            }
+            DaemonCommand::ListAutoReplies => {
+                let Some(ref store) = self.auto_reply_store else {
+                    return DaemonResponse::error("auto-reply store not initialized");
+                };
+                match store.list_rules() {
+                    Ok(rules) => {
+                        let data: Vec<serde_json::Value> = rules
+                            .iter()
+                            .map(|r| serde_json::json!({
+                                "id": r.id,
+                                "pattern": r.pattern,
+                                "response": r.response,
+                                "chat_id": r.chat_id,
+                                "priority": r.priority,
+                                "enabled": r.enabled,
+                                "language": r.language,
+                            }))
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("{} auto-reply rule(s)", data.len()),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(format!("failed to list auto-reply rules: {e}")),
+                }
+            }
+            DaemonCommand::ToggleAutoReply { id, enabled } => {
+                let Some(ref store) = self.auto_reply_store else {
+                    return DaemonResponse::error("auto-reply store not initialized");
+                };
+                match store.toggle_rule(&id, enabled) {
+                    Ok(true) => {
+                        let state = if enabled { "enabled" } else { "disabled" };
+                        DaemonResponse::ok(format!("auto-reply rule {id} {state}"))
+                    }
+                    Ok(false) => DaemonResponse::error(format!("auto-reply rule {id} not found")),
+                    Err(e) => DaemonResponse::error(format!("failed to toggle auto-reply rule: {e}")),
+                }
+            }
+            DaemonCommand::SetAutoReplyChat { chat_id, enabled } => {
+                let Some(ref store) = self.auto_reply_store else {
+                    return DaemonResponse::error("auto-reply store not initialized");
+                };
+                match store.set_chat_enabled(chat_id, enabled) {
+                    Ok(()) => {
+                        let state = if enabled { "enabled" } else { "disabled" };
+                        DaemonResponse::ok(format!("auto-reply {state} for chat {chat_id}"))
+                    }
+                    Err(e) => DaemonResponse::error(format!("failed to set chat auto-reply state: {e}")),
+                }
             }
 
             // -- Message routing commands --
@@ -3744,9 +4124,12 @@ impl DaemonRuntime {
                 self.handle_schedule_reply_trigger(&name)
             }
 
-            // -- Configuration introspection (stub) --
+            // -- Configuration introspection --
             DaemonCommand::GetEffectiveConfig => {
-                DaemonResponse::error("effective config introspection not yet implemented")
+                match serde_json::to_value(&self.config) {
+                    Ok(data) => DaemonResponse::ok_with_data("effective daemon configuration", data),
+                    Err(e) => DaemonResponse::error(format!("failed to serialize config: {e}")),
+                }
             }
 
             // -- Agent job tracking commands --
@@ -3876,13 +4259,89 @@ impl DaemonRuntime {
                 DaemonResponse::error("push notification commands not yet wired to daemon")
             }
 
-            // -- Poll commands (stubs, added by another agent) --
-            DaemonCommand::CreatePoll { .. }
-            | DaemonCommand::VotePoll { .. }
-            | DaemonCommand::ClosePoll { .. }
-            | DaemonCommand::PollResults { .. }
-            | DaemonCommand::ListPolls => {
-                DaemonResponse::error("poll commands not yet wired to daemon")
+            // -- Poll commands --
+            DaemonCommand::CreatePoll { question, options, channel, duration_secs } => {
+                let duration = duration_secs.unwrap_or(0);
+                match self.poll_manager.create_poll(&question, &options, &channel, "daemon", duration) {
+                    Ok(poll) => {
+                        let data = serde_json::json!({
+                            "id": poll.id.to_string(),
+                            "question": poll.question,
+                            "options": poll.options,
+                            "channel": poll.channel,
+                            "created_at": poll.created_at.to_rfc3339(),
+                            "expires_at": poll.expires_at.map(|t| t.to_rfc3339()),
+                        });
+                        DaemonResponse::ok_with_data(
+                            format!("poll {} created", poll.id),
+                            data,
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::VotePoll { poll_id, option, voter_id } => {
+                match self.poll_manager.vote(poll_id, &option, &voter_id) {
+                    Ok(()) => DaemonResponse::ok(format!("vote recorded on poll {poll_id}")),
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::ClosePoll { poll_id } => {
+                match self.poll_manager.close_poll(poll_id) {
+                    Ok(results) => {
+                        let data: Vec<serde_json::Value> = results
+                            .iter()
+                            .map(|r| serde_json::json!({
+                                "option": r.option,
+                                "vote_count": r.vote_count,
+                                "percentage": r.percentage,
+                            }))
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("poll {poll_id} closed"),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::PollResults { poll_id } => {
+                match self.poll_manager.get_results(poll_id) {
+                    Ok(results) => {
+                        let data: Vec<serde_json::Value> = results
+                            .iter()
+                            .map(|r| serde_json::json!({
+                                "option": r.option,
+                                "vote_count": r.vote_count,
+                                "percentage": r.percentage,
+                            }))
+                            .collect();
+                        DaemonResponse::ok_with_data(
+                            format!("poll {poll_id} results"),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(e),
+                }
+            }
+            DaemonCommand::ListPolls => {
+                let polls = self.poll_manager.list_active_polls();
+                let data: Vec<serde_json::Value> = polls
+                    .iter()
+                    .map(|p| serde_json::json!({
+                        "id": p.id.to_string(),
+                        "question": p.question,
+                        "channel": p.channel,
+                        "options": p.options,
+                        "created_at": p.created_at.to_rfc3339(),
+                        "expires_at": p.expires_at.map(|t| t.to_rfc3339()),
+                        "total_votes": p.votes.values().map(|v| v.len()).sum::<usize>(),
+                    }))
+                    .collect();
+                DaemonResponse::ok_with_data(
+                    format!("{} active poll(s)", data.len()),
+                    serde_json::json!(data),
+                )
             }
 
             // -- Command queue commands --

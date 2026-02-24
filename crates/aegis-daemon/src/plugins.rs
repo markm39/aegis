@@ -30,11 +30,19 @@ pub struct PluginManifest {
 }
 
 /// Registry of discovered and loaded plugins.
+#[derive(Default)]
 pub struct PluginRegistry {
     plugins: Vec<PluginManifest>,
 }
 
 impl PluginRegistry {
+    /// Create an empty plugin registry.
+    pub fn new() -> Self {
+        Self {
+            plugins: Vec::new(),
+        }
+    }
+
     /// Scan a directory for plugin manifests.
     ///
     /// Expects the directory structure:
