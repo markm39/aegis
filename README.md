@@ -553,6 +553,19 @@ cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```
 
+### Vendored coding runtime sync
+
+Aegis tracks a neutral-path vendored coding runtime snapshot under
+`vendor/coding-runtime/` with explicit upstream attribution and pinned SHA.
+
+```bash
+# Refresh snapshot from ~/codex-mirror (or $CODEX_MIRROR_DIR)
+make sync-coding-runtime
+
+# CI-safe drift check (no file writes)
+make check-coding-runtime
+```
+
 ## License
 
 MIT OR Apache-2.0

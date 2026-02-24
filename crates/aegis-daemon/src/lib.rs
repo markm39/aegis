@@ -13,18 +13,26 @@
 //! - [`persistence`]: launchd integration, PID files, caffeinate
 //! - [`state`]: crash recovery via persistent state.json
 
+pub mod attachment_handler;
+pub mod audio_transcription;
 pub mod browser_profile;
 pub mod builtin_tools;
 pub mod command_queue;
 pub mod commands;
 pub mod control;
 pub mod cron;
-pub mod execution_lanes;
 pub mod dashboard;
+pub mod deferred_reply;
+pub mod device_registry;
 pub mod embeddings;
+pub mod execution_lanes;
 pub mod fleet;
+pub mod heartbeat;
+pub mod image_understanding;
 pub mod jobs;
 pub mod lifecycle;
+pub mod link_understanding;
+pub mod llm_client;
 pub mod memory;
 pub mod memory_capture;
 pub mod memory_daily_log;
@@ -34,37 +42,29 @@ pub mod memory_hybrid_search;
 pub mod memory_longterm;
 pub mod memory_recall;
 pub mod memory_tools;
+pub mod message_routing;
 pub mod ndjson_fmt;
-pub mod semantic_search;
 pub mod persistence;
+pub mod phone_control;
 pub mod plugins;
-pub mod service;
 pub mod prompt_builder;
-pub mod slot;
-pub mod state;
-pub mod stream_fmt;
+pub mod scheduled_reply;
+pub mod semantic_search;
+pub mod service;
 pub mod session_files;
 pub mod session_router;
 pub mod session_tools;
+pub mod setup_codes;
+pub mod slot;
+pub mod speech;
+pub mod state;
+pub mod stream_fmt;
 pub mod tool_contract;
 pub mod toolkit_runtime;
-pub mod message_routing;
-pub mod scheduled_reply;
-pub mod heartbeat;
-pub mod deferred_reply;
-pub mod audio_transcription;
-pub mod image_understanding;
-pub mod link_understanding;
 pub mod video_processing;
-pub mod web_tools;
-pub mod attachment_handler;
-pub mod device_registry;
-pub mod phone_control;
-pub mod setup_codes;
-pub mod llm_client;
-pub mod speech;
 pub mod voice;
 pub mod voice_gateway;
+pub mod web_tools;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -242,8 +242,16 @@ fn status_label(status: &AgentStatus) -> String {
 fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
     use aegis_types::daemon::AgentToolConfig;
 
-    let (tool, headless, policy_mediation, mediation_note, mediation_mode, hook_bridge, tool_coverage, compliance_mode) =
-        match &config.tool {
+    let (
+        tool,
+        headless,
+        policy_mediation,
+        mediation_note,
+        mediation_mode,
+        hook_bridge,
+        tool_coverage,
+        compliance_mode,
+    ) = match &config.tool {
         AgentToolConfig::ClaudeCode { .. } => (
             "ClaudeCode".to_string(),
             true,
@@ -254,16 +262,25 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
             "covered".to_string(),
             "blocking".to_string(),
         ),
-        AgentToolConfig::Codex { .. } => (
-            "Codex".to_string(),
-            true,
-            "partial".to_string(),
-            "runtime mediation is limited until a secure bridge is available".to_string(),
-            "partial".to_string(),
-            "unavailable".to_string(),
-            "partial".to_string(),
-            "advisory".to_string(),
-        ),
+        AgentToolConfig::Codex { runtime_engine, .. } => {
+            let note = if runtime_engine != "external" {
+                "native coding runtime enabled; external codex fallback allowed, policy mediation remains partial until secure bridge is available"
+                    .to_string()
+            } else {
+                "external codex runtime enabled; policy mediation is partial until secure bridge is available"
+                    .to_string()
+            };
+            (
+                "Codex".to_string(),
+                true,
+                "partial".to_string(),
+                note,
+                "partial".to_string(),
+                "unavailable".to_string(),
+                "partial".to_string(),
+                "advisory".to_string(),
+            )
+        }
         AgentToolConfig::OpenClaw { .. } => {
             let bridge_connected = hooks::openclaw_bridge_connected(&config.working_dir);
             if bridge_connected {
@@ -1097,9 +1114,7 @@ impl DaemonRuntime {
                 .parent()
                 .unwrap_or(std::path::Path::new("."))
                 .join("push_subscriptions.db");
-            match aegis_alert::push::PushSubscriptionStore::open(
-                &push_db.to_string_lossy(),
-            ) {
+            match aegis_alert::push::PushSubscriptionStore::open(&push_db.to_string_lossy()) {
                 Ok(store) => {
                     info!(path = %push_db.display(), "push subscription store opened");
                     Some(store)
@@ -1135,9 +1150,9 @@ impl DaemonRuntime {
             message_router: crate::message_routing::MessageRouter::new(),
             job_tracker: crate::jobs::JobTracker::new(),
             command_queue: crate::command_queue::CommandQueue::new(),
-            setup_code_manager: device_store.as_ref().map(|store| {
-                crate::setup_codes::SetupCodeManager::new(store.hmac_key().to_vec())
-            }),
+            setup_code_manager: device_store
+                .as_ref()
+                .map(|store| crate::setup_codes::SetupCodeManager::new(store.hmac_key().to_vec())),
             device_store,
             phone_controller: crate::phone_control::PhoneController::new(),
             voice_manager: None, // Initialized lazily if TWILIO_AUTH_TOKEN is set
@@ -1147,7 +1162,10 @@ impl DaemonRuntime {
                 let registry = aegis_tools::ToolRegistry::new();
                 match crate::builtin_tools::register_builtins(&registry) {
                     Ok(()) => {
-                        info!(count = registry.tool_count(), "builtin tool registry initialized");
+                        info!(
+                            count = registry.tool_count(),
+                            "builtin tool registry initialized"
+                        );
                         Some(registry)
                     }
                     Err(e) => {
@@ -1213,7 +1231,8 @@ impl DaemonRuntime {
                 one_shot: false,
                 extra_args: Vec::new(),
             }),
-            AgentToolConfig::Codex { .. } => Ok(AgentToolConfig::Codex {
+            AgentToolConfig::Codex { runtime_engine, .. } => Ok(AgentToolConfig::Codex {
+                runtime_engine: runtime_engine.clone(),
                 approval_mode: "suggest".to_string(),
                 one_shot: false,
                 extra_args: Vec::new(),
@@ -5617,9 +5636,7 @@ impl DaemonRuntime {
                 info!(agent = name, pid = p, "sent SIGCONT, session resumed");
             }
             None => {
-                return DaemonResponse::error(format!(
-                    "cannot resume '{name}': no known PID"
-                ));
+                return DaemonResponse::error(format!("cannot resume '{name}': no known PID"));
             }
         }
 
@@ -5650,9 +5667,7 @@ impl DaemonRuntime {
 
         let current = slot.session_state;
         if current.is_terminal() {
-            return DaemonResponse::error(format!(
-                "session '{name}' is already terminated"
-            ));
+            return DaemonResponse::error(format!("session '{name}' is already terminated"));
         }
 
         // Allow termination from Active, Suspended, or Resumed
@@ -5818,10 +5833,9 @@ impl DaemonRuntime {
     fn handle_schedule_reply_list(&self) -> DaemonResponse {
         let list = self.scheduled_reply_mgr.list_scheduled_replies();
         match serde_json::to_value(list) {
-            Ok(data) => DaemonResponse::ok_with_data(
-                format!("{} scheduled repl(ies)", list.len()),
-                data,
-            ),
+            Ok(data) => {
+                DaemonResponse::ok_with_data(format!("{} scheduled repl(ies)", list.len()), data)
+            }
             Err(e) => DaemonResponse::error(format!("failed to serialize: {e}")),
         }
     }
@@ -5829,7 +5843,10 @@ impl DaemonRuntime {
     /// Handle ScheduleReplyTrigger: render template with current state data.
     fn handle_schedule_reply_trigger(&mut self, name: &str) -> DaemonResponse {
         let data = self.collect_template_data();
-        match self.scheduled_reply_mgr.trigger_scheduled_reply(name, &data) {
+        match self
+            .scheduled_reply_mgr
+            .trigger_scheduled_reply(name, &data)
+        {
             Ok((rendered, channel)) => {
                 info!(reply_name = %name, channel = %channel, "scheduled reply triggered");
                 let payload = serde_json::json!({
@@ -5926,10 +5943,9 @@ impl DaemonRuntime {
     fn handle_get_message_thread(&self, message_id: uuid::Uuid) -> DaemonResponse {
         let thread = self.message_router.get_thread(message_id);
         match serde_json::to_value(&thread) {
-            Ok(data) => DaemonResponse::ok_with_data(
-                format!("{} message(s) in thread", thread.len()),
-                data,
-            ),
+            Ok(data) => {
+                DaemonResponse::ok_with_data(format!("{} message(s) in thread", thread.len()), data)
+            }
             Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
         }
     }
@@ -5946,9 +5962,7 @@ impl DaemonRuntime {
 
         // Validate target agent exists
         if self.fleet.slot(agent_name).is_none() {
-            return DaemonResponse::error(format!(
-                "unknown agent: {agent_name}"
-            ));
+            return DaemonResponse::error(format!("unknown agent: {agent_name}"));
         }
 
         // Cedar policy gate: system message injection requires elevated action
@@ -7950,9 +7964,7 @@ controls:
         }
 
         // Suspending a non-running agent (no PID) should fail
-        let resp = runtime.handle_command(DaemonCommand::SuspendSession {
-            name: "a1".into(),
-        });
+        let resp = runtime.handle_command(DaemonCommand::SuspendSession { name: "a1".into() });
         assert!(!resp.ok, "suspend should fail without a running PID");
         assert!(resp.message.contains("no known PID"));
 

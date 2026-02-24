@@ -659,6 +659,10 @@ pub enum AgentToolConfig {
     },
     /// OpenAI Codex CLI.
     Codex {
+        /// Runtime engine: "native" (vendored runtime wrapper) or "external"
+        /// (`codex` binary on PATH).
+        #[serde(default = "default_codex_runtime_engine")]
+        runtime_engine: String,
         /// Approval mode: "suggest", "auto-edit", or "full-auto".
         #[serde(default = "default_codex_approval")]
         approval_mode: String,
@@ -696,6 +700,10 @@ pub enum AgentToolConfig {
 
 fn default_codex_approval() -> String {
     "suggest".to_string()
+}
+
+fn default_codex_runtime_engine() -> String {
+    "native".to_string()
 }
 
 /// When to restart an agent after it exits.
@@ -872,9 +880,7 @@ pub fn validate_lane_name(name: &str) -> Result<(), String> {
         return Err("lane name cannot be empty".into());
     }
     if name.len() > MAX_LANE_NAME_LEN {
-        return Err(format!(
-            "lane name exceeds {MAX_LANE_NAME_LEN} characters"
-        ));
+        return Err(format!("lane name exceeds {MAX_LANE_NAME_LEN} characters"));
     }
     if name.contains("..") || name.contains('/') || name.contains('\\') {
         return Err("lane name must not contain path traversal sequences".into());
@@ -883,9 +889,7 @@ pub fn validate_lane_name(name: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
-        return Err(
-            "lane name may only contain letters, digits, hyphens, and underscores".into(),
-        );
+        return Err("lane name may only contain letters, digits, hyphens, and underscores".into());
     }
     Ok(())
 }
@@ -954,10 +958,7 @@ impl DaemonConfig {
         }
         for lane in &config.lanes {
             validate_lane_name(&lane.name).map_err(|e| {
-                crate::AegisError::DaemonError(format!(
-                    "invalid lane name {:?}: {e}",
-                    lane.name
-                ))
+                crate::AegisError::DaemonError(format!("invalid lane name {:?}: {e}", lane.name))
             })?;
         }
 
@@ -1035,6 +1036,7 @@ mod tests {
                 extra_args: vec!["--verbose".into()],
             },
             AgentToolConfig::Codex {
+                runtime_engine: "native".into(),
                 approval_mode: "full-auto".into(),
                 one_shot: true,
                 extra_args: vec![],
@@ -1062,6 +1064,18 @@ mod tests {
     #[test]
     fn restart_policy_default() {
         assert_eq!(RestartPolicy::default(), RestartPolicy::OnFailure);
+    }
+
+    #[test]
+    fn codex_runtime_engine_defaults_to_native() {
+        let json = r#"{"type":"codex","approval_mode":"suggest","one_shot":false,"extra_args":[]}"#;
+        let parsed: AgentToolConfig = serde_json::from_str(json).unwrap();
+        match parsed {
+            AgentToolConfig::Codex { runtime_engine, .. } => {
+                assert_eq!(runtime_engine, "native");
+            }
+            _ => panic!("expected codex tool config"),
+        }
     }
 
     #[test]

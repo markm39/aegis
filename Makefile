@@ -23,7 +23,7 @@ VERSION = $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 TARGET = $(shell rustc -vV | grep host | cut -d' ' -f2)
 BINARY = target/release/aegis
 
-.PHONY: build install uninstall completions manpage test lint check clean dist
+.PHONY: build install uninstall completions manpage test lint check clean dist sync-coding-runtime check-coding-runtime
 
 build:
 	cargo build --release
@@ -86,3 +86,9 @@ dist: $(BINARY) completions manpage
 	cp man/aegis.1 dist/
 	cd dist && shasum -a 256 aegis-*.tar.gz > aegis-$(VERSION)-checksums.sha256
 	@echo "Release artifacts in ./dist/"
+
+sync-coding-runtime:
+	./scripts/sync-coding-runtime.sh
+
+check-coding-runtime:
+	./scripts/sync-coding-runtime.sh --check

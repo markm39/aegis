@@ -60,16 +60,66 @@ struct SkillCommand {
 
 /// All available skill commands. Looked up in `execute_command()`.
 const SKILL_COMMANDS: &[SkillCommand] = &[
-    SkillCommand { name: "debug", prompt: skill_prompts::DEBUG, needs_arg: true, arg_hint: "Usage: /debug <error message or description>" },
-    SkillCommand { name: "doc", prompt: skill_prompts::DOC, needs_arg: true, arg_hint: "Usage: /doc <file or area>" },
-    SkillCommand { name: "explain", prompt: skill_prompts::EXPLAIN, needs_arg: true, arg_hint: "Usage: /explain <file, function, or concept>" },
-    SkillCommand { name: "refactor", prompt: skill_prompts::REFACTOR, needs_arg: true, arg_hint: "Usage: /refactor <file or area>" },
-    SkillCommand { name: "test", prompt: skill_prompts::TEST, needs_arg: true, arg_hint: "Usage: /test <file or function>" },
-    SkillCommand { name: "review", prompt: skill_prompts::REVIEW, needs_arg: false, arg_hint: "Usage: /review [file or description]" },
-    SkillCommand { name: "security", prompt: skill_prompts::SECURITY, needs_arg: true, arg_hint: "Usage: /security <file or area>" },
-    SkillCommand { name: "perf", prompt: skill_prompts::PERF, needs_arg: true, arg_hint: "Usage: /perf <file or area>" },
-    SkillCommand { name: "panel-review", prompt: skill_prompts::PANEL_REVIEW, needs_arg: true, arg_hint: "Usage: /panel-review <topic or question>" },
-    SkillCommand { name: "link-worktree", prompt: skill_prompts::LINK_WORKTREE, needs_arg: true, arg_hint: "Usage: /link-worktree <worktree-path>" },
+    SkillCommand {
+        name: "debug",
+        prompt: skill_prompts::DEBUG,
+        needs_arg: true,
+        arg_hint: "Usage: /debug <error message or description>",
+    },
+    SkillCommand {
+        name: "doc",
+        prompt: skill_prompts::DOC,
+        needs_arg: true,
+        arg_hint: "Usage: /doc <file or area>",
+    },
+    SkillCommand {
+        name: "explain",
+        prompt: skill_prompts::EXPLAIN,
+        needs_arg: true,
+        arg_hint: "Usage: /explain <file, function, or concept>",
+    },
+    SkillCommand {
+        name: "refactor",
+        prompt: skill_prompts::REFACTOR,
+        needs_arg: true,
+        arg_hint: "Usage: /refactor <file or area>",
+    },
+    SkillCommand {
+        name: "test",
+        prompt: skill_prompts::TEST,
+        needs_arg: true,
+        arg_hint: "Usage: /test <file or function>",
+    },
+    SkillCommand {
+        name: "review",
+        prompt: skill_prompts::REVIEW,
+        needs_arg: false,
+        arg_hint: "Usage: /review [file or description]",
+    },
+    SkillCommand {
+        name: "security",
+        prompt: skill_prompts::SECURITY,
+        needs_arg: true,
+        arg_hint: "Usage: /security <file or area>",
+    },
+    SkillCommand {
+        name: "perf",
+        prompt: skill_prompts::PERF,
+        needs_arg: true,
+        arg_hint: "Usage: /perf <file or area>",
+    },
+    SkillCommand {
+        name: "panel-review",
+        prompt: skill_prompts::PANEL_REVIEW,
+        needs_arg: true,
+        arg_hint: "Usage: /panel-review <topic or question>",
+    },
+    SkillCommand {
+        name: "link-worktree",
+        prompt: skill_prompts::LINK_WORKTREE,
+        needs_arg: true,
+        arg_hint: "Usage: /link-worktree <worktree-path>",
+    },
 ];
 
 /// Result of a skill execution dispatched to a background thread.
@@ -178,9 +228,7 @@ enum AgentLoopEvent {
         result: String,
     },
     /// LLM needs approval for a tool before executing it.
-    ToolApprovalNeeded {
-        tool_call: LlmToolCall,
-    },
+    ToolApprovalNeeded { tool_call: LlmToolCall },
     /// An error occurred in the loop.
     Error(String),
     /// The agentic loop finished (all tool calls done, final response received).
@@ -198,7 +246,13 @@ enum AgentLoopEvent {
 static NEXT_TASK_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Tools that are auto-approved (read-only, safe operations).
-const SAFE_TOOLS: &[&str] = &["read_file", "glob_search", "grep_search", "file_search", "task"];
+const SAFE_TOOLS: &[&str] = &[
+    "read_file",
+    "glob_search",
+    "grep_search",
+    "file_search",
+    "task",
+];
 
 /// Check whether a tool should be auto-approved.
 fn is_safe_tool(name: &str) -> bool {
@@ -237,33 +291,68 @@ fn classify_tool_risk(tool_name: &str, input: &serde_json::Value) -> ActionRisk 
 /// Destructive commands (rm -rf, force push, sudo) are High risk.
 /// Git mutations and general commands default to Medium.
 fn classify_bash_risk(input: &serde_json::Value) -> ActionRisk {
-    let cmd = input
-        .get("command")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
     let read_only_prefixes = [
-        "cat ", "ls ", "ls\n", "pwd", "echo ", "head ", "tail ", "wc ",
-        "grep ", "rg ", "find ", "which ", "type ", "file ",
-        "git status", "git log", "git diff", "git branch",
-        "git show", "git rev-parse", "cargo clippy", "cargo check",
-        "cargo test", "cargo build", "npm test", "npm run",
-        "python -c", "node -e",
+        "cat ",
+        "ls ",
+        "ls\n",
+        "pwd",
+        "echo ",
+        "head ",
+        "tail ",
+        "wc ",
+        "grep ",
+        "rg ",
+        "find ",
+        "which ",
+        "type ",
+        "file ",
+        "git status",
+        "git log",
+        "git diff",
+        "git branch",
+        "git show",
+        "git rev-parse",
+        "cargo clippy",
+        "cargo check",
+        "cargo test",
+        "cargo build",
+        "npm test",
+        "npm run",
+        "python -c",
+        "node -e",
     ];
     if read_only_prefixes.iter().any(|p| cmd.starts_with(p)) {
         return ActionRisk::Low;
     }
 
     let destructive_patterns = [
-        "rm -rf", "rm -r", "rmdir", "git push --force", "git push -f",
-        "git reset --hard", "git clean", "drop table", "drop database",
-        "docker rm", "kill -9", "sudo ", "chmod 777",
+        "rm -rf",
+        "rm -r",
+        "rmdir",
+        "git push --force",
+        "git push -f",
+        "git reset --hard",
+        "git clean",
+        "drop table",
+        "drop database",
+        "docker rm",
+        "kill -9",
+        "sudo ",
+        "chmod 777",
     ];
     if destructive_patterns.iter().any(|p| cmd.contains(p)) {
         return ActionRisk::High;
     }
 
-    let git_write = ["git add", "git commit", "git push", "git checkout", "git stash"];
+    let git_write = [
+        "git add",
+        "git commit",
+        "git push",
+        "git checkout",
+        "git stash",
+    ];
     if git_write.iter().any(|p| cmd.starts_with(p)) {
         return ActionRisk::Medium;
     }
@@ -491,15 +580,47 @@ pub struct ChatApp {
 
 /// Commands recognized by the minimal command bar.
 const COMMANDS: &[&str] = &[
-    "quit", "q", "clear", "new", "compact", "abort", "model", "provider", "help", "usage",
-    "think", "think off", "think low", "think medium", "think high",
-    "auto", "auto off", "auto edits", "auto high", "auto full",
-    "save", "resume", "sessions", "settings",
-    "daemon start", "daemon stop", "daemon status",
-    "daemon restart", "daemon reload", "daemon init",
+    "quit",
+    "q",
+    "clear",
+    "new",
+    "compact",
+    "abort",
+    "model",
+    "provider",
+    "help",
+    "usage",
+    "think",
+    "think off",
+    "think low",
+    "think medium",
+    "think high",
+    "auto",
+    "auto off",
+    "auto edits",
+    "auto high",
+    "auto full",
+    "save",
+    "resume",
+    "sessions",
+    "settings",
+    "daemon start",
+    "daemon stop",
+    "daemon status",
+    "daemon restart",
+    "daemon reload",
+    "daemon init",
     // Skill commands
-    "debug", "doc", "explain", "refactor", "test",
-    "review", "security", "perf", "panel-review", "link-worktree",
+    "debug",
+    "doc",
+    "explain",
+    "refactor",
+    "test",
+    "review",
+    "security",
+    "perf",
+    "panel-review",
+    "link-worktree",
 ];
 
 impl ChatApp {
@@ -691,10 +812,8 @@ impl ChatApp {
                             .last()
                             .is_some_and(|m| m.role == MessageRole::Assistant);
                         if !already_streaming {
-                            self.messages.push(ChatMessage::new(
-                                MessageRole::Assistant,
-                                resp.content,
-                            ));
+                            self.messages
+                                .push(ChatMessage::new(MessageRole::Assistant, resp.content));
                         }
                     }
                     self.scroll_offset = 0;
@@ -710,10 +829,8 @@ impl ChatApp {
                             msg.content.push_str(&text);
                         }
                     } else {
-                        self.messages.push(ChatMessage::new(
-                            MessageRole::Assistant,
-                            text,
-                        ));
+                        self.messages
+                            .push(ChatMessage::new(MessageRole::Assistant, text));
                     }
                     self.scroll_offset = 0;
                 }
@@ -818,9 +935,7 @@ impl ChatApp {
         };
 
         // Inject as the first user message
-        let msg = format!(
-            "[First run -- reading BOOTSTRAP.md]\n\n{content}"
-        );
+        let msg = format!("[First run -- reading BOOTSTRAP.md]\n\n{content}");
         self.conversation.push(LlmMessage::user(msg.clone()));
         self.messages.push(ChatMessage::new(
             MessageRole::System,
@@ -1401,10 +1516,8 @@ impl ChatApp {
         for msg in &self.conversation {
             match msg.role {
                 aegis_types::llm::LlmRole::User => {
-                    self.messages.push(ChatMessage::new(
-                        MessageRole::User,
-                        msg.content.clone(),
-                    ));
+                    self.messages
+                        .push(ChatMessage::new(MessageRole::User, msg.content.clone()));
                 }
                 aegis_types::llm::LlmRole::Assistant => {
                     self.messages.push(ChatMessage::new(
@@ -1427,16 +1540,11 @@ impl ChatApp {
         }
 
         // Show the command in chat.
-        self.messages.push(ChatMessage::new(
-            MessageRole::User,
-            format!("!{cmd}"),
-        ));
+        self.messages
+            .push(ChatMessage::new(MessageRole::User, format!("!{cmd}")));
 
         // Run locally via the user's shell.
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output();
+        let output = std::process::Command::new("sh").arg("-c").arg(cmd).output();
 
         let result = match output {
             Ok(out) => {
@@ -1473,10 +1581,8 @@ impl ChatApp {
             Err(e) => format!("[error] {e}"),
         };
 
-        self.messages.push(ChatMessage::new(
-            MessageRole::System,
-            result,
-        ));
+        self.messages
+            .push(ChatMessage::new(MessageRole::System, result));
         self.scroll_offset = 0;
     }
 
@@ -1590,8 +1696,8 @@ impl ChatApp {
                 KeyCode::Char('d') | KeyCode::Delete => {
                     // Delete the selected session file.
                     if let Some(meta) = items.get(selected) {
-                        let path = persistence::conversations_dir()
-                            .join(format!("{}.jsonl", meta.id));
+                        let path =
+                            persistence::conversations_dir().join(format!("{}.jsonl", meta.id));
                         let _ = std::fs::remove_file(&path);
                         // Rebuild the list.
                         let new_items: Vec<_> = items
@@ -1657,11 +1763,17 @@ impl ChatApp {
             }
             1 => {
                 // Cycle thinking: off -> low -> medium -> high -> off
-                let levels: &[Option<u32>] =
-                    &[None, Some(1024), Some(4096), Some(16384)];
-                let current = levels.iter().position(|l| *l == self.thinking_budget).unwrap_or(0);
+                let levels: &[Option<u32>] = &[None, Some(1024), Some(4096), Some(16384)];
+                let current = levels
+                    .iter()
+                    .position(|l| *l == self.thinking_budget)
+                    .unwrap_or(0);
                 let next = if reverse {
-                    if current == 0 { levels.len() - 1 } else { current - 1 }
+                    if current == 0 {
+                        levels.len() - 1
+                    } else {
+                        current - 1
+                    }
                 } else {
                     (current + 1) % levels.len()
                 };
@@ -1680,7 +1792,11 @@ impl ChatApp {
                     .position(|p| *p == self.approval_profile)
                     .unwrap_or(0);
                 let next = if reverse {
-                    if current == 0 { profiles.len() - 1 } else { current - 1 }
+                    if current == 0 {
+                        profiles.len() - 1
+                    } else {
+                        current - 1
+                    }
                 } else {
                     (current + 1) % profiles.len()
                 };
@@ -1722,10 +1838,7 @@ impl ChatApp {
                 self.set_result("No saved sessions.");
             }
             Ok(items) => {
-                self.overlay = Some(Overlay::SessionPicker {
-                    items,
-                    selected: 0,
-                });
+                self.overlay = Some(Overlay::SessionPicker { items, selected: 0 });
             }
             Err(e) => {
                 self.set_result(format!("Failed to list sessions: {e}"));
@@ -1819,22 +1932,15 @@ impl ChatApp {
                         if let Some(pinfo) = aegis_types::providers::provider_by_id(pid) {
                             let detected = aegis_types::providers::detect_provider(pinfo);
                             if !detected.available {
-                                warning = format!(
-                                    " (warning: {} not set)",
-                                    pinfo.env_var,
-                                );
+                                warning = format!(" (warning: {} not set)", pinfo.env_var,);
                             }
                         }
                     }
 
                     let old = self.model.clone();
                     self.model = model_name.clone();
-                    let suffix = provider_id
-                        .map(|p| format!(" ({p})"))
-                        .unwrap_or_default();
-                    self.set_result(format!(
-                        "Model: {old} -> {model_name}{suffix}{warning}"
-                    ));
+                    let suffix = provider_id.map(|p| format!(" ({p})")).unwrap_or_default();
+                    self.set_result(format!("Model: {old} -> {model_name}{suffix}{warning}"));
                 }
             }
             "model" => {
@@ -1898,8 +2004,7 @@ impl ChatApp {
                     match crate::commands::daemon::stop_quiet() {
                         Ok(msg) => {
                             self.set_result(msg);
-                            self.last_poll =
-                                Instant::now() - std::time::Duration::from_secs(10);
+                            self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
                             self.last_error = Some(format!("Failed to stop daemon: {e}"));
@@ -1921,8 +2026,7 @@ impl ChatApp {
                     match crate::commands::daemon::restart_quiet() {
                         Ok(msg) => {
                             self.set_result(msg);
-                            self.last_poll =
-                                Instant::now() - std::time::Duration::from_secs(10);
+                            self.last_poll = Instant::now() - std::time::Duration::from_secs(10);
                         }
                         Err(e) => {
                             self.last_error = Some(format!("Failed to restart daemon: {e}"));
@@ -2060,9 +2164,7 @@ impl ChatApp {
                     ApprovalProfile::AutoApprove(ActionRisk::Medium) => {
                         "auto-edits (up to medium risk)"
                     }
-                    ApprovalProfile::AutoApprove(ActionRisk::High) => {
-                        "auto-high (up to high risk)"
-                    }
+                    ApprovalProfile::AutoApprove(ActionRisk::High) => "auto-high (up to high risk)",
                     ApprovalProfile::AutoApprove(_) => "auto-custom",
                     ApprovalProfile::FullAuto => "full-auto (everything)",
                 };
@@ -2072,13 +2174,11 @@ impl ChatApp {
             }
             other => {
                 // 1. Check hardcoded prompt-based skill commands.
-                if let Some(skill_cmd) = SKILL_COMMANDS.iter().find(|sc| {
-                    other == sc.name || other.starts_with(&format!("{} ", sc.name))
-                }) {
-                    let arg = other
-                        .strip_prefix(skill_cmd.name)
-                        .unwrap_or("")
-                        .trim();
+                if let Some(skill_cmd) = SKILL_COMMANDS
+                    .iter()
+                    .find(|sc| other == sc.name || other.starts_with(&format!("{} ", sc.name)))
+                {
+                    let arg = other.strip_prefix(skill_cmd.name).unwrap_or("").trim();
                     if arg.is_empty() && skill_cmd.needs_arg {
                         self.set_result(skill_cmd.arg_hint);
                     } else {
@@ -2092,7 +2192,9 @@ impl ChatApp {
                     self.dispatch_dynamic_skill(other);
                     return;
                 }
-                self.set_result(format!("Unknown command: '{other}'. Type /help for commands."));
+                self.set_result(format!(
+                    "Unknown command: '{other}'. Type /help for commands."
+                ));
             }
         }
     }
@@ -2155,10 +2257,7 @@ impl ChatApp {
             format!("Running /{cmd_name} ..."),
         ));
 
-        let args: Vec<String> = args_raw
-            .split_whitespace()
-            .map(String::from)
-            .collect();
+        let args: Vec<String> = args_raw.split_whitespace().map(String::from).collect();
         let parameters = serde_json::json!({
             "args": args,
             "raw": format!("/{input}"),
@@ -2190,13 +2289,8 @@ impl ChatApp {
                 }
             };
             let executor = aegis_skills::SkillExecutor::new();
-            let result = rt.block_on(executor.execute(
-                &manifest,
-                &skill_dir,
-                &action,
-                parameters,
-                context,
-            ));
+            let result =
+                rt.block_on(executor.execute(&manifest, &skill_dir, &action, parameters, context));
             let _ = tx.send(SkillExecResult {
                 command_name: cmd_name,
                 output: result.map_err(|e| format!("{e:#}")),
@@ -2564,10 +2658,7 @@ fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
             .unwrap_or("?")
             .to_string(),
         "apply_patch" => {
-            let patch = input
-                .get("patch")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let patch = input.get("patch").and_then(|v| v.as_str()).unwrap_or("");
             // Show the first file operation from the patch.
             patch
                 .lines()
@@ -2702,7 +2793,8 @@ fn run_agent_loop(
         };
 
         // Check if the LLM wants to call tools.
-        let wants_tools = resp.stop_reason == Some(StopReason::ToolUse) && !resp.tool_calls.is_empty();
+        let wants_tools =
+            resp.stop_reason == Some(StopReason::ToolUse) && !resp.tool_calls.is_empty();
 
         if !wants_tools {
             // Final response -- send it and finish.
@@ -2853,9 +2945,7 @@ fn try_streaming_call(
 }
 
 /// Parse an LLM response from a daemon response.
-fn parse_llm_response(
-    result: Result<DaemonResponse, String>,
-) -> Result<LlmResponse, String> {
+fn parse_llm_response(result: Result<DaemonResponse, String>) -> Result<LlmResponse, String> {
     match result {
         Ok(resp) if resp.ok => {
             if let Some(data) = resp.data {
@@ -3111,8 +3201,8 @@ fn send_with_timeout(
         .try_clone()
         .map_err(|e| format!("failed to clone stream: {e}"))?;
 
-    let mut json = serde_json::to_string(command)
-        .map_err(|e| format!("failed to serialize command: {e}"))?;
+    let mut json =
+        serde_json::to_string(command).map_err(|e| format!("failed to serialize command: {e}"))?;
     json.push('\n');
     writer
         .write_all(json.as_bytes())
@@ -3168,7 +3258,10 @@ fn format_skill_output(command: &str, output: &aegis_skills::SkillOutput) -> Str
 
     // Note artifacts.
     if !output.artifacts.is_empty() {
-        text.push_str(&format!("\n({} artifact(s) produced)", output.artifacts.len()));
+        text.push_str(&format!(
+            "\n({} artifact(s) produced)",
+            output.artifacts.len()
+        ));
     }
 
     text
@@ -3311,6 +3404,15 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     let events = EventHandler::new(TICK_RATE_MS);
     let mut app = ChatApp::new(Some(client), model);
     app.bootstrap_pending = is_first_run;
+    if aegis_types::providers::scan_providers()
+        .into_iter()
+        .all(|p| !p.available)
+    {
+        app.messages.push(ChatMessage::new(
+            MessageRole::System,
+            "No LLM provider is configured yet. Use /provider to see detected options, then run `aegis auth add <provider> --method oauth` or set that provider API key env var. Local backends such as Ollama are auto-detected when running.".to_string(),
+        ));
+    }
 
     // Apply --auto CLI flag if provided.
     if let Some(mode) = auto_mode {
@@ -3583,10 +3685,8 @@ mod tests {
     fn clear_command_clears_conversation() {
         let mut app = make_app();
         app.conversation.push(LlmMessage::user("hello"));
-        app.messages.push(ChatMessage::new(
-            MessageRole::User,
-            "hello".to_string(),
-        ));
+        app.messages
+            .push(ChatMessage::new(MessageRole::User, "hello".to_string()));
         app.scroll_offset = 5;
 
         app.execute_command("clear");
@@ -3616,7 +3716,11 @@ mod tests {
     fn unknown_command_shows_error() {
         let mut app = make_app();
         app.execute_command("foobar");
-        assert!(app.command_result.as_ref().unwrap().contains("Unknown command"));
+        assert!(app
+            .command_result
+            .as_ref()
+            .unwrap()
+            .contains("Unknown command"));
     }
 
     #[test]
@@ -3734,10 +3838,7 @@ mod tests {
         app.poll_llm();
 
         assert_eq!(app.messages.len(), 1);
-        assert!(matches!(
-            app.messages[0].role,
-            MessageRole::ToolCall { .. }
-        ));
+        assert!(matches!(app.messages[0].role, MessageRole::ToolCall { .. }));
     }
 
     #[test]
@@ -3833,7 +3934,10 @@ mod tests {
             "ls -la"
         );
         assert_eq!(
-            summarize_tool_input("read_file", &serde_json::json!({"file_path": "/tmp/test.txt"})),
+            summarize_tool_input(
+                "read_file",
+                &serde_json::json!({"file_path": "/tmp/test.txt"})
+            ),
             "/tmp/test.txt"
         );
         assert_eq!(
@@ -3879,7 +3983,10 @@ mod tests {
     #[test]
     fn classify_read_file_is_informational() {
         let input = serde_json::json!({"file_path": "/tmp/test.rs"});
-        assert_eq!(classify_tool_risk("read_file", &input), ActionRisk::Informational);
+        assert_eq!(
+            classify_tool_risk("read_file", &input),
+            ActionRisk::Informational
+        );
     }
 
     #[test]
@@ -3945,7 +4052,10 @@ mod tests {
     #[test]
     fn classify_unknown_tool_is_high() {
         let input = serde_json::json!({});
-        assert_eq!(classify_tool_risk("some_new_tool", &input), ActionRisk::High);
+        assert_eq!(
+            classify_tool_risk("some_new_tool", &input),
+            ActionRisk::High
+        );
     }
 
     // -- Approval profile logic ---------------------------------------------
@@ -3954,8 +4064,18 @@ mod tests {
     fn manual_profile_only_approves_safe_tools() {
         let profile = ApprovalProfile::Manual;
         let bash_input = serde_json::json!({"command": "ls"});
-        assert!(!should_auto_approve_tool("bash", &bash_input, false, &profile));
-        assert!(should_auto_approve_tool("read_file", &serde_json::json!({}), false, &profile));
+        assert!(!should_auto_approve_tool(
+            "bash",
+            &bash_input,
+            false,
+            &profile
+        ));
+        assert!(should_auto_approve_tool(
+            "read_file",
+            &serde_json::json!({}),
+            false,
+            &profile
+        ));
     }
 
     #[test]
@@ -3969,14 +4089,21 @@ mod tests {
     fn auto_edits_approves_medium_risk() {
         let profile = ApprovalProfile::AutoApprove(ActionRisk::Medium);
         let write_input = serde_json::json!({"file_path": "/tmp/x", "content": "y"});
-        assert!(should_auto_approve_tool("write_file", &write_input, false, &profile));
+        assert!(should_auto_approve_tool(
+            "write_file",
+            &write_input,
+            false,
+            &profile
+        ));
     }
 
     #[test]
     fn auto_edits_blocks_high_risk() {
         let profile = ApprovalProfile::AutoApprove(ActionRisk::Medium);
         let rm_input = serde_json::json!({"command": "rm -rf /tmp"});
-        assert!(!should_auto_approve_tool("bash", &rm_input, false, &profile));
+        assert!(!should_auto_approve_tool(
+            "bash", &rm_input, false, &profile
+        ));
     }
 
     #[test]
@@ -3991,7 +4118,12 @@ mod tests {
         let profile = ApprovalProfile::Manual;
         let bash_input = serde_json::json!({"command": "rm -rf /"});
         // When user pressed 'a', auto_approve_all is true -- overrides profile.
-        assert!(should_auto_approve_tool("bash", &bash_input, true, &profile));
+        assert!(should_auto_approve_tool(
+            "bash",
+            &bash_input,
+            true,
+            &profile
+        ));
     }
 
     // -- Parse approval mode ------------------------------------------------
@@ -4030,7 +4162,10 @@ mod tests {
             approval_profile_label(&ApprovalProfile::AutoApprove(ActionRisk::High)),
             "auto-high"
         );
-        assert_eq!(approval_profile_label(&ApprovalProfile::FullAuto), "full-auto");
+        assert_eq!(
+            approval_profile_label(&ApprovalProfile::FullAuto),
+            "full-auto"
+        );
     }
 
     // -- /auto commands -----------------------------------------------------

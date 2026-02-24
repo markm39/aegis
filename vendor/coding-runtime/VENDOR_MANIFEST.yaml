@@ -1,0 +1,25 @@
+version: 1
+upstream_name: codex
+upstream_source: /Users/markmiller/codex-mirror
+upstream_sha: bfe622f4955b8a25ad64253b7ebb4f80a452c904
+synced_at_utc: 2026-02-24T14:51:07Z
+sync_script: scripts/sync-coding-runtime.sh
+layout: neutral-vendor-path
+vendor_path: vendor/coding-runtime
+included_top_level_dirs:
+  - .codex
+  - codex-cli
+  - codex-rs
+  - docs
+  - patches
+  - scripts
+  - sdk
+  - shell-tool-mcp
+  - third_party
+excluded_paths:
+  - .git/
+  - .github/
+  - .vscode/
+  - .devcontainer/
+  - node_modules/
+local_patches: []

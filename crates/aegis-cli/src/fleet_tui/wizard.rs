@@ -739,6 +739,7 @@ impl AddAgentWizard {
                 extra_args: vec![],
             },
             ToolChoice::Codex => AgentToolConfig::Codex {
+                runtime_engine: "native".into(),
                 approval_mode: "suggest".into(),
                 one_shot: false,
                 extra_args: vec![],

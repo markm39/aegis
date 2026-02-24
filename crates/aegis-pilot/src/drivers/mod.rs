@@ -30,11 +30,13 @@ pub fn create_driver(config: &AgentToolConfig, agent_name: Option<&str>) -> Box<
             extra_args: extra_args.clone(),
         }),
         AgentToolConfig::Codex {
+            runtime_engine,
             approval_mode,
             one_shot,
             extra_args,
         } => Box::new(codex::CodexDriver {
             aegis_agent_name: agent_name.map(|s| s.to_string()),
+            runtime_engine: runtime_engine.clone(),
             approval_mode: approval_mode.clone(),
             one_shot: *one_shot,
             extra_args: extra_args.clone(),
@@ -80,6 +82,7 @@ mod tests {
     #[test]
     fn create_codex_driver() {
         let config = AgentToolConfig::Codex {
+            runtime_engine: "native".into(),
             approval_mode: "full-auto".into(),
             one_shot: false,
             extra_args: vec![],

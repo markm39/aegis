@@ -198,10 +198,8 @@ fn check_configuration(aegis_dir: &Path, fix: bool) -> Vec<CheckResult> {
                 aegis_dir.display()
             ))),
             Err(e) => results.push(
-                CheckResult::fail(format!(
-                    "Could not create config directory: {e}"
-                ))
-                .with_hint(format!("mkdir -p {}", aegis_dir.display())),
+                CheckResult::fail(format!("Could not create config directory: {e}"))
+                    .with_hint(format!("mkdir -p {}", aegis_dir.display())),
             ),
         }
     } else {
@@ -249,20 +247,14 @@ fn check_configuration(aegis_dir: &Path, fix: bool) -> Vec<CheckResult> {
         }
     } else {
         results.push(
-            CheckResult::warn(format!(
-                "daemon.toml not found ({})",
-                daemon_toml.display()
-            ))
-            .with_hint("Run `aegis daemon init` or `aegis doctor --fix` to create one"),
+            CheckResult::warn(format!("daemon.toml not found ({})", daemon_toml.display()))
+                .with_hint("Run `aegis daemon init` or `aegis doctor --fix` to create one"),
         );
     }
 
     // 3. Policy files exist (check daemon config agents for policy_dir)
     if let Some(daemon_cfg) = load_daemon_config() {
-        let has_policy_dirs = daemon_cfg
-            .agents
-            .iter()
-            .any(|a| a.policy_dir.is_some());
+        let has_policy_dirs = daemon_cfg.agents.iter().any(|a| a.policy_dir.is_some());
         if has_policy_dirs {
             for agent in &daemon_cfg.agents {
                 if let Some(ref policy_dir) = agent.policy_dir {
@@ -279,7 +271,9 @@ fn check_configuration(aegis_dir: &Path, fix: bool) -> Vec<CheckResult> {
                                     "Agent '{}' policy dir exists but contains no .cedar files",
                                     agent.name
                                 ))
-                                .with_hint("Add Cedar policy files or remove policy_dir from agent config"),
+                                .with_hint(
+                                    "Add Cedar policy files or remove policy_dir from agent config",
+                                ),
                             );
                         }
                     } else {
@@ -382,9 +376,8 @@ fn check_runtime(aegis_dir: &Path) -> Vec<CheckResult> {
             if let Ok(resp) = client.send(&aegis_control::daemon::DaemonCommand::Ping) {
                 if resp.ok {
                     if let Some(data) = resp.data {
-                        if let Ok(ping) = serde_json::from_value::<
-                            aegis_control::daemon::DaemonPing,
-                        >(data)
+                        if let Ok(ping) =
+                            serde_json::from_value::<aegis_control::daemon::DaemonPing>(data)
                         {
                             let uptime = format_uptime(ping.uptime_secs);
                             results.push(CheckResult::ok(format!(
@@ -422,33 +415,111 @@ fn check_runtime(aegis_dir: &Path) -> Vec<CheckResult> {
     // 7. Agent binaries available
     if let Some(daemon_cfg) = load_daemon_config() {
         for agent in &daemon_cfg.agents {
-            let (binary, label) = match &agent.tool {
+            match &agent.tool {
                 aegis_types::daemon::AgentToolConfig::ClaudeCode { .. } => {
-                    ("claude", "ClaudeCode")
+                    let binary = "claude";
+                    if binary_exists(binary) {
+                        results.push(CheckResult::ok(format!(
+                            "Agent '{}' binary found: {binary} (ClaudeCode)",
+                            agent.name
+                        )));
+                    } else {
+                        results.push(
+                            CheckResult::fail(format!(
+                                "Agent '{}' binary not found: {binary}",
+                                agent.name
+                            ))
+                            .with_hint(format!(
+                                "Install ClaudeCode or remove agent '{}' from config",
+                                agent.name
+                            )),
+                        );
+                    }
                 }
-                aegis_types::daemon::AgentToolConfig::Codex { .. } => ("codex", "Codex"),
-                aegis_types::daemon::AgentToolConfig::OpenClaw { .. } => ("openclaw", "OpenClaw"),
+                aegis_types::daemon::AgentToolConfig::Codex { runtime_engine, .. } => {
+                    if runtime_engine != "external" {
+                        if binary_exists("cargo") {
+                            results.push(CheckResult::ok(format!(
+                                "Agent '{}' runtime available: cargo (Codex native)",
+                                agent.name
+                            )));
+                        } else if binary_exists("codex") {
+                            results.push(CheckResult::ok(format!(
+                                "Agent '{}' runtime available: codex (external fallback)",
+                                agent.name
+                            )));
+                        } else {
+                            results.push(
+                                CheckResult::fail(format!(
+                                    "Agent '{}' native Codex runtime unavailable (need cargo or codex)",
+                                    agent.name
+                                ))
+                                .with_hint(format!(
+                                    "Install Rust (cargo) for native runtime or install codex for fallback; otherwise remove agent '{}'",
+                                    agent.name
+                                )),
+                            );
+                        }
+                    } else {
+                        let binary = "codex";
+                        if binary_exists(binary) {
+                            results.push(CheckResult::ok(format!(
+                                "Agent '{}' binary found: {binary} (Codex external)",
+                                agent.name
+                            )));
+                        } else {
+                            results.push(
+                                CheckResult::fail(format!(
+                                    "Agent '{}' binary not found: {binary}",
+                                    agent.name
+                                ))
+                                .with_hint(format!(
+                                    "Install Codex CLI or switch '{}' to runtime_engine='native'",
+                                    agent.name
+                                )),
+                            );
+                        }
+                    }
+                }
+                aegis_types::daemon::AgentToolConfig::OpenClaw { .. } => {
+                    let binary = "openclaw";
+                    if binary_exists(binary) {
+                        results.push(CheckResult::ok(format!(
+                            "Agent '{}' binary found: {binary} (OpenClaw)",
+                            agent.name
+                        )));
+                    } else {
+                        results.push(
+                            CheckResult::fail(format!(
+                                "Agent '{}' binary not found: {binary}",
+                                agent.name
+                            ))
+                            .with_hint(format!(
+                                "Install OpenClaw or remove agent '{}' from config",
+                                agent.name
+                            )),
+                        );
+                    }
+                }
                 aegis_types::daemon::AgentToolConfig::Custom { command, .. } => {
-                    (command.as_str(), "Custom")
+                    if binary_exists(command) {
+                        results.push(CheckResult::ok(format!(
+                            "Agent '{}' binary found: {} (Custom)",
+                            agent.name, command
+                        )));
+                    } else {
+                        results.push(
+                            CheckResult::fail(format!(
+                                "Agent '{}' binary not found: {}",
+                                agent.name, command
+                            ))
+                            .with_hint(format!(
+                                "Install the custom runtime or remove agent '{}' from config",
+                                agent.name
+                            )),
+                        );
+                    }
                 }
-            };
-
-            if binary_exists(binary) {
-                results.push(CheckResult::ok(format!(
-                    "Agent '{}' binary found: {binary} ({label})",
-                    agent.name
-                )));
-            } else {
-                results.push(
-                    CheckResult::fail(format!(
-                        "Agent '{}' binary not found: {binary}",
-                        agent.name
-                    ))
-                    .with_hint(format!(
-                        "Install {label} or remove agent '{}' from config",
-                        agent.name
-                    )),
-                );
             }
         }
     }
@@ -503,11 +574,8 @@ fn check_audit(config: &aegis_types::AegisConfig) -> Vec<CheckResult> {
                 }
                 Ok(r) => {
                     results.push(
-                        CheckResult::fail(format!(
-                            "Audit chain integrity: FAILED - {}",
-                            r.message
-                        ))
-                        .with_hint("The audit hash chain has been tampered with or corrupted"),
+                        CheckResult::fail(format!("Audit chain integrity: FAILED - {}", r.message))
+                            .with_hint("The audit hash chain has been tampered with or corrupted"),
                     );
                 }
                 Err(e) => {
@@ -520,11 +588,10 @@ fn check_audit(config: &aegis_types::AegisConfig) -> Vec<CheckResult> {
         }
         Err(e) => {
             results.push(
-                CheckResult::fail(format!("Cannot open audit database: {e}"))
-                    .with_hint(format!(
-                        "Check permissions on {}",
-                        config.ledger_path.display()
-                    )),
+                CheckResult::fail(format!("Cannot open audit database: {e}")).with_hint(format!(
+                    "Check permissions on {}",
+                    config.ledger_path.display()
+                )),
             );
         }
     }
@@ -593,12 +660,9 @@ fn check_environment(daemon_cfg: &Option<DaemonConfig>) -> Vec<CheckResult> {
         results.push(CheckResult::ok("OPENAI_API_KEY set"));
     } else {
         let needs_openai = daemon_cfg.as_ref().is_some_and(|cfg| {
-            cfg.agents.iter().any(|a| {
-                matches!(
-                    a.tool,
-                    aegis_types::daemon::AgentToolConfig::Codex { .. }
-                )
-            })
+            cfg.agents
+                .iter()
+                .any(|a| matches!(a.tool, aegis_types::daemon::AgentToolConfig::Codex { .. }))
         });
         if needs_openai {
             results.push(
@@ -615,8 +679,9 @@ fn check_environment(daemon_cfg: &Option<DaemonConfig>) -> Vec<CheckResult> {
                 results.push(CheckResult::ok("Telegram bot token format valid"));
             } else {
                 results.push(
-                    CheckResult::warn("Telegram bot token format looks invalid")
-                        .with_hint("Token should match <bot_id>:<alphanumeric_hash> from @BotFather"),
+                    CheckResult::warn("Telegram bot token format looks invalid").with_hint(
+                        "Token should match <bot_id>:<alphanumeric_hash> from @BotFather",
+                    ),
                 );
             }
         }
@@ -626,9 +691,7 @@ fn check_environment(daemon_cfg: &Option<DaemonConfig>) -> Vec<CheckResult> {
     #[cfg(target_os = "macos")]
     {
         if binary_exists("sandbox-exec") {
-            results.push(CheckResult::ok(
-                "sandbox-exec available (macOS Seatbelt)",
-            ));
+            results.push(CheckResult::ok("sandbox-exec available (macOS Seatbelt)"));
         } else {
             results.push(
                 CheckResult::warn("sandbox-exec not found")
@@ -670,10 +733,7 @@ fn validate_telegram_token_format(token: &str) -> bool {
 // Storage checks
 // ---------------------------------------------------------------------------
 
-fn check_storage(
-    aegis_dir: &Path,
-    config: Option<&aegis_types::AegisConfig>,
-) -> Vec<CheckResult> {
+fn check_storage(aegis_dir: &Path, config: Option<&aegis_types::AegisConfig>) -> Vec<CheckResult> {
     let mut results = Vec::new();
 
     // 13. Disk space
@@ -686,9 +746,7 @@ fn check_storage(
                         .with_hint("Free up disk space in the aegis directory"),
                 );
             } else {
-                results.push(CheckResult::ok(format!(
-                    "Disk space: {display} available"
-                )));
+                results.push(CheckResult::ok(format!("Disk space: {display} available")));
             }
         }
         None => {
@@ -719,8 +777,7 @@ fn available_disk_space(path: &Path) -> Option<u64> {
         // Fall back to home
         PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
     };
-    let c_path =
-        std::ffi::CString::new(target.to_string_lossy().as_bytes()).ok()?;
+    let c_path = std::ffi::CString::new(target.to_string_lossy().as_bytes()).ok()?;
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
@@ -819,7 +876,9 @@ mod tests {
 
     #[test]
     fn validate_telegram_token_valid() {
-        assert!(validate_telegram_token_format("123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"));
+        assert!(validate_telegram_token_format(
+            "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+        ));
         assert!(validate_telegram_token_format("1:a"));
     }
 

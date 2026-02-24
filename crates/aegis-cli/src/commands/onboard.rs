@@ -48,6 +48,7 @@ pub(crate) fn prompt_tool() -> anyhow::Result<AgentToolConfig> {
             extra_args: vec![],
         },
         "2" => AgentToolConfig::Codex {
+            runtime_engine: "native".into(),
             approval_mode: "suggest".into(),
             one_shot: false,
             extra_args: vec![],
@@ -152,6 +153,7 @@ mod tests {
         assert_eq!(tool_display_name(&cc), "Claude Code");
 
         let codex = AgentToolConfig::Codex {
+            runtime_engine: "native".into(),
             approval_mode: "suggest".into(),
             one_shot: false,
             extra_args: vec![],

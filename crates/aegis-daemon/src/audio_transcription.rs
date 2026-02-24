@@ -250,9 +250,10 @@ impl AudioTranscriber {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "transcription response missing 'text' field".to_string())?;
 
-        let language = value.get("language").and_then(|v| v.as_str()).map(|s| {
-            sanitize_text(s)
-        });
+        let language = value
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(sanitize_text);
 
         let duration = value.get("duration").and_then(|v| v.as_f64());
 
@@ -289,8 +290,7 @@ impl AudioTranscriber {
     /// are permitted. Private IP ranges, localhost, and non-HTTPS schemes are
     /// rejected.
     pub fn validate_api_url(url: &str) -> Result<(), String> {
-        let parsed = url::Url::parse(url)
-            .map_err(|e| format!("invalid API URL: {e}"))?;
+        let parsed = url::Url::parse(url).map_err(|e| format!("invalid API URL: {e}"))?;
 
         // Require HTTPS.
         if parsed.scheme() != "https" {
@@ -363,11 +363,7 @@ impl AudioTranscriber {
     /// Build multipart form data for the Whisper API request.
     ///
     /// Returns `(content_type_header, body_bytes)`.
-    pub fn build_multipart_body(
-        &self,
-        data: &[u8],
-        format: AudioFormat,
-    ) -> (String, Vec<u8>) {
+    pub fn build_multipart_body(&self, data: &[u8], format: AudioFormat) -> (String, Vec<u8>) {
         let boundary = Self::generate_boundary();
         let mut body = Vec::new();
         let filename = format!("audio.{}", format.as_str());
@@ -381,9 +377,7 @@ impl AudioTranscriber {
             )
             .as_bytes(),
         );
-        body.extend_from_slice(
-            format!("Content-Type: {}\r\n\r\n", format.mime_type()).as_bytes(),
-        );
+        body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", format.mime_type()).as_bytes());
         body.extend_from_slice(data);
         body.extend_from_slice(b"\r\n");
 
@@ -395,9 +389,7 @@ impl AudioTranscriber {
 
         // Response format part
         body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-        body.extend_from_slice(
-            b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\n",
-        );
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"response_format\"\r\n\r\n");
         body.extend_from_slice(self.config.response_format.as_bytes());
         body.extend_from_slice(b"\r\n");
 
@@ -720,7 +712,9 @@ mod tests {
             ]
         }"#;
 
-        let result = transcriber.parse_transcription_response(response_json).unwrap();
+        let result = transcriber
+            .parse_transcription_response(response_json)
+            .unwrap();
         assert_eq!(result.text, "Hello, world!");
         assert_eq!(result.language, Some("en".to_string()));
         assert_eq!(result.duration, Some(5.5));
@@ -867,12 +861,18 @@ mod tests {
 
     #[test]
     fn test_ssrf_protection_allows_openai() {
-        assert!(AudioTranscriber::validate_api_url("https://api.openai.com/v1/audio/transcriptions").is_ok());
+        assert!(AudioTranscriber::validate_api_url(
+            "https://api.openai.com/v1/audio/transcriptions"
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_ssrf_protection_blocks_credentials_in_url() {
-        assert!(AudioTranscriber::validate_api_url("https://user:pass@api.openai.com/v1/audio").is_err());
+        assert!(
+            AudioTranscriber::validate_api_url("https://user:pass@api.openai.com/v1/audio")
+                .is_err()
+        );
     }
 
     #[test]

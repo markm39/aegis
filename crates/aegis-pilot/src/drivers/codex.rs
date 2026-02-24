@@ -14,9 +14,21 @@ pub struct CodexDriver {
     /// Aegis agent name, set as AEGIS_AGENT_NAME env var so hooks can
     /// identify which agent is making the tool call.
     pub aegis_agent_name: Option<String>,
+    pub runtime_engine: String,
     pub approval_mode: String,
     pub one_shot: bool,
     pub extra_args: Vec<String>,
+}
+
+fn native_wrapper_path() -> Option<String> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent()?.parent()?;
+    let wrapper = repo_root.join("scripts").join("coding-runtime-codex.sh");
+    if wrapper.exists() {
+        Some(wrapper.to_string_lossy().into_owned())
+    } else {
+        None
+    }
 }
 
 impl AgentDriver for CodexDriver {
@@ -39,6 +51,21 @@ impl AgentDriver for CodexDriver {
         };
 
         let mut env = Vec::new();
+        let command = if self.runtime_engine != "external" {
+            if let Some(wrapper) = native_wrapper_path() {
+                env.push(("AEGIS_CODEX_RUNTIME".to_string(), "native".to_string()));
+                wrapper
+            } else {
+                env.push((
+                    "AEGIS_CODEX_RUNTIME".to_string(),
+                    "external-fallback".to_string(),
+                ));
+                "codex".to_string()
+            }
+        } else {
+            env.push(("AEGIS_CODEX_RUNTIME".to_string(), "external".to_string()));
+            "codex".to_string()
+        };
         if let Some(ref name) = self.aegis_agent_name {
             env.push(("AEGIS_AGENT_NAME".to_string(), name.clone()));
         }
@@ -49,7 +76,7 @@ impl AgentDriver for CodexDriver {
         ));
 
         SpawnStrategy::Process {
-            command: "codex".to_string(),
+            command,
             args,
             env,
             kind: ProcessKind::Json {
@@ -90,6 +117,7 @@ mod tests {
     fn spawn_strategy_suggest() {
         let driver = CodexDriver {
             aegis_agent_name: None,
+            runtime_engine: "external".into(),
             approval_mode: "suggest".into(),
             one_shot: false,
             extra_args: vec![],
@@ -108,6 +136,7 @@ mod tests {
     fn spawn_strategy_full_auto() {
         let driver = CodexDriver {
             aegis_agent_name: None,
+            runtime_engine: "external".into(),
             approval_mode: "full-auto".into(),
             one_shot: false,
             extra_args: vec![],
@@ -125,6 +154,7 @@ mod tests {
     fn one_shot_includes_subcommand() {
         let driver = CodexDriver {
             aegis_agent_name: None,
+            runtime_engine: "external".into(),
             approval_mode: "suggest".into(),
             one_shot: true,
             extra_args: vec![],
@@ -142,6 +172,7 @@ mod tests {
     fn spawn_strategy_sets_aegis_env() {
         let driver = CodexDriver {
             aegis_agent_name: Some("codex-1".to_string()),
+            runtime_engine: "external".into(),
             approval_mode: "full-auto".into(),
             one_shot: false,
             extra_args: vec![],
@@ -160,6 +191,7 @@ mod tests {
     fn adapter_in_suggest_mode() {
         let driver = CodexDriver {
             aegis_agent_name: None,
+            runtime_engine: "external".into(),
             approval_mode: "suggest".into(),
             one_shot: false,
             extra_args: vec![],
@@ -171,10 +203,42 @@ mod tests {
     fn no_adapter_in_full_auto() {
         let driver = CodexDriver {
             aegis_agent_name: None,
+            runtime_engine: "external".into(),
             approval_mode: "full-auto".into(),
             one_shot: false,
             extra_args: vec![],
         };
         assert!(driver.create_adapter().is_none());
+    }
+
+    #[test]
+    fn native_runtime_uses_wrapper_when_available() {
+        let driver = CodexDriver {
+            aegis_agent_name: None,
+            runtime_engine: "native".into(),
+            approval_mode: "suggest".into(),
+            one_shot: false,
+            extra_args: vec![],
+        };
+        let strategy = driver.spawn_strategy(&PathBuf::from("/tmp"));
+        match strategy {
+            SpawnStrategy::Process { command, env, .. } => {
+                if command == "codex" {
+                    assert!(
+                        env.contains(&(
+                            "AEGIS_CODEX_RUNTIME".to_string(),
+                            "external-fallback".to_string()
+                        )),
+                        "native mode must mark external fallback when wrapper is unavailable"
+                    );
+                } else {
+                    assert!(command.ends_with("scripts/coding-runtime-codex.sh"));
+                    assert!(
+                        env.contains(&("AEGIS_CODEX_RUNTIME".to_string(), "native".to_string()))
+                    );
+                }
+            }
+            _ => panic!("expected Process strategy"),
+        }
     }
 }
