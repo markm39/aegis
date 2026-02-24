@@ -6060,7 +6060,16 @@ impl DaemonRuntime {
         crate::scheduled_reply::TemplateData {
             agent_count,
             active_agents,
-            total_sessions: 0, // TODO: wire to ledger query when available
+            total_sessions: self
+                .fleet
+                .agent_names()
+                .iter()
+                .filter(|name| {
+                    self.fleet
+                        .slot(name)
+                        .is_some_and(|s| s.session_id.lock().is_some())
+                })
+                .count() as u64,
             uptime,
             fleet_status,
         }
