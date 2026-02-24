@@ -12,9 +12,11 @@ use std::sync::mpsc;
 
 use serde_json::Value;
 
+use aegis_types::credentials::CredentialStore;
 use aegis_types::llm::{
     to_anthropic_message, LlmMessage, LlmResponse, LlmRole, LlmToolCall, LlmUsage, StopReason,
 };
+use aegis_types::providers::provider_by_id;
 
 use super::AgentLoopEvent;
 
@@ -23,6 +25,48 @@ const MAX_RESPONSE_BYTES: u64 = 10_000_000;
 
 /// Default max tokens for LLM requests.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// Resolve an API key for a provider, checking all credential sources.
+///
+/// Resolution order (handled by `CredentialStore::resolve_api_key`):
+/// 1. Environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+/// 2. Credential store (`~/.aegis/credentials.toml`)
+/// 3. OAuth token store (`~/.aegis/oauth/{provider}/token.json`)
+fn resolve_provider_key(provider_id: &str) -> Result<String, String> {
+    let provider = provider_by_id(provider_id)
+        .ok_or_else(|| format!("unknown provider: {provider_id}"))?;
+
+    let store = CredentialStore::load_default().unwrap_or_default();
+
+    store.resolve_api_key(provider).ok_or_else(|| {
+        format!(
+            "configuration error: environment variable '{}' not set \
+             and no stored credentials found for {} \
+             (run `aegis` to set up authentication)",
+            provider.env_var, provider.display_name,
+        )
+    })
+}
+
+/// Resolve the base URL for a provider.
+///
+/// Checks env var override first (preserving existing behavior), then
+/// credential store, then falls back to the provider's default URL.
+fn resolve_provider_base_url(provider_id: &str) -> String {
+    let provider = match provider_by_id(provider_id) {
+        Some(p) => p,
+        None => return String::new(),
+    };
+    // Env var override takes precedence (matches existing behavior).
+    let env_key = format!("{}_BASE_URL", provider_id.to_uppercase());
+    if let Ok(url) = std::env::var(&env_key) {
+        if !url.is_empty() {
+            return url;
+        }
+    }
+    let store = CredentialStore::load_default().unwrap_or_default();
+    store.resolve_base_url(provider)
+}
 
 /// Parameters for a streaming LLM call.
 pub struct StreamingCallParams {
@@ -81,11 +125,8 @@ fn stream_anthropic(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
 ) -> Result<StreamingCallResult, String> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
-
-    let base_url = std::env::var("ANTHROPIC_BASE_URL")
-        .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+    let api_key = resolve_provider_key("anthropic")?;
+    let base_url = resolve_provider_base_url("anthropic");
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
     // Build messages, separating system.
@@ -323,11 +364,8 @@ fn stream_openai(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
 ) -> Result<StreamingCallResult, String> {
-    let api_key =
-        std::env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY not set".to_string())?;
-
-    let base_url = std::env::var("OPENAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com".to_string());
+    let api_key = resolve_provider_key("openai")?;
+    let base_url = resolve_provider_base_url("openai");
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
     // Build messages in OpenAI format.
