@@ -1736,6 +1736,7 @@ impl OnboardApp {
                 .map(|s| s.name.clone())
                 .collect(),
             retention: Default::default(),
+            redaction: Default::default(),
         }
     }
 

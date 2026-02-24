@@ -681,6 +681,7 @@ impl FleetApp {
                 default_model: None,
                 skills: vec![],
                 retention: Default::default(),
+                redaction: Default::default(),
             }
         };
 

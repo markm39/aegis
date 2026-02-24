@@ -77,6 +77,19 @@ impl PiiRedactor {
         Ok(())
     }
 
+    /// Build a [`PiiRedactor`] from a [`RedactionConfig`].
+    ///
+    /// Compiles the built-in patterns (when `config.enabled` is true) and
+    /// all custom patterns.  Returns an error if any custom pattern
+    /// contains an invalid regex.
+    pub fn from_config(config: &aegis_types::config::RedactionConfig) -> Result<Self, String> {
+        let mut redactor = Self::new(config.enabled);
+        for pat in &config.custom_patterns {
+            redactor.add_pattern(&pat.pattern, &pat.replacement)?;
+        }
+        Ok(redactor)
+    }
+
     /// Apply all redaction rules to the input text.
     ///
     /// Returns the input unchanged if redaction is disabled.
@@ -159,5 +172,43 @@ mod tests {
         let redactor = PiiRedactor::new(true);
         let input = "FileWrite /tmp/output.txt";
         assert_eq!(redactor.redact(input), input);
+    }
+
+    #[test]
+    fn from_config_with_custom_patterns() {
+        use aegis_types::config::{RedactionConfig, RedactionPattern};
+        let config = RedactionConfig {
+            enabled: true,
+            custom_patterns: vec![RedactionPattern {
+                pattern: r"\b\d{3}-\d{2}-\d{4}\b".to_string(),
+                replacement: "[SSN]".to_string(),
+            }],
+        };
+        let redactor = PiiRedactor::from_config(&config).unwrap();
+        assert_eq!(redactor.redact("ssn is 123-45-6789"), "ssn is [SSN]");
+        assert_eq!(
+            redactor.redact("email user@example.com"),
+            "email [EMAIL]"
+        );
+    }
+
+    #[test]
+    fn from_config_disabled() {
+        let config = aegis_types::config::RedactionConfig::default();
+        let redactor = PiiRedactor::from_config(&config).unwrap();
+        assert_eq!(redactor.redact("user@example.com"), "user@example.com");
+    }
+
+    #[test]
+    fn from_config_rejects_bad_regex() {
+        use aegis_types::config::{RedactionConfig, RedactionPattern};
+        let config = RedactionConfig {
+            enabled: true,
+            custom_patterns: vec![RedactionPattern {
+                pattern: "[invalid".to_string(),
+                replacement: "[BAD]".to_string(),
+            }],
+        };
+        assert!(PiiRedactor::from_config(&config).is_err());
     }
 }

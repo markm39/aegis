@@ -14,8 +14,9 @@ use nix::unistd::Pid;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use aegis_ledger::{AuditStore, AuditWriter};
+use aegis_ledger::{AuditStore, AuditWriter, PiiRedactor};
 use aegis_pilot::supervisor::SupervisorCommand;
+use aegis_types::config::RedactionConfig;
 use aegis_types::daemon::{
     AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy, ToolkitConfig,
 };
@@ -41,6 +42,8 @@ pub struct Fleet {
     /// Shared tokio runtime handle, injected by the daemon after the runtime is created.
     /// Propagated into each agent lifecycle thread for async subsystems (e.g. usage proxy).
     rt_handle: Option<tokio::runtime::Handle>,
+    /// PII redaction config applied to per-agent observer/proxy audit stores.
+    redaction: RedactionConfig,
 }
 
 impl Fleet {
@@ -56,12 +59,15 @@ impl Fleet {
             slots.insert(agent_config.name.to_string(), slot);
         }
 
-        let store = AuditStore::open(&aegis_config.ledger_path).unwrap_or_else(|e| {
+        let mut store = AuditStore::open(&aegis_config.ledger_path).unwrap_or_else(|e| {
             panic!(
                 "failed to open audit store at '{}': {e}",
                 aegis_config.ledger_path.display()
             )
         });
+        if let Ok(redactor) = PiiRedactor::from_config(&config.redaction) {
+            store.set_redactor(redactor);
+        }
         let (audit_writer, audit_writer_thread) = AuditWriter::spawn(store);
 
         Self {
@@ -72,6 +78,7 @@ impl Fleet {
             audit_writer,
             audit_writer_thread: Some(audit_writer_thread),
             rt_handle: None,
+            redaction: config.redaction.clone(),
         }
     }
 
@@ -228,6 +235,7 @@ impl Fleet {
         let audit_writer = self.audit_writer.clone();
         // Clone the shared runtime handle (None if not injected, e.g. in tests).
         let rt_handle = self.rt_handle.clone();
+        let redaction = self.redaction.clone();
 
         // Clear session_id before spawning the next run.
         *slot.session_id.lock() = None;
@@ -249,6 +257,7 @@ impl Fleet {
                     child_pid,
                     shared_session_id,
                     rt_handle,
+                    &redaction,
                 )
             });
 
@@ -862,6 +871,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         }
     }
 

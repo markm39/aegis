@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     AdapterConfig, AlertRule, ChannelConfig, ChannelRoutingConfig, IsolationConfig, PilotConfig,
-    RetentionConfig,
+    RedactionConfig, RetentionConfig,
 };
 use crate::ids::AgentName;
 
@@ -99,6 +99,12 @@ pub struct DaemonConfig {
     /// periodically (every hour) during runtime.
     #[serde(default)]
     pub retention: RetentionConfig,
+    /// PII redaction for audit log entries (GDPR/CCPA compliance).
+    ///
+    /// When enabled, email, phone, IP addresses, and custom patterns
+    /// are scrubbed from audit entries before persistence.
+    #[serde(default)]
+    pub redaction: RedactionConfig,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -1008,6 +1014,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: RetentionConfig::default(),
+            redaction: RedactionConfig::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

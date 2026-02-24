@@ -219,6 +219,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -283,6 +284,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

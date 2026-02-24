@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use aegis_control::hooks;
-use aegis_ledger::{AuditStore, AuditWriter};
+use aegis_ledger::{AuditStore, AuditWriter, PiiRedactor};
 use aegis_pilot::driver::ProcessKind;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
@@ -78,6 +78,7 @@ pub fn run_agent_slot(
     // Shared tokio runtime handle. When provided, the usage proxy runs on the
     // daemon's shared runtime instead of creating a per-agent runtime.
     rt_handle: Option<tokio::runtime::Handle>,
+    redaction: &aegis_types::config::RedactionConfig,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
@@ -94,6 +95,7 @@ pub fn run_agent_slot(
         &child_pid,
         &shared_session_id,
         rt_handle.as_ref(),
+        redaction,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -123,6 +125,7 @@ fn run_agent_slot_inner(
     child_pid: &AtomicU32,
     shared_session_id: &Mutex<Option<uuid::Uuid>>,
     rt_handle: Option<&tokio::runtime::Handle>,
+    redaction: &aegis_types::config::RedactionConfig,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
     // `name_str` is used for APIs that expect `&str` and for tracing fields.
@@ -168,8 +171,11 @@ fn run_agent_slot_inner(
     // Open a separate AuditStore for the observer and proxy subsystems.
     // These components are read-heavy and retain their own Arc<Mutex<AuditStore>>.
     // The write path (begin/end session) goes through the audit_writer above.
-    let obs_store = AuditStore::open(&aegis_config.ledger_path)
+    let mut obs_store = AuditStore::open(&aegis_config.ledger_path)
         .map_err(|e| format!("failed to open observer audit store for {name}: {e}"))?;
+    if let Ok(redactor) = PiiRedactor::from_config(redaction) {
+        obs_store.set_redactor(redactor);
+    }
     let store = Arc::new(std::sync::Mutex::new(obs_store));
 
     let engine_arc = Arc::new(std::sync::Mutex::new(engine));

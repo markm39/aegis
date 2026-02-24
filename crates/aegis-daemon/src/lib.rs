@@ -72,7 +72,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use aegis_channel::ChannelInput;
 use aegis_control::alias::AliasRegistry;
@@ -87,13 +87,13 @@ use aegis_control::daemon::{
 };
 use aegis_control::event::{EventStats, PilotEventKind, PilotWebhookEvent};
 use aegis_control::hooks;
-use aegis_ledger::AuditStore;
+use aegis_ledger::{AuditStore, PiiRedactor};
 use aegis_toolkit::contract::{CaptureRegion as ToolkitCaptureRegion, RiskTag, ToolAction};
 use aegis_toolkit::policy::map_tool_action;
 use aegis_types::daemon::{
     AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy,
 };
-use aegis_types::AegisConfig;
+use aegis_types::{AegisConfig, AegisError};
 use aegis_types::{Action, ActionKind, Decision, Verdict};
 
 use crate::control::DaemonCmdRx;
@@ -1271,8 +1271,20 @@ impl DaemonRuntime {
         }
     }
 
+    /// Open an [`AuditStore`] with the daemon's PII redaction config applied.
+    fn open_audit_store(&self) -> Result<AuditStore, AegisError> {
+        let mut store = AuditStore::open(&self.aegis_config.ledger_path)?;
+        match PiiRedactor::from_config(&self.config.redaction) {
+            Ok(redactor) => store.set_redactor(redactor),
+            Err(e) => {
+                warn!(error = %e, "invalid redaction config; proceeding without redaction");
+            }
+        }
+        Ok(store)
+    }
+
     fn append_audit_entry(&self, action: &Action, verdict: &Verdict) {
-        match AuditStore::open(&self.aegis_config.ledger_path) {
+        match self.open_audit_store() {
             Ok(mut store) => {
                 if let Err(e) = store.append(action, verdict) {
                     warn!(?e, "failed to append audit entry");
@@ -1692,7 +1704,7 @@ impl DaemonRuntime {
             Verdict::deny(audit_action.id, provenance.reason.clone(), None)
         };
 
-        match AuditStore::open(&self.aegis_config.ledger_path) {
+        match self.open_audit_store() {
             Ok(mut store) => {
                 if let Err(e) = store.append(&audit_action, &verdict) {
                     warn!(?e, "failed to append runtime audit entry");
@@ -1745,6 +1757,20 @@ impl DaemonRuntime {
             for agent_state in &prev_state.agents {
                 self.fleet
                     .restore_restart_count(&agent_state.name, agent_state.restart_count);
+            }
+        }
+
+        // Validate redaction config early so bad regex surfaces immediately
+        if self.config.redaction.enabled {
+            match PiiRedactor::from_config(&self.config.redaction) {
+                Ok(_) => info!(
+                    custom_patterns = self.config.redaction.custom_patterns.len(),
+                    "PII redaction enabled"
+                ),
+                Err(e) => error!(
+                    error = %e,
+                    "redaction config contains invalid patterns; redaction will be disabled"
+                ),
             }
         }
 
@@ -5215,7 +5241,7 @@ impl DaemonRuntime {
                     .as_deref()
                     .and_then(|s| uuid::Uuid::parse_str(s).ok());
                 if let Some(uuid) = session_uuid {
-                    match AuditStore::open(&self.aegis_config.ledger_path) {
+                    match self.open_audit_store() {
                         Ok(mut store) => {
                             if let Err(e) =
                                 store.append_with_session(&audit_action, &verdict, &uuid)
@@ -5257,7 +5283,7 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::RegisterChatSession => {
-                match AuditStore::open(&self.aegis_config.ledger_path) {
+                match self.open_audit_store() {
                     Ok(mut store) => {
                         match store.begin_session("chat-tui", "chat", &[], Some("chat-tui")) {
                             Ok(uuid) => {
@@ -5605,7 +5631,7 @@ impl DaemonRuntime {
                     );
                 }
 
-                match AuditStore::open(&self.aegis_config.ledger_path) {
+                match self.open_audit_store() {
                     Ok(mut store) => {
                         let mut total_purged: usize = 0;
 
@@ -5665,7 +5691,7 @@ impl DaemonRuntime {
             return;
         }
 
-        let mut store = match AuditStore::open(&self.aegis_config.ledger_path) {
+        let mut store = match self.open_audit_store() {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "retention: failed to open audit store");
@@ -6613,6 +6639,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -6959,6 +6986,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -7644,6 +7672,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -7740,6 +7769,7 @@ mod tests {
             default_model: None,
             skills: vec![],
             retention: Default::default(),
+            redaction: Default::default(),
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);
