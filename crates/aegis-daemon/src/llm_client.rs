@@ -28,7 +28,9 @@ use aegis_types::llm::{
     LlmToolCall, LlmUsage, MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig,
     ProviderConfig, ProviderRegistry, StopReason,
 };
+use aegis_types::credentials::CredentialStore;
 use aegis_types::oauth::{FileTokenStore, OAuthTokenStore};
+use aegis_types::providers::provider_by_id;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -233,17 +235,19 @@ impl LlmClient {
         })
     }
 
-    /// Resolve an API key for the given provider, preferring OAuth tokens.
+    /// Resolve an API key for the given provider, checking all credential sources.
     ///
-    /// Checks the OAuth token store first. If a valid OAuth bearer token
-    /// is found, returns it. Otherwise falls back to reading the API key
-    /// from environment variables via the provider config.
+    /// Resolution order:
+    /// 1. OAuth token store (`~/.aegis/oauth/<provider>/token.json`) -- with refresh logic
+    /// 2. Credential store (`~/.aegis/credentials.toml`) -- where onboarding saves tokens
+    ///    (also checks env vars and alt env vars internally)
+    /// 3. Provider-specific env var read as final fallback
     fn resolve_api_key_with_oauth(
         &self,
         provider_name: &str,
         read_env_key: impl FnOnce() -> Result<String, String>,
     ) -> Result<String, String> {
-        // Try OAuth first.
+        // 1. Try OAuth token resolver (handles refresh-token logic).
         if let Some(ref resolver) = self.oauth_resolver {
             if let Some(oauth_token) = resolver.resolve_token(provider_name) {
                 info!(
@@ -254,7 +258,19 @@ impl LlmClient {
             }
         }
 
-        // Fall back to API key from environment.
+        // 2. Try the unified credential store (env vars -> stored creds -> OAuth file).
+        if let Some(provider) = provider_by_id(provider_name) {
+            let store = CredentialStore::load_default().unwrap_or_default();
+            if let Some(key) = store.resolve_api_key(provider) {
+                info!(
+                    provider = provider_name,
+                    "resolved API key from credential store"
+                );
+                return Ok(key);
+            }
+        }
+
+        // 3. Fall back to provider-config env var read.
         read_env_key()
     }
 
@@ -1389,16 +1405,14 @@ pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
         )
         .map_err(|e| format!("failed to register OpenAI provider: {e}"))?;
 
-    // Register Gemini if GOOGLE_API_KEY or GEMINI_API_KEY is available.
-    let has_google_key = std::env::var("GOOGLE_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    // Load credential store once for provider registration checks.
+    let cred_store = CredentialStore::load_default().unwrap_or_default();
+
+    // Register Gemini if credentials are available (env var, stored cred, or OAuth).
+    let has_gemini_cred = provider_by_id("google")
+        .and_then(|p| cred_store.resolve_api_key(p))
         .is_some();
-    let has_gemini_key = std::env::var("GEMINI_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .is_some();
-    if has_google_key || has_gemini_key {
+    if has_gemini_cred {
         registry
             .register_provider(
                 "google",
@@ -1422,12 +1436,11 @@ pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
         )
         .map_err(|e| format!("failed to register Ollama provider: {e}"))?;
 
-    // Register OpenRouter if OPENROUTER_API_KEY is available.
-    let has_openrouter_key = std::env::var("OPENROUTER_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    // Register OpenRouter if credentials are available (env var, stored cred, or OAuth).
+    let has_openrouter_cred = provider_by_id("openrouter")
+        .and_then(|p| cred_store.resolve_api_key(p))
         .is_some();
-    if has_openrouter_key {
+    if has_openrouter_cred {
         registry
             .register_provider(
                 "openrouter",
