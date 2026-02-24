@@ -30,7 +30,7 @@ use aegis_types::llm::{
     StopReason,
 };
 use aegis_types::oauth::{FileTokenStore, OAuthTokenStore};
-use aegis_types::providers::provider_by_id;
+use aegis_types::providers::{provider_by_id, read_codex_cli_token};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -290,6 +290,17 @@ impl LlmClient {
                         return Ok(legacy.api_key.clone());
                     }
                 }
+            }
+        }
+
+        // 2b. Try provider-specific CLI token files.
+        if provider_name == "openai-codex" {
+            if let Some(token) = read_codex_cli_token() {
+                info!(
+                    provider = provider_name,
+                    "resolved token from Codex CLI auth file"
+                );
+                return Ok(token);
             }
         }
 
@@ -3121,6 +3132,40 @@ data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"o
         }
         if let Some(k) = old_anthropic {
             std::env::set_var("ANTHROPIC_API_KEY", k);
+        }
+    }
+
+    #[test]
+    fn test_resolve_api_key_openai_codex_reads_cli_token_file() {
+        let _guard = HOME_MUTEX.lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        let old_openai = std::env::var("OPENAI_API_KEY").ok();
+        std::env::set_var("HOME", tmp.path());
+        std::env::remove_var("OPENAI_API_KEY");
+
+        let codex_dir = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("auth.json"),
+            r#"{"tokens":{"access_token":"codex-cli-token"}}"#,
+        )
+        .unwrap();
+
+        let registry = build_registry_from_env().unwrap();
+        let mut client = LlmClient::new(registry).unwrap();
+        client.oauth_resolver = None;
+
+        let key = client.resolve_api_key_with_oauth("openai-codex", || {
+            Err("OPENAI_API_KEY environment variable is not set".to_string())
+        });
+        assert_eq!(key.unwrap(), "codex-cli-token");
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        if let Some(k) = old_openai {
+            std::env::set_var("OPENAI_API_KEY", k);
         }
     }
 }

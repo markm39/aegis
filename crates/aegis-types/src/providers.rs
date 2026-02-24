@@ -243,19 +243,31 @@ fn check_claude_code_token() -> bool {
 
 /// Check if OpenAI Codex CLI has a stored OAuth token at `~/.codex/auth.json`.
 fn check_codex_cli_token() -> bool {
-    let home = match std::env::var("HOME") {
-        Ok(h) if !h.is_empty() => h,
-        _ => return false,
-    };
+    read_codex_cli_token().is_some()
+}
+
+/// Read OpenAI Codex CLI token from `~/.codex/auth.json`.
+///
+/// Supports current and legacy field layouts:
+/// - `tokens.access_token`
+/// - `OPENAI_API_KEY`
+pub fn read_codex_cli_token() -> Option<String> {
+    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
     let path = std::path::PathBuf::from(home).join(".codex/auth.json");
-    if !path.exists() {
-        return false;
-    }
-    // Just check that the file exists and contains something --
-    // actual token extraction happens during the auth flow.
-    std::fs::metadata(&path)
-        .map(|m| m.len() > 2) // More than just "{}"
-        .unwrap_or(false)
+    let raw = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+
+    json.get("tokens")
+        .and_then(|v| v.get("access_token"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            json.get("OPENAI_API_KEY")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
 }
 
 /// Check if a Copilot token file exists at `~/.aegis/providers/copilot/tokens.json`.
@@ -1555,6 +1567,11 @@ pub fn discover_openai_compat_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    static HOME_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn all_providers_have_unique_ids() {
@@ -1650,5 +1667,49 @@ mod tests {
     #[test]
     fn format_context_window_small() {
         assert_eq!(format_context_window(512), "512");
+    }
+
+    #[test]
+    fn read_codex_cli_token_reads_tokens_access_token() {
+        let _guard = HOME_MUTEX.lock().unwrap();
+        let tmp = tempdir().unwrap();
+        let codex_dir = tmp.path().join(".codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        fs::write(
+            codex_dir.join("auth.json"),
+            r#"{"tokens":{"access_token":"tok-abc"},"OPENAI_API_KEY":"fallback"}"#,
+        )
+        .unwrap();
+
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        let token = read_codex_cli_token();
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert_eq!(token.as_deref(), Some("tok-abc"));
+    }
+
+    #[test]
+    fn read_codex_cli_token_falls_back_to_openai_api_key_field() {
+        let _guard = HOME_MUTEX.lock().unwrap();
+        let tmp = tempdir().unwrap();
+        let codex_dir = tmp.path().join(".codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        fs::write(codex_dir.join("auth.json"), r#"{"OPENAI_API_KEY":"fallback"}"#).unwrap();
+
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        let token = read_codex_cli_token();
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert_eq!(token.as_deref(), Some("fallback"));
     }
 }

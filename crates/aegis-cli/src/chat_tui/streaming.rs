@@ -16,7 +16,7 @@ use aegis_types::credentials::CredentialStore;
 use aegis_types::llm::{
     LlmMessage, LlmResponse, LlmRole, LlmToolCall, LlmUsage, StopReason, to_anthropic_message,
 };
-use aegis_types::providers::provider_by_id;
+use aegis_types::providers::{provider_by_id, read_codex_cli_token};
 
 use super::AgentLoopEvent;
 
@@ -57,6 +57,9 @@ fn resolve_provider_key(provider_id: &str) -> Result<String, String> {
             if is_legacy_codex_oauth {
                 return Ok(legacy.api_key.clone());
             }
+        }
+        if let Some(token) = read_codex_cli_token() {
+            return Ok(token);
         }
     }
 
@@ -914,6 +917,9 @@ fn parse_responses_sse(
 #[allow(clippy::manual_strip)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static HOME_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn is_anthropic_model_detects_claude() {
@@ -940,6 +946,34 @@ mod tests {
             "openai-codex"
         );
         assert_eq!(openai_provider_for_model("gpt-5.2"), "openai");
+    }
+
+    #[test]
+    fn resolve_provider_key_openai_codex_uses_cli_token_file() {
+        let _guard = HOME_MUTEX.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        let old_openai = std::env::var("OPENAI_API_KEY").ok();
+        std::env::set_var("HOME", tmp.path());
+        std::env::remove_var("OPENAI_API_KEY");
+
+        let codex_dir = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("auth.json"),
+            r#"{"tokens":{"access_token":"codex-cli-token"}}"#,
+        )
+        .unwrap();
+
+        let key = resolve_provider_key("openai-codex").unwrap();
+        assert_eq!(key, "codex-cli-token");
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        if let Some(k) = old_openai {
+            std::env::set_var("OPENAI_API_KEY", k);
+        }
     }
 
     #[test]
