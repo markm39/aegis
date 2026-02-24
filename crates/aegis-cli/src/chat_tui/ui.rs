@@ -19,9 +19,13 @@ use super::{ApprovalProfile, ChatApp, InputMode, Overlay, filter_model_items};
 pub fn draw(f: &mut Frame, app: &mut ChatApp) {
     let area = f.area();
 
-    // Compute input height: 3 lines normally, grows if multi-line paste
-    let newline_count = app.input_buffer.chars().filter(|c| *c == '\n').count();
-    let input_height = (3 + newline_count).min(8) as u16;
+    // Compute input height accounting for text wrapping at terminal width
+    let prefix_len = match app.input_mode {
+        InputMode::Chat => 2,     // "> "
+        InputMode::Scroll => 7,   // "SCROLL "
+        InputMode::Command => 2,  // "/ "
+    };
+    let input_height = compute_input_height(&app.input_buffer, prefix_len, area.width);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -181,11 +185,25 @@ fn draw_input_area(f: &mut Frame, app: &ChatApp, area: Rect) {
     let cursor_spans = build_cursor_spans(&app.input_buffer, app.input_cursor);
     spans.extend(cursor_spans);
 
-    let input_para = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
-    );
+    // Scroll to keep cursor visible when input exceeds max height
+    let prefix_len = mode_indicator.len();
+    let usable_width = area.width as usize;
+    let visible_rows = area.height.saturating_sub(1) as usize; // minus top border
+    let cursor_row = cursor_visual_row(&app.input_buffer, app.input_cursor, prefix_len, usable_width);
+    let scroll_offset = if visible_rows > 0 && cursor_row >= visible_rows {
+        (cursor_row - visible_rows + 1) as u16
+    } else {
+        0
+    };
+
+    let input_para = Paragraph::new(Line::from(spans))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0))
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+        );
     f.render_widget(input_para, area);
 
     // Show command result or error below input if present
@@ -346,6 +364,34 @@ fn build_cursor_spans(text: &str, cursor: usize) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+/// Compute the height needed for the input area, accounting for text wrapping.
+///
+/// Returns a height that includes 1 row for the top border plus content rows,
+/// clamped between 3 and 10.
+fn compute_input_height(text: &str, prefix_len: usize, area_width: u16) -> u16 {
+    let usable = area_width as usize;
+    if usable == 0 {
+        return 3;
+    }
+    let char_count = prefix_len + text.chars().count();
+    let visual_lines = if char_count == 0 {
+        1
+    } else {
+        char_count.div_ceil(usable)
+    };
+    // +1 for top border, +1 spare row for result/error line
+    (visual_lines as u16 + 2).clamp(3, 10)
+}
+
+/// Determine which visual row the cursor occupies when the input wraps.
+fn cursor_visual_row(text: &str, cursor: usize, prefix_len: usize, width: usize) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    let chars_before = text[..cursor.min(text.len())].chars().count();
+    (prefix_len + chars_before) / width
 }
 
 /// Compute a centered rectangle as a percentage of the parent area.
