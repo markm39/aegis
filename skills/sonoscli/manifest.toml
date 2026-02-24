@@ -13,3 +13,8 @@ required_bins = ["sonos"]
 required_env = []
 os = []
 
+[[commands]]
+name = "sonos"
+description = "Control Sonos speakers"
+usage = "/sonos [play|pause|volume|list|group] [args...]"
+aliases = []

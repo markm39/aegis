@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "tokenusage"
+description = "Show LLM token usage statistics"
+usage = "/tokenusage [today|week|month|all]"
+aliases = ["usage", "tokens"]

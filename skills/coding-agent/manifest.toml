@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "delegate"
+description = "Delegate a coding task to Claude Code or Codex"
+usage = "/delegate <task_description>"
+aliases = ["agent"]

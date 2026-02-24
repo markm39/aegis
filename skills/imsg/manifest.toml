@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "imessage"
+description = "Send an iMessage via Messages.app"
+usage = "/imessage <phone_or_email> <message>"
+aliases = ["imsg"]

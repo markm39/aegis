@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "codereview"
+description = "Review code changes in the current git repo"
+usage = "/codereview [file_or_path]"
+aliases = ["cr"]

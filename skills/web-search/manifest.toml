@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "websearch"
+description = "Search the web using DuckDuckGo"
+usage = "/websearch <query>"
+aliases = ["ws", "ddg"]

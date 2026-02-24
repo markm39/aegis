@@ -13,3 +13,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "gemini"
+description = "Query Google Gemini AI"
+usage = "/gemini <prompt>"
+aliases = []

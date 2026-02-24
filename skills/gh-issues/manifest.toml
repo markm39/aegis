@@ -13,3 +13,8 @@ required_bins = ["gh"]
 required_env = []
 os = []
 
+[[commands]]
+name = "ghissues"
+description = "List, create, or view GitHub issues via gh CLI"
+usage = "/ghissues [list|create|view|close] [args...]"
+aliases = ["ghi"]

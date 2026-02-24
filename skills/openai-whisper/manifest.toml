@@ -13,3 +13,8 @@ required_bins = ["whisper"]
 required_env = []
 os = []
 
+[[commands]]
+name = "whisper"
+description = "Transcribe audio files using local Whisper model"
+usage = "/whisper <audio_file> [model]"
+aliases = ["transcribe"]

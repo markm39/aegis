@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "notes"
+description = "Create, list, or search Apple Notes"
+usage = "/notes [list|create|search] [text]"
+aliases = []

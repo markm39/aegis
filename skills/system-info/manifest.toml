@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "sysinfo"
+description = "Show system information (OS, CPU, memory, disk)"
+usage = "/sysinfo [cpu|mem|disk|net|all]"
+aliases = ["sys"]

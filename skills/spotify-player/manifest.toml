@@ -13,3 +13,8 @@ required_bins = ["spotify_player"]
 required_env = []
 os = []
 
+[[commands]]
+name = "spotify"
+description = "Control Spotify playback"
+usage = "/spotify [play|pause|next|prev|status|search] [query]"
+aliases = []

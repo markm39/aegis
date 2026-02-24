@@ -13,3 +13,8 @@ required_bins = ["gh"]
 required_env = []
 os = []
 
+[[commands]]
+name = "ghub"
+description = "GitHub operations: PRs, repos, gists via gh CLI"
+usage = "/ghub [pr|repo|gist] [subcommand] [args...]"
+aliases = ["gh"]

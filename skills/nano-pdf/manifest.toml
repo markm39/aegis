@@ -13,3 +13,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "pdf"
+description = "Extract text from PDF files"
+usage = "/pdf <file.pdf> [page_range]"
+aliases = []

@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "sessionlogs"
+description = "Browse and search Aegis session logs"
+usage = "/sessionlogs [list|search|show] [query_or_id]"
+aliases = ["sessions"]

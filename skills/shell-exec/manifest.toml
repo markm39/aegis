@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "sh"
+description = "Execute a shell command and capture output"
+usage = "/sh <command>"
+aliases = ["exec", "run"]

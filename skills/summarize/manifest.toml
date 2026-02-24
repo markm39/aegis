@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "tldr"
+description = "Summarize text, files, or URLs"
+usage = "/tldr <text_or_file_path_or_url>"
+aliases = ["summarize"]

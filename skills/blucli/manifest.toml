@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "bluetooth"
+description = "Manage Bluetooth devices"
+usage = "/bluetooth [list|connect|disconnect|status] [device]"
+aliases = ["bt"]

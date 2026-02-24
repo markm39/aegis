@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "oracle"
+description = "Ask a question and get answers from multiple LLM providers"
+usage = "/oracle <question>"
+aliases = ["ask"]

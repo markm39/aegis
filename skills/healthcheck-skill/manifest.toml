@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "healthcheck"
+description = "Check HTTP endpoint health (status code and latency)"
+usage = "/healthcheck <url> [expected_status]"
+aliases = ["hc", "ping"]

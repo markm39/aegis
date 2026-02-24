@@ -13,3 +13,8 @@ required_bins = ["ffmpeg"]
 required_env = []
 os = []
 
+[[commands]]
+name = "vidframes"
+description = "Extract frames from video files using ffmpeg"
+usage = "/vidframes <video_file> [interval_secs] [output_dir]"
+aliases = ["frames"]

@@ -13,3 +13,8 @@ required_bins = ["op"]
 required_env = []
 os = []
 
+[[commands]]
+name = "1pass"
+description = "Access 1Password items and vaults via op CLI"
+usage = "/1pass [list|get|search] [item_name]"
+aliases = ["op"]

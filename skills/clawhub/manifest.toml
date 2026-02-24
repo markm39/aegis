@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "hub"
+description = "Browse and search the AegisHub skill registry"
+usage = "/hub [search|list|info] [query]"
+aliases = ["clawhub"]

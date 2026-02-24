@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "localtts"
+description = "Text-to-speech using local sherpa-onnx"
+usage = "/localtts <text> [output_file]"
+aliases = ["speak"]

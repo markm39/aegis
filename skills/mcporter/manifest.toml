@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "mcp"
+description = "List and manage MCP server connections"
+usage = "/mcp [list|status|connect] [server_name]"
+aliases = []

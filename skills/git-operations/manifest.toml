@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "gitop"
+description = "Run common git operations (status, log, diff, branch, stash)"
+usage = "/gitop <subcommand> [args...]"
+aliases = ["git"]

@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "clipboard"
+description = "Read from or write to the system clipboard"
+usage = "/clipboard [get|set|clear] [text]"
+aliases = ["clip", "pb"]

@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "canvas"
+description = "Generate ASCII art or simple diagrams"
+usage = "/canvas <description>"
+aliases = ["diagram", "ascii"]

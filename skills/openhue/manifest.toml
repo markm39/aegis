@@ -13,3 +13,8 @@ required_bins = ["openhue"]
 required_env = []
 os = []
 
+[[commands]]
+name = "hue"
+description = "Control Philips Hue smart lights"
+usage = "/hue [list|on|off|color|scene] [args...]"
+aliases = ["lights"]

@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "http"
+description = "Make HTTP requests (GET, POST, etc.)"
+usage = "/http <url> [method] [body]"
+aliases = ["fetch", "curl"]

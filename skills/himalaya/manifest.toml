@@ -13,3 +13,8 @@ required_bins = ["himalaya"]
 required_env = []
 os = []
 
+[[commands]]
+name = "email"
+description = "Read and send email via himalaya CLI"
+usage = "/email [list|read|send|reply] [args...]"
+aliases = ["mail"]

@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "vault"
+description = "Search and read Obsidian vault notes"
+usage = "/vault [search|read|list|recent] [query_or_path]"
+aliases = ["obsidian"]

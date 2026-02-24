@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "files"
+description = "List, search, or get info about files"
+usage = "/files [list|search|info] [path_or_pattern]"
+aliases = ["fm"]

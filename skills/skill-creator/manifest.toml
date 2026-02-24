@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "mkskill"
+description = "Scaffold a new Aegis skill from a template"
+usage = "/mkskill <skill_name> [category]"
+aliases = ["newskill"]

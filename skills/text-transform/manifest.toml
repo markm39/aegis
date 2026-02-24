@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "tt"
+description = "Transform text (upper, lower, base64, count, hash, urlencode)"
+usage = "/tt <transform> <text>"
+aliases = ["transform"]

@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "rss"
+description = "Fetch and parse RSS/Atom feeds"
+usage = "/rss <feed_url> [limit]"
+aliases = ["feed"]

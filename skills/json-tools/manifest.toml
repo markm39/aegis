@@ -11,3 +11,9 @@ install_method = "config"
 required_bins = []
 required_env = []
 os = []
+
+[[commands]]
+name = "json"
+description = "Format, query, or validate JSON data"
+usage = "/json <format|query|validate> <input_or_jq_filter>"
+aliases = ["jq"]

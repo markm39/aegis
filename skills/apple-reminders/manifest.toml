@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "reminders"
+description = "Create, list, or complete Apple Reminders"
+usage = "/reminders [list|create|complete] [text]"
+aliases = []

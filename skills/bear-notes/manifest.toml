@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "bear"
+description = "Create, search, or open Bear notes"
+usage = "/bear [create|search|open] [text]"
+aliases = []

@@ -13,3 +13,8 @@ required_bins = ["imagesnap"]
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "cam"
+description = "Capture a photo from the webcam"
+usage = "/cam [filename]"
+aliases = ["webcam", "snap"]

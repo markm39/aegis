@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "things"
+description = "Create or list tasks in Things 3"
+usage = "/things [add|today|inbox|search] [text]"
+aliases = ["todo"]

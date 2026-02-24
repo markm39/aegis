@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = ["darwin"]
 
+[[commands]]
+name = "screenshot"
+description = "Take a screenshot of the screen or a window"
+usage = "/screenshot [full|window|area] [filename]"
+aliases = ["peek"]

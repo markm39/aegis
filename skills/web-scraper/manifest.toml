@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "scrape"
+description = "Extract text and links from a web page"
+usage = "/scrape <url> [text|links|all]"
+aliases = []

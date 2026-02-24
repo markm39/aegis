@@ -13,3 +13,8 @@ required_bins = ["tmux"]
 required_env = []
 os = []
 
+[[commands]]
+name = "tmux"
+description = "Manage tmux sessions, windows, and panes"
+usage = "/tmux [list|new|send|kill] [args...]"
+aliases = []
