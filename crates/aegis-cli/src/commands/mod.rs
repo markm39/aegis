@@ -59,7 +59,6 @@ pub mod pilot;
 pub mod pipeline;
 pub mod policy;
 pub mod report;
-pub mod run;
 pub mod sessions;
 pub mod setup;
 pub mod skills;
