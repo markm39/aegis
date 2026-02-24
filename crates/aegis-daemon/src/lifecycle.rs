@@ -349,6 +349,23 @@ fn run_agent_slot_inner(
         }
     }
 
+    // 4c. Apply Docker container wrapping if configured.
+    // Rewrites the spawn command to run inside a security-hardened container.
+    if matches!(aegis_config.isolation, aegis_types::IsolationConfig::Docker(_)) {
+        match wrap_strategy_with_docker(&mut strategy, aegis_config, &working_dir) {
+            Ok(()) => {
+                info!(agent = name_str, "Docker container sandbox enabled");
+            }
+            Err(e) => {
+                warn!(
+                    agent = name_str,
+                    error = %e,
+                    "failed to configure Docker sandbox; agent will run unsandboxed"
+                );
+            }
+        }
+    }
+
     // 5. Compute task injection BEFORE spawn so CliArg can be folded into args.
     //    Orchestrator slots get a specialized prompt with review-cycle instructions.
     //    Worker slots learn about the orchestrator so they follow its direction.
@@ -691,6 +708,70 @@ fn wrap_strategy_with_sandbox(strategy: &mut SpawnStrategy, profile_path: &str) 
             // Nothing to wrap -- external processes are managed outside Aegis.
         }
     }
+}
+
+/// Wrap a spawn strategy to run inside a Docker container.
+///
+/// Rewrites the command and args so the original command runs inside a
+/// security-hardened Docker container (cap-drop=ALL, read-only root,
+/// resource limits). For PTY strategies, adds `-it` flags for interactive
+/// terminal allocation.
+fn wrap_strategy_with_docker(
+    strategy: &mut SpawnStrategy,
+    aegis_config: &aegis_types::AegisConfig,
+    working_dir: &std::path::Path,
+) -> Result<(), String> {
+    let is_pty = matches!(strategy, SpawnStrategy::Pty { .. });
+
+    match strategy {
+        SpawnStrategy::Process {
+            ref mut command,
+            ref mut args,
+            ref mut env,
+            ..
+        }
+        | SpawnStrategy::Pty {
+            ref mut command,
+            ref mut args,
+            ref mut env,
+            ..
+        } => {
+            let original_command = std::mem::take(command);
+            let original_args = std::mem::take(args);
+            let original_env = std::mem::take(env);
+
+            // Build a config with the working directory as the sandbox mount point.
+            let mut docker_config = aegis_config.clone();
+            docker_config.sandbox_dir = working_dir.to_path_buf();
+
+            // Convert env vars to the format build_docker_args expects.
+            let env_refs: Vec<(&str, &str)> = original_env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+
+            let mut docker_args = aegis_sandbox::docker::build_docker_args(
+                &original_command,
+                &original_args,
+                &docker_config,
+                &env_refs,
+            )
+            .map_err(|e| format!("failed to build Docker args: {e}"))?;
+
+            // For PTY strategies, add -it after "run" for interactive terminal.
+            if is_pty {
+                // Insert -it right after "run" (index 0 is "run").
+                docker_args.insert(1, "-it".to_string());
+            }
+
+            *command = "docker".to_string();
+            *args = docker_args;
+            // Env vars are passed through Docker's -e flags, not the host env.
+            *env = vec![];
+        }
+        SpawnStrategy::External => {}
+    }
+    Ok(())
 }
 
 /// Compose a structured prompt from fleet goal, agent identity, and task.
