@@ -516,30 +516,67 @@ impl RateLimiter {
 
 /// Verify a Discord interaction signature (Ed25519).
 ///
-/// **STUB IMPLEMENTATION**: The `ed25519-dalek` crate is not in the workspace
-/// dependency tree. This function logs a warning and returns `true`.
+/// Discord signs each interaction webhook with Ed25519. The message to verify
+/// is `timestamp + body`, where both are UTF-8 strings concatenated without a
+/// separator. The public key and signature are hex-encoded in the HTTP headers.
 ///
-/// For production use, either:
-/// 1. Add `ed25519-dalek` to the workspace and implement proper verification.
-/// 2. Deploy behind a reverse proxy (e.g., Cloudflare Workers) that verifies
-///    interaction signatures before forwarding.
+/// Returns `false` on any decode or verification failure (fail-closed).
 ///
 /// # Arguments
-/// * `_public_key` - Hex-encoded Ed25519 public key from Discord app settings
-/// * `_timestamp` - Value of the `X-Signature-Timestamp` header
-/// * `_body` - Raw request body bytes
-/// * `_signature` - Value of the `X-Signature-Ed25519` header
+/// * `public_key` - Hex-encoded Ed25519 public key from Discord app settings (64 hex chars)
+/// * `timestamp` - Value of the `X-Signature-Timestamp` header
+/// * `body` - Raw request body string
+/// * `signature` - Value of the `X-Signature-Ed25519` header (128 hex chars)
 pub fn verify_interaction_signature(
-    _public_key: &str,
-    _timestamp: &str,
-    _body: &str,
-    _signature: &str,
+    public_key: &str,
+    timestamp: &str,
+    body: &str,
+    signature: &str,
 ) -> bool {
-    warn!(
-        "Discord interaction signature verification is STUBBED. \
-         Deploy behind a signature-verifying proxy or add ed25519-dalek to the workspace."
-    );
-    true
+    use ed25519_dalek::{Signature, VerifyingKey};
+
+    // Decode the hex-encoded public key (32 bytes).
+    let pk_bytes: [u8; 32] = match hex::decode(public_key) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            arr
+        }
+        _ => {
+            warn!("Discord signature verification failed: invalid public key hex");
+            return false;
+        }
+    };
+
+    let verifying_key = match VerifyingKey::from_bytes(&pk_bytes) {
+        Ok(vk) => vk,
+        Err(_) => {
+            warn!("Discord signature verification failed: invalid Ed25519 public key");
+            return false;
+        }
+    };
+
+    // Decode the hex-encoded signature (64 bytes).
+    let sig_bytes: [u8; 64] = match hex::decode(signature) {
+        Ok(bytes) if bytes.len() == 64 => {
+            let mut arr = [0u8; 64];
+            arr.copy_from_slice(&bytes);
+            arr
+        }
+        _ => {
+            warn!("Discord signature verification failed: invalid signature hex");
+            return false;
+        }
+    };
+
+    let sig = Signature::from_bytes(&sig_bytes);
+
+    // The signed message is timestamp + body concatenated.
+    let mut message = Vec::with_capacity(timestamp.len() + body.len());
+    message.extend_from_slice(timestamp.as_bytes());
+    message.extend_from_slice(body.as_bytes());
+
+    verifying_key.verify_strict(&message, &sig).is_ok()
 }
 
 /// Parsed Discord interaction from a webhook POST.
@@ -1876,16 +1913,61 @@ mod tests {
         assert!(rows.is_empty());
     }
 
-    // -- Verify interaction signature stub --
+    // -- Verify interaction signature (Ed25519) --
 
     #[test]
-    fn test_interaction_signature_stub() {
-        // The stub always returns true (documented behavior)
-        assert!(verify_interaction_signature(
-            "pubkey",
+    fn test_interaction_signature_rejects_invalid_hex() {
+        // Invalid hex should be rejected (fail-closed).
+        assert!(!verify_interaction_signature(
+            "not-hex",
             "timestamp",
             "body",
-            "signature"
+            "also-not-hex"
+        ));
+    }
+
+    #[test]
+    fn test_interaction_signature_rejects_wrong_length() {
+        // Valid hex but wrong length should be rejected.
+        assert!(!verify_interaction_signature(
+            "aabb",
+            "timestamp",
+            "body",
+            "ccdd"
+        ));
+    }
+
+    #[test]
+    fn test_interaction_signature_real_keypair() {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        // Generate a real keypair and sign a message.
+        let secret = SigningKey::from_bytes(&[42u8; 32]);
+        let public = secret.verifying_key();
+        let public_hex = hex::encode(public.as_bytes());
+
+        let timestamp = "1234567890";
+        let body = r#"{"type":1}"#;
+        let mut message = Vec::new();
+        message.extend_from_slice(timestamp.as_bytes());
+        message.extend_from_slice(body.as_bytes());
+
+        let sig = secret.sign(&message);
+        let sig_hex = hex::encode(sig.to_bytes());
+
+        // Valid signature should pass.
+        assert!(verify_interaction_signature(
+            &public_hex, timestamp, body, &sig_hex
+        ));
+
+        // Tampered body should fail.
+        assert!(!verify_interaction_signature(
+            &public_hex, timestamp, "tampered", &sig_hex
+        ));
+
+        // Tampered timestamp should fail.
+        assert!(!verify_interaction_signature(
+            &public_hex, "9999999999", body, &sig_hex
         ));
     }
 
