@@ -1222,14 +1222,12 @@ fn resolve_config(config: Option<String>) -> anyhow::Result<String> {
     }
 }
 
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    // Initialize tracing based on flags: --verbose sets debug, --quiet sets error,
-    // otherwise respect RUST_LOG or default to warn.
-    let filter = if cli.verbose {
+/// Initialize the tracing subscriber. Only call this when needed -- fast-path
+/// commands (daemon status, list) skip tracing to minimize startup latency.
+fn init_tracing(verbose: bool, quiet: bool) {
+    let filter = if verbose {
         EnvFilter::new("debug")
-    } else if cli.quiet {
+    } else if quiet {
         EnvFilter::new("error")
     } else {
         EnvFilter::from_default_env()
@@ -1239,12 +1237,40 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(filter)
         .with_target(false)
         .init();
+}
 
-    let command = match cli.command {
+fn main() -> anyhow::Result<()> {
+    let Cli {
+        verbose,
+        quiet,
+        auto,
+        command,
+    } = Cli::parse();
+
+    // Fast path: bare `aegis` launches the fleet TUI hub which handles its own logging.
+    let command = match command {
         Some(cmd) => cmd,
-        None => return commands::default_action::run(cli.auto.as_deref()),
+        None => return commands::default_action::run(auto.as_deref()),
     };
 
+    // Fast-path daemon subcommands: status, agents, pending -- skip tracing init.
+    let needs_tracing = if let Commands::Daemon { ref action } = command {
+        !matches!(
+            action,
+            DaemonCommands::Status | DaemonCommands::Agents | DaemonCommands::Pending { .. }
+        )
+    } else {
+        !matches!(command, Commands::List | Commands::Use { .. })
+    };
+
+    if needs_tracing {
+        init_tracing(verbose, quiet);
+    }
+
+    dispatch_command(command)
+}
+
+fn dispatch_command(command: Commands) -> anyhow::Result<()> {
     match command {
         Commands::Setup => commands::setup::run(),
         Commands::Init { name, policy, dir } => {
@@ -1256,7 +1282,9 @@ fn main() -> anyhow::Result<()> {
             tag,
             command,
         } => {
-            eprintln!("Note: `aegis run` is deprecated. Use `aegis wrap` instead (add --seatbelt for sandbox enforcement).");
+            eprintln!(
+                "Note: `aegis run` is deprecated. Use `aegis wrap` instead (add --seatbelt for sandbox enforcement)."
+            );
             let (cmd, args) = command.split_first().ok_or_else(|| {
                 anyhow::anyhow!("no command specified; usage: aegis run -- <command> [args...]")
             })?;
@@ -1410,7 +1438,13 @@ fn main() -> anyhow::Result<()> {
                 config,
             } => {
                 let config = resolve_config(config)?;
-                commands::sessions::list(&config, sender.as_deref(), channel.as_deref(), resumable, limit)
+                commands::sessions::list(
+                    &config,
+                    sender.as_deref(),
+                    channel.as_deref(),
+                    resumable,
+                    limit,
+                )
             }
             SessionCommands::Show { session_id, config } => {
                 let config = resolve_config(config)?;
@@ -1428,17 +1462,11 @@ fn main() -> anyhow::Result<()> {
                 let config = resolve_config(config)?;
                 commands::sessions::resume(&config, &agent, &session_id)
             }
-            SessionCommands::Inspect {
-                session_id,
-                config,
-            } => {
+            SessionCommands::Inspect { session_id, config } => {
                 let config = resolve_config(config)?;
                 commands::sessions::inspect(&config, &session_id)
             }
-            SessionCommands::Reset {
-                session_id,
-                config,
-            } => {
+            SessionCommands::Reset { session_id, config } => {
                 let config = resolve_config(config)?;
                 commands::sessions::reset(&config, &session_id)
             }
@@ -1450,17 +1478,11 @@ fn main() -> anyhow::Result<()> {
                 let config = resolve_config(config)?;
                 commands::sessions::delete(&config, &session_id, confirm)
             }
-            SessionCommands::Fork {
-                session_id,
-                config,
-            } => {
+            SessionCommands::Fork { session_id, config } => {
                 let config = resolve_config(config)?;
                 commands::sessions::fork(&config, &session_id)
             }
-            SessionCommands::Tree {
-                session_id,
-                config,
-            } => {
+            SessionCommands::Tree { session_id, config } => {
                 let config = resolve_config(config)?;
                 commands::sessions::tree(&config, &session_id)
             }
@@ -1666,7 +1688,7 @@ fn main() -> anyhow::Result<()> {
                     _ => {
                         return Err(anyhow::anyhow!(
                             "latest-frame requires all of --x, --y, --width, --height"
-                        ))
+                        ));
                     }
                 };
                 commands::daemon::latest_frame(&name, region)

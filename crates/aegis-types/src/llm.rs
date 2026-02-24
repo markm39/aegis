@@ -158,10 +158,7 @@ impl LlmMessage {
     }
 
     /// Create an assistant message that includes tool calls.
-    pub fn assistant_with_tools(
-        content: impl Into<String>,
-        tool_calls: Vec<LlmToolCall>,
-    ) -> Self {
+    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<LlmToolCall>) -> Self {
         Self {
             role: LlmRole::Assistant,
             content: content.into(),
@@ -365,9 +362,8 @@ impl AnthropicConfig {
 
     /// Validate that the base URL is safe (HTTPS, no SSRF targets).
     pub fn validate_endpoint(&self) -> Result<(), AegisError> {
-        validate_endpoint_url(&self.base_url).map_err(|e| {
-            AegisError::ConfigError(e.to_string().replace("Gemini", "Anthropic"))
-        })
+        validate_endpoint_url(&self.base_url)
+            .map_err(|e| AegisError::ConfigError(e.to_string().replace("Gemini", "Anthropic")))
     }
 }
 
@@ -436,9 +432,8 @@ impl OpenAiConfig {
 
     /// Validate that the base URL is safe (HTTPS, no SSRF targets).
     pub fn validate_endpoint(&self) -> Result<(), AegisError> {
-        validate_endpoint_url(&self.base_url).map_err(|e| {
-            AegisError::ConfigError(e.to_string().replace("Gemini", "OpenAI"))
-        })
+        validate_endpoint_url(&self.base_url)
+            .map_err(|e| AegisError::ConfigError(e.to_string().replace("Gemini", "OpenAI")))
     }
 }
 
@@ -513,9 +508,8 @@ impl GeminiProviderConfig {
     /// The Gemini endpoint is always the public Google API; we validate against
     /// the constant to prevent SSRF via configuration tampering.
     pub fn validate_endpoint(&self) -> Result<(), AegisError> {
-        validate_endpoint_url(DEFAULT_GEMINI_ENDPOINT).map_err(|e| {
-            AegisError::ConfigError(e.to_string().replace("Gemini", "Google Gemini"))
-        })
+        validate_endpoint_url(DEFAULT_GEMINI_ENDPOINT)
+            .map_err(|e| AegisError::ConfigError(e.to_string().replace("Gemini", "Google Gemini")))
     }
 }
 
@@ -638,9 +632,8 @@ impl OpenRouterConfig {
 
     /// Validate the OpenRouter endpoint URL for SSRF protection.
     pub fn validate_endpoint(&self) -> Result<(), AegisError> {
-        validate_endpoint_url(DEFAULT_OPENROUTER_ENDPOINT).map_err(|e| {
-            AegisError::ConfigError(e.to_string().replace("Gemini", "OpenRouter"))
-        })
+        validate_endpoint_url(DEFAULT_OPENROUTER_ENDPOINT)
+            .map_err(|e| AegisError::ConfigError(e.to_string().replace("Gemini", "OpenRouter")))
     }
 }
 
@@ -705,6 +698,7 @@ impl ProviderConfig {
 ///
 /// Routes model identifiers to their provider based on prefix matching:
 /// - `claude-*` -> Anthropic
+/// - `gpt-5.3-codex*` -> OpenAI Codex
 /// - `gpt-*`, `o1-*`, `o3-*` -> OpenAI
 /// - `gemini-*` -> Google
 /// - `llama*`, `mistral*`, `codellama*`, `phi*` -> Ollama (when registered)
@@ -730,6 +724,7 @@ impl ProviderRegistry {
     pub fn new() -> Self {
         let prefix_routes = vec![
             ("claude-".to_string(), "anthropic".to_string()),
+            ("gpt-5.3-codex".to_string(), "openai-codex".to_string()),
             ("gpt-".to_string(), "openai".to_string()),
             ("o1-".to_string(), "openai".to_string()),
             ("o3-".to_string(), "openai".to_string()),
@@ -878,9 +873,7 @@ impl ProviderRegistry {
                         name: c.default_model.clone(),
                         provider: name.clone(),
                         max_tokens: 128_000,
-                        capabilities: vec![
-                            "tool_use".to_string(),
-                        ],
+                        capabilities: vec!["tool_use".to_string()],
                     });
                 }
                 ProviderConfig::OpenRouter(c) => {
@@ -1701,26 +1694,19 @@ mod tests {
             Some("anthropic")
         );
         assert_eq!(registry.resolve_provider("gpt-4o"), Some("openai"));
+        assert_eq!(registry.resolve_provider("gpt-4-turbo"), Some("openai"));
+        assert_eq!(registry.resolve_provider("o1-preview"), Some("openai"));
+        assert_eq!(registry.resolve_provider("o3-mini"), Some("openai"));
         assert_eq!(
-            registry.resolve_provider("gpt-4-turbo"),
-            Some("openai")
+            registry.resolve_provider("gpt-5.3-codex"),
+            Some("openai-codex")
         );
         assert_eq!(
-            registry.resolve_provider("o1-preview"),
-            Some("openai")
+            registry.resolve_provider("gpt-5.3-codex-spark"),
+            Some("openai-codex")
         );
-        assert_eq!(
-            registry.resolve_provider("o3-mini"),
-            Some("openai")
-        );
-        assert_eq!(
-            registry.resolve_provider("gemini-pro"),
-            Some("google")
-        );
-        assert_eq!(
-            registry.resolve_provider("gemini-1.5-pro"),
-            Some("google")
-        );
+        assert_eq!(registry.resolve_provider("gemini-pro"), Some("google"));
+        assert_eq!(registry.resolve_provider("gemini-1.5-pro"), Some("google"));
     }
 
     // -- Model prefix matching --
@@ -1815,8 +1801,7 @@ mod tests {
         let openai = to_openai_message(&msg);
         let tcs = openai.tool_calls.as_ref().unwrap();
         assert_eq!(tcs[0].function.name, "eviltool");
-        let args: serde_json::Value =
-            serde_json::from_str(&tcs[0].function.arguments).unwrap();
+        let args: serde_json::Value = serde_json::from_str(&tcs[0].function.arguments).unwrap();
         assert_eq!(args["cmd"], "rm -rf /");
     }
 
@@ -1937,10 +1922,7 @@ mod tests {
             )
             .unwrap();
         registry
-            .register_provider(
-                "openai",
-                ProviderConfig::OpenAi(OpenAiConfig::default()),
-            )
+            .register_provider("openai", ProviderConfig::OpenAi(OpenAiConfig::default()))
             .unwrap();
 
         let models = registry.list_all_models();
@@ -2090,7 +2072,8 @@ mod tests {
 
     #[test]
     fn gemini_response_parsing() {
-        let json: serde_json::Value = serde_json::from_str(r#"{
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
             "candidates": [{
                 "content": {
                     "parts": [{"text": "Hello! I am Gemini."}],
@@ -2102,7 +2085,9 @@ mod tests {
                 "promptTokenCount": 15,
                 "candidatesTokenCount": 8
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = from_gemini_response(&json, "gemini-2.0-flash").unwrap();
         assert_eq!(resp.content, "Hello! I am Gemini.");
@@ -2115,7 +2100,8 @@ mod tests {
 
     #[test]
     fn gemini_function_call_response() {
-        let json: serde_json::Value = serde_json::from_str(r#"{
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
             "candidates": [{
                 "content": {
                     "parts": [
@@ -2130,7 +2116,9 @@ mod tests {
                 "promptTokenCount": 20,
                 "candidatesTokenCount": 15
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = from_gemini_response(&json, "gemini-2.0-flash").unwrap();
         assert_eq!(resp.content, "Let me search for that.");
@@ -2288,23 +2276,23 @@ mod tests {
         assert_eq!(chain, vec!["gpt-4o"]);
 
         // Set a failover chain.
-        registry.set_failover("gpt-4o", vec![
-            "claude-sonnet-4-20250514".to_string(),
-            "gemini-2.0-flash".to_string(),
-        ]);
+        registry.set_failover(
+            "gpt-4o",
+            vec![
+                "claude-sonnet-4-20250514".to_string(),
+                "gemini-2.0-flash".to_string(),
+            ],
+        );
 
         let chain = registry.get_failover_chain("gpt-4o");
-        assert_eq!(chain, vec![
-            "gpt-4o",
-            "claude-sonnet-4-20250514",
-            "gemini-2.0-flash",
-        ]);
+        assert_eq!(
+            chain,
+            vec!["gpt-4o", "claude-sonnet-4-20250514", "gemini-2.0-flash",]
+        );
 
         // Failover with alias resolves the alias first.
         registry.add_alias("fast", "gemini-2.0-flash");
-        registry.set_failover("gemini-2.0-flash", vec![
-            "gpt-4o-mini".to_string(),
-        ]);
+        registry.set_failover("gemini-2.0-flash", vec!["gpt-4o-mini".to_string()]);
 
         let chain = registry.get_failover_chain("fast");
         assert_eq!(chain, vec!["gemini-2.0-flash", "gpt-4o-mini"]);
@@ -2317,28 +2305,43 @@ mod tests {
         let mut registry = ProviderRegistry::new();
 
         registry
-            .register_provider("anthropic", ProviderConfig::Anthropic(AnthropicConfig::default()))
+            .register_provider(
+                "anthropic",
+                ProviderConfig::Anthropic(AnthropicConfig::default()),
+            )
             .unwrap();
         registry
             .register_provider("openai", ProviderConfig::OpenAi(OpenAiConfig::default()))
             .unwrap();
         registry
-            .register_provider("google", ProviderConfig::Gemini(GeminiProviderConfig::default()))
+            .register_provider(
+                "google",
+                ProviderConfig::Gemini(GeminiProviderConfig::default()),
+            )
             .unwrap();
         registry
             .register_provider("ollama", ProviderConfig::Ollama(OllamaConfig::default()))
             .unwrap();
         registry
-            .register_provider("openrouter", ProviderConfig::OpenRouter(OpenRouterConfig::default()))
+            .register_provider(
+                "openrouter",
+                ProviderConfig::OpenRouter(OpenRouterConfig::default()),
+            )
             .unwrap();
 
         // All 5 providers registered.
         assert_eq!(registry.provider_names().len(), 5);
 
         // Model routing works for all providers.
-        assert_eq!(registry.resolve_provider("claude-sonnet-4-20250514"), Some("anthropic"));
+        assert_eq!(
+            registry.resolve_provider("claude-sonnet-4-20250514"),
+            Some("anthropic")
+        );
         assert_eq!(registry.resolve_provider("gpt-4o"), Some("openai"));
-        assert_eq!(registry.resolve_provider("gemini-2.0-flash"), Some("google"));
+        assert_eq!(
+            registry.resolve_provider("gemini-2.0-flash"),
+            Some("google")
+        );
         assert_eq!(registry.resolve_provider("llama3.2"), Some("ollama"));
 
         // All models listed.

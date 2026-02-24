@@ -174,7 +174,8 @@ static ANTHROPIC_FLOWS: &[AuthFlowKind] = &[
         extraction: TokenExtraction::JsonField("oauthAccessToken"),
     },
     AuthFlowKind::SetupToken {
-        instructions: "In a separate terminal, run:\n\n  claude setup-token\n\nThen paste the token here.",
+        instructions:
+            "In a separate terminal, run:\n\n  claude setup-token\n\nThen paste the token here.",
     },
     AuthFlowKind::PkceBrowser {
         client_id_source: ClientIdSource::Static {
@@ -223,7 +224,8 @@ static GOOGLE_FLOWS: &[AuthFlowKind] = &[
     AuthFlowKind::PkceBrowser {
         client_id_source: ClientIdSource::CliExtraction {
             cli_name: "Gemini CLI",
-            search_path: ".npm/_npx/**/node_modules/@google/gemini-cli-core/dist/src/core/oauth2.js",
+            search_path:
+                ".npm/_npx/**/node_modules/@google/gemini-cli-core/dist/src/core/oauth2.js",
             id_regex: r"(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)",
             secret_regex: r"(GOCSPX-[A-Za-z0-9_-]+)",
         },
@@ -240,8 +242,8 @@ static GOOGLE_FLOWS: &[AuthFlowKind] = &[
     AuthFlowKind::ApiKey,
 ];
 
-/// OpenAI auth flows (ordered: most convenient first).
-static OPENAI_FLOWS: &[AuthFlowKind] = &[
+/// OpenAI Codex auth flows (ordered: most convenient first).
+static OPENAI_CODEX_FLOWS: &[AuthFlowKind] = &[
     AuthFlowKind::CliExtract {
         cli_name: "OpenAI Codex CLI",
         config_rel_path: ".codex/auth.json",
@@ -274,7 +276,7 @@ static NO_AUTH: &[AuthFlowKind] = &[];
 pub fn auth_flows_for(provider_id: &str) -> &'static [AuthFlowKind] {
     match provider_id {
         "anthropic" => ANTHROPIC_FLOWS,
-        "openai" => OPENAI_FLOWS,
+        "openai-codex" => OPENAI_CODEX_FLOWS,
         "github-copilot" => COPILOT_FLOWS,
         "qwen" => QWEN_FLOWS,
         "minimax" => MINIMAX_FLOWS,
@@ -326,7 +328,10 @@ mod tests {
     fn qwen_has_device_flow_and_api_key() {
         let flows = auth_flows_for("qwen");
         assert_eq!(flows.len(), 2);
-        assert!(matches!(flows[0], AuthFlowKind::DeviceFlow { use_pkce: true, .. }));
+        assert!(matches!(
+            flows[0],
+            AuthFlowKind::DeviceFlow { use_pkce: true, .. }
+        ));
         assert!(matches!(flows[1], AuthFlowKind::ApiKey));
     }
 
@@ -351,12 +356,19 @@ mod tests {
     }
 
     #[test]
-    fn openai_has_three_flows() {
-        let flows = auth_flows_for("openai");
+    fn openai_codex_has_three_flows() {
+        let flows = auth_flows_for("openai-codex");
         assert_eq!(flows.len(), 3);
         assert!(matches!(flows[0], AuthFlowKind::CliExtract { .. }));
         assert!(matches!(flows[1], AuthFlowKind::PkceBrowser { .. }));
         assert!(matches!(flows[2], AuthFlowKind::ApiKey));
+    }
+
+    #[test]
+    fn openai_is_api_key_only() {
+        let flows = auth_flows_for("openai");
+        assert_eq!(flows.len(), 1);
+        assert!(matches!(flows[0], AuthFlowKind::ApiKey));
     }
 
     #[test]
@@ -368,10 +380,11 @@ mod tests {
     #[test]
     fn multiple_auth_flows_check() {
         assert!(has_multiple_auth_flows("anthropic"));
-        assert!(has_multiple_auth_flows("openai"));
+        assert!(has_multiple_auth_flows("openai-codex"));
         assert!(has_multiple_auth_flows("qwen"));
         assert!(has_multiple_auth_flows("minimax"));
         assert!(has_multiple_auth_flows("google"));
+        assert!(!has_multiple_auth_flows("openai"));
         assert!(!has_multiple_auth_flows("github-copilot"));
     }
 

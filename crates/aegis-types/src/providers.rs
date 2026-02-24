@@ -148,10 +148,7 @@ pub struct DetectedProvider {
 
 /// Scan all providers and return detection results.
 pub fn scan_providers() -> Vec<DetectedProvider> {
-    ALL_PROVIDERS
-        .iter()
-        .map(detect_provider)
-        .collect()
+    ALL_PROVIDERS.iter().map(detect_provider).collect()
 }
 
 /// Detect availability of a single provider.
@@ -164,8 +161,7 @@ pub fn scan_providers() -> Vec<DetectedProvider> {
 /// 5. TCP probe for local services (Ollama, vLLM, LiteLLM)
 pub fn detect_provider(info: &'static ProviderInfo) -> DetectedProvider {
     // Check environment variable
-    let key_set = has_env_var(info.env_var)
-        || info.alt_env_vars.iter().any(|v| has_env_var(v));
+    let key_set = has_env_var(info.env_var) || info.alt_env_vars.iter().any(|v| has_env_var(v));
 
     // Check OAuth token store
     let has_oauth_token = check_oauth_token_store(info.id);
@@ -183,7 +179,8 @@ pub fn detect_provider(info: &'static ProviderInfo) -> DetectedProvider {
         false
     };
 
-    let available = key_set || has_oauth_token || has_cli_token || has_stored_credential || probe_ok;
+    let available =
+        key_set || has_oauth_token || has_cli_token || has_stored_credential || probe_ok;
 
     let status_label = if key_set {
         "[API Key]".to_string()
@@ -221,6 +218,7 @@ fn check_oauth_token_store(provider_id: &str) -> bool {
 fn check_cli_token(provider_id: &str) -> bool {
     match provider_id {
         "anthropic" => check_claude_code_token(),
+        "openai-codex" => check_codex_cli_token(),
         "github-copilot" => check_copilot_token_file(),
         _ => false,
     }
@@ -243,14 +241,30 @@ fn check_claude_code_token() -> bool {
         .unwrap_or(false)
 }
 
+/// Check if OpenAI Codex CLI has a stored OAuth token at `~/.codex/auth.json`.
+fn check_codex_cli_token() -> bool {
+    let home = match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() => h,
+        _ => return false,
+    };
+    let path = std::path::PathBuf::from(home).join(".codex/auth.json");
+    if !path.exists() {
+        return false;
+    }
+    // Just check that the file exists and contains something --
+    // actual token extraction happens during the auth flow.
+    std::fs::metadata(&path)
+        .map(|m| m.len() > 2) // More than just "{}"
+        .unwrap_or(false)
+}
+
 /// Check if a Copilot token file exists at `~/.aegis/providers/copilot/tokens.json`.
 fn check_copilot_token_file() -> bool {
     let home = match std::env::var("HOME") {
         Ok(h) if !h.is_empty() => h,
         _ => return false,
     };
-    let path = std::path::PathBuf::from(home)
-        .join(".aegis/providers/copilot/tokens.json");
+    let path = std::path::PathBuf::from(home).join(".aegis/providers/copilot/tokens.json");
     path.exists()
 }
 
@@ -347,6 +361,22 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
             ModelInfo {
                 id: "gpt-5.2",
                 display_name: "GPT-5.2",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5-mini",
+                display_name: "GPT-5 Mini",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.0",
+                display_name: "GPT-5.0",
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,
@@ -539,16 +569,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::OpenaiCompletions,
         auth_method: AuthMethod::ApiKey,
         default_model: "grok-4",
-        models: &[
-            ModelInfo {
-                id: "grok-4",
-                display_name: "Grok 4",
-                context_window: 131_072,
-                max_output_tokens: 8_192,
-                supports_vision: false,
-                supports_thinking: false,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "grok-4",
+            display_name: "Grok 4",
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_thinking: false,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -563,16 +591,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::OpenaiCompletions,
         auth_method: AuthMethod::ApiKey,
         default_model: "auto",
-        models: &[
-            ModelInfo {
-                id: "auto",
-                display_name: "OpenRouter Auto",
-                context_window: 0,
-                max_output_tokens: 0,
-                supports_vision: true,
-                supports_thinking: true,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "auto",
+            display_name: "OpenRouter Auto",
+            context_window: 0,
+            max_output_tokens: 0,
+            supports_vision: true,
+            supports_thinking: true,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -767,16 +793,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::OpenaiCompletions,
         auth_method: AuthMethod::ApiKey,
         default_model: "claude-sonnet-4-6",
-        models: &[
-            ModelInfo {
-                id: "claude-sonnet-4-6",
-                display_name: "Claude Sonnet 4.6 (via Vercel)",
-                context_window: 1_000_000,
-                max_output_tokens: 128_000,
-                supports_vision: true,
-                supports_thinking: true,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "claude-sonnet-4-6",
+            display_name: "Claude Sonnet 4.6 (via Vercel)",
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_thinking: true,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -790,16 +814,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::AnthropicMessages,
         auth_method: AuthMethod::ApiKey,
         default_model: "claude-sonnet-4-6",
-        models: &[
-            ModelInfo {
-                id: "claude-sonnet-4-6",
-                display_name: "Claude Sonnet 4.6 (via Cloudflare)",
-                context_window: 1_000_000,
-                max_output_tokens: 128_000,
-                supports_vision: true,
-                supports_thinking: true,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "claude-sonnet-4-6",
+            display_name: "Claude Sonnet 4.6 (via Cloudflare)",
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_thinking: true,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -844,16 +866,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::OpenaiCompletions,
         auth_method: AuthMethod::ApiKey,
         default_model: "gpt-4o",
-        models: &[
-            ModelInfo {
-                id: "gpt-4o",
-                display_name: "GPT-4o (via LiteLLM)",
-                context_window: 128_000,
-                max_output_tokens: 16_384,
-                supports_vision: true,
-                supports_thinking: false,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "gpt-4o",
+            display_name: "GPT-4o (via LiteLLM)",
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+            supports_vision: true,
+            supports_thinking: false,
+        }],
         dynamic_discovery: true,
         probe_addr: "127.0.0.1:4000",
     },
@@ -1089,16 +1109,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::OpenaiCompletions,
         auth_method: AuthMethod::ApiKey,
         default_model: "kimi-k2.5",
-        models: &[
-            ModelInfo {
-                id: "kimi-k2.5",
-                display_name: "Kimi K2.5",
-                context_window: 256_000,
-                max_output_tokens: 65_536,
-                supports_vision: false,
-                supports_thinking: true,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "kimi-k2.5",
+            display_name: "Kimi K2.5",
+            context_window: 256_000,
+            max_output_tokens: 65_536,
+            supports_vision: false,
+            supports_thinking: true,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -1112,16 +1130,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::AnthropicMessages,
         auth_method: AuthMethod::ApiKey,
         default_model: "k2p5",
-        models: &[
-            ModelInfo {
-                id: "k2p5",
-                display_name: "Kimi K2.5 for Coding",
-                context_window: 262_000,
-                max_output_tokens: 65_536,
-                supports_vision: true,
-                supports_thinking: true,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "k2p5",
+            display_name: "Kimi K2.5 for Coding",
+            context_window: 262_000,
+            max_output_tokens: 65_536,
+            supports_vision: true,
+            supports_thinking: true,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -1291,16 +1307,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::AnthropicMessages,
         auth_method: AuthMethod::ApiKey,
         default_model: "mimo-v2-flash",
-        models: &[
-            ModelInfo {
-                id: "mimo-v2-flash",
-                display_name: "MiMo V2 Flash",
-                context_window: 262_000,
-                max_output_tokens: 65_536,
-                supports_vision: false,
-                supports_thinking: false,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "mimo-v2-flash",
+            display_name: "MiMo V2 Flash",
+            context_window: 262_000,
+            max_output_tokens: 65_536,
+            supports_vision: false,
+            supports_thinking: false,
+        }],
         dynamic_discovery: false,
         probe_addr: "",
     },
@@ -1377,16 +1391,14 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         api_type: ApiType::Ollama,
         auth_method: AuthMethod::None,
         default_model: "llama3.2",
-        models: &[
-            ModelInfo {
-                id: "llama3.2",
-                display_name: "Llama 3.2 (placeholder -- use dynamic discovery)",
-                context_window: 131_072,
-                max_output_tokens: 32_768,
-                supports_vision: false,
-                supports_thinking: false,
-            },
-        ],
+        models: &[ModelInfo {
+            id: "llama3.2",
+            display_name: "Llama 3.2 (placeholder -- use dynamic discovery)",
+            context_window: 131_072,
+            max_output_tokens: 32_768,
+            supports_vision: false,
+            supports_thinking: false,
+        }],
         dynamic_discovery: true,
         probe_addr: "127.0.0.1:11434",
     },
@@ -1555,7 +1567,10 @@ mod tests {
 
     #[test]
     fn primary_providers_have_models() {
-        for p in ALL_PROVIDERS.iter().filter(|p| p.tier == ProviderTier::Primary) {
+        for p in ALL_PROVIDERS
+            .iter()
+            .filter(|p| p.tier == ProviderTier::Primary)
+        {
             assert!(
                 !p.models.is_empty(),
                 "primary provider {} has no models",

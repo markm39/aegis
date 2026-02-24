@@ -9,15 +9,15 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use aegis_types::CredentialStore;
 use aegis_types::daemon::{DaemonConfig, DaemonControlConfig, DashboardConfig, PersistenceConfig};
 use aegis_types::provider_auth::{
-    auth_flows_for, has_multiple_auth_flows, needs_auth, AuthFlowKind,
+    AuthFlowKind, auth_flows_for, has_multiple_auth_flows, needs_auth,
 };
 use aegis_types::providers::{
-    scan_providers, ApiType, DiscoveredModel, ProviderInfo, ProviderTier, ALL_PROVIDERS,
-    discover_ollama_models, discover_openai_compat_models,
+    ALL_PROVIDERS, ApiType, DiscoveredModel, ProviderInfo, ProviderTier, discover_ollama_models,
+    discover_openai_compat_models, scan_providers,
 };
-use aegis_types::CredentialStore;
 
 use super::auth_flow::{self, AuthToken, AuthTokenType, DevicePollResult};
 
@@ -456,10 +456,7 @@ impl OnboardApp {
             CredentialStore::load_default().unwrap_or_else(|_| CredentialStore::default());
 
         // Pre-select first available provider.
-        let provider_selected = providers
-            .iter()
-            .position(|p| p.available)
-            .unwrap_or(0);
+        let provider_selected = providers.iter().position(|p| p.available).unwrap_or(0);
 
         // Default workspace path.
         let workspace_path = home_dir()
@@ -714,8 +711,7 @@ impl OnboardApp {
                     self.provider_searching = false;
                 }
                 KeyCode::Char(c) => {
-                    self.provider_search
-                        .insert(self.provider_search_cursor, c);
+                    self.provider_search.insert(self.provider_search_cursor, c);
                     self.provider_search_cursor += c.len_utf8();
                     self.provider_scroll_offset = 0;
                 }
@@ -847,7 +843,10 @@ impl OnboardApp {
         let models = match api_type {
             ApiType::Ollama => discover_ollama_models(base_url),
             _ => {
-                let api_key = self.credential_store.get(provider_id).map(|c| c.api_key.clone());
+                let api_key = self
+                    .credential_store
+                    .get(provider_id)
+                    .map(|c| c.api_key.clone());
                 discover_openai_compat_models(base_url, api_key.as_deref())
             }
         };
@@ -855,8 +854,9 @@ impl OnboardApp {
         self.model_loading = false;
 
         if models.is_empty() && static_empty {
-            self.model_loading_error =
-                Some("No models discovered. Enter a model ID manually or check the service.".into());
+            self.model_loading_error = Some(
+                "No models discovered. Enter a model ID manually or check the service.".into(),
+            );
         }
 
         self.discovered_models = models;
@@ -923,12 +923,8 @@ impl OnboardApp {
                 }
                 // Store the API key and mark provider as available.
                 let provider_id = self.providers[self.provider_selected].info.id;
-                self.credential_store.set(
-                    provider_id,
-                    self.api_key_input.clone(),
-                    None,
-                    None,
-                );
+                self.credential_store
+                    .set(provider_id, self.api_key_input.clone(), None, None);
                 self.providers[self.provider_selected].available = true;
                 self.providers[self.provider_selected].detection_label = "[Key Set]";
                 // Go to model selection.
@@ -996,9 +992,7 @@ impl OnboardApp {
                 AuthTokenType::OAuthAccess => {
                     aegis_types::provider_auth::CredentialType::OAuthToken
                 }
-                AuthTokenType::SetupToken => {
-                    aegis_types::provider_auth::CredentialType::SetupToken
-                }
+                AuthTokenType::SetupToken => aegis_types::provider_auth::CredentialType::SetupToken,
                 AuthTokenType::CliExtracted => {
                     aegis_types::provider_auth::CredentialType::CliExtracted
                 }
@@ -1030,12 +1024,8 @@ impl OnboardApp {
             );
         } else {
             // No credential stored yet -- store model preference only.
-            self.credential_store.set(
-                provider.info.id,
-                String::new(),
-                Some(model),
-                None,
-            );
+            self.credential_store
+                .set(provider.info.id, String::new(), Some(model), None);
         }
 
         // Save credentials to disk (best effort).
@@ -1101,39 +1091,33 @@ impl OnboardApp {
                 }
                 self.provider_sub_step = ProviderSubStep::CliExtractResult;
             }
-            AuthFlowKind::DeviceFlow { .. } => {
-                match auth_flow::start_device_flow(flow) {
-                    Ok(state) => {
-                        self.device_flow = Some(state);
-                        self.device_flow_error = None;
-                        self.provider_sub_step = ProviderSubStep::DeviceFlowWaiting;
-                    }
-                    Err(e) => {
-                        self.error_message =
-                            Some(format!("Failed to start device flow: {e}"));
-                    }
+            AuthFlowKind::DeviceFlow { .. } => match auth_flow::start_device_flow(flow) {
+                Ok(state) => {
+                    self.device_flow = Some(state);
+                    self.device_flow_error = None;
+                    self.provider_sub_step = ProviderSubStep::DeviceFlowWaiting;
                 }
-            }
-            AuthFlowKind::PkceBrowser { .. } => {
-                match auth_flow::start_pkce_browser_flow(flow) {
-                    Ok(state) => {
-                        let auth_url = state.auth_url.clone();
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        std::thread::spawn(move || {
-                            let result = auth_flow::complete_pkce_browser_flow(&state);
-                            let _ = tx.send(result);
-                        });
-                        self.pkce_auth_url = Some(auth_url);
-                        self.pkce_receiver = Some(rx);
-                        self.pkce_error = None;
-                        self.provider_sub_step = ProviderSubStep::PkceBrowserWaiting;
-                    }
-                    Err(e) => {
-                        self.error_message =
-                            Some(format!("Failed to start browser auth: {e}"));
-                    }
+                Err(e) => {
+                    self.error_message = Some(format!("Failed to start device flow: {e}"));
                 }
-            }
+            },
+            AuthFlowKind::PkceBrowser { .. } => match auth_flow::start_pkce_browser_flow(flow) {
+                Ok(state) => {
+                    let auth_url = state.auth_url.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let result = auth_flow::complete_pkce_browser_flow(&state);
+                        let _ = tx.send(result);
+                    });
+                    self.pkce_auth_url = Some(auth_url);
+                    self.pkce_receiver = Some(rx);
+                    self.pkce_error = None;
+                    self.provider_sub_step = ProviderSubStep::PkceBrowserWaiting;
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Failed to start browser auth: {e}"));
+                }
+            },
         }
     }
 
@@ -1144,7 +1128,8 @@ impl OnboardApp {
 
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.auth_flow_selected = (self.auth_flow_selected + 1).min(count.saturating_sub(1));
+                self.auth_flow_selected =
+                    (self.auth_flow_selected + 1).min(count.saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.auth_flow_selected = self.auth_flow_selected.saturating_sub(1);
@@ -1272,9 +1257,9 @@ impl OnboardApp {
                     token
                 };
 
-                // OpenAI OAuth tokens target the ChatGPT backend.
+                // OpenAI Codex OAuth tokens target the ChatGPT backend.
                 let mut final_token = final_token;
-                if provider_id == "openai" && final_token.base_url_override.is_none() {
+                if provider_id == "openai-codex" && final_token.base_url_override.is_none() {
                     final_token.base_url_override =
                         Some("https://chatgpt.com/backend-api".to_string());
                 }
@@ -1307,11 +1292,10 @@ impl OnboardApp {
 
         match rx.try_recv() {
             Ok(Ok(mut token)) => {
-                // OpenAI OAuth tokens are for the ChatGPT backend, not the public API.
+                // OpenAI Codex OAuth tokens are for the ChatGPT backend, not the public API.
                 let provider_id = self.providers[self.provider_selected].info.id;
-                if provider_id == "openai" && token.base_url_override.is_none() {
-                    token.base_url_override =
-                        Some("https://chatgpt.com/backend-api".to_string());
+                if provider_id == "openai-codex" && token.base_url_override.is_none() {
+                    token.base_url_override = Some("https://chatgpt.com/backend-api".to_string());
                 }
                 self.auth_token = Some(token);
                 self.pkce_receiver = None;
@@ -1330,8 +1314,7 @@ impl OnboardApp {
                 // Still waiting for callback.
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.pkce_error =
-                    Some("OAuth callback thread terminated unexpectedly.".into());
+                self.pkce_error = Some("OAuth callback thread terminated unexpectedly.".into());
                 self.pkce_receiver = None;
             }
         }
@@ -1430,10 +1413,7 @@ impl OnboardApp {
                 // Delegate to the active field.
                 match self.gateway_field {
                     GatewayField::Port => {
-                        self.handle_text_input(
-                            key.code,
-                            TextInputTarget::GatewayPort,
-                        );
+                        self.handle_text_input(key.code, TextInputTarget::GatewayPort);
                     }
                     GatewayField::BindAddress => match key.code {
                         KeyCode::Char('j') | KeyCode::Down => {
@@ -1447,10 +1427,7 @@ impl OnboardApp {
                         _ => {}
                     },
                     GatewayField::AuthToken => {
-                        self.handle_text_input(
-                            key.code,
-                            TextInputTarget::GatewayToken,
-                        );
+                        self.handle_text_input(key.code, TextInputTarget::GatewayToken);
                     }
                 }
             }
@@ -1518,8 +1495,7 @@ impl OnboardApp {
                     if result.success {
                         self.service_status = Some(result.message);
                     } else {
-                        self.service_status =
-                            Some(format!("Install failed: {}", result.message));
+                        self.service_status = Some(format!("Install failed: {}", result.message));
                     }
                 }
                 self.step = OnboardStep::HealthCheck;
@@ -1597,10 +1573,7 @@ impl OnboardApp {
 
         // Check credentials.
         let has_creds = !self.credential_store.providers.is_empty()
-            || self
-                .providers
-                .iter()
-                .any(|p| p.available);
+            || self.providers.iter().any(|p| p.available);
         self.health_results.push(HealthResult {
             label: "Credentials".into(),
             passed: has_creds,

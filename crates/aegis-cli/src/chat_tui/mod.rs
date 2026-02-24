@@ -15,9 +15,9 @@ pub mod streaming;
 pub mod system_prompt;
 mod ui;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -471,7 +471,9 @@ fn parse_approval_mode(mode: &str) -> ApprovalProfile {
         "high" => ApprovalProfile::AutoApprove(ActionRisk::High),
         "full" | "full-auto" => ApprovalProfile::FullAuto,
         _ => {
-            eprintln!("Warning: unknown --auto mode '{mode}', using 'manual'. Options: off, edits, high, full");
+            eprintln!(
+                "Warning: unknown --auto mode '{mode}', using 'manual'. Options: off, edits, high, full"
+            );
             ApprovalProfile::Manual
         }
     }
@@ -3849,6 +3851,8 @@ fn resolve_model_input(input: &str) -> (String, Option<&'static str>) {
     let lower = input.to_lowercase();
     let provider_id = if lower.starts_with("claude-") {
         Some("anthropic")
+    } else if lower == "gpt-5.3-codex" || lower.starts_with("gpt-5.3-codex-") {
+        Some("openai-codex")
     } else if lower.starts_with("gpt-")
         || lower.starts_with("o1-")
         || lower.starts_with("o3-")
@@ -4253,11 +4257,12 @@ mod tests {
     fn unknown_command_shows_error() {
         let mut app = make_app();
         app.execute_command("foobar");
-        assert!(app
-            .command_result
-            .as_ref()
-            .unwrap()
-            .contains("Unknown command"));
+        assert!(
+            app.command_result
+                .as_ref()
+                .unwrap()
+                .contains("Unknown command")
+        );
     }
 
     #[test]

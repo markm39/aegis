@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use aegis_types::credentials::CredentialStore;
 use aegis_types::llm::{
-    to_anthropic_message, LlmMessage, LlmResponse, LlmRole, LlmToolCall, LlmUsage, StopReason,
+    LlmMessage, LlmResponse, LlmRole, LlmToolCall, LlmUsage, StopReason, to_anthropic_message,
 };
 use aegis_types::providers::provider_by_id;
 
@@ -33,19 +33,39 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 /// 2. Credential store (`~/.aegis/credentials.toml`)
 /// 3. OAuth token store (`~/.aegis/oauth/{provider}/token.json`)
 fn resolve_provider_key(provider_id: &str) -> Result<String, String> {
-    let provider = provider_by_id(provider_id)
-        .ok_or_else(|| format!("unknown provider: {provider_id}"))?;
+    let provider =
+        provider_by_id(provider_id).ok_or_else(|| format!("unknown provider: {provider_id}"))?;
 
     let store = CredentialStore::load_default().unwrap_or_default();
 
-    store.resolve_api_key(provider).ok_or_else(|| {
-        format!(
-            "configuration error: environment variable '{}' not set \
-             and no stored credentials found for {} \
-             (run `aegis` to set up authentication)",
-            provider.env_var, provider.display_name,
-        )
-    })
+    if let Some(key) = store.resolve_api_key(provider) {
+        return Ok(key);
+    }
+
+    // Backward-compat shim: older builds stored Codex OAuth credentials under
+    // `openai` instead of `openai-codex`.
+    if provider_id == "openai-codex" {
+        use aegis_types::provider_auth::CredentialType;
+        if let Some(legacy) = store.get("openai") {
+            let is_legacy_codex_oauth = legacy.credential_type == CredentialType::OAuthToken
+                && legacy
+                    .base_url
+                    .as_deref()
+                    .map(|u| u.contains("chatgpt.com"))
+                    .unwrap_or(false)
+                && !legacy.api_key.is_empty();
+            if is_legacy_codex_oauth {
+                return Ok(legacy.api_key.clone());
+            }
+        }
+    }
+
+    Err(format!(
+        "configuration error: environment variable '{}' not set \
+         and no stored credentials found for {} \
+         (run `aegis` to set up authentication)",
+        provider.env_var, provider.display_name,
+    ))
 }
 
 /// Resolve the base URL for a provider.
@@ -97,10 +117,11 @@ pub(super) fn stream_llm_call(
     if is_anthropic_model(&params.model) {
         stream_anthropic(params, event_tx)
     } else if is_openai_model(&params.model) {
+        let provider_id = openai_provider_for_model(&params.model);
         // Route to Responses API for OAuth users (ChatGPT backend) or always
         // for models that only exist on the Responses API.
-        if should_use_responses_api("openai") {
-            stream_openai_responses(params, event_tx)
+        if provider_id == "openai-codex" || should_use_responses_api(provider_id) {
+            stream_openai_responses(params, event_tx, provider_id)
         } else {
             stream_openai(params, event_tx)
         }
@@ -131,6 +152,16 @@ fn is_anthropic_model(model: &str) -> bool {
 /// Check if this is an OpenAI model name.
 fn is_openai_model(model: &str) -> bool {
     model.starts_with("gpt-") || model.starts_with("codex-")
+}
+
+/// Route OpenAI-family models between direct OpenAI and Codex OAuth providers.
+fn openai_provider_for_model(model: &str) -> &'static str {
+    let lower = model.trim().to_lowercase();
+    if lower == "gpt-5.3-codex" || lower.starts_with("gpt-5.3-codex-") {
+        "openai-codex"
+    } else {
+        "openai"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,10 +291,7 @@ fn parse_anthropic_sse(
                         model = m.to_string();
                     }
                     // Extract input token usage from message_start.
-                    if let Some(u) = event
-                        .get("message")
-                        .and_then(|msg| msg.get("usage"))
-                    {
+                    if let Some(u) = event.get("message").and_then(|msg| msg.get("usage")) {
                         if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
                             usage.input_tokens = inp;
                         }
@@ -528,8 +556,8 @@ fn parse_openai_sse(
                     // Tool call deltas.
                     if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                         for tc in tcs {
-                            let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0)
-                                as usize;
+                            let idx =
+                                tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
                             // Extend tool_calls vec if needed.
                             while tool_calls.len() <= idx {
@@ -547,9 +575,7 @@ fn parse_openai_sse(
                                 if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
                                     tool_calls[idx].name = name.to_string();
                                 }
-                                if let Some(args) =
-                                    func.get("arguments").and_then(|v| v.as_str())
-                                {
+                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
                                     tool_calls[idx].input_json.push_str(args);
                                 }
                             }
@@ -655,12 +681,14 @@ fn to_responses_input(messages: &[LlmMessage]) -> Vec<Value> {
 fn stream_openai_responses(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
+    provider_id: &str,
 ) -> Result<StreamingCallResult, String> {
-    let api_key = resolve_provider_key("openai")?;
-    let base_url = resolve_provider_base_url("openai");
+    let api_key = resolve_provider_key(provider_id)?;
+    let base_url = resolve_provider_base_url(provider_id);
 
     // ChatGPT backend uses /codex/responses, public API uses /v1/responses.
-    let url = if base_url.contains("chatgpt.com") {
+    let is_codex_backend = provider_id == "openai-codex" || base_url.contains("chatgpt.com");
+    let url = if is_codex_backend {
         format!("{}/codex/responses", base_url.trim_end_matches('/'))
     } else {
         format!("{}/v1/responses", base_url.trim_end_matches('/'))
@@ -673,7 +701,9 @@ fn stream_openai_responses(
         "model": params.model,
         "input": input,
         "stream": true,
-        "store": false,
+        // Direct OpenAI Responses expects store=true by default; Codex backend
+        // requires store=false.
+        "store": !is_codex_backend,
     });
 
     // System prompt goes in `instructions`.
@@ -727,7 +757,9 @@ fn stream_openai_responses(
     let status = resp.status();
     if !status.is_success() {
         let err_text = resp.text().unwrap_or_default();
-        return Err(format!("OpenAI Responses API returned {status}: {err_text}"));
+        return Err(format!(
+            "OpenAI Responses API returned {status}: {err_text}"
+        ));
     }
 
     parse_responses_sse(resp, event_tx, &params.model)
@@ -820,8 +852,8 @@ fn parse_responses_sse(
                     .get("arguments")
                     .and_then(|v| v.as_str())
                     .unwrap_or(&current_tool_args);
-                let input: Value = serde_json::from_str(args_str)
-                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                let input: Value =
+                    serde_json::from_str(args_str).unwrap_or(Value::Object(serde_json::Map::new()));
                 tool_calls.push(LlmToolCall {
                     id: current_tool_call_id.clone(),
                     name: current_tool_name.clone(),
@@ -898,6 +930,16 @@ mod tests {
         assert!(is_openai_model("codex-mini-latest"));
         assert!(!is_openai_model("claude-sonnet-4-6"));
         assert!(!is_openai_model("gemini-2.0-flash"));
+    }
+
+    #[test]
+    fn routes_gpt_53_codex_to_openai_codex_provider() {
+        assert_eq!(openai_provider_for_model("gpt-5.3-codex"), "openai-codex");
+        assert_eq!(
+            openai_provider_for_model("gpt-5.3-codex-spark"),
+            "openai-codex"
+        );
+        assert_eq!(openai_provider_for_model("gpt-5.2"), "openai");
     }
 
     #[test]
@@ -1013,13 +1055,10 @@ data: {\"type\":\"message_stop\"}\n";
                             let dt = delta.get("type").and_then(|t| t.as_str());
                             match dt {
                                 Some("text_delta") => {
-                                    if let Some(text) =
-                                        delta.get("text").and_then(|t| t.as_str())
-                                    {
+                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
                                         content.push_str(text);
-                                        let _ = tx.send(AgentLoopEvent::StreamDelta(
-                                            text.to_string(),
-                                        ));
+                                        let _ =
+                                            tx.send(AgentLoopEvent::StreamDelta(text.to_string()));
                                     }
                                 }
                                 Some("input_json_delta") => {
@@ -1156,13 +1195,10 @@ data: {\"type\":\"message_stop\"}\n";
                         if let Some(delta) = event.get("delta") {
                             match delta.get("type").and_then(|t| t.as_str()) {
                                 Some("text_delta") => {
-                                    if let Some(text) =
-                                        delta.get("text").and_then(|t| t.as_str())
-                                    {
+                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
                                         content.push_str(text);
-                                        let _ = tx.send(AgentLoopEvent::StreamDelta(
-                                            text.to_string(),
-                                        ));
+                                        let _ =
+                                            tx.send(AgentLoopEvent::StreamDelta(text.to_string()));
                                     }
                                 }
                                 Some("input_json_delta") => {
