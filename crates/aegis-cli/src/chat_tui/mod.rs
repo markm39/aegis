@@ -3189,6 +3189,19 @@ impl ChatApp {
 
     /// Handle pasted text (bracketed paste).
     pub fn handle_paste(&mut self, text: &str) {
+        // If a Login overlay with key input is active, paste there.
+        if let Some(Overlay::Login {
+            key_input: Some(ref mut input),
+            ..
+        }) = self.overlay
+        {
+            let cleaned = text.replace(['\n', '\r'], "");
+            input.buffer.insert_str(input.cursor, &cleaned);
+            input.cursor += cleaned.len();
+            input.error = None;
+            return;
+        }
+
         match self.input_mode {
             InputMode::Command => {
                 let cleaned = text.replace(['\n', '\r'], " ");

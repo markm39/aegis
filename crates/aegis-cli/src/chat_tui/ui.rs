@@ -729,10 +729,18 @@ fn draw_login(
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )];
-        let cursor_spans = build_cursor_spans(
-            &display_text,
-            input.cursor.min(display_text.len()),
-        );
+        // Convert byte cursor in the original buffer to a byte cursor in the
+        // display text.  The masked text replaces characters with multi-byte
+        // bullets, so byte offsets don't transfer directly.
+        let char_cursor = input.buffer[..input.cursor.min(input.buffer.len())]
+            .chars()
+            .count();
+        let display_cursor = display_text
+            .char_indices()
+            .nth(char_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(display_text.len());
+        let cursor_spans = build_cursor_spans(&display_text, display_cursor);
         spans.extend(cursor_spans);
         f.render_widget(Paragraph::new(Line::from(spans)), input_area);
 
