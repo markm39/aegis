@@ -314,7 +314,40 @@ fn run_agent_slot_inner(
 
     // 4. Create driver and determine spawn strategy
     let driver = create_driver(&slot_config.tool, Some(name));
-    let strategy = driver.spawn_strategy(&working_dir);
+    let mut strategy = driver.spawn_strategy(&working_dir);
+
+    // 4b. Apply Seatbelt sandbox wrapping if configured (macOS only).
+    // Compiles Cedar policies into an SBPL profile and wraps the spawn
+    // command with `sandbox-exec -f <profile>`.
+    #[allow(unused_mut)]
+    let mut _sandbox_tempfile: Option<tempfile::NamedTempFile> = None;
+    #[cfg(target_os = "macos")]
+    if matches!(aegis_config.isolation, aegis_types::IsolationConfig::Seatbelt { .. }) {
+        let compile_result = engine_arc.lock()
+            .map_err(|e| format!("policy engine lock poisoned: {e}"))
+            .and_then(|guard| {
+                aegis_sandbox::compile_cedar_to_sbpl(aegis_config, &guard)
+                    .map_err(|e| format!("{e}"))
+            });
+        match compile_result {
+            Ok(sbpl) => {
+                match write_sbpl_tempfile(&sbpl) {
+                    Ok(tmp) => {
+                        let profile_path = tmp.path().to_string_lossy().to_string();
+                        info!(agent = name_str, profile = %profile_path, "compiled Cedar to SBPL sandbox profile");
+                        wrap_strategy_with_sandbox(&mut strategy, &profile_path);
+                        _sandbox_tempfile = Some(tmp);
+                    }
+                    Err(e) => {
+                        warn!(agent = name_str, error = %e, "failed to write sandbox profile; agent will run unsandboxed");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(agent = name_str, error = %e, "failed to compile sandbox profile; agent will run unsandboxed");
+            }
+        }
+    }
 
     // 5. Compute task injection BEFORE spawn so CliArg can be folded into args.
     //    Orchestrator slots get a specialized prompt with review-cycle instructions.
@@ -606,6 +639,58 @@ fn run_agent_slot_inner(
         stats,
         session_id: Some(session_id),
     })
+}
+
+/// Write an SBPL profile string to a temporary file.
+///
+/// The caller must keep the returned `NamedTempFile` alive until after the
+/// sandboxed child process has started (sandbox-exec reads the file at exec time).
+#[cfg(target_os = "macos")]
+fn write_sbpl_tempfile(sbpl: &str) -> Result<tempfile::NamedTempFile, String> {
+    use std::io::Write;
+    let mut tmp = tempfile::NamedTempFile::new()
+        .map_err(|e| format!("failed to create sandbox profile tempfile: {e}"))?;
+    tmp.write_all(sbpl.as_bytes())
+        .map_err(|e| format!("failed to write sandbox profile: {e}"))?;
+    tmp.flush()
+        .map_err(|e| format!("failed to flush sandbox profile: {e}"))?;
+    Ok(tmp)
+}
+
+/// Wrap a spawn strategy's command with `sandbox-exec -f <profile>`.
+///
+/// Rewrites `Process { command, args, .. }` and `Pty { command, args, .. }` to
+/// prepend `sandbox-exec -f <profile_path>` before the original command. The
+/// `External` variant is left unchanged (nothing to spawn).
+#[cfg(target_os = "macos")]
+fn wrap_strategy_with_sandbox(strategy: &mut SpawnStrategy, profile_path: &str) {
+    match strategy {
+        SpawnStrategy::Process {
+            ref mut command,
+            ref mut args,
+            ..
+        }
+        | SpawnStrategy::Pty {
+            ref mut command,
+            ref mut args,
+            ..
+        } => {
+            let original_command = std::mem::take(command);
+            let original_args = std::mem::take(args);
+
+            *command = "sandbox-exec".to_string();
+            let mut new_args = vec![
+                "-f".to_string(),
+                profile_path.to_string(),
+                original_command,
+            ];
+            new_args.extend(original_args);
+            *args = new_args;
+        }
+        SpawnStrategy::External => {
+            // Nothing to wrap -- external processes are managed outside Aegis.
+        }
+    }
 }
 
 /// Compose a structured prompt from fleet goal, agent identity, and task.

@@ -54,6 +54,4 @@ qrcode = "0.14"
 glob = { workspace = true }
 shlex = "1"
 pdf-extract = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }
