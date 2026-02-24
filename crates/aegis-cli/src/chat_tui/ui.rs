@@ -13,8 +13,7 @@ use ratatui::Frame;
 use super::markdown;
 use super::message::MessageRole;
 use super::render;
-use super::ChatApp;
-use super::InputMode;
+use super::{filter_model_items, ApprovalProfile, ChatApp, InputMode, Overlay};
 
 /// Draw the complete chat TUI frame.
 pub fn draw(f: &mut Frame, app: &mut ChatApp) {
@@ -47,6 +46,11 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
     // Completion popup above command bar
     if app.input_mode == InputMode::Command && !app.command_completions.is_empty() {
         draw_completion_popup(f, app, chunks[3]);
+    }
+
+    // Overlay on top of everything
+    if let Some(ref overlay) = app.overlay {
+        draw_overlay(f, app, overlay, area);
     }
 }
 
@@ -348,6 +352,292 @@ fn build_cursor_spans(text: &str, cursor: usize) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+/// Compute a centered rectangle as a percentage of the parent area.
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+/// Dispatch overlay rendering based on the overlay type.
+fn draw_overlay(f: &mut Frame, app: &ChatApp, overlay: &Overlay, area: Rect) {
+    match overlay {
+        Overlay::ModelPicker {
+            items,
+            filter,
+            selected,
+        } => draw_model_picker(f, items, filter, *selected, area),
+        Overlay::SessionPicker { items, selected } => {
+            draw_session_picker(f, items, *selected, area);
+        }
+        Overlay::Settings { selected } => {
+            draw_settings(f, app, *selected, area);
+        }
+    }
+}
+
+/// Draw the model picker overlay with filter and scrollable list.
+fn draw_model_picker(
+    f: &mut Frame,
+    items: &[(String, String)],
+    filter: &str,
+    selected: usize,
+    area: Rect,
+) {
+    let popup = centered_rect(60, 70, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Model Picker (type to filter, Enter to select, Esc to cancel) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Rgb(25, 25, 25)));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    if inner.height < 3 {
+        return;
+    }
+
+    // Filter input row
+    let filter_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    let filter_display = if filter.is_empty() {
+        Span::styled(
+            " Filter...",
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        Span::styled(
+            format!(" {filter}"),
+            Style::default().fg(Color::White),
+        )
+    };
+    f.render_widget(Paragraph::new(Line::from(filter_display)), filter_area);
+
+    // Separator
+    let sep_area = Rect {
+        x: inner.x,
+        y: inner.y + 1,
+        width: inner.width,
+        height: 1,
+    };
+    let sep = Paragraph::new(Line::from(Span::styled(
+        "\u{2500}".repeat(inner.width as usize),
+        Style::default().fg(Color::Rgb(60, 60, 60)),
+    )));
+    f.render_widget(sep, sep_area);
+
+    // Filtered item list
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y + 2,
+        width: inner.width,
+        height: inner.height.saturating_sub(2),
+    };
+
+    let filtered = filter_model_items(items, filter);
+    if filtered.is_empty() {
+        let msg = Paragraph::new(Line::from(Span::styled(
+            " No matching models",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(msg, list_area);
+        return;
+    }
+
+    // Scroll so selected item is visible.
+    let visible = list_area.height as usize;
+    let scroll_offset = if selected >= visible {
+        selected - visible + 1
+    } else {
+        0
+    };
+
+    let lines: Vec<Line<'static>> = filtered
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(visible)
+        .map(|(i, (id, label))| {
+            let style = if i == selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let text = format!(" {id:40} {label}");
+            let truncated: String = text.chars().take(list_area.width as usize).collect();
+            Line::from(Span::styled(truncated, style))
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(lines), list_area);
+}
+
+/// Draw the session picker overlay.
+fn draw_session_picker(
+    f: &mut Frame,
+    items: &[super::persistence::ConversationMeta],
+    selected: usize,
+    area: Rect,
+) {
+    let popup = centered_rect(70, 60, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Sessions (Enter to resume, d to delete, Esc to cancel) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Rgb(25, 25, 25)));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    if inner.height < 2 || items.is_empty() {
+        let msg = Paragraph::new(Line::from(Span::styled(
+            " No saved sessions",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    // Header row
+    let header_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    let header = Paragraph::new(Line::from(Span::styled(
+        format!(" {:8} {:30} {:>5}  {}", "ID", "Model", "Msgs", "Timestamp"),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )));
+    f.render_widget(header, header_area);
+
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y + 1,
+        width: inner.width,
+        height: inner.height.saturating_sub(1),
+    };
+
+    let visible = list_area.height as usize;
+    let scroll_offset = if selected >= visible {
+        selected - visible + 1
+    } else {
+        0
+    };
+
+    let lines: Vec<Line<'static>> = items
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(visible)
+        .map(|(i, m)| {
+            let style = if i == selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            // Truncate timestamp to date portion for display.
+            let ts = if m.timestamp.len() > 10 {
+                &m.timestamp[..10]
+            } else {
+                &m.timestamp
+            };
+            let text = format!(
+                " {:8} {:30} {:>5}  {}",
+                m.id, m.model, m.message_count, ts,
+            );
+            let truncated: String = text.chars().take(inner.width as usize).collect();
+            Line::from(Span::styled(truncated, style))
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(lines), list_area);
+}
+
+/// Draw the settings overlay.
+fn draw_settings(f: &mut Frame, app: &ChatApp, selected: usize, area: Rect) {
+    let popup = centered_rect(50, 40, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Settings (arrows to navigate, Enter/Space to change, Esc to close) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Rgb(25, 25, 25)));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let settings: Vec<(&str, String)> = vec![
+        (
+            "Show Usage",
+            if app.show_usage {
+                "ON".to_string()
+            } else {
+                "OFF".to_string()
+            },
+        ),
+        (
+            "Thinking",
+            match app.thinking_budget {
+                None => "OFF".to_string(),
+                Some(1024) => "Low (1024)".to_string(),
+                Some(4096) => "Medium (4096)".to_string(),
+                Some(16384) => "High (16384)".to_string(),
+                Some(n) => format!("Custom ({n})"),
+            },
+        ),
+        (
+            "Approval",
+            match &app.approval_profile {
+                ApprovalProfile::Manual => "Manual".to_string(),
+                ApprovalProfile::AutoApprove(risk) => format!("Auto ({risk:?})"),
+                ApprovalProfile::FullAuto => "Full Auto".to_string(),
+            },
+        ),
+    ];
+
+    let lines: Vec<Line<'static>> = settings
+        .into_iter()
+        .enumerate()
+        .map(|(i, (label, value))| {
+            let style = if i == selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let arrow = if i == selected { ">" } else { " " };
+            Line::from(Span::styled(
+                format!(" {arrow} {label:20} {value}"),
+                style,
+            ))
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]

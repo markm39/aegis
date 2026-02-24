@@ -6,6 +6,7 @@
 
 pub mod compaction;
 pub mod event;
+pub mod hooks;
 pub mod markdown;
 pub mod message;
 pub mod persistence;
@@ -51,6 +52,35 @@ pub enum InputMode {
     Scroll,
     /// `/` when input empty: command bar.
     Command,
+}
+
+/// Active overlay in the chat TUI.
+///
+/// Overlays render on top of the main UI and capture all input until
+/// dismissed. They are modal: only one overlay can be active at a time.
+#[derive(Debug, Clone)]
+pub enum Overlay {
+    /// Model picker: filterable list of available models.
+    ModelPicker {
+        /// All available (model_id, display_label) pairs.
+        items: Vec<(String, String)>,
+        /// User-typed filter string.
+        filter: String,
+        /// Index of the selected item in the filtered list.
+        selected: usize,
+    },
+    /// Session picker: list of saved conversations.
+    SessionPicker {
+        /// Saved conversation metadata, newest first.
+        items: Vec<persistence::ConversationMeta>,
+        /// Index of the selected item.
+        selected: usize,
+    },
+    /// Settings panel: toggle options.
+    Settings {
+        /// Index of the selected setting.
+        selected: usize,
+    },
 }
 
 /// Incremental events from the agentic loop running in a background thread.
@@ -250,6 +280,8 @@ fn seed_workspace() -> bool {
         ("IDENTITY.md", include_str!("templates/IDENTITY.md")),
         ("USER.md", include_str!("templates/USER.md")),
         ("TOOLS.md", include_str!("templates/TOOLS.md")),
+        ("MEMORY.md", include_str!("templates/MEMORY.md")),
+        ("HEARTBEAT.md", include_str!("templates/HEARTBEAT.md")),
     ];
 
     let mut is_first_run = false;
@@ -271,6 +303,8 @@ pub struct ChatApp {
     pub running: bool,
     /// Current input mode.
     pub input_mode: InputMode,
+    /// Active overlay (modal popup), if any.
+    pub overlay: Option<Overlay>,
 
     // -- Chat --
     /// Display messages for the chat area.
@@ -370,7 +404,7 @@ const COMMANDS: &[&str] = &[
     "quit", "q", "clear", "new", "compact", "abort", "model", "provider", "help", "usage",
     "think", "think off", "think low", "think medium", "think high",
     "auto", "auto off", "auto edits", "auto high", "auto full",
-    "save", "resume", "sessions",
+    "save", "resume", "sessions", "settings",
     "daemon start", "daemon stop", "daemon status",
     "daemon restart", "daemon reload", "daemon init",
 ];
@@ -381,6 +415,7 @@ impl ChatApp {
         Self {
             running: true,
             input_mode: InputMode::Chat,
+            overlay: None,
 
             messages: Vec::new(),
             scroll_offset: 0,
@@ -813,6 +848,12 @@ impl ChatApp {
             return;
         }
 
+        // If an overlay is active, route all input there.
+        if self.overlay.is_some() {
+            self.handle_overlay_key(key);
+            return;
+        }
+
         // Ctrl+C: cancel or quit
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             match self.input_mode {
@@ -839,6 +880,10 @@ impl ChatApp {
                             &self.model,
                         );
                     }
+                    hooks::fire_hook_event(hooks::ChatHookEvent::SessionEnd {
+                        session_id: self.session_id.clone(),
+                        message_count: self.conversation.len(),
+                    });
                     self.running = false;
                 }
             }
@@ -1328,6 +1373,264 @@ impl ChatApp {
         self.scroll_offset = 0;
     }
 
+    /// Handle key events when an overlay is active.
+    fn handle_overlay_key(&mut self, key: KeyEvent) {
+        // Take ownership temporarily so we can match and mutate.
+        let Some(overlay) = self.overlay.take() else {
+            return;
+        };
+
+        match overlay {
+            Overlay::ModelPicker {
+                items,
+                mut filter,
+                mut selected,
+            } => match key.code {
+                KeyCode::Esc => {
+                    // Close without changing model.
+                }
+                KeyCode::Enter => {
+                    let filtered = filter_model_items(&items, &filter);
+                    if let Some((model_id, _label)) = filtered.get(selected) {
+                        let old = self.model.clone();
+                        self.model = model_id.clone();
+                        self.set_result(format!("Model: {old} -> {model_id}"));
+                    }
+                }
+                KeyCode::Up => {
+                    selected = selected.saturating_sub(1);
+                    self.overlay = Some(Overlay::ModelPicker {
+                        items,
+                        filter,
+                        selected,
+                    });
+                }
+                KeyCode::Down => {
+                    let filtered_len = filter_model_items(&items, &filter).len();
+                    if selected + 1 < filtered_len {
+                        selected += 1;
+                    }
+                    self.overlay = Some(Overlay::ModelPicker {
+                        items,
+                        filter,
+                        selected,
+                    });
+                }
+                KeyCode::Backspace => {
+                    filter.pop();
+                    selected = 0;
+                    self.overlay = Some(Overlay::ModelPicker {
+                        items,
+                        filter,
+                        selected,
+                    });
+                }
+                KeyCode::Char(c) => {
+                    filter.push(c);
+                    selected = 0;
+                    self.overlay = Some(Overlay::ModelPicker {
+                        items,
+                        filter,
+                        selected,
+                    });
+                }
+                _ => {
+                    self.overlay = Some(Overlay::ModelPicker {
+                        items,
+                        filter,
+                        selected,
+                    });
+                }
+            },
+            Overlay::SessionPicker {
+                items,
+                mut selected,
+            } => match key.code {
+                KeyCode::Esc => {
+                    // Close without resuming.
+                }
+                KeyCode::Enter => {
+                    if let Some(meta) = items.get(selected) {
+                        match persistence::load_conversation(&meta.id) {
+                            Ok((messages, meta)) => {
+                                self.conversation = messages;
+                                self.model = meta.model.clone();
+                                self.session_id = meta.id.clone();
+                                self.audit_session_id = None;
+                                self.register_audit_session();
+                                self.rebuild_display_messages();
+                                self.set_result(format!(
+                                    "Resumed {} ({}, {} messages)",
+                                    meta.id, meta.model, meta.message_count
+                                ));
+                            }
+                            Err(e) => {
+                                self.set_result(format!("Failed to resume: {e}"));
+                            }
+                        }
+                    }
+                }
+                KeyCode::Up => {
+                    selected = selected.saturating_sub(1);
+                    self.overlay = Some(Overlay::SessionPicker { items, selected });
+                }
+                KeyCode::Down => {
+                    if selected + 1 < items.len() {
+                        selected += 1;
+                    }
+                    self.overlay = Some(Overlay::SessionPicker { items, selected });
+                }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    // Delete the selected session file.
+                    if let Some(meta) = items.get(selected) {
+                        let path = persistence::conversations_dir()
+                            .join(format!("{}.jsonl", meta.id));
+                        let _ = std::fs::remove_file(&path);
+                        // Rebuild the list.
+                        let new_items: Vec<_> = items
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(i, _)| *i != selected)
+                            .map(|(_, m)| m)
+                            .collect();
+                        let new_selected = selected.min(new_items.len().saturating_sub(1));
+                        if new_items.is_empty() {
+                            self.set_result("No saved sessions.");
+                        } else {
+                            self.overlay = Some(Overlay::SessionPicker {
+                                items: new_items,
+                                selected: new_selected,
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    self.overlay = Some(Overlay::SessionPicker { items, selected });
+                }
+            },
+            Overlay::Settings { mut selected } => match key.code {
+                KeyCode::Esc => {
+                    // Close settings.
+                }
+                KeyCode::Up => {
+                    selected = selected.saturating_sub(1);
+                    self.overlay = Some(Overlay::Settings { selected });
+                }
+                KeyCode::Down => {
+                    // 3 settings rows (0..2).
+                    if selected < 2 {
+                        selected += 1;
+                    }
+                    self.overlay = Some(Overlay::Settings { selected });
+                }
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
+                    self.cycle_setting(selected, false);
+                    self.overlay = Some(Overlay::Settings { selected });
+                }
+                KeyCode::Left => {
+                    self.cycle_setting(selected, true);
+                    self.overlay = Some(Overlay::Settings { selected });
+                }
+                _ => {
+                    self.overlay = Some(Overlay::Settings { selected });
+                }
+            },
+        }
+    }
+
+    /// Cycle a setting value (used by the Settings overlay).
+    ///
+    /// `index`: 0 = show_usage, 1 = thinking, 2 = approval profile.
+    /// `reverse`: cycle backward instead of forward.
+    fn cycle_setting(&mut self, index: usize, reverse: bool) {
+        match index {
+            0 => {
+                // Toggle show_usage.
+                self.show_usage = !self.show_usage;
+            }
+            1 => {
+                // Cycle thinking: off -> low -> medium -> high -> off
+                let levels: &[Option<u32>] =
+                    &[None, Some(1024), Some(4096), Some(16384)];
+                let current = levels.iter().position(|l| *l == self.thinking_budget).unwrap_or(0);
+                let next = if reverse {
+                    if current == 0 { levels.len() - 1 } else { current - 1 }
+                } else {
+                    (current + 1) % levels.len()
+                };
+                self.thinking_budget = levels[next];
+            }
+            2 => {
+                // Cycle approval: Manual -> AutoEdits -> AutoHigh -> FullAuto
+                let profiles = [
+                    ApprovalProfile::Manual,
+                    ApprovalProfile::AutoApprove(ActionRisk::Medium),
+                    ApprovalProfile::AutoApprove(ActionRisk::High),
+                    ApprovalProfile::FullAuto,
+                ];
+                let current = profiles
+                    .iter()
+                    .position(|p| *p == self.approval_profile)
+                    .unwrap_or(0);
+                let next = if reverse {
+                    if current == 0 { profiles.len() - 1 } else { current - 1 }
+                } else {
+                    (current + 1) % profiles.len()
+                };
+                self.approval_profile = profiles[next].clone();
+            }
+            _ => {}
+        }
+    }
+
+    /// Open the model picker overlay.
+    fn open_model_picker(&mut self) {
+        let mut items: Vec<(String, String)> = Vec::new();
+        for provider in aegis_types::providers::ALL_PROVIDERS {
+            for model in provider.models {
+                items.push((
+                    model.id.to_string(),
+                    format!("{} ({})", model.display_name, provider.id),
+                ));
+            }
+        }
+        // Put the currently selected model at the top so it's visible.
+        let current = self.model.clone();
+        items.sort_by(|a, b| {
+            let a_current = a.0 == current;
+            let b_current = b.0 == current;
+            b_current.cmp(&a_current)
+        });
+        self.overlay = Some(Overlay::ModelPicker {
+            items,
+            filter: String::new(),
+            selected: 0,
+        });
+    }
+
+    /// Open the session picker overlay.
+    fn open_session_picker(&mut self) {
+        match persistence::list_conversations() {
+            Ok(items) if items.is_empty() => {
+                self.set_result("No saved sessions.");
+            }
+            Ok(items) => {
+                self.overlay = Some(Overlay::SessionPicker {
+                    items,
+                    selected: 0,
+                });
+            }
+            Err(e) => {
+                self.set_result(format!("Failed to list sessions: {e}"));
+            }
+        }
+    }
+
+    /// Open the settings overlay.
+    fn open_settings(&mut self) {
+        self.overlay = Some(Overlay::Settings { selected: 0 });
+    }
+
     /// Execute a command string.
     fn execute_command(&mut self, input: &str) {
         let trimmed = input.trim();
@@ -1345,6 +1648,10 @@ impl ChatApp {
                         &self.model,
                     );
                 }
+                hooks::fire_hook_event(hooks::ChatHookEvent::SessionEnd {
+                    session_id: self.session_id.clone(),
+                    message_count: self.conversation.len(),
+                });
                 self.running = false;
             }
             "clear" => {
@@ -1372,37 +1679,14 @@ impl ChatApp {
                 }
             }
             "sessions" | "list" => {
-                match persistence::list_conversations() {
-                    Ok(metas) if metas.is_empty() => {
-                        self.set_result("No saved conversations.");
-                    }
-                    Ok(metas) => {
-                        let shown: Vec<String> = metas
-                            .iter()
-                            .take(5)
-                            .map(|m| {
-                                format!(
-                                    "{} ({}, {} msgs, {})",
-                                    m.id, m.model, m.message_count, m.timestamp
-                                )
-                            })
-                            .collect();
-                        let total = metas.len();
-                        let suffix = if total > 5 {
-                            format!(" ... and {} more", total - 5)
-                        } else {
-                            String::new()
-                        };
-                        self.set_result(format!("{}{}", shown.join(" | "), suffix));
-                    }
-                    Err(e) => {
-                        self.set_result(format!("Failed to list sessions: {e}"));
-                    }
-                }
+                self.open_session_picker();
+            }
+            "settings" => {
+                self.open_settings();
             }
             "help" | "h" => {
                 self.set_result(
-                    "/quit  /clear  /new  /compact  /abort  /model <name>  /provider  /usage  /think off|low|medium|high|<n>  /auto off|edits|high|full  /save  /resume <id>  /sessions  /daemon ...  !<cmd>",
+                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /usage  /think off|low|medium|high|<n>  /auto off|edits|high|full  /save  /resume <id>  /sessions  /settings  /daemon ...  !<cmd>",
                 );
             }
             "usage" => {
@@ -1447,7 +1731,7 @@ impl ChatApp {
                 }
             }
             "model" => {
-                self.show_model_info();
+                self.open_model_picker();
             }
             "provider" => {
                 let all: Vec<String> = aegis_types::providers::scan_providers()
@@ -1553,6 +1837,11 @@ impl ChatApp {
                 }
             },
             "new" => {
+                // Fire BeforeReset hook before clearing.
+                hooks::fire_hook_event(hooks::ChatHookEvent::BeforeReset {
+                    session_id: self.session_id.clone(),
+                    message_count: self.conversation.len(),
+                });
                 // Auto-save old conversation if non-empty.
                 if !self.conversation.is_empty() {
                     let _ = persistence::save_conversation(
@@ -1572,6 +1861,10 @@ impl ChatApp {
                 self.total_input_tokens = 0;
                 self.total_output_tokens = 0;
                 self.total_cost_usd = 0.0;
+                // Fire SessionStart hook for the new session.
+                hooks::fire_hook_event(hooks::ChatHookEvent::SessionStart {
+                    session_id: self.session_id.clone(),
+                });
                 self.set_result("New session started");
             }
             "compact" => {
@@ -2170,6 +2463,11 @@ fn run_agent_loop(
                 let _ = event_tx.send(AgentLoopEvent::Done);
                 return;
             }
+            // Fire BeforeToolCall hook.
+            hooks::fire_hook_event(hooks::ChatHookEvent::BeforeToolCall {
+                tool_name: tc.name.clone(),
+                tool_input: tc.input.clone(),
+            });
             let tool_result = if tc.name == "task" {
                 // Subagent task: foreground or background.
                 let prompt = tc
@@ -2241,6 +2539,16 @@ fn run_agent_loop(
                 Ok(text) => text,
                 Err(e) => format!("Error executing {}: {e}", tc.name),
             };
+
+            // Fire AfterToolCall hook.
+            hooks::fire_hook_event(hooks::ChatHookEvent::AfterToolCall {
+                tool_name: tc.name.clone(),
+                result_preview: if result_text.len() > 500 {
+                    format!("{}...", &result_text[..500])
+                } else {
+                    result_text.clone()
+                },
+            });
 
             // Send result event for UI display.
             let _ = event_tx.send(AgentLoopEvent::ToolResult {
@@ -2563,6 +2871,23 @@ fn send_with_timeout(
     serde_json::from_str(&line).map_err(|e| format!("failed to parse response: {e}"))
 }
 
+/// Filter model items by a search string (case-insensitive substring match).
+fn filter_model_items<'a>(
+    items: &'a [(String, String)],
+    filter: &str,
+) -> Vec<&'a (String, String)> {
+    if filter.is_empty() {
+        return items.iter().collect();
+    }
+    let lower = filter.to_lowercase();
+    items
+        .iter()
+        .filter(|(id, label)| {
+            id.to_lowercase().contains(&lower) || label.to_lowercase().contains(&lower)
+        })
+        .collect()
+}
+
 /// Get completions for the command buffer.
 fn local_completions(input: &str) -> Vec<String> {
     COMMANDS
@@ -2690,6 +3015,11 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     if let Some(mode) = auto_mode {
         app.approval_profile = parse_approval_mode(mode);
     }
+
+    // Fire SessionStart hook.
+    hooks::fire_hook_event(hooks::ChatHookEvent::SessionStart {
+        session_id: app.session_id.clone(),
+    });
 
     let result = run_event_loop(&mut terminal, &events, &mut app);
 
@@ -2966,10 +3296,11 @@ mod tests {
     }
 
     #[test]
-    fn model_command_shows_current() {
+    fn model_command_opens_picker() {
         let mut app = make_app();
         app.execute_command("model");
-        assert!(app.command_result.as_ref().unwrap().contains("claude-sonnet-4-20250514"));
+        assert!(app.overlay.is_some());
+        assert!(matches!(app.overlay, Some(Overlay::ModelPicker { .. })));
     }
 
     #[test]

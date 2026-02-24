@@ -129,14 +129,18 @@ pub fn build_system_prompt(
     let ws = aegis_types::daemon::workspace_dir();
     let workspace_files: &[(&str, &str, bool)] = &[
         // (filename, label, full_only)
-        ("SOUL.md", "SOUL.md", true),         // full only -- personality
-        ("IDENTITY.md", "IDENTITY.md", false), // always -- agent name
-        ("USER.md", "USER.md", true),          // full only -- personal
-        ("TOOLS.md", "TOOLS.md", false),       // always -- environment
+        ("SOUL.md", "SOUL.md", true),             // full only -- personality
+        ("IDENTITY.md", "IDENTITY.md", false),     // always -- agent name
+        ("USER.md", "USER.md", true),              // full only -- personal
+        ("TOOLS.md", "TOOLS.md", false),           // always -- environment
+        ("MEMORY.md", "MEMORY.md", true),          // full only -- persistent memory
+        ("HEARTBEAT.md", "HEARTBEAT.md", true),    // full only -- session checklist
     ];
 
     let mut has_ws_context = false;
     let mut has_soul = false;
+    let mut has_memory = false;
+    let mut has_heartbeat = false;
     for &(filename, label, full_only) in workspace_files {
         if full_only && !is_full {
             continue;
@@ -154,6 +158,12 @@ pub fn build_system_prompt(
             if filename == "SOUL.md" {
                 has_soul = true;
             }
+            if filename == "MEMORY.md" {
+                has_memory = true;
+            }
+            if filename == "HEARTBEAT.md" {
+                has_heartbeat = true;
+            }
             let _ = writeln!(prompt, "\n## {label}\n");
             prompt.push_str(&contents);
             prompt.push('\n');
@@ -166,6 +176,24 @@ pub fn build_system_prompt(
             "\nIf SOUL.md is present above, embody its persona and tone. \
              Avoid stiff, generic replies; follow its guidance unless \
              higher-priority instructions override it.\n",
+        );
+    }
+
+    // Special instruction when MEMORY.md is present
+    if has_memory {
+        prompt.push_str(
+            "\nMEMORY.md above contains your persistent notes from prior \
+             sessions. Reference it for context. Update it with new learnings \
+             using write_file when you discover important information.\n",
+        );
+    }
+
+    // Special instruction when HEARTBEAT.md is present
+    if has_heartbeat {
+        prompt.push_str(
+            "\nIf HEARTBEAT.md has checklist items above, review them at the \
+             start of the session. Report anything that needs attention. \
+             If all items are clear, proceed normally.\n",
         );
     }
 
