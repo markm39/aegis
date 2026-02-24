@@ -114,5 +114,6 @@ chrono-tz = "0.10"
 vt100 = "0.15"
 base64 = "0.22"
 ed25519-dalek = { version = "2", features = ["std"] }
+pdf-extract = "0.7"
 
 # Orchestrator computer-use toolkit

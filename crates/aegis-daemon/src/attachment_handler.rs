@@ -521,10 +521,10 @@ impl AttachmentHandler for CodeHandler {
 // PdfHandler (stub)
 // ---------------------------------------------------------------------------
 
-/// Handles PDF attachments (stub implementation).
+/// Handles PDF attachments with text extraction via `pdf-extract`.
 ///
-/// Validates the PDF magic bytes and returns metadata. Full text extraction
-/// requires the `pdf-extract` crate which is not yet integrated.
+/// Validates PDF magic bytes, extracts text content, and returns metadata
+/// including PDF version and extracted text length.
 pub struct PdfHandler;
 
 impl AttachmentHandler for PdfHandler {
@@ -550,17 +550,19 @@ impl AttachmentHandler for PdfHandler {
             .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
             .to_string();
 
+        // Extract text content from the PDF.
+        let text_content = pdf_extract::extract_text_from_mem(data).ok();
+
         let mut metadata = HashMap::new();
         metadata.insert("handler".to_string(), "pdf".to_string());
         metadata.insert("format".to_string(), "pdf".to_string());
         metadata.insert("pdf_version".to_string(), version);
-        metadata.insert(
-            "note".to_string(),
-            "PDF text extraction requires pdf-extract feature".to_string(),
-        );
+        if let Some(ref text) = text_content {
+            metadata.insert("extracted_chars".to_string(), text.len().to_string());
+        }
 
         Ok(ProcessedAttachment {
-            text_content: None,
+            text_content,
             metadata,
             original_mime: mime.to_string(),
             original_size: data.len() as u64,
@@ -1112,7 +1114,9 @@ mod tests {
         let handler = PdfHandler;
         let result = handler.process(&minimal_pdf(), "application/pdf").unwrap();
         assert_eq!(result.metadata.get("pdf_version").unwrap(), "1.7");
-        assert!(result.metadata.get("note").unwrap().contains("pdf-extract"));
+        // text_content may be Some or None depending on whether the minimal
+        // PDF has extractable text. Either way, the handler should not error.
+        assert_eq!(result.metadata.get("handler").unwrap(), "pdf");
     }
 
     #[test]
