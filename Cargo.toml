@@ -101,6 +101,7 @@ aegis-canvas = { path = "crates/aegis-canvas" }
 aegis-browser = { path = "crates/aegis-browser" }
 aegis-hooks = { path = "crates/aegis-hooks" }
 
+memmap2 = "0.9"
 parking_lot = "0.12"
 async-trait = "0.1"
 tokio-tungstenite = "0.26"
