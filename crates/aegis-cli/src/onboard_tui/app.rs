@@ -1018,8 +1018,18 @@ impl OnboardApp {
                 Some(model.clone()),
                 base,
             );
+        } else if let Some(existing) = self.credential_store.get(provider.info.id).cloned() {
+            // Credential already stored (e.g. from a prior auth step). Update only
+            // the model preference without overwriting the api_key.
+            self.credential_store.set_with_type(
+                provider.info.id,
+                existing.api_key,
+                Some(model),
+                existing.base_url.or(base),
+                existing.credential_type,
+            );
         } else {
-            // Just store the model preference.
+            // No credential stored yet -- store model preference only.
             self.credential_store.set(
                 provider.info.id,
                 String::new(),
