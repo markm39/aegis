@@ -222,7 +222,8 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
                 &push_rate_limiter,
                 &rule.name,
                 &event,
-            );
+            )
+            .await;
         }
     }
 
@@ -233,7 +234,7 @@ async fn run_loop(config: DispatcherConfig, receiver: Receiver<AlertEvent>) {
 ///
 /// This is a best-effort operation -- failures are logged but do not
 /// affect webhook dispatch.
-fn dispatch_push_notifications(
+async fn dispatch_push_notifications(
     push_store: &Option<PushSubscriptionStore>,
     vapid_config: &Option<VapidConfig>,
     rate_limiter: &PushRateLimiter,
@@ -282,7 +283,7 @@ fn dispatch_push_notifications(
     };
 
     for sub in &subscriptions {
-        match push::deliver_push_notification(sub, &notification, vapid, rate_limiter) {
+        match push::deliver_push_notification(sub, &notification, vapid, rate_limiter).await {
             Ok(()) => {
                 if let Err(e) = store.update_last_used(&sub.id) {
                     warn!("failed to update push subscription last_used: {e}");

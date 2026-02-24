@@ -115,5 +115,9 @@ vt100 = "0.15"
 base64 = "0.22"
 ed25519-dalek = { version = "2", features = ["std"] }
 pdf-extract = "0.7"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+rand = "0.8"
 
 # Orchestrator computer-use toolkit

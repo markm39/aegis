@@ -217,9 +217,7 @@ pub trait SttProvider: Send + Sync {
 /// The WebSocket URL is hardcoded to prevent SSRF attacks.
 pub struct DeepgramProvider {
     /// API key read from env var (never persisted).
-    /// Prefixed with underscore because actual WebSocket connections are not
-    /// yet implemented; the key will be used for the `Authorization` header.
-    _api_key: String,
+    api_key: String,
     /// Optional language hint.
     language_hint: Option<String>,
     /// Model name (defaults to "nova-2").
@@ -236,7 +234,7 @@ impl DeepgramProvider {
         model: Option<String>,
     ) -> Self {
         Self {
-            _api_key: api_key,
+            api_key,
             language_hint,
             model: model.unwrap_or_else(|| "nova-2".to_string()),
         }
@@ -293,7 +291,7 @@ impl SttProvider for DeepgramProvider {
     fn transcribe_batch(
         &self,
         audio: &[u8],
-        _format: AudioFormat,
+        format: AudioFormat,
     ) -> Result<String, anyhow::Error> {
         if audio.len() > MAX_BATCH_AUDIO_SIZE {
             return Err(anyhow::anyhow!(
@@ -303,10 +301,53 @@ impl SttProvider for DeepgramProvider {
             ));
         }
 
-        // The actual implementation would POST to
-        // https://api.deepgram.com/v1/listen with the audio body.
-        // For now, return a placeholder indicating the provider would process it.
-        Ok(String::new())
+        // POST raw audio to Deepgram's pre-recorded transcription endpoint.
+        // Host is hardcoded to api.deepgram.com (SSRF prevention).
+        let mut url = format!(
+            "https://{DEEPGRAM_HOST}/v1/listen?model={}&punctuate=true",
+            self.model,
+        );
+        if let Some(ref lang) = self.language_hint {
+            url.push_str(&format!("&language={lang}"));
+        }
+
+        let content_type = match format {
+            AudioFormat::Mp3 => "audio/mpeg",
+            AudioFormat::Wav => "audio/wav",
+            AudioFormat::Opus => "audio/opus",
+            AudioFormat::Pcm16kHz => "audio/l16;rate=16000",
+            AudioFormat::MuLaw8kHz => "audio/basic",
+        };
+
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Token {}", self.api_key))
+            .header("Content-Type", content_type)
+            .body(audio.to_vec())
+            .send()
+            .map_err(|e| anyhow::anyhow!("Deepgram request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Deepgram returned {status}: {}",
+                &body[..body.len().min(200)]
+            ));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .map_err(|e| anyhow::anyhow!("failed to parse Deepgram response: {e}"))?;
+
+        // Extract transcript from: results.channels[0].alternatives[0].transcript
+        let transcript = json["results"]["channels"][0]["alternatives"][0]["transcript"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        Ok(transcript)
     }
 
     fn provider_name(&self) -> &str {
@@ -324,13 +365,11 @@ impl SttProvider for DeepgramProvider {
 /// The API URL is hardcoded to prevent SSRF attacks.
 pub struct WhisperProvider {
     /// API key read from env var (never persisted).
-    /// Prefixed with underscore because actual HTTP requests are not yet
-    /// implemented; the key will be used for the `Authorization` header.
-    _api_key: String,
+    api_key: String,
     /// Optional language hint (passed to the Whisper API `language` field).
-    _language_hint: Option<String>,
+    language_hint: Option<String>,
     /// Model name (defaults to "whisper-1").
-    _model: String,
+    model: String,
 }
 
 impl WhisperProvider {
@@ -343,9 +382,9 @@ impl WhisperProvider {
         model: Option<String>,
     ) -> Self {
         Self {
-            _api_key: api_key,
-            _language_hint: language_hint,
-            _model: model.unwrap_or_else(|| "whisper-1".to_string()),
+            api_key,
+            language_hint,
+            model: model.unwrap_or_else(|| "whisper-1".to_string()),
         }
     }
 
@@ -379,7 +418,7 @@ impl SttProvider for WhisperProvider {
     fn transcribe_batch(
         &self,
         audio: &[u8],
-        _format: AudioFormat,
+        format: AudioFormat,
     ) -> Result<String, anyhow::Error> {
         if audio.len() > MAX_BATCH_AUDIO_SIZE {
             return Err(anyhow::anyhow!(
@@ -389,13 +428,81 @@ impl SttProvider for WhisperProvider {
             ));
         }
 
-        // The actual implementation would:
-        // 1. Build multipart/form-data with audio file
-        // 2. POST to https://api.openai.com/v1/audio/transcriptions
-        // 3. Parse JSON response for transcript text
-        //
-        // Auth: Authorization: Bearer {api_key}
-        Ok(String::new())
+        // Build multipart/form-data body manually to avoid adding the
+        // `multipart` feature to reqwest.  The Whisper API expects:
+        //   - file: audio data
+        //   - model: model name
+        //   - language: optional language hint
+        let boundary = format!("aegis-boundary-{}", uuid::Uuid::new_v4().simple());
+        let extension = match format {
+            AudioFormat::Mp3 => "mp3",
+            AudioFormat::Wav => "wav",
+            AudioFormat::Opus => "opus",
+            AudioFormat::Pcm16kHz => "pcm",
+            AudioFormat::MuLaw8kHz => "raw",
+        };
+
+        let mut body = Vec::new();
+
+        // File part.
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"audio.{extension}\"\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(audio);
+        body.extend_from_slice(b"\r\n");
+
+        // Model part.
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+        body.extend_from_slice(self.model.as_bytes());
+        body.extend_from_slice(b"\r\n");
+
+        // Language part (optional).
+        if let Some(ref lang) = self.language_hint {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(b"Content-Disposition: form-data; name=\"language\"\r\n\r\n");
+            body.extend_from_slice(lang.as_bytes());
+            body.extend_from_slice(b"\r\n");
+        }
+
+        // Closing boundary.
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .post(Self::api_url())
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.api_key),
+            )
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .send()
+            .map_err(|e| anyhow::anyhow!("Whisper request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_body = response.text().unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Whisper API returned {status}: {}",
+                &error_body[..error_body.len().min(200)]
+            ));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .map_err(|e| anyhow::anyhow!("failed to parse Whisper response: {e}"))?;
+
+        let transcript = json["text"].as_str().unwrap_or("").to_string();
+        Ok(transcript)
     }
 
     fn provider_name(&self) -> &str {
@@ -645,10 +752,18 @@ mod tests {
             "error should mention size limit, got: {err}"
         );
 
-        // Audio at exactly the limit should be accepted.
+        // Audio at exactly the limit should pass the size check.
+        // The actual HTTP call will fail (no valid API key), but the error
+        // should NOT be about exceeding the size limit.
         let at_limit = vec![0u8; MAX_BATCH_AUDIO_SIZE];
         let result = mgr.transcribe_file(&at_limit, AudioFormat::Wav);
-        assert!(result.is_ok(), "audio at limit should be accepted");
+        if let Err(ref e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("exceeds maximum size"),
+                "at-limit audio should not be rejected for size: {msg}"
+            );
+        }
     }
 
     #[test]

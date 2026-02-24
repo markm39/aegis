@@ -2,18 +2,26 @@
 //!
 //! Provides subscription management (CRUD backed by SQLite), endpoint
 //! validation with SSRF protection, key validation, payload sanitization,
-//! and rate limiting.  Actual ECDH/HKDF/AES-GCM encryption and HTTP
-//! delivery are stubbed with TODO markers because they require the `p256`
-//! and `aes-gcm` crates which are not yet in the workspace.
+//! rate limiting, ECDH/HKDF/AES-GCM encryption (RFC 8291), and VAPID
+//! JWT authentication (RFC 8292).
 
 use std::sync::Mutex;
 use std::time::Instant;
 
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes128Gcm, Key, Nonce};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use hkdf::Hkdf;
+use p256::ecdh::EphemeralSecret;
+use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+use p256::{EncodedPoint, PublicKey};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use rusqlite::Connection;
-use tracing::{debug, info, warn};
+use sha2::Sha256;
+use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -546,19 +554,18 @@ impl PushSubscriptionStore {
 /// `p256` crate which is not yet in the workspace. The function validates
 /// inputs and returns a placeholder error.
 pub fn generate_vapid_jwt(vapid: &VapidConfig, audience: &str) -> Result<String, String> {
-    // Validate inputs.
     if vapid.subject.is_empty() {
         return Err("VAPID subject must not be empty".into());
     }
 
     let aud_url = Url::parse(audience).map_err(|e| format!("invalid audience URL: {e}"))?;
-    let _audience_origin = format!(
+    let audience_origin = format!(
         "{}://{}",
         aud_url.scheme(),
         aud_url.host_str().unwrap_or("")
     );
 
-    // Validate the private key is valid base64 and correct length.
+    // Decode and validate the VAPID private key (32-byte P-256 scalar).
     let pk_bytes = URL_SAFE_NO_PAD
         .decode(&vapid.private_key)
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&vapid.private_key))
@@ -571,28 +578,36 @@ pub fn generate_vapid_jwt(vapid: &VapidConfig, audience: &str) -> Result<String,
         ));
     }
 
-    // TODO: Implement actual ES256 JWT signing.
-    //
-    // The JWT structure should be:
-    //   Header: {"typ":"JWT","alg":"ES256"}
-    //   Payload: {"aud": audience_origin, "exp": now + 24h, "sub": vapid.subject}
-    //   Signature: ECDSA-P256-SHA256(header.payload, private_key)
-    //
-    // This requires the `p256` crate for ECDSA signing and `serde_json`
-    // for encoding the header/payload.  Once the crate is added:
-    //
-    //   let header = base64url(json!({"typ":"JWT","alg":"ES256"}));
-    //   let payload = base64url(json!({"aud": audience_origin, "exp": exp, "sub": vapid.subject}));
-    //   let signing_input = format!("{header}.{payload}");
-    //   let signature = p256::ecdsa::sign(signing_input, private_key);
-    //   Ok(format!("{signing_input}.{}", base64url(signature)))
+    let signing_key = SigningKey::from_bytes(pk_bytes.as_slice().into())
+        .map_err(|e| format!("invalid VAPID private key: {e}"))?;
 
-    debug!(
-        "VAPID JWT generation stubbed (p256 crate not yet available), subject={}",
-        vapid.subject
+    // Build JWT header and payload.
+    let header = serde_json::json!({"typ": "JWT", "alg": "ES256"});
+    let exp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system time error: {e}"))?
+        .as_secs()
+        + 86400; // 24 hours
+
+    let payload = serde_json::json!({
+        "aud": audience_origin,
+        "exp": exp,
+        "sub": vapid.subject,
+    });
+
+    let header_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&header).map_err(|e| format!("JSON encode error: {e}"))?,
     );
+    let payload_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&payload).map_err(|e| format!("JSON encode error: {e}"))?,
+    );
+    let signing_input = format!("{header_b64}.{payload_b64}");
 
-    Err("VAPID JWT signing not yet implemented (requires p256 crate)".into())
+    // Sign with ES256 (ECDSA P-256 + SHA-256).
+    let signature: Signature = signing_key.sign(signing_input.as_bytes());
+    let sig_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+
+    Ok(format!("{signing_input}.{sig_b64}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -601,19 +616,16 @@ pub fn generate_vapid_jwt(vapid: &VapidConfig, audience: &str) -> Result<String,
 
 /// Deliver a push notification to a subscription endpoint.
 ///
-/// # Current Status
-/// This is a stub. The full implementation requires:
-/// 1. ECDH key agreement (p256 crate)
-/// 2. HKDF key derivation
-/// 3. AES-128-GCM payload encryption (aes-gcm crate)
-/// 4. VAPID JWT for authentication
-/// 5. HTTP POST to the subscription endpoint
-///
-/// For now, this validates inputs, sanitizes the payload, and logs the attempt.
-pub fn deliver_push_notification(
+/// Implements RFC 8291 (Web Push Message Encryption) with aes128gcm encoding:
+/// 1. ECDH key agreement with ephemeral P-256 key
+/// 2. HKDF-SHA256 key derivation for content encryption key + nonce
+/// 3. AES-128-GCM payload encryption
+/// 4. VAPID JWT authentication (RFC 8292)
+/// 5. HTTP POST to the push service endpoint
+pub async fn deliver_push_notification(
     subscription: &PushSubscription,
     notification: &PushNotification,
-    _vapid: &VapidConfig,
+    vapid: &VapidConfig,
     rate_limiter: &PushRateLimiter,
 ) -> Result<(), String> {
     // Rate limit check.
@@ -629,27 +641,123 @@ pub fn deliver_push_notification(
     // Validate endpoint is still a known push service.
     validate_endpoint(&subscription.endpoint)?;
 
-    // TODO: Implement actual Web Push delivery.
-    //
-    // Steps:
-    // 1. Generate ECDH shared secret from our ephemeral key + subscription p256dh
-    // 2. Derive encryption keys via HKDF
-    // 3. Encrypt notification payload with AES-128-GCM
-    // 4. Generate VAPID JWT for Authorization header
-    // 5. POST encrypted payload to subscription.endpoint with:
-    //    - Authorization: vapid t=<jwt>, k=<public_key>
-    //    - Content-Encoding: aes128gcm
-    //    - Content-Type: application/octet-stream
-    //    - TTL: 86400
+    // 1. Decode the subscriber's P-256 public key and auth secret.
+    let ua_public_bytes = URL_SAFE_NO_PAD
+        .decode(&subscription.p256dh)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&subscription.p256dh))
+        .map_err(|e| format!("failed to decode p256dh: {e}"))?;
+    let ua_public = PublicKey::from_sec1_bytes(&ua_public_bytes)
+        .map_err(|e| format!("invalid p256dh public key: {e}"))?;
 
-    info!(
-        "push notification delivery stubbed: id={}, endpoint={} (truncated), title={:?}",
-        subscription.id,
-        &subscription.endpoint[..subscription.endpoint.len().min(60)],
-        notif.title,
-    );
+    let auth_secret = URL_SAFE_NO_PAD
+        .decode(&subscription.auth)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&subscription.auth))
+        .map_err(|e| format!("failed to decode auth secret: {e}"))?;
 
-    Err("push delivery not yet implemented (requires p256 + aes-gcm crates)".into())
+    // 2. Generate ephemeral ECDH P-256 key pair.
+    let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+    let server_public = PublicKey::from(&ephemeral_secret);
+    let server_public_point = EncodedPoint::from(server_public);
+
+    // 3. ECDH shared secret.
+    let shared_secret = ephemeral_secret.diffie_hellman(&ua_public);
+
+    // 4. RFC 8291 key derivation.
+    // Step A: Extract IKM from auth secret + ECDH shared secret.
+    let hkdf_auth =
+        Hkdf::<Sha256>::new(Some(&auth_secret), shared_secret.raw_secret_bytes().as_slice());
+
+    // key_info = "WebPush: info\x00" + ua_public (65 bytes) + server_public (65 bytes)
+    let mut key_info = Vec::with_capacity(144);
+    key_info.extend_from_slice(b"WebPush: info\x00");
+    key_info.extend_from_slice(&ua_public_bytes);
+    key_info.extend_from_slice(server_public_point.as_bytes());
+
+    let mut ikm = [0u8; 32];
+    hkdf_auth
+        .expand(&key_info, &mut ikm)
+        .map_err(|e| format!("HKDF auth expand failed: {e}"))?;
+
+    // Step B: Generate random 16-byte salt for content encryption.
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+
+    // Step C: Derive content encryption key (16 bytes) and nonce (12 bytes).
+    let hkdf_content = Hkdf::<Sha256>::new(Some(&salt), &ikm);
+
+    let mut cek = [0u8; 16];
+    hkdf_content
+        .expand(b"Content-Encoding: aes128gcm\x00", &mut cek)
+        .map_err(|e| format!("HKDF CEK derivation failed: {e}"))?;
+
+    let mut nonce_bytes = [0u8; 12];
+    hkdf_content
+        .expand(b"Content-Encoding: nonce\x00", &mut nonce_bytes)
+        .map_err(|e| format!("HKDF nonce derivation failed: {e}"))?;
+
+    // 5. Encrypt notification payload with AES-128-GCM.
+    let payload_json = serde_json::json!({
+        "title": notif.title,
+        "body": notif.body,
+        "icon": notif.icon,
+        "url": notif.url,
+        "tag": notif.tag,
+    });
+    let mut plaintext = serde_json::to_vec(&payload_json)
+        .map_err(|e| format!("failed to serialize notification: {e}"))?;
+    // RFC 8188: add padding delimiter byte (0x02 = last record).
+    plaintext.push(0x02);
+
+    let cipher = Aes128Gcm::new(Key::<Aes128Gcm>::from_slice(&cek));
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("AES-GCM encryption failed: {e}"))?;
+
+    // 6. Build aes128gcm content encoding payload.
+    // Format: salt (16) + rs (4, big-endian) + idlen (1) + keyid (65) + ciphertext
+    let rs: u32 = 4096;
+    let server_pub_bytes = server_public_point.as_bytes();
+    let idlen = server_pub_bytes.len() as u8;
+
+    let mut body = Vec::with_capacity(16 + 4 + 1 + server_pub_bytes.len() + ciphertext.len());
+    body.extend_from_slice(&salt);
+    body.extend_from_slice(&rs.to_be_bytes());
+    body.push(idlen);
+    body.extend_from_slice(server_pub_bytes);
+    body.extend_from_slice(&ciphertext);
+
+    // 7. Generate VAPID JWT for authorization.
+    let jwt = generate_vapid_jwt(vapid, &subscription.endpoint)?;
+    let vapid_header = format!("vapid t={}, k={}", jwt, vapid.public_key);
+
+    // 8. HTTP POST to push service endpoint.
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&subscription.endpoint)
+        .header("Authorization", &vapid_header)
+        .header("Content-Encoding", "aes128gcm")
+        .header("Content-Type", "application/octet-stream")
+        .header("TTL", "86400")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("push delivery failed: {e}"))?;
+
+    let status = response.status();
+    if status.is_success() || status.as_u16() == 201 {
+        info!(
+            "push notification delivered: id={}, status={status}",
+            subscription.id
+        );
+        Ok(())
+    } else {
+        let error_body = response.text().await.unwrap_or_default();
+        Err(format!(
+            "push service returned {status}: {}",
+            &error_body[..error_body.len().min(200)]
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -982,6 +1090,42 @@ mod tests {
         let result = generate_vapid_jwt(&config, "https://fcm.googleapis.com");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("32 bytes"));
+    }
+
+    #[test]
+    fn vapid_jwt_signs_with_valid_key() {
+        // Generate a real P-256 signing key.
+        let signing_key = SigningKey::random(&mut OsRng);
+        let private_key_b64 = URL_SAFE_NO_PAD.encode(signing_key.to_bytes());
+
+        let config = VapidConfig {
+            subject: "mailto:test@example.com".into(),
+            public_key: String::new(), // not needed for JWT generation
+            private_key: private_key_b64,
+        };
+
+        let jwt = generate_vapid_jwt(&config, "https://fcm.googleapis.com").unwrap();
+
+        // JWT should have 3 dot-separated parts.
+        let parts: Vec<&str> = jwt.split('.').collect();
+        assert_eq!(parts.len(), 3, "JWT must have header.payload.signature");
+
+        // Decode and verify header.
+        let header_bytes = URL_SAFE_NO_PAD.decode(parts[0]).unwrap();
+        let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        assert_eq!(header["alg"], "ES256");
+        assert_eq!(header["typ"], "JWT");
+
+        // Decode and verify payload.
+        let payload_bytes = URL_SAFE_NO_PAD.decode(parts[1]).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
+        assert_eq!(payload["aud"], "https://fcm.googleapis.com");
+        assert_eq!(payload["sub"], "mailto:test@example.com");
+        assert!(payload["exp"].as_u64().unwrap() > 0);
+
+        // Signature should be 64 bytes (P-256 ECDSA).
+        let sig_bytes = URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
+        assert_eq!(sig_bytes.len(), 64);
     }
 
     #[test]

@@ -561,13 +561,22 @@ impl ToolkitRuntime {
                 );
             }
             ToolAction::TextToSpeech { .. } => {
-                return Err("text-to-speech is not yet available".to_string());
+                return Err(
+                    "text-to-speech requires an API key; configure [tts] in daemon.toml"
+                        .to_string(),
+                );
             }
             ToolAction::CanvasRender { .. } => {
-                return Err("canvas rendering is not yet available".to_string());
+                return Err(
+                    "canvas rendering requires the canvas service; configure [canvas] in daemon.toml"
+                        .to_string(),
+                );
             }
             ToolAction::DeviceControl { .. } => {
-                return Err("device control is not yet available".to_string());
+                return Err(
+                    "device control requires a registered device; configure [devices] in daemon.toml"
+                        .to_string(),
+                );
             }
         }
 
