@@ -719,8 +719,11 @@ fn stream_openai_responses(
     if let Some(temp) = params.temperature {
         body["temperature"] = serde_json::json!(temp);
     }
-    let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-    body["max_output_tokens"] = serde_json::json!(max_tokens);
+    // ChatGPT Codex backend does not accept `max_output_tokens`.
+    if !is_codex_backend {
+        let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+        body["max_output_tokens"] = serde_json::json!(max_tokens);
+    }
 
     if let Some(ref tools) = params.tools {
         if let Some(arr) = tools.as_array() {

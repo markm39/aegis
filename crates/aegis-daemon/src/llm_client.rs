@@ -1305,9 +1305,11 @@ impl LlmClient {
     /// Send a completion request via the OpenAI Responses API.
     ///
     /// Used when the credential is an OAuth token (ChatGPT backend). The
-    /// Responses API uses `input` instead of `messages`, `instructions`
-    /// instead of system messages, and `max_output_tokens` instead of
-    /// `max_tokens`.
+    /// Responses API uses `input` instead of `messages` and `instructions`
+    /// instead of system messages.
+    ///
+    /// Note: ChatGPT Codex backend rejects `max_output_tokens`, so we only
+    /// send token caps for the public `/v1/responses` endpoint.
     fn complete_openai_responses(
         &self,
         request: &LlmRequest,
@@ -1402,8 +1404,11 @@ impl LlmClient {
             }
         }
 
-        let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        body["max_output_tokens"] = serde_json::json!(max_tokens);
+        // ChatGPT Codex backend does not accept `max_output_tokens`.
+        if !is_codex_backend {
+            let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+            body["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
 
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
