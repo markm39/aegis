@@ -215,6 +215,7 @@ mod tests {
             workspace_hooks: Default::default(),
             acp_server: None,
             default_model: None,
+            skills: vec![],
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -277,6 +278,7 @@ mod tests {
             workspace_hooks: Default::default(),
             acp_server: None,
             default_model: None,
+            skills: vec![],
         };
 
         let toml_str = config.to_toml().unwrap();

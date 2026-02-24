@@ -1744,6 +1744,12 @@ impl OnboardApp {
             workspace_hooks: Default::default(),
             acp_server: None,
             default_model: Some(model),
+            skills: self
+                .skills
+                .iter()
+                .filter(|s| s.selected)
+                .map(|s| s.name.clone())
+                .collect(),
         }
     }
 

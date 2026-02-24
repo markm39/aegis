@@ -72,6 +72,46 @@ const SKILL_COMMANDS: &[SkillCommand] = &[
     SkillCommand { name: "link-worktree", prompt: skill_prompts::LINK_WORKTREE, needs_arg: true, arg_hint: "Usage: /link-worktree <worktree-path>" },
 ];
 
+/// Result of a skill execution dispatched to a background thread.
+struct SkillExecResult {
+    /// The slash command that triggered this skill.
+    command_name: String,
+    /// The skill output, or an error message.
+    output: Result<aegis_skills::SkillOutput, String>,
+}
+
+/// Discover skills and build a registry + command router.
+///
+/// Scans the bundled `skills/` directory for skill manifests, advances each
+/// through the lifecycle (discover -> validate -> load -> activate), and
+/// builds a `CommandRouter` from their `[[commands]]` sections.
+///
+/// Returns empty registry/router if no skills are found.
+fn init_skills() -> (aegis_skills::SkillRegistry, aegis_skills::CommandRouter) {
+    let mut registry = aegis_skills::SkillRegistry::new();
+    let mut router = aegis_skills::CommandRouter::new();
+
+    let instances = aegis_skills::discover_bundled_skills().unwrap_or_default();
+
+    for mut instance in instances {
+        // Best-effort lifecycle advancement: validate -> load -> activate.
+        if instance.validate().is_err() {
+            continue;
+        }
+        if instance.load().is_err() {
+            continue;
+        }
+        if instance.activate().is_err() {
+            continue;
+        }
+        let _ = registry.register(instance);
+    }
+
+    aegis_skills::auto_register_commands(&mut router, &registry);
+
+    (registry, router)
+}
+
 /// How often to poll crossterm for events (milliseconds).
 const TICK_RATE_MS: u64 = 200;
 
@@ -437,6 +477,16 @@ pub struct ChatApp {
     last_poll: Instant,
     /// Pricing table for cost calculation.
     pricing: aegis_proxy::pricing::PricingTable,
+
+    // -- Skills --
+    /// Registry of discovered and activated skills.
+    skill_registry: aegis_skills::SkillRegistry,
+    /// Router mapping slash command names to skills.
+    skill_router: aegis_skills::CommandRouter,
+    /// Dynamic command names from discovered skills (for tab completion).
+    skill_command_names: Vec<String>,
+    /// Channel for receiving skill execution results from background thread.
+    skill_result_rx: Option<mpsc::Receiver<SkillExecResult>>,
 }
 
 /// Commands recognized by the minimal command bar.
@@ -455,6 +505,13 @@ const COMMANDS: &[&str] = &[
 impl ChatApp {
     /// Create a new chat TUI application.
     pub fn new(client: Option<DaemonClient>, model: String) -> Self {
+        let (skill_registry, skill_router) = init_skills();
+        let skill_command_names: Vec<String> = skill_router
+            .list_commands()
+            .into_iter()
+            .map(|ci| ci.name.clone())
+            .collect();
+
         Self {
             running: true,
             input_mode: InputMode::Chat,
@@ -505,6 +562,11 @@ impl ChatApp {
             // Force immediate first poll.
             last_poll: Instant::now() - std::time::Duration::from_secs(10),
             pricing: aegis_proxy::pricing::PricingTable::with_defaults(),
+
+            skill_registry,
+            skill_router,
+            skill_command_names,
+            skill_result_rx: None,
         }
     }
 
@@ -522,6 +584,7 @@ impl ChatApp {
     pub fn poll_daemon(&mut self) {
         self.clear_stale_result();
         self.poll_llm();
+        self.poll_skills();
 
         if self.last_poll.elapsed().as_millis() < POLL_INTERVAL_MS {
             return;
@@ -1257,7 +1320,8 @@ impl ChatApp {
 
     /// Update tab completions based on current buffer.
     fn update_completions(&mut self) {
-        self.command_completions = local_completions(&self.command_buffer);
+        self.command_completions =
+            local_completions(&self.command_buffer, &self.skill_command_names);
         self.completion_idx = None;
     }
 
@@ -2007,7 +2071,7 @@ impl ChatApp {
                 ));
             }
             other => {
-                // Check skill commands before falling through to "unknown".
+                // 1. Check hardcoded prompt-based skill commands.
                 if let Some(skill_cmd) = SKILL_COMMANDS.iter().find(|sc| {
                     other == sc.name || other.starts_with(&format!("{} ", sc.name))
                 }) {
@@ -2020,6 +2084,12 @@ impl ChatApp {
                     } else {
                         self.run_skill_command(skill_cmd, arg);
                     }
+                    return;
+                }
+                // 2. Check dynamic skill router for registered slash commands.
+                let cmd_name = other.split_whitespace().next().unwrap_or("");
+                if self.skill_router.route_name(cmd_name).is_some() {
+                    self.dispatch_dynamic_skill(other);
                     return;
                 }
                 self.set_result(format!("Unknown command: '{other}'. Type /help for commands."));
@@ -2048,6 +2118,115 @@ impl ChatApp {
         self.scroll_offset = 0;
         self.awaiting_response = true;
         self.send_llm_request();
+    }
+
+    /// Dispatch a dynamic skill command via the SkillExecutor.
+    ///
+    /// Parses the command, looks up the skill in the router/registry,
+    /// spawns a background thread with a tokio runtime to run the async
+    /// executor, and sends the result back via a channel.
+    fn dispatch_dynamic_skill(&mut self, input: &str) {
+        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+        let cmd_name = parts[0].to_string();
+        let args_raw = parts.get(1).copied().unwrap_or("").to_string();
+
+        let skill_name = match self.skill_router.route_name(&cmd_name) {
+            Some(name) => name.to_string(),
+            None => {
+                self.set_result(format!("No skill registered for /{cmd_name}"));
+                return;
+            }
+        };
+
+        let instance = match self.skill_registry.get(&skill_name) {
+            Some(i) => i,
+            None => {
+                self.set_result(format!("Skill '{skill_name}' not in registry"));
+                return;
+            }
+        };
+
+        let manifest = instance.manifest.clone();
+        let skill_dir = instance.path.clone();
+
+        // Show the command in the chat.
+        self.messages.push(ChatMessage::new(
+            MessageRole::System,
+            format!("Running /{cmd_name} ..."),
+        ));
+
+        let args: Vec<String> = args_raw
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let parameters = serde_json::json!({
+            "args": args,
+            "raw": format!("/{input}"),
+        });
+
+        let context = aegis_skills::SkillContext {
+            agent_name: Some("chat-tui".into()),
+            session_id: Some(self.session_id.clone()),
+            workspace_path: None,
+            env_vars: Default::default(),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        self.skill_result_rx = Some(rx);
+
+        let action = cmd_name.clone();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(SkillExecResult {
+                        command_name: cmd_name,
+                        output: Err(format!("failed to build runtime: {e}")),
+                    });
+                    return;
+                }
+            };
+            let executor = aegis_skills::SkillExecutor::new();
+            let result = rt.block_on(executor.execute(
+                &manifest,
+                &skill_dir,
+                &action,
+                parameters,
+                context,
+            ));
+            let _ = tx.send(SkillExecResult {
+                command_name: cmd_name,
+                output: result.map_err(|e| format!("{e:#}")),
+            });
+        });
+    }
+
+    /// Poll for completed dynamic skill executions.
+    fn poll_skills(&mut self) {
+        let result = self
+            .skill_result_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        if let Some(skill_result) = result {
+            match skill_result.output {
+                Ok(output) => {
+                    let text = format_skill_output(&skill_result.command_name, &output);
+                    self.messages
+                        .push(ChatMessage::new(MessageRole::System, text));
+                }
+                Err(e) => {
+                    self.messages.push(ChatMessage::new(
+                        MessageRole::System,
+                        format!("Skill error: {e}"),
+                    ));
+                }
+            }
+            self.skill_result_rx = None;
+            self.scroll_offset = 0;
+        }
     }
 
     /// Show current model and available providers.
@@ -2970,12 +3149,41 @@ fn filter_model_items<'a>(
 }
 
 /// Get completions for the command buffer.
-fn local_completions(input: &str) -> Vec<String> {
-    COMMANDS
+/// Format a `SkillOutput` for display in the chat area.
+fn format_skill_output(command: &str, output: &aegis_skills::SkillOutput) -> String {
+    let mut text = String::new();
+    // Show the result.
+    let result_str = match &output.result {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "(no output)".to_string(),
+        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+    };
+    text.push_str(&format!("[/{command}] {result_str}"));
+
+    // Append any messages.
+    for msg in &output.messages {
+        text.push('\n');
+        text.push_str(msg);
+    }
+
+    // Note artifacts.
+    if !output.artifacts.is_empty() {
+        text.push_str(&format!("\n({} artifact(s) produced)", output.artifacts.len()));
+    }
+
+    text
+}
+
+fn local_completions(input: &str, extra_commands: &[String]) -> Vec<String> {
+    let static_iter = COMMANDS
         .iter()
         .filter(|c| c.starts_with(input))
-        .map(|c| c.to_string())
-        .collect()
+        .map(|c| c.to_string());
+    let dynamic_iter = extra_commands
+        .iter()
+        .filter(|c| c.starts_with(input))
+        .cloned();
+    static_iter.chain(dynamic_iter).collect()
 }
 
 /// Apply a completion to the command buffer.
@@ -3624,7 +3832,7 @@ mod tests {
 
     #[test]
     fn local_completions_filters() {
-        let completions = local_completions("da");
+        let completions = local_completions("da", &[]);
         assert!(completions.contains(&"daemon start".to_string()));
         assert!(completions.contains(&"daemon stop".to_string()));
         assert!(completions.contains(&"daemon status".to_string()));
@@ -3633,7 +3841,7 @@ mod tests {
 
     #[test]
     fn local_completions_empty_input() {
-        let completions = local_completions("");
+        let completions = local_completions("", &[]);
         assert_eq!(completions.len(), COMMANDS.len());
     }
 

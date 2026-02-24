@@ -811,6 +811,7 @@ mod tests {
             workspace_hooks: Default::default(),
             acp_server: None,
             default_model: None,
+            skills: vec![],
         }
     }
 

@@ -87,6 +87,9 @@ pub struct DaemonConfig {
     /// Default LLM model for the chat TUI (e.g., "claude-sonnet-4-20250514").
     #[serde(default)]
     pub default_model: Option<String>,
+    /// Names of skills enabled by the user (from wizard or manual config).
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -992,6 +995,7 @@ mod tests {
             workspace_hooks: WorkspaceHooksConfig::default(),
             acp_server: None,
             default_model: None,
+            skills: vec![],
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

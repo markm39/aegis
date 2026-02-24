@@ -150,6 +150,7 @@ impl FixtureBuilder {
             workspace_hooks: Default::default(),
             acp_server: None,
             default_model: None,
+            skills: vec![],
         };
 
         TestFixture {
@@ -195,6 +196,7 @@ pub fn build_test_daemon_config(temp_dir: &Path) -> DaemonConfig {
         workspace_hooks: Default::default(),
         acp_server: None,
         default_model: None,
+        skills: vec![],
     }
 }
 
