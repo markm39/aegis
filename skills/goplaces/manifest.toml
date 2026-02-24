@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["GOOGLE_MAPS_API_KEY"]
 os = []
 
+[[commands]]
+name = "places"
+description = "Search for nearby places via Google Places API"
+usage = "/places <query> [location]"
+aliases = ["maps"]

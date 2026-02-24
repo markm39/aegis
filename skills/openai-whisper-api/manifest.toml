@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["OPENAI_API_KEY"]
 os = []
 
+[[commands]]
+name = "whisperapi"
+description = "Transcribe audio using OpenAI Whisper API"
+usage = "/whisperapi <audio_file>"
+aliases = []

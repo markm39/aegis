@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["WHATSAPP_API_TOKEN"]
 os = []
 
+[[commands]]
+name = "whatsapp"
+description = "Send WhatsApp messages via Business API"
+usage = "/whatsapp <phone_number> <message>"
+aliases = ["wa"]

@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["GOOGLE_APPLICATION_CREDENTIALS"]
 os = []
 
+[[commands]]
+name = "google"
+description = "Search Google or use Google APIs"
+usage = "/google <search_query>"
+aliases = ["gsearch"]

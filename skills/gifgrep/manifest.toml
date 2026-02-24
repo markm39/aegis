@@ -11,3 +11,8 @@ required_bins = []
 required_env = []
 os = []
 
+[[commands]]
+name = "gif"
+description = "Search for GIFs via Tenor"
+usage = "/gif <search_query>"
+aliases = ["giphy"]

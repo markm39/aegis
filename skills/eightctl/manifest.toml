@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["EIGHT_SLEEP_EMAIL", "EIGHT_SLEEP_PASSWORD"]
 os = []
 
+[[commands]]
+name = "eightsleep"
+description = "Control Eight Sleep smart mattress"
+usage = "/eightsleep [status|temp|alarm] [args...]"
+aliases = ["bed"]

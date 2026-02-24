@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["TRELLO_API_KEY"]
 os = []
 
+[[commands]]
+name = "trello"
+description = "Manage Trello boards, lists, and cards"
+usage = "/trello [boards|cards|create] [args...]"
+aliases = []

@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["BANANA_API_KEY"]
 os = []
 
+[[commands]]
+name = "banana"
+description = "Run ML models via banana.dev API"
+usage = "/banana <model_key> <input>"
+aliases = []

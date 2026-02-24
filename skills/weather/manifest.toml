@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["OPENWEATHER_API_KEY"]
 os = []
 
+[[commands]]
+name = "weather"
+description = "Get current weather and forecast for a location"
+usage = "/weather <city_or_zip>"
+aliases = ["wx"]

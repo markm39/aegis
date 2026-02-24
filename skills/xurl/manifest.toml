@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["X_API_KEY"]
 os = []
 
+[[commands]]
+name = "tweet"
+description = "Post to X/Twitter or search tweets"
+usage = "/tweet [post|search|timeline] [text_or_query]"
+aliases = ["x"]

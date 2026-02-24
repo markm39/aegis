@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]
 os = []
 
+[[commands]]
+name = "call"
+description = "Make a voice call via Twilio"
+usage = "/call <phone_number> <message>"
+aliases = ["phone"]

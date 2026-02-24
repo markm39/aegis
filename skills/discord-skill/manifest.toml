@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["DISCORD_BOT_TOKEN"]
 os = []
 
+[[commands]]
+name = "discord"
+description = "Send messages and manage Discord channels"
+usage = "/discord [send|channels|guilds] [args...]"
+aliases = []

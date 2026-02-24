@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["OPENAI_API_KEY"]
 os = []
 
+[[commands]]
+name = "imagegen"
+description = "Generate images using OpenAI DALL-E"
+usage = "/imagegen <prompt> [size]"
+aliases = ["dalle"]

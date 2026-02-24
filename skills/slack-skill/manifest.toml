@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["SLACK_BOT_TOKEN"]
 os = []
 
+[[commands]]
+name = "slack"
+description = "Send messages and read Slack channels"
+usage = "/slack [send|read|channels|search] [args...]"
+aliases = []

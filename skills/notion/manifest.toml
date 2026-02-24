@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["NOTION_API_KEY"]
 os = []
 
+[[commands]]
+name = "notion"
+description = "Search and manage Notion pages and databases"
+usage = "/notion [search|page|databases] [query]"
+aliases = []

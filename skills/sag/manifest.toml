@@ -11,3 +11,8 @@ required_bins = []
 required_env = ["ELEVENLABS_API_KEY"]
 os = []
 
+[[commands]]
+name = "tts-eleven"
+description = "Text-to-speech via ElevenLabs API"
+usage = "/tts-eleven <text> [voice_id]"
+aliases = ["elevenlabs"]
