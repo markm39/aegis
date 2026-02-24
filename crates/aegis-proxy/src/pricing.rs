@@ -217,8 +217,7 @@ struct PricingToml {
 /// cache_write_cost_per_mtok = 3.75
 /// ```
 pub fn parse_pricing_toml(toml_str: &str) -> Result<PricingTable> {
-    let parsed: PricingToml =
-        toml::from_str(toml_str).context("failed to parse pricing TOML")?;
+    let parsed: PricingToml = toml::from_str(toml_str).context("failed to parse pricing TOML")?;
     Ok(PricingTable {
         models: parsed.models,
     })
@@ -243,9 +242,7 @@ mod tests {
     #[test]
     fn test_pricing_table_defaults_have_openai() {
         let table = PricingTable::with_defaults();
-        let pricing = table
-            .lookup("gpt-4o")
-            .expect("should find gpt-4o pricing");
+        let pricing = table.lookup("gpt-4o").expect("should find gpt-4o pricing");
         assert!(
             (pricing.input_cost_per_mtok - 2.5).abs() < f64::EPSILON,
             "gpt-4o input cost should be $2.50/Mtok"
@@ -270,15 +267,18 @@ mod tests {
         let table = PricingTable::with_defaults();
         // 500k input + 200k output + 100k cache read + 50k cache write
         let cost = table
-            .calculate_cost("claude-sonnet-4-5-20250929", 500_000, 200_000, 100_000, 50_000)
+            .calculate_cost(
+                "claude-sonnet-4-5-20250929",
+                500_000,
+                200_000,
+                100_000,
+                50_000,
+            )
             .expect("should calculate cost");
         // Expected: (500k * 3 + 200k * 15 + 100k * 0.375 + 50k * 3.75) / 1M
         //         = (1_500_000 + 3_000_000 + 37_500 + 187_500) / 1_000_000
         //         = 4_725_000 / 1_000_000 = 4.725
-        assert!(
-            (cost - 4.725).abs() < 1e-9,
-            "expected $4.725, got {cost}"
-        );
+        assert!((cost - 4.725).abs() < 1e-9, "expected $4.725, got {cost}");
     }
 
     #[test]
@@ -321,18 +321,12 @@ cache_write_cost_per_mtok = 0.0
         let pricing = table
             .lookup("my-custom-model-v2")
             .expect("should find custom model via glob");
-        assert!(
-            (pricing.input_cost_per_mtok - 1.0).abs() < f64::EPSILON
-        );
-        assert!(
-            (pricing.output_cost_per_mtok - 2.0).abs() < f64::EPSILON
-        );
+        assert!((pricing.input_cost_per_mtok - 1.0).abs() < f64::EPSILON);
+        assert!((pricing.output_cost_per_mtok - 2.0).abs() < f64::EPSILON);
         let exact = table
             .lookup("another-model")
             .expect("should find exact match");
-        assert!(
-            (exact.input_cost_per_mtok - 0.1).abs() < f64::EPSILON
-        );
+        assert!((exact.input_cost_per_mtok - 0.1).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -373,14 +367,8 @@ cache_write_cost_per_mtok = 0.0
             Some("anthropic")
         );
         assert_eq!(table.provider_for_model("gpt-4o"), Some("openai"));
-        assert_eq!(
-            table.provider_for_model("gemini-2-flash"),
-            Some("google")
-        );
-        assert_eq!(
-            table.provider_for_model("llama-3-70b"),
-            Some("ollama")
-        );
+        assert_eq!(table.provider_for_model("gemini-2-flash"), Some("google"));
+        assert_eq!(table.provider_for_model("llama-3-70b"), Some("ollama"));
         assert_eq!(table.provider_for_model("unknown-model"), None);
     }
 
@@ -403,12 +391,8 @@ cache_write_cost_per_mtok = 0.0
     fn test_o1_model_pricing() {
         let table = PricingTable::with_defaults();
         let pricing = table.lookup("o1-preview").expect("should find o1 pricing");
-        assert!(
-            (pricing.input_cost_per_mtok - 15.0).abs() < f64::EPSILON
-        );
-        assert!(
-            (pricing.output_cost_per_mtok - 60.0).abs() < f64::EPSILON
-        );
+        assert!((pricing.input_cost_per_mtok - 15.0).abs() < f64::EPSILON);
+        assert!((pricing.output_cost_per_mtok - 60.0).abs() < f64::EPSILON);
         assert_eq!(pricing.provider, "openai");
     }
 
@@ -427,10 +411,10 @@ cache_write_cost_per_mtok = 0.0
     #[test]
     fn test_gemini_pricing() {
         let table = PricingTable::with_defaults();
-        let pricing = table.lookup("gemini-2-flash").expect("should find gemini-2 pricing");
-        assert!(
-            (pricing.input_cost_per_mtok - 0.075).abs() < f64::EPSILON
-        );
+        let pricing = table
+            .lookup("gemini-2-flash")
+            .expect("should find gemini-2 pricing");
+        assert!((pricing.input_cost_per_mtok - 0.075).abs() < f64::EPSILON);
         assert_eq!(pricing.provider, "google");
     }
 }

@@ -412,9 +412,11 @@ impl BroadcastGroupManager {
 
     /// Remove a broadcast group by name.
     pub fn remove_group(&mut self, name: &str) -> Result<BroadcastGroup, BroadcastError> {
-        self.groups.remove(name).ok_or_else(|| BroadcastError::GroupNotFound {
-            name: name.to_string(),
-        })
+        self.groups
+            .remove(name)
+            .ok_or_else(|| BroadcastError::GroupNotFound {
+                name: name.to_string(),
+            })
     }
 
     /// Get a reference to a group by name.
@@ -438,12 +440,12 @@ impl BroadcastGroupManager {
         group_name: &str,
         content: &str,
     ) -> Result<RoutedMessage, BroadcastError> {
-        let group = self
-            .groups
-            .get_mut(group_name)
-            .ok_or_else(|| BroadcastError::GroupNotFound {
-                name: group_name.to_string(),
-            })?;
+        let group =
+            self.groups
+                .get_mut(group_name)
+                .ok_or_else(|| BroadcastError::GroupNotFound {
+                    name: group_name.to_string(),
+                })?;
 
         group.route_inbound(content)
     }
@@ -454,12 +456,12 @@ impl BroadcastGroupManager {
         group_name: &str,
         content: &str,
     ) -> Result<(), BroadcastError> {
-        let group = self
-            .groups
-            .get_mut(group_name)
-            .ok_or_else(|| BroadcastError::GroupNotFound {
-                name: group_name.to_string(),
-            })?;
+        let group =
+            self.groups
+                .get_mut(group_name)
+                .ok_or_else(|| BroadcastError::GroupNotFound {
+                    name: group_name.to_string(),
+                })?;
 
         group.record_outbound(content);
         Ok(())
@@ -607,7 +609,7 @@ mod tests {
         let mut group = BroadcastGroup::with_dedup(
             "test",
             DispatchStrategy::All,
-            5,  // small window
+            5, // small window
             Duration::from_secs(60),
         )
         .unwrap();

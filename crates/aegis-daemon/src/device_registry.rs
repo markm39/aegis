@@ -997,10 +997,7 @@ mod tests {
     #[test]
     fn device_id_display() {
         let id = DeviceId(Uuid::nil());
-        assert_eq!(
-            id.to_string(),
-            "00000000-0000-0000-0000-000000000000"
-        );
+        assert_eq!(id.to_string(), "00000000-0000-0000-0000-000000000000");
     }
 
     #[test]

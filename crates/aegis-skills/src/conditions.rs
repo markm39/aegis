@@ -66,9 +66,7 @@ pub fn evaluate_conditions(conditions: &[LoadCondition]) -> Vec<(LoadCondition, 
 fn check_single(condition: &LoadCondition) -> bool {
     match condition {
         LoadCondition::EnvVarSet(name) => {
-            std::env::var(name)
-                .map(|v| !v.is_empty())
-                .unwrap_or(false)
+            std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
         }
         LoadCondition::BinaryExists(name) => binary_in_path(name),
         LoadCondition::PlatformIs(platform) => current_platform() == Some(*platform),
@@ -102,7 +100,10 @@ fn describe_result(condition: &LoadCondition, passed: bool) -> String {
             if passed {
                 format!("running on {platform}")
             } else {
-                format!("not running on {platform} (current: {})", current_platform_name())
+                format!(
+                    "not running on {platform} (current: {})",
+                    current_platform_name()
+                )
             }
         }
         LoadCondition::ConfigFlag(key) => {
@@ -188,7 +189,9 @@ mod tests {
     #[test]
     fn test_env_var_set_fails_when_unset() {
         std::env::remove_var("AEGIS_TEST_MISSING_VAR_XYZ");
-        let conditions = vec![LoadCondition::EnvVarSet("AEGIS_TEST_MISSING_VAR_XYZ".into())];
+        let conditions = vec![LoadCondition::EnvVarSet(
+            "AEGIS_TEST_MISSING_VAR_XYZ".into(),
+        )];
         assert!(!check_conditions(&conditions));
     }
 

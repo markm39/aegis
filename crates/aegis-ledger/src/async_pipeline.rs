@@ -128,7 +128,12 @@ impl AsyncAuditWriter {
         let store = AuditStore::open(db_path)?;
         let (tx, rx) = mpsc::channel(config.channel_capacity);
 
-        let handle = tokio::spawn(writer_task(store, rx, config.batch_size, config.flush_interval));
+        let handle = tokio::spawn(writer_task(
+            store,
+            rx,
+            config.batch_size,
+            config.flush_interval,
+        ));
 
         info!(
             capacity = config.channel_capacity,
@@ -161,18 +166,15 @@ impl AsyncAuditWriter {
     /// This ensures no audit entries are lost.
     pub async fn shutdown(self) -> Result<(), AegisError> {
         // Use the async send for shutdown to ensure it gets queued even under load.
-        self.tx
-            .send(AuditCommand::Shutdown)
-            .await
-            .map_err(|_| {
-                AegisError::LedgerError(
-                    "async audit channel closed: could not send shutdown".to_string(),
-                )
-            })?;
+        self.tx.send(AuditCommand::Shutdown).await.map_err(|_| {
+            AegisError::LedgerError(
+                "async audit channel closed: could not send shutdown".to_string(),
+            )
+        })?;
 
-        self.handle.await.map_err(|e| {
-            AegisError::LedgerError(format!("async audit writer task panicked: {e}"))
-        })
+        self.handle
+            .await
+            .map_err(|e| AegisError::LedgerError(format!("async audit writer task panicked: {e}")))
     }
 }
 
@@ -350,11 +352,7 @@ mod tests {
     #[tokio::test]
     async fn async_pipeline_inserts_entries() {
         let tmp = tmp_db();
-        let writer = AsyncAuditWriter::start(
-            tmp.path(),
-            AsyncAuditConfig::default(),
-        )
-        .unwrap();
+        let writer = AsyncAuditWriter::start(tmp.path(), AsyncAuditConfig::default()).unwrap();
 
         let action = sample_action("agent-1");
         let verdict = Verdict::allow(action.id, "ok", None);
@@ -454,7 +452,11 @@ mod tests {
         // Verify by opening a separate connection.
         let store = AuditStore::open(tmp.path()).unwrap();
         let entries = store.query_last(10).unwrap();
-        assert_eq!(entries.len(), 1, "entry should be flushed by interval timer");
+        assert_eq!(
+            entries.len(),
+            1,
+            "entry should be flushed by interval timer"
+        );
 
         writer.shutdown().await.unwrap();
     }
@@ -487,11 +489,7 @@ mod tests {
     #[tokio::test]
     async fn async_pipeline_continues_on_insert_error() {
         let tmp = tmp_db();
-        let writer = AsyncAuditWriter::start(
-            tmp.path(),
-            AsyncAuditConfig::default(),
-        )
-        .unwrap();
+        let writer = AsyncAuditWriter::start(tmp.path(), AsyncAuditConfig::default()).unwrap();
 
         // Send an fs audit with an invalid path (relative -- will be rejected).
         writer
@@ -566,11 +564,7 @@ mod tests {
     #[tokio::test]
     async fn async_pipeline_channel_audit() {
         let tmp = tmp_db();
-        let writer = AsyncAuditWriter::start(
-            tmp.path(),
-            AsyncAuditConfig::default(),
-        )
-        .unwrap();
+        let writer = AsyncAuditWriter::start(tmp.path(), AsyncAuditConfig::default()).unwrap();
 
         writer
             .send(AuditCommand::InsertChannelAudit {
@@ -593,11 +587,7 @@ mod tests {
     #[tokio::test]
     async fn async_pipeline_fs_audit() {
         let tmp = tmp_db();
-        let writer = AsyncAuditWriter::start(
-            tmp.path(),
-            AsyncAuditConfig::default(),
-        )
-        .unwrap();
+        let writer = AsyncAuditWriter::start(tmp.path(), AsyncAuditConfig::default()).unwrap();
 
         writer
             .send(AuditCommand::InsertFsAudit {

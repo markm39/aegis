@@ -120,15 +120,19 @@ fn require_string_field(
     field: &str,
     method: &str,
 ) -> Result<String, TranslationError> {
-    let value = payload.get(field).ok_or_else(|| TranslationError::MissingField {
-        method: method.to_string(),
-        field: field.to_string(),
-    })?;
+    let value = payload
+        .get(field)
+        .ok_or_else(|| TranslationError::MissingField {
+            method: method.to_string(),
+            field: field.to_string(),
+        })?;
 
-    let s = value.as_str().ok_or_else(|| TranslationError::InvalidField {
-        field: field.to_string(),
-        reason: format!("expected string, got {}", value_type_name(value)),
-    })?;
+    let s = value
+        .as_str()
+        .ok_or_else(|| TranslationError::InvalidField {
+            field: field.to_string(),
+            reason: format!("expected string, got {}", value_type_name(value)),
+        })?;
 
     let sanitized = sanitize_content(s);
 
@@ -142,7 +146,10 @@ fn require_string_field(
     if sanitized.len() > 4096 {
         return Err(TranslationError::InvalidField {
             field: field.to_string(),
-            reason: format!("field exceeds maximum length of 4096 (got {})", sanitized.len()),
+            reason: format!(
+                "field exceeds maximum length of 4096 (got {})",
+                sanitized.len()
+            ),
         });
     }
 
@@ -408,11 +415,7 @@ impl AcpTranslator {
     ///
     /// Used when the daemon emits events that should be pushed to ACP clients
     /// (e.g., agent status changes, output streaming, pending prompt notifications).
-    pub fn daemon_event_to_acp(
-        &self,
-        event_type: &str,
-        response: &DaemonResponse,
-    ) -> AcpMessage {
+    pub fn daemon_event_to_acp(&self, event_type: &str, response: &DaemonResponse) -> AcpMessage {
         let sanitized_event_type = sanitize_content(event_type);
         let sanitized_message = sanitize_content(&response.message);
         let sanitized_data = response.data.as_ref().map(sanitize_json_value);
@@ -445,27 +448,13 @@ impl AcpTranslator {
     ///
     /// This ensures that even error conditions produce well-formed ACP messages
     /// that clients can programmatically handle.
-    pub fn error_to_acp(
-        &self,
-        request_id: Option<Uuid>,
-        error: &TranslationError,
-    ) -> AcpMessage {
+    pub fn error_to_acp(&self, request_id: Option<Uuid>, error: &TranslationError) -> AcpMessage {
         let (code, message) = match error {
-            TranslationError::UnknownMethod { .. } => {
-                ("UNKNOWN_METHOD", error.to_string())
-            }
-            TranslationError::MissingField { .. } => {
-                ("MISSING_FIELD", error.to_string())
-            }
-            TranslationError::InvalidField { .. } => {
-                ("INVALID_FIELD", error.to_string())
-            }
-            TranslationError::WrongMessageVariant { .. } => {
-                ("WRONG_VARIANT", error.to_string())
-            }
-            TranslationError::RateLimitExceeded { .. } => {
-                ("RATE_LIMITED", error.to_string())
-            }
+            TranslationError::UnknownMethod { .. } => ("UNKNOWN_METHOD", error.to_string()),
+            TranslationError::MissingField { .. } => ("MISSING_FIELD", error.to_string()),
+            TranslationError::InvalidField { .. } => ("INVALID_FIELD", error.to_string()),
+            TranslationError::WrongMessageVariant { .. } => ("WRONG_VARIANT", error.to_string()),
+            TranslationError::RateLimitExceeded { .. } => ("RATE_LIMITED", error.to_string()),
             TranslationError::Internal(_) => {
                 // Do not leak internal details to clients
                 ("INTERNAL_ERROR", "internal translation error".to_string())
@@ -513,10 +502,7 @@ mod tests {
     #[test]
     fn acp_to_daemon_send_translation() {
         let translator = AcpTranslator::new();
-        let msg = make_request(
-            "send",
-            json!({"name": "claude-1", "text": "hello agent"}),
-        );
+        let msg = make_request("send", json!({"name": "claude-1", "text": "hello agent"}));
         let (cmd, _id) = translator.acp_to_daemon("session-1", &msg).unwrap();
         match cmd {
             DaemonCommand::SendToAgent { name, text } => {
@@ -560,10 +546,7 @@ mod tests {
     #[test]
     fn acp_to_daemon_deny_translation() {
         let translator = AcpTranslator::new();
-        let msg = make_request(
-            "deny",
-            json!({"name": "claude-1", "request_id": "req-xyz"}),
-        );
+        let msg = make_request("deny", json!({"name": "claude-1", "request_id": "req-xyz"}));
         let (cmd, _id) = translator.acp_to_daemon("session-1", &msg).unwrap();
         match cmd {
             DaemonCommand::DenyRequest { name, request_id } => {
@@ -645,8 +628,7 @@ mod tests {
     #[test]
     fn daemon_event_to_acp_translation() {
         let translator = AcpTranslator::new();
-        let response =
-            DaemonResponse::ok_with_data("status changed", json!({"status": "running"}));
+        let response = DaemonResponse::ok_with_data("status changed", json!({"status": "running"}));
         let acp_msg = translator.daemon_event_to_acp("agent.status_changed", &response);
         match &acp_msg {
             AcpMessage::Event {
@@ -736,7 +718,10 @@ mod tests {
 
     #[test]
     fn sanitize_preserves_valid_whitespace() {
-        assert_eq!(sanitize_content("line1\nline2\ttab\rreturn"), "line1\nline2\ttab\rreturn");
+        assert_eq!(
+            sanitize_content("line1\nline2\ttab\rreturn"),
+            "line1\nline2\ttab\rreturn"
+        );
     }
 
     #[test]
@@ -746,7 +731,10 @@ mod tests {
 
     #[test]
     fn sanitize_strips_bell_and_escape() {
-        assert_eq!(sanitize_content("normal\x07bell\x1bescape"), "normalbellescape");
+        assert_eq!(
+            sanitize_content("normal\x07bell\x1bescape"),
+            "normalbellescape"
+        );
     }
 
     #[test]
@@ -848,22 +836,23 @@ mod tests {
 
         let evil_name = "agent\x00\x1b[31mred\x1b[0m";
         let evil_text = "payload\x07\x08\x1b]0;pwned\x07";
-        let msg = make_request(
-            "send",
-            json!({"name": evil_name, "text": evil_text}),
-        );
+        let msg = make_request("send", json!({"name": evil_name, "text": evil_text}));
         let (cmd, _) = translator.acp_to_daemon("session-1", &msg).unwrap();
 
         match cmd {
             DaemonCommand::SendToAgent { name, text } => {
                 // Verify no control characters remain
                 assert!(
-                    !name.chars().any(|c| c.is_control() && c != '\t' && c != '\n' && c != '\r'),
+                    !name
+                        .chars()
+                        .any(|c| c.is_control() && c != '\t' && c != '\n' && c != '\r'),
                     "SECURITY VIOLATION: control characters in agent name: {:?}",
                     name
                 );
                 assert!(
-                    !text.chars().any(|c| c.is_control() && c != '\t' && c != '\n' && c != '\r'),
+                    !text
+                        .chars()
+                        .any(|c| c.is_control() && c != '\t' && c != '\n' && c != '\r'),
                     "SECURITY VIOLATION: control characters in text: {:?}",
                     text
                 );

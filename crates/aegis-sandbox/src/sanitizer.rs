@@ -30,9 +30,7 @@ impl ContentSanitizer {
         let defaults = default_patterns();
         let patterns = defaults
             .into_iter()
-            .filter_map(|(name, pat)| {
-                Regex::new(&pat).ok().map(|re| (name.to_string(), re))
-            })
+            .filter_map(|(name, pat)| Regex::new(&pat).ok().map(|re| (name.to_string(), re)))
             .collect();
         Self { patterns }
     }

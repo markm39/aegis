@@ -43,7 +43,7 @@ pub use daemon_harness::{
 };
 pub use error::HarnessError;
 pub use expect::Expect;
-pub use fixtures::{TestFixture, FixtureBuilder};
+pub use fixtures::{FixtureBuilder, TestFixture};
 pub use key::Key;
 pub use session::{SessionOptions, TerminalSession};
 pub use snapshot::ScreenSnapshot;

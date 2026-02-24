@@ -43,7 +43,7 @@ const MAX_OPUS_FRAME_SIZE: usize = 7680;
 // ---------------------------------------------------------------------------
 
 /// Configuration for connecting to a Discord voice channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoiceChannelConfig {
     /// Discord guild (server) ID.
     pub guild_id: String,
@@ -55,6 +55,18 @@ pub struct VoiceChannelConfig {
     pub self_deaf: bool,
     /// Whether to self-mute on join.
     pub self_mute: bool,
+}
+
+impl std::fmt::Debug for VoiceChannelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoiceChannelConfig")
+            .field("guild_id", &self.guild_id)
+            .field("channel_id", &self.channel_id)
+            .field("bot_token", &"[REDACTED]")
+            .field("self_deaf", &self.self_deaf)
+            .field("self_mute", &self.self_mute)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -469,9 +481,7 @@ impl VoiceChannelState {
         if display_name.len() > MAX_DISPLAY_NAME_LEN {
             return Err(VoiceError::InvalidId {
                 value: display_name,
-                reason: format!(
-                    "display name exceeds maximum length of {MAX_DISPLAY_NAME_LEN}"
-                ),
+                reason: format!("display name exceeds maximum length of {MAX_DISPLAY_NAME_LEN}"),
             });
         }
 
@@ -513,12 +523,12 @@ impl VoiceChannelState {
 
     /// Set the mute state for a participant.
     pub fn set_muted(&mut self, user_id: &str, muted: bool) -> Result<(), VoiceError> {
-        let p = self
-            .participants
-            .get_mut(user_id)
-            .ok_or_else(|| VoiceError::ParticipantNotFound {
-                user_id: user_id.to_string(),
-            })?;
+        let p =
+            self.participants
+                .get_mut(user_id)
+                .ok_or_else(|| VoiceError::ParticipantNotFound {
+                    user_id: user_id.to_string(),
+                })?;
         p.audio_state.muted = muted;
         debug!(user_id = %user_id, muted, "participant mute state changed");
         Ok(())
@@ -526,12 +536,12 @@ impl VoiceChannelState {
 
     /// Set the deafen state for a participant.
     pub fn set_deafened(&mut self, user_id: &str, deafened: bool) -> Result<(), VoiceError> {
-        let p = self
-            .participants
-            .get_mut(user_id)
-            .ok_or_else(|| VoiceError::ParticipantNotFound {
-                user_id: user_id.to_string(),
-            })?;
+        let p =
+            self.participants
+                .get_mut(user_id)
+                .ok_or_else(|| VoiceError::ParticipantNotFound {
+                    user_id: user_id.to_string(),
+                })?;
         p.audio_state.deafened = deafened;
         // Deafening also mutes by convention
         if deafened {
@@ -895,10 +905,7 @@ mod tests {
         let mut state = VoiceChannelState::new("g", "c");
         state.add_participant("user_1", "Alice").unwrap();
         let err = state.add_participant("user_1", "Alice2").unwrap_err();
-        assert!(matches!(
-            err,
-            VoiceError::ParticipantAlreadyPresent { .. }
-        ));
+        assert!(matches!(err, VoiceError::ParticipantAlreadyPresent { .. }));
     }
 
     #[test]
@@ -916,9 +923,7 @@ mod tests {
                 .add_participant(format!("user_{i}"), format!("User {i}"))
                 .unwrap();
         }
-        let err = state
-            .add_participant("overflow", "Overflow")
-            .unwrap_err();
+        let err = state.add_participant("overflow", "Overflow").unwrap_err();
         assert!(matches!(err, VoiceError::TooManyParticipants { .. }));
     }
 
@@ -1105,7 +1110,10 @@ mod tests {
 
     #[test]
     fn connection_status_equality() {
-        assert_eq!(ConnectionStatus::Disconnected, ConnectionStatus::Disconnected);
+        assert_eq!(
+            ConnectionStatus::Disconnected,
+            ConnectionStatus::Disconnected
+        );
         assert_ne!(ConnectionStatus::Connected, ConnectionStatus::Disconnected);
         assert_ne!(ConnectionStatus::Connecting, ConnectionStatus::Reconnecting);
     }

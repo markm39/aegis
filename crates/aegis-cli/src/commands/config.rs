@@ -10,12 +10,12 @@
 
 use std::fs;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use aegis_types::{AegisConfig, CONFIG_FILENAME};
 use aegis_types::{
-    flatten_toml, format_toml_value, get_dot_value, is_sensitive_field, mask_sensitive,
-    set_dot_value, ConfigLoader,
+    ConfigLoader, flatten_toml, format_toml_value, get_dot_value, is_sensitive_field,
+    mask_sensitive, set_dot_value,
 };
 
 use crate::commands::init::{load_config, resolve_config_dir};
@@ -357,13 +357,17 @@ mod tests {
     #[test]
     fn describe_observer_variants() {
         assert_eq!(aegis_types::ObserverConfig::None.to_string(), "None");
-        assert!(aegis_types::ObserverConfig::FsEvents {
-            enable_snapshots: false
-        }
-        .to_string()
-        .contains("disabled"));
-        assert!(aegis_types::ObserverConfig::EndpointSecurity
+        assert!(
+            aegis_types::ObserverConfig::FsEvents {
+                enable_snapshots: false
+            }
             .to_string()
-            .contains("Endpoint"));
+            .contains("disabled")
+        );
+        assert!(
+            aegis_types::ObserverConfig::EndpointSecurity
+                .to_string()
+                .contains("Endpoint")
+        );
     }
 }

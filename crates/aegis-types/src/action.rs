@@ -373,6 +373,40 @@ pub enum ActionKind {
         /// Operation being performed (e.g., "start", "stop", "pause", "resume", "list").
         operation: String,
     },
+
+    // -- Administrative actions (recorded for compliance audit trail) --
+    /// Add a new agent to the fleet.
+    AdminAgentAdd {
+        /// Name of the agent being added.
+        agent_name: String,
+    },
+    /// Remove an agent from the fleet.
+    AdminAgentRemove {
+        /// Name of the agent being removed.
+        agent_name: String,
+    },
+    /// Install or modify a hook script.
+    AdminHookInstall {
+        /// Event name the hook is registered for.
+        event: String,
+        /// Path to the hook script.
+        script_path: String,
+    },
+    /// Remove a hook script.
+    AdminHookRemove {
+        /// Event name the hook was registered for.
+        event: String,
+    },
+    /// Change a daemon configuration setting.
+    AdminConfigChange {
+        /// Name of the configuration key that changed.
+        key: String,
+    },
+    /// Purge audit log entries (data retention operation).
+    AdminAuditPurge {
+        /// Number of entries purged.
+        entries_purged: usize,
+    },
 }
 
 /// A principal performing an action at a point in time.
@@ -478,7 +512,10 @@ impl std::fmt::Display for ActionKind {
                 format,
                 size_bytes,
             } => {
-                write!(f, "ImageProcess {format} ({size_bytes} bytes, hash={content_hash})")
+                write!(
+                    f,
+                    "ImageProcess {format} ({size_bytes} bytes, hash={content_hash})"
+                )
             }
             ActionKind::OAuthExchange {
                 provider,
@@ -491,7 +528,10 @@ impl std::fmt::Display for ActionKind {
                 method,
                 payload_size,
             } => {
-                write!(f, "AcpServerReceive {source} {method} ({payload_size} bytes)")
+                write!(
+                    f,
+                    "AcpServerReceive {source} {method} ({payload_size} bytes)"
+                )
             }
             ActionKind::TtsSynthesize {
                 provider,
@@ -500,28 +540,40 @@ impl std::fmt::Display for ActionKind {
                 text_length,
                 ..
             } => {
-                write!(f, "TtsSynthesize {provider}/{voice} {format} ({text_length} chars)")
+                write!(
+                    f,
+                    "TtsSynthesize {provider}/{voice} {format} ({text_length} chars)"
+                )
             }
             ActionKind::TranscribeAudio {
                 content_hash,
                 format,
                 size_bytes,
             } => {
-                write!(f, "TranscribeAudio {format} ({size_bytes} bytes, hash={content_hash})")
+                write!(
+                    f,
+                    "TranscribeAudio {format} ({size_bytes} bytes, hash={content_hash})"
+                )
             }
             ActionKind::VideoProcess {
                 content_hash,
                 format,
                 size_bytes,
             } => {
-                write!(f, "VideoProcess {format} ({size_bytes} bytes, hash={content_hash})")
+                write!(
+                    f,
+                    "VideoProcess {format} ({size_bytes} bytes, hash={content_hash})"
+                )
             }
             ActionKind::AcpTranslate {
                 session_id,
                 method,
                 direction,
             } => {
-                write!(f, "AcpTranslate {direction} {method} (session={session_id})")
+                write!(
+                    f,
+                    "AcpTranslate {direction} {method} (session={session_id})"
+                )
             }
             ActionKind::CopilotAuth { grant_type } => {
                 write!(f, "CopilotAuth ({grant_type})")
@@ -542,7 +594,10 @@ impl std::fmt::Display for ActionKind {
                 mime_type,
                 size_bytes,
             } => {
-                write!(f, "ProcessAttachment {mime_type} ({size_bytes} bytes, hash={content_hash})")
+                write!(
+                    f,
+                    "ProcessAttachment {mime_type} ({size_bytes} bytes, hash={content_hash})"
+                )
             }
             ActionKind::CanvasCreate { canvas_id } => {
                 write!(f, "CanvasCreate {canvas_id}")
@@ -602,10 +657,7 @@ impl std::fmt::Display for ActionKind {
             } => {
                 write!(f, "MakeVoiceCall {to_number} (agent={agent_id})")
             }
-            ActionKind::SpeechRecognition {
-                provider,
-                format,
-            } => {
+            ActionKind::SpeechRecognition { provider, format } => {
                 write!(f, "SpeechRecognition {provider} ({format})")
             }
             ActionKind::VoiceSession {
@@ -613,6 +665,24 @@ impl std::fmt::Display for ActionKind {
                 operation,
             } => {
                 write!(f, "VoiceSession {agent_id} ({operation})")
+            }
+            ActionKind::AdminAgentAdd { agent_name } => {
+                write!(f, "AdminAgentAdd {agent_name}")
+            }
+            ActionKind::AdminAgentRemove { agent_name } => {
+                write!(f, "AdminAgentRemove {agent_name}")
+            }
+            ActionKind::AdminHookInstall { event, script_path } => {
+                write!(f, "AdminHookInstall {event} -> {script_path}")
+            }
+            ActionKind::AdminHookRemove { event } => {
+                write!(f, "AdminHookRemove {event}")
+            }
+            ActionKind::AdminConfigChange { key } => {
+                write!(f, "AdminConfigChange {key}")
+            }
+            ActionKind::AdminAuditPurge { entries_purged } => {
+                write!(f, "AdminAuditPurge ({entries_purged} entries)")
             }
         }
     }
@@ -785,6 +855,23 @@ mod tests {
                 agent_id: "agent-1".into(),
                 operation: "start".into(),
             },
+            ActionKind::AdminAgentAdd {
+                agent_name: "claude-2".into(),
+            },
+            ActionKind::AdminAgentRemove {
+                agent_name: "claude-2".into(),
+            },
+            ActionKind::AdminHookInstall {
+                event: "pre_tool_use".into(),
+                script_path: "/hooks/check.sh".into(),
+            },
+            ActionKind::AdminHookRemove {
+                event: "pre_tool_use".into(),
+            },
+            ActionKind::AdminConfigChange {
+                key: "fleet.restart_policy".into(),
+            },
+            ActionKind::AdminAuditPurge { entries_purged: 42 },
         ];
         for v in variants {
             let json = serde_json::to_string(&v).unwrap();

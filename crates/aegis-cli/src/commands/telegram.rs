@@ -7,11 +7,11 @@
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 
 use aegis_channel::telegram::api::TelegramApi;
 use aegis_types::config::{ChannelConfig, TelegramConfig};
-use aegis_types::daemon::{daemon_config_path, daemon_dir, DaemonConfig};
+use aegis_types::daemon::{DaemonConfig, daemon_config_path, daemon_dir};
 
 /// Entry point: create a tokio runtime and run the async wizard.
 pub fn run() -> anyhow::Result<()> {

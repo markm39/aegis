@@ -275,10 +275,7 @@ pub enum DaemonCommand {
 
     // -- Memory store commands --
     /// Get a value from the agent memory store.
-    MemoryGet {
-        namespace: String,
-        key: String,
-    },
+    MemoryGet { namespace: String, key: String },
     /// Set a value in the agent memory store (upsert).
     MemorySet {
         namespace: String,
@@ -286,10 +283,7 @@ pub enum DaemonCommand {
         value: String,
     },
     /// Delete a key from the agent memory store.
-    MemoryDelete {
-        namespace: String,
-        key: String,
-    },
+    MemoryDelete { namespace: String, key: String },
     /// List keys in a namespace.
     MemoryList {
         namespace: String,
@@ -312,25 +306,17 @@ pub enum DaemonCommand {
         command: serde_json::Value,
     },
     /// Remove a cron job by name.
-    CronRemove {
-        name: String,
-    },
+    CronRemove { name: String },
     /// Manually trigger a cron job by name.
-    CronTrigger {
-        name: String,
-    },
+    CronTrigger { name: String },
 
     // -- Plugin commands --
     /// Load a plugin from a manifest path.
-    LoadPlugin {
-        path: String,
-    },
+    LoadPlugin { path: String },
     /// List all loaded plugins.
     ListPlugins,
     /// Unload a plugin by name.
-    UnloadPlugin {
-        name: String,
-    },
+    UnloadPlugin { name: String },
 
     // -- ACP protocol commands --
     // -- Alias commands --
@@ -530,10 +516,7 @@ pub enum DaemonCommand {
     /// The agent name is validated for traversal characters and the
     /// description is sanitized (control chars stripped, max 1024 bytes).
     /// Per-agent job limit of 100 is enforced.
-    CreateJob {
-        agent: String,
-        description: String,
-    },
+    CreateJob { agent: String, description: String },
     /// List jobs, optionally filtered by agent name.
     ///
     /// If `agent` is None, returns all jobs across all agents.
@@ -542,16 +525,12 @@ pub enum DaemonCommand {
         agent: Option<String>,
     },
     /// Get the status of a single job by ID.
-    JobStatus {
-        job_id: uuid::Uuid,
-    },
+    JobStatus { job_id: uuid::Uuid },
     /// Cancel a queued or running job.
     ///
     /// Transitions the job to Cancelled. Only Queued and Running jobs
     /// can be cancelled; attempting to cancel a terminal job is rejected.
-    CancelJob {
-        job_id: uuid::Uuid,
-    },
+    CancelJob { job_id: uuid::Uuid },
     /// Update the progress percentage of a running job.
     ///
     /// Progress must be in the range 0-100. Only Running jobs accept
@@ -1021,6 +1000,22 @@ pub enum DaemonCommand {
     ///
     /// Cedar policy gate: `daemon:register_chat_session`.
     RegisterChatSession,
+
+    // -- Audit log maintenance --
+    /// Purge old audit log entries by age or count.
+    ///
+    /// At least one of `before_days` or `keep_entries` must be specified.
+    /// If both are given, both constraints are applied (entries older than
+    /// N days are deleted, then trimmed to at most K entries).
+    /// Cedar policy gate: `daemon:purge_audit_log`.
+    PurgeAuditLog {
+        /// Delete entries older than this many days.
+        #[serde(default)]
+        before_days: Option<u64>,
+        /// Keep at most this many entries (delete oldest).
+        #[serde(default)]
+        keep_entries: Option<usize>,
+    },
 }
 
 fn default_true() -> bool {
@@ -1165,7 +1160,9 @@ impl DaemonCommand {
             DaemonCommand::GenerateSetupCode { .. } => "daemon:generate_setup_code",
             DaemonCommand::QueueDeviceCommand { .. } => "daemon:queue_device_command",
             DaemonCommand::PollDeviceCommands { .. } => "daemon:poll_device_commands",
-            DaemonCommand::ReportDeviceCommandResult { .. } => "daemon:report_device_command_result",
+            DaemonCommand::ReportDeviceCommandResult { .. } => {
+                "daemon:report_device_command_result"
+            }
             DaemonCommand::MakeCall { .. } => "daemon:make_call",
             DaemonCommand::HangupCall { .. } => "daemon:hangup_call",
             DaemonCommand::ListCalls => "daemon:list_calls",
@@ -1178,6 +1175,7 @@ impl DaemonCommand {
             DaemonCommand::ListVoiceSessions => "daemon:list_voice_sessions",
             DaemonCommand::ExecuteTool { .. } => "daemon:execute_tool",
             DaemonCommand::RegisterChatSession => "daemon:register_chat_session",
+            DaemonCommand::PurgeAuditLog { .. } => "daemon:purge_audit_log",
         }
     }
 }
@@ -2039,9 +2037,7 @@ mod tests {
                 command: "approve".into(),
                 args: vec!["--all".into()],
             },
-            DaemonCommand::RemoveAlias {
-                alias: "s".into(),
-            },
+            DaemonCommand::RemoveAlias { alias: "s".into() },
             DaemonCommand::ListAliases,
             // ACP protocol commands
             DaemonCommand::BroadcastToFleet {
@@ -2122,7 +2118,10 @@ mod tests {
             // Message routing commands
             DaemonCommand::RouteMessage {
                 envelope: crate::message_routing::MessageEnvelope::new(
-                    "agent-1", "agent-2", "direct", "hello there",
+                    "agent-1",
+                    "agent-2",
+                    "direct",
+                    "hello there",
                 ),
             },
             DaemonCommand::GetMessageThread {
@@ -2653,7 +2652,9 @@ mod tests {
     fn session_state_transition_to_returns_error_on_invalid() {
         let result = SessionState::Created.transition_to(SessionState::Suspended);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("invalid session state transition"));
+        assert!(result
+            .unwrap_err()
+            .contains("invalid session state transition"));
 
         let result = SessionState::Terminated.transition_to(SessionState::Active);
         assert!(result.is_err());

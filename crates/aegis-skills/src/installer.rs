@@ -26,10 +26,7 @@ pub enum InstallSource {
     /// Installed from the registry.
     Registry { version: String },
     /// Installed via a system package manager (brew, npm, go, apt, uv).
-    PackageManager {
-        method: String,
-        target: String,
-    },
+    PackageManager { method: String, target: String },
 }
 
 impl std::fmt::Display for InstallSource {
@@ -115,8 +112,7 @@ impl SkillInstaller for LocalInstaller {
             std::fs::remove_dir_all(dest_dir)
                 .with_context(|| format!("failed to clean destination: {}", dest_dir.display()))?;
         }
-        copy_dir_recursive(&self.source_dir, dest_dir)
-            .context("failed to copy skill directory")?;
+        copy_dir_recursive(&self.source_dir, dest_dir).context("failed to copy skill directory")?;
 
         // Validate the installed manifest
         let installed_manifest_path = dest_dir.join("manifest.toml");
@@ -181,10 +177,7 @@ impl SkillInstaller for GitInstaller {
         // Validate the cloned repo has a manifest
         let manifest_path = dest_dir.join("manifest.toml");
         if !manifest_path.exists() {
-            bail!(
-                "cloned repository has no manifest.toml: {}",
-                self.repo_url
-            );
+            bail!("cloned repository has no manifest.toml: {}", self.repo_url);
         }
 
         let manifest =
@@ -324,9 +317,10 @@ impl InstallMethod {
     pub fn install_command(&self, target: &str) -> (String, Vec<String>) {
         match self {
             InstallMethod::Brew => ("brew".into(), vec!["install".into(), target.into()]),
-            InstallMethod::Npm => {
-                ("npm".into(), vec!["install".into(), "-g".into(), target.into()])
-            }
+            InstallMethod::Npm => (
+                "npm".into(),
+                vec!["install".into(), "-g".into(), target.into()],
+            ),
             InstallMethod::Go => {
                 let target_with_version = if target.contains('@') {
                     target.to_string()
@@ -337,9 +331,17 @@ impl InstallMethod {
             }
             InstallMethod::Apt => (
                 "sudo".into(),
-                vec!["apt-get".into(), "install".into(), "-y".into(), target.into()],
+                vec![
+                    "apt-get".into(),
+                    "install".into(),
+                    "-y".into(),
+                    target.into(),
+                ],
             ),
-            InstallMethod::Uv => ("uv".into(), vec!["tool".into(), "install".into(), target.into()]),
+            InstallMethod::Uv => (
+                "uv".into(),
+                vec!["tool".into(), "install".into(), target.into()],
+            ),
             InstallMethod::Download => {
                 // Download expects target to be a URL; use curl -LO
                 ("curl".into(), vec!["-LO".into(), target.into()])
@@ -420,15 +422,18 @@ pub fn validate_installation(skill_dir: &Path) -> Result<InstalledSkill> {
     // Read the install metadata if present
     let meta_path = skill_dir.join(".aegis-install.json");
     let (installed_at, source) = if meta_path.exists() {
-        let content = std::fs::read_to_string(&meta_path)
-            .context("failed to read install metadata")?;
+        let content =
+            std::fs::read_to_string(&meta_path).context("failed to read install metadata")?;
         let meta: InstallMetadata =
             serde_json::from_str(&content).context("failed to parse install metadata")?;
         (meta.installed_at, meta.source)
     } else {
-        (Utc::now(), InstallSource::Local {
-            path: skill_dir.to_path_buf(),
-        })
+        (
+            Utc::now(),
+            InstallSource::Local {
+                path: skill_dir.to_path_buf(),
+            },
+        )
     };
 
     Ok(InstalledSkill {
@@ -453,8 +458,8 @@ pub fn write_install_metadata(
         installed_at,
         source: source.clone(),
     };
-    let content = serde_json::to_string_pretty(&meta)
-        .context("failed to serialize install metadata")?;
+    let content =
+        serde_json::to_string_pretty(&meta).context("failed to serialize install metadata")?;
     std::fs::write(skill_dir.join(".aegis-install.json"), content)
         .context("failed to write install metadata")?;
     Ok(())

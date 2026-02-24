@@ -157,10 +157,7 @@ impl std::fmt::Display for PresenceError {
                 user_id,
                 channel_id,
             } => {
-                write!(
-                    f,
-                    "user {user_id:?} not found in channel {channel_id:?}"
-                )
+                write!(f, "user {user_id:?} not found in channel {channel_id:?}")
             }
             Self::InvalidId { value, reason } => {
                 write!(f, "invalid ID {value:?}: {reason}")
@@ -324,13 +321,13 @@ impl PresenceTracker {
             channel_id: channel_id.to_string(),
         };
 
-        let entry =
-            self.entries
-                .get_mut(&key)
-                .ok_or_else(|| PresenceError::UserNotFound {
-                    user_id: user_id.to_string(),
-                    channel_id: channel_id.to_string(),
-                })?;
+        let entry = self
+            .entries
+            .get_mut(&key)
+            .ok_or_else(|| PresenceError::UserNotFound {
+                user_id: user_id.to_string(),
+                channel_id: channel_id.to_string(),
+            })?;
 
         if entry.status != status {
             debug!(
@@ -358,13 +355,13 @@ impl PresenceTracker {
             channel_id: channel_id.to_string(),
         };
 
-        let entry =
-            self.entries
-                .get_mut(&key)
-                .ok_or_else(|| PresenceError::UserNotFound {
-                    user_id: user_id.to_string(),
-                    channel_id: channel_id.to_string(),
-                })?;
+        let entry = self
+            .entries
+            .get_mut(&key)
+            .ok_or_else(|| PresenceError::UserNotFound {
+                user_id: user_id.to_string(),
+                channel_id: channel_id.to_string(),
+            })?;
 
         entry.status_message = message;
         Ok(())
@@ -390,11 +387,7 @@ impl PresenceTracker {
     }
 
     /// Get a user's presence entry.
-    pub fn get(
-        &self,
-        user_id: &str,
-        channel_id: &str,
-    ) -> Option<&PresenceEntry> {
+    pub fn get(&self, user_id: &str, channel_id: &str) -> Option<&PresenceEntry> {
         let key = PresenceKey {
             user_id: user_id.to_string(),
             channel_id: channel_id.to_string(),
@@ -403,11 +396,7 @@ impl PresenceTracker {
     }
 
     /// Get a user's current status, or Offline if not tracked.
-    pub fn status_of(
-        &self,
-        user_id: &str,
-        channel_id: &str,
-    ) -> PresenceStatus {
+    pub fn status_of(&self, user_id: &str, channel_id: &str) -> PresenceStatus {
         self.get(user_id, channel_id)
             .map(|e| e.status)
             .unwrap_or(PresenceStatus::Offline)
@@ -434,7 +423,11 @@ impl PresenceTracker {
     /// Count users by status in a channel.
     pub fn count_by_status(&self, channel_id: &str) -> HashMap<PresenceStatus, usize> {
         let mut counts = HashMap::new();
-        for (_, entry) in self.entries.iter().filter(|(k, _)| k.channel_id == channel_id) {
+        for (_, entry) in self
+            .entries
+            .iter()
+            .filter(|(k, _)| k.channel_id == channel_id)
+        {
             *counts.entry(entry.status).or_insert(0) += 1;
         }
         counts
@@ -658,9 +651,7 @@ mod tests {
         tracker
             .set_status_message("user1", "chan1", Some("busy".to_string()))
             .unwrap();
-        tracker
-            .set_status_message("user1", "chan1", None)
-            .unwrap();
+        tracker.set_status_message("user1", "chan1", None).unwrap();
 
         let entry = tracker.get("user1", "chan1").unwrap();
         assert!(entry.status_message().is_none());
@@ -739,10 +730,7 @@ mod tests {
 
         let counts = tracker.count_by_status("gen");
         assert_eq!(*counts.get(&PresenceStatus::Online).unwrap_or(&0), 1);
-        assert_eq!(
-            *counts.get(&PresenceStatus::DoNotDisturb).unwrap_or(&0),
-            1
-        );
+        assert_eq!(*counts.get(&PresenceStatus::DoNotDisturb).unwrap_or(&0), 1);
     }
 
     // -- Tick (idle detection) --
@@ -823,10 +811,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         tracker.tick(); // transition to Idle
 
-        assert_eq!(
-            tracker.status_of("user1", "chan1"),
-            PresenceStatus::Idle
-        );
+        assert_eq!(tracker.status_of("user1", "chan1"), PresenceStatus::Idle);
 
         // Activity should bring back to Online
         let status = tracker.record_activity("user1", "chan1").unwrap();

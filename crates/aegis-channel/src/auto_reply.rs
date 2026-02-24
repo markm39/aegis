@@ -69,9 +69,7 @@ const ALLOWED_FILE_EXTENSIONS: &[&str] = &["pdf", "txt", "csv", "json", "zip"];
 ///
 /// Any language code not in this allowlist is rejected. This prevents
 /// arbitrary string injection through the language field.
-const ISO_639_1_ALLOWLIST: &[&str] = &[
-    "ar", "de", "en", "es", "fr", "ja", "ko", "pt", "ru", "zh",
-];
+const ISO_639_1_ALLOWLIST: &[&str] = &["ar", "de", "en", "es", "fr", "ja", "ko", "pt", "ru", "zh"];
 
 /// Validate that a language code is in the ISO 639-1 allowlist.
 ///
@@ -189,24 +187,24 @@ pub fn detect_language(text: &str) -> Option<String> {
     // Count indicator words for each Latin-script language.
     // These are high-frequency function words that are strong indicators.
     let en_words: &[&str] = &[
-        "the", "is", "and", "are", "was", "were", "have", "has", "this", "that",
-        "with", "for", "not", "you", "but", "from", "they", "been", "which",
+        "the", "is", "and", "are", "was", "were", "have", "has", "this", "that", "with", "for",
+        "not", "you", "but", "from", "they", "been", "which",
     ];
     let fr_words: &[&str] = &[
-        "le", "la", "les", "de", "des", "du", "un", "une", "est", "et",
-        "en", "que", "qui", "dans", "pour", "pas", "sur", "avec", "ce", "sont",
+        "le", "la", "les", "de", "des", "du", "un", "une", "est", "et", "en", "que", "qui", "dans",
+        "pour", "pas", "sur", "avec", "ce", "sont",
     ];
     let es_words: &[&str] = &[
-        "el", "es", "los", "las", "del", "una", "por", "con", "para", "que",
-        "en", "se", "como", "pero", "sus", "esta", "son", "fue", "todo",
+        "el", "es", "los", "las", "del", "una", "por", "con", "para", "que", "en", "se", "como",
+        "pero", "sus", "esta", "son", "fue", "todo",
     ];
     let de_words: &[&str] = &[
-        "der", "die", "das", "und", "ist", "ein", "eine", "nicht", "sich",
-        "mit", "auf", "den", "von", "auch", "nach", "wie", "aber", "ich",
+        "der", "die", "das", "und", "ist", "ein", "eine", "nicht", "sich", "mit", "auf", "den",
+        "von", "auch", "nach", "wie", "aber", "ich",
     ];
     let pt_words: &[&str] = &[
-        "o", "a", "os", "as", "do", "da", "dos", "das", "um", "uma",
-        "que", "em", "para", "com", "por", "mais", "como", "mas", "foi",
+        "o", "a", "os", "as", "do", "da", "dos", "das", "um", "uma", "que", "em", "para", "com",
+        "por", "mais", "como", "mas", "foi",
     ];
 
     let mut en_score: usize = 0;
@@ -235,7 +233,11 @@ pub fn detect_language(text: &str) -> Option<String> {
 
     // Require minimum confidence of 3 indicator words.
     let min_confidence = 3;
-    let max_score = en_score.max(fr_score).max(es_score).max(de_score).max(pt_score);
+    let max_score = en_score
+        .max(fr_score)
+        .max(es_score)
+        .max(de_score)
+        .max(pt_score);
 
     if max_score < min_confidence {
         return None;
@@ -297,18 +299,17 @@ fn is_hangul(ch: char) -> bool {
 /// Check if a character is in the Cyrillic range.
 fn is_cyrillic(ch: char) -> bool {
     let cp = ch as u32;
-    (0x0400..=0x04FF).contains(&cp)
-    || (0x0500..=0x052F).contains(&cp)
+    (0x0400..=0x04FF).contains(&cp) || (0x0500..=0x052F).contains(&cp)
 }
 
 /// Check if a character is in the Arabic range.
 fn is_arabic(ch: char) -> bool {
     let cp = ch as u32;
     (0x0600..=0x06FF).contains(&cp)
-    || (0x0750..=0x077F).contains(&cp)
-    || (0x08A0..=0x08FF).contains(&cp)
-    || (0xFB50..=0xFDFF).contains(&cp)
-    || (0xFE70..=0xFEFF).contains(&cp)
+        || (0x0750..=0x077F).contains(&cp)
+        || (0x08A0..=0x08FF).contains(&cp)
+        || (0xFB50..=0xFDFF).contains(&cp)
+        || (0xFE70..=0xFEFF).contains(&cp)
 }
 
 // ---------------------------------------------------------------------------
@@ -361,12 +362,7 @@ impl HeartbeatConfig {
     ///
     /// Currently uses placeholder values since fleet data is not available in
     /// the channel layer. Pass `"N/A"` for unknown values.
-    pub fn format_message(
-        &self,
-        agent_count: &str,
-        pending_count: &str,
-        uptime: &str,
-    ) -> String {
+    pub fn format_message(&self, agent_count: &str, pending_count: &str, uptime: &str) -> String {
         self.message_template
             .replace("{agent_count}", agent_count)
             .replace("{pending_count}", pending_count)
@@ -452,7 +448,9 @@ pub enum MediaError {
     NoExtension,
     #[error("sticker file_id too long ({0} chars, max {MAX_STICKER_FILE_ID_LEN})")]
     StickerIdTooLong(usize),
-    #[error("sticker file_id contains invalid characters (only alphanumeric, dash, underscore allowed)")]
+    #[error(
+        "sticker file_id contains invalid characters (only alphanumeric, dash, underscore allowed)"
+    )]
     StickerIdInvalidChars,
     #[error("failed to read media file: {0}")]
     IoError(#[from] std::io::Error),
@@ -720,7 +718,11 @@ fn has_nested_quantifiers(pattern: &str) -> bool {
             ')' => {
                 let inner_has_quantifier = group_stack.pop().unwrap_or(false);
                 if inner_has_quantifier {
-                    let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+                    let next = if i + 1 < len {
+                        Some(chars[i + 1])
+                    } else {
+                        None
+                    };
                     if matches!(next, Some('+') | Some('*') | Some('?') | Some('{')) {
                         return true;
                     }
@@ -794,7 +796,11 @@ impl RateLimiter {
         let window = std::time::Duration::from_secs(RATE_LIMIT_WINDOW_SECS);
         self.windows
             .get(&chat_id)
-            .map(|ts| ts.iter().filter(|t| now.duration_since(**t) < window).count())
+            .map(|ts| {
+                ts.iter()
+                    .filter(|t| now.duration_since(**t) < window)
+                    .count()
+            })
             .unwrap_or(0)
     }
 }
@@ -836,8 +842,7 @@ const MIGRATION_ADD_RESPONSE_TYPE: &str =
     "ALTER TABLE auto_reply_rules ADD COLUMN response_type TEXT NOT NULL DEFAULT 'text'";
 
 /// Migration to add the language column to existing databases.
-const MIGRATION_ADD_LANGUAGE: &str =
-    "ALTER TABLE auto_reply_rules ADD COLUMN language TEXT";
+const MIGRATION_ADD_LANGUAGE: &str = "ALTER TABLE auto_reply_rules ADD COLUMN language TEXT";
 
 /// SQLite-backed persistent store for auto-reply rules and per-chat state.
 pub struct AutoReplyStore {
@@ -868,8 +873,8 @@ impl AutoReplyStore {
 
     /// Open an in-memory store (for testing).
     pub fn open_in_memory() -> Result<Self, String> {
-        let conn =
-            Connection::open_in_memory().map_err(|e| format!("failed to open in-memory db: {e}"))?;
+        let conn = Connection::open_in_memory()
+            .map_err(|e| format!("failed to open in-memory db: {e}"))?;
 
         conn.execute_batch(STORE_SCHEMA_SQL)
             .map_err(|e| format!("failed to create auto-reply schema: {e}"))?;
@@ -981,12 +986,10 @@ impl AutoReplyStore {
         match &media_type {
             MediaResponseType::Text => {}
             MediaResponseType::Image { path } => {
-                validate_media_path(path)
-                    .map_err(|e| format!("media path rejected: {e}"))?;
+                validate_media_path(path).map_err(|e| format!("media path rejected: {e}"))?;
             }
             MediaResponseType::File { path, .. } => {
-                validate_media_path(path)
-                    .map_err(|e| format!("media path rejected: {e}"))?;
+                validate_media_path(path).map_err(|e| format!("media path rejected: {e}"))?;
             }
             MediaResponseType::Sticker { file_id } => {
                 validate_sticker_file_id(file_id)
@@ -1345,7 +1348,11 @@ impl PersistentAutoReplyEngine {
     /// Rules with invalid or unsafe regex patterns are skipped and logged.
     /// Rules are sorted by priority descending (highest priority first).
     pub fn new(mut rules: Vec<PersistentAutoReplyRule>) -> Self {
-        rules.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
+        rules.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then(a.created_at.cmp(&b.created_at))
+        });
 
         let compiled = rules
             .into_iter()
@@ -1444,10 +1451,8 @@ impl PersistentAutoReplyEngine {
             }
 
             if compiled.regex.is_match(text) {
-                let response = render_lang_template(
-                    &compiled.rule.response,
-                    detected_lang.as_deref(),
-                );
+                let response =
+                    render_lang_template(&compiled.rule.response, detected_lang.as_deref());
                 return Some(response);
             }
         }
@@ -1503,10 +1508,8 @@ impl PersistentAutoReplyEngine {
             }
 
             if compiled.regex.is_match(text) {
-                let response_text = render_lang_template(
-                    &compiled.rule.response,
-                    detected_lang.as_deref(),
-                );
+                let response_text =
+                    render_lang_template(&compiled.rule.response, detected_lang.as_deref());
 
                 // Attempt media loading; fall back to text-only on failure
                 match load_media(&compiled.rule.response_type) {
@@ -1521,9 +1524,7 @@ impl PersistentAutoReplyEngine {
                                     "auto-reply sending image"
                                 );
                             }
-                            MediaPayload::File {
-                                data, filename, ..
-                            } => {
+                            MediaPayload::File { data, filename, .. } => {
                                 info!(
                                     rule_id = %compiled.rule.id,
                                     filename = %filename,
@@ -1628,14 +1629,8 @@ fn render_lang_template(template: &str, lang: Option<&str>) -> String {
 ///
 /// These are the variable names recognized by [`RichTemplate::render`].
 /// Any `{{variable}}` not in this list is left as-is (fail-safe).
-const RICH_TEMPLATE_VARIABLES: &[&str] = &[
-    "sender",
-    "time",
-    "agent_name",
-    "channel",
-    "lang",
-    "message",
-];
+const RICH_TEMPLATE_VARIABLES: &[&str] =
+    &["sender", "time", "agent_name", "channel", "lang", "message"];
 
 /// Maximum template length (4096 chars). Prevents resource exhaustion from
 /// extremely large templates.
@@ -2232,7 +2227,9 @@ mod tests {
         // Add rules with different priorities
         store.add_rule(r"test", "low priority", None, 1).unwrap();
         store.add_rule(r"test", "high priority", None, 100).unwrap();
-        store.add_rule(r"test", "medium priority", None, 50).unwrap();
+        store
+            .add_rule(r"test", "medium priority", None, 50)
+            .unwrap();
 
         let rules = store.list_rules().unwrap();
         let mut engine = PersistentAutoReplyEngine::new(rules);
@@ -2963,7 +2960,10 @@ mod tests {
 
         // English text
         assert_eq!(
-            engine.check("test the quick brown fox and the lazy dog was happy", Some(1)),
+            engine.check(
+                "test the quick brown fox and the lazy dog was happy",
+                Some(1)
+            ),
             Some("global response".to_string())
         );
 
@@ -3024,7 +3024,11 @@ mod tests {
 
         // SQL injection attempts rejected
         let result = store.add_rule_with_language(
-            r"^test$", "ok", None, 0, Some("en'; DROP TABLE auto_reply_rules;--")
+            r"^test$",
+            "ok",
+            None,
+            0,
+            Some("en'; DROP TABLE auto_reply_rules;--"),
         );
         assert!(result.is_err());
 
@@ -3123,10 +3127,22 @@ mod tests {
 
     #[test]
     fn render_lang_template_substitution() {
-        assert_eq!(render_lang_template("Hello {{lang}}", Some("en")), "Hello en");
-        assert_eq!(render_lang_template("Hello {{lang}}", Some("es")), "Hello es");
-        assert_eq!(render_lang_template("Hello {{lang}}", None), "Hello unknown");
-        assert_eq!(render_lang_template("No template here", Some("en")), "No template here");
+        assert_eq!(
+            render_lang_template("Hello {{lang}}", Some("en")),
+            "Hello en"
+        );
+        assert_eq!(
+            render_lang_template("Hello {{lang}}", Some("es")),
+            "Hello es"
+        );
+        assert_eq!(
+            render_lang_template("Hello {{lang}}", None),
+            "Hello unknown"
+        );
+        assert_eq!(
+            render_lang_template("No template here", Some("en")),
+            "No template here"
+        );
         assert_eq!(
             render_lang_template("{{lang}} start and {{lang}} end", Some("fr")),
             "fr start and fr end"
@@ -3173,8 +3189,7 @@ mod tests {
 
     #[test]
     fn rich_template_conditional_truthy() {
-        let tmpl =
-            RichTemplate::new("Start{{#if sender}} from {{sender}}{{/if}} end.").unwrap();
+        let tmpl = RichTemplate::new("Start{{#if sender}} from {{sender}}{{/if}} end.").unwrap();
         let ctx = sample_context();
         let result = tmpl.render(&ctx);
         assert_eq!(result, "Start from Alice end.");
@@ -3182,8 +3197,7 @@ mod tests {
 
     #[test]
     fn rich_template_conditional_falsy_empty() {
-        let tmpl =
-            RichTemplate::new("Start{{#if sender}} from {{sender}}{{/if}} end.").unwrap();
+        let tmpl = RichTemplate::new("Start{{#if sender}} from {{sender}}{{/if}} end.").unwrap();
         let ctx = TemplateContext {
             sender: String::new(),
             ..sample_context()
@@ -3194,8 +3208,7 @@ mod tests {
 
     #[test]
     fn rich_template_conditional_falsy_unknown() {
-        let tmpl =
-            RichTemplate::new("Lang{{#if lang}}: {{lang}}{{/if}}.").unwrap();
+        let tmpl = RichTemplate::new("Lang{{#if lang}}: {{lang}}{{/if}}.").unwrap();
         let ctx = TemplateContext {
             lang: "unknown".into(),
             ..sample_context()

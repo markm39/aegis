@@ -324,7 +324,7 @@ fn runtime_capabilities(config: &AgentSlotConfig) -> RuntimeCapabilities {
     let (auth_mode, auth_ready, auth_hint) = tool_auth_readiness(config);
 
     RuntimeCapabilities {
-        name: config.name.clone(),
+        name: config.name.to_string(),
         tool,
         headless,
         policy_mediation,
@@ -1413,7 +1413,7 @@ impl DaemonRuntime {
         };
 
         let child_config = AgentSlotConfig {
-            name: child_name.clone(),
+            name: child_name.clone().into(),
             tool: tool.clone(),
             working_dir: working_dir.clone(),
             role: request
@@ -2275,7 +2275,7 @@ impl DaemonRuntime {
                             is_orchestrator: slot.config.orchestrator.is_some(),
                             parent: self
                                 .subagents
-                                .get(&slot.config.name)
+                                .get(slot.config.name.as_str())
                                 .map(|s| s.parent.clone()),
                         })
                     })
@@ -2386,6 +2386,17 @@ impl DaemonRuntime {
                 if start {
                     self.fleet.start_agent(&name);
                 }
+
+                // Record admin action in audit ledger.
+                let admin_action = Action::new(
+                    "daemon",
+                    ActionKind::AdminAgentAdd {
+                        agent_name: name.to_string(),
+                    },
+                );
+                let verdict = Verdict::allow(admin_action.id, "agent added", None);
+                self.append_audit_entry(&admin_action, &verdict);
+
                 DaemonResponse::ok(format!("agent '{name}' added"))
             }
 
@@ -2417,6 +2428,17 @@ impl DaemonRuntime {
                 self.cleanup_agent_runtime_state(name);
                 self.fleet.remove_agent(name); // remove_agent stops the agent internally
                 self.subagents.remove(name);
+
+                // Record admin action in audit ledger.
+                let admin_action = Action::new(
+                    "daemon",
+                    ActionKind::AdminAgentRemove {
+                        agent_name: name.clone(),
+                    },
+                );
+                let verdict = Verdict::allow(admin_action.id, "agent removed", None);
+                self.append_audit_entry(&admin_action, &verdict);
+
                 DaemonResponse::ok(format!("agent '{name}' removed"))
             }
 
@@ -4603,10 +4625,25 @@ impl DaemonRuntime {
                             ));
                         }
                         match crate::copy_dir_recursive(&path, &dest) {
-                            Ok(()) => DaemonResponse::ok(format!(
-                                "hook installed ({} entries)",
-                                manifest.hooks.len()
-                            )),
+                            Ok(()) => {
+                                // Record admin action in audit ledger.
+                                let events: Vec<String> = manifest.hooks.iter().map(|h| h.event.clone()).collect();
+                                for event in &events {
+                                    let admin_action = Action::new(
+                                        "daemon",
+                                        ActionKind::AdminHookInstall {
+                                            event: event.clone(),
+                                            script_path: dest.display().to_string(),
+                                        },
+                                    );
+                                    let verdict = Verdict::allow(admin_action.id, "hook installed", None);
+                                    self.append_audit_entry(&admin_action, &verdict);
+                                }
+                                DaemonResponse::ok(format!(
+                                    "hook installed ({} entries)",
+                                    manifest.hooks.len()
+                                ))
+                            }
                             Err(e) => DaemonResponse::error(format!("install failed: {e}")),
                         }
                     }
@@ -4657,6 +4694,16 @@ impl DaemonRuntime {
                         let _ = std::fs::set_permissions(&hook_path, perms);
                     }
                 }
+                // Record admin action in audit ledger.
+                let admin_action = Action::new(
+                    "daemon",
+                    ActionKind::AdminConfigChange {
+                        key: format!("hook.{name}.enabled=true"),
+                    },
+                );
+                let verdict = Verdict::allow(admin_action.id, "hook enabled", None);
+                self.append_audit_entry(&admin_action, &verdict);
+
                 DaemonResponse::ok(format!("hook '{name}' enabled"))
             }
             DaemonCommand::DisableHook { name } => {
@@ -4682,6 +4729,16 @@ impl DaemonRuntime {
                         let _ = std::fs::set_permissions(&hook_path, perms);
                     }
                 }
+                // Record admin action in audit ledger.
+                let admin_action = Action::new(
+                    "daemon",
+                    ActionKind::AdminConfigChange {
+                        key: format!("hook.{name}.enabled=false"),
+                    },
+                );
+                let verdict = Verdict::allow(admin_action.id, "hook disabled", None);
+                self.append_audit_entry(&admin_action, &verdict);
+
                 DaemonResponse::ok(format!("hook '{name}' disabled"))
             }
             DaemonCommand::HookStatus { name } => {
@@ -5514,6 +5571,66 @@ impl DaemonRuntime {
                     Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
                 }
             }
+
+            DaemonCommand::PurgeAuditLog {
+                before_days,
+                keep_entries,
+            } => {
+                if before_days.is_none() && keep_entries.is_none() {
+                    return DaemonResponse::error(
+                        "at least one of before_days or keep_entries must be specified",
+                    );
+                }
+
+                match AuditStore::open(&self.aegis_config.ledger_path) {
+                    Ok(mut store) => {
+                        let mut total_purged: usize = 0;
+
+                        // 1. Purge by age
+                        if let Some(days) = before_days {
+                            let cutoff = chrono::Utc::now()
+                                - chrono::Duration::days(days as i64);
+                            match store.purge_before(cutoff) {
+                                Ok(n) => total_purged += n,
+                                Err(e) => {
+                                    return DaemonResponse::error(format!(
+                                        "purge by age failed: {e}"
+                                    ))
+                                }
+                            }
+                        }
+
+                        // 2. Purge by count
+                        if let Some(keep) = keep_entries {
+                            match store.purge_oldest(keep) {
+                                Ok(n) => total_purged += n,
+                                Err(e) => {
+                                    return DaemonResponse::error(format!(
+                                        "purge by count failed: {e}"
+                                    ))
+                                }
+                            }
+                        }
+
+                        // Record the purge itself as an admin audit entry.
+                        let purge_action = Action::new(
+                            "daemon",
+                            ActionKind::AdminAuditPurge {
+                                entries_purged: total_purged,
+                            },
+                        );
+                        let verdict = Verdict::allow(
+                            purge_action.id,
+                            "admin audit purge executed",
+                            None,
+                        );
+                        let _ = store.append(&purge_action, &verdict);
+
+                        DaemonResponse::ok(format!("{total_purged} audit entries purged"))
+                    }
+                    Err(e) => DaemonResponse::error(format!("ledger open failed: {e}")),
+                }
+            }
         }
     }
 
@@ -6032,7 +6149,7 @@ impl DaemonRuntime {
         let current_names: std::collections::HashSet<String> =
             self.fleet.agent_names().into_iter().collect();
         let new_names: std::collections::HashSet<String> =
-            new_config.agents.iter().map(|a| a.name.clone()).collect();
+            new_config.agents.iter().map(|a| a.name.to_string()).collect();
 
         // Remove agents no longer in config
         for name in current_names.difference(&new_names) {
@@ -6049,7 +6166,7 @@ impl DaemonRuntime {
         // Add or update agents
         let mut started = 0;
         for agent_config in &new_config.agents {
-            if current_names.contains(&agent_config.name) {
+            if current_names.contains(agent_config.name.as_str()) {
                 self.fleet.update_agent_config(agent_config);
                 updated += 1;
             } else {
@@ -6420,7 +6537,7 @@ mod tests {
 
     fn test_agent(name: &str) -> AgentSlotConfig {
         AgentSlotConfig {
-            name: name.to_string(),
+            name: name.into(),
             tool: AgentToolConfig::ClaudeCode {
                 skip_permissions: false,
                 one_shot: false,

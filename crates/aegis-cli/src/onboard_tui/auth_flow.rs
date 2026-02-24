@@ -16,7 +16,7 @@ use aegis_types::oauth::{
 use aegis_types::provider_auth::{
     AuthFlowKind, ClientIdSource, DeviceFlowPollStyle, TokenExtraction,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use super::callback_server;
 
@@ -118,11 +118,7 @@ impl DeviceFlowState {
                 &self.grant_type,
             )
         } else {
-            oauth::poll_device_code(
-                &self.token_url,
-                &self.client_id,
-                &self.response.device_code,
-            )
+            oauth::poll_device_code(&self.token_url, &self.client_id, &self.response.device_code)
         };
 
         match result {
@@ -209,13 +205,8 @@ pub fn start_device_flow(flow: &AuthFlowKind) -> Result<DeviceFlowState> {
 
     let (response, pkce_verifier) = if use_pkce {
         let pkce = PkceChallenge::generate();
-        let resp = oauth::request_device_code_with_pkce(
-            device_code_url,
-            client_id,
-            scope,
-            &pkce,
-        )
-        .context("failed to request device code")?;
+        let resp = oauth::request_device_code_with_pkce(device_code_url, client_id, scope, &pkce)
+            .context("failed to request device code")?;
         (resp, Some(pkce.code_verifier))
     } else {
         let resp = oauth::request_device_code(device_code_url, client_id, scope)
@@ -349,25 +340,24 @@ pub struct PkceBrowserState {
 /// and returns a `PkceBrowserState` that the wizard uses to wait for
 /// the callback.
 pub fn start_pkce_browser_flow(flow: &AuthFlowKind) -> Result<PkceBrowserState> {
-    let (client_id_source, auth_url, token_url, scopes, redirect_port, redirect_path) =
-        match flow {
-            AuthFlowKind::PkceBrowser {
-                client_id_source,
-                auth_url,
-                token_url,
-                scopes,
-                redirect_port,
-                redirect_path,
-            } => (
-                client_id_source,
-                *auth_url,
-                *token_url,
-                *scopes,
-                *redirect_port,
-                *redirect_path,
-            ),
-            _ => bail!("start_pkce_browser_flow called with non-PKCE-browser auth kind"),
-        };
+    let (client_id_source, auth_url, token_url, scopes, redirect_port, redirect_path) = match flow {
+        AuthFlowKind::PkceBrowser {
+            client_id_source,
+            auth_url,
+            token_url,
+            scopes,
+            redirect_port,
+            redirect_path,
+        } => (
+            client_id_source,
+            *auth_url,
+            *token_url,
+            *scopes,
+            *redirect_port,
+            *redirect_path,
+        ),
+        _ => bail!("start_pkce_browser_flow called with non-PKCE-browser auth kind"),
+    };
 
     // Resolve client ID and optional secret.
     let (client_id, client_secret) = resolve_client_id(client_id_source)?;
@@ -495,14 +485,8 @@ fn resolve_client_id(source: &ClientIdSource) -> Result<(String, Option<String>)
         ClientIdSource::Static {
             client_id,
             client_secret,
-        } => Ok((
-            client_id.to_string(),
-            client_secret.map(|s| s.to_string()),
-        )),
-        ClientIdSource::EnvVar {
-            id_var,
-            secret_var,
-        } => {
+        } => Ok((client_id.to_string(), client_secret.map(|s| s.to_string()))),
+        ClientIdSource::EnvVar { id_var, secret_var } => {
             let id = std::env::var(id_var)
                 .with_context(|| format!("environment variable {id_var} not set"))?;
             let secret = secret_var.and_then(|v| std::env::var(v).ok());
@@ -522,7 +506,10 @@ fn resolve_client_id(source: &ClientIdSource) -> Result<(String, Option<String>)
             let mut found_id = None;
             let mut found_secret = None;
 
-            for path in glob::glob(&pattern).unwrap_or_else(|_| glob::glob("").unwrap()).flatten() {
+            for path in glob::glob(&pattern)
+                .unwrap_or_else(|_| glob::glob("").unwrap())
+                .flatten()
+            {
                 if let Ok(contents) = std::fs::read_to_string(&path) {
                     if found_id.is_none() {
                         if let Ok(re) = regex::Regex::new(id_regex) {
@@ -548,9 +535,7 @@ fn resolve_client_id(source: &ClientIdSource) -> Result<(String, Option<String>)
 
             match found_id {
                 Some(id) => Ok((id, found_secret)),
-                None => bail!(
-                    "could not extract client ID from {cli_name} -- is it installed?"
-                ),
+                None => bail!("could not extract client ID from {cli_name} -- is it installed?"),
             }
         }
     }
@@ -586,8 +571,7 @@ mod tests {
 
     #[test]
     fn extract_json_field_simple() {
-        let json: serde_json::Value =
-            serde_json::json!({"oauthAccessToken": "test-token-123"});
+        let json: serde_json::Value = serde_json::json!({"oauthAccessToken": "test-token-123"});
         assert_eq!(
             extract_json_field(&json, "oauthAccessToken"),
             Some("test-token-123".into())
@@ -596,8 +580,7 @@ mod tests {
 
     #[test]
     fn extract_json_field_nested() {
-        let json: serde_json::Value =
-            serde_json::json!({"auth": {"token": "nested-token"}});
+        let json: serde_json::Value = serde_json::json!({"auth": {"token": "nested-token"}});
         assert_eq!(
             extract_json_field(&json, "auth.token"),
             Some("nested-token".into())

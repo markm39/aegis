@@ -3,7 +3,7 @@
 //! Generates summary reports showing audit statistics, deny rates,
 //! action breakdowns, integrity status, and policy change history.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use aegis_ledger::AuditFilter;
 use aegis_types::ActionKind;
@@ -120,7 +120,9 @@ fn print_text_report(config_name: &str, report: &ComplianceReport) {
     }
 
     if !stats.integrity_valid {
-        println!("WARNING: Audit ledger integrity check FAILED. The hash chain may have been tampered with.");
+        println!(
+            "WARNING: Audit ledger integrity check FAILED. The hash chain may have been tampered with."
+        );
     }
 
     if report.runtime.total_runtime_actions > 0 {

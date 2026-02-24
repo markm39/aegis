@@ -292,10 +292,22 @@ mod tests {
         assert_eq!(watch.device_type, DeviceType::Watch);
 
         // Verify string parsing for all types.
-        assert_eq!(DeviceType::from_str_checked("phone").unwrap(), DeviceType::Phone);
-        assert_eq!(DeviceType::from_str_checked("tablet").unwrap(), DeviceType::Tablet);
-        assert_eq!(DeviceType::from_str_checked("desktop").unwrap(), DeviceType::Desktop);
-        assert_eq!(DeviceType::from_str_checked("watch").unwrap(), DeviceType::Watch);
+        assert_eq!(
+            DeviceType::from_str_checked("phone").unwrap(),
+            DeviceType::Phone
+        );
+        assert_eq!(
+            DeviceType::from_str_checked("tablet").unwrap(),
+            DeviceType::Tablet
+        );
+        assert_eq!(
+            DeviceType::from_str_checked("desktop").unwrap(),
+            DeviceType::Desktop
+        );
+        assert_eq!(
+            DeviceType::from_str_checked("watch").unwrap(),
+            DeviceType::Watch
+        );
         assert!(DeviceType::from_str_checked("unknown").is_err());
     }
 
@@ -306,13 +318,22 @@ mod tests {
         assert_eq!(device.status, DeviceStatus::Paired);
 
         mgr.update_status(device.id, DeviceStatus::Online).unwrap();
-        assert_eq!(mgr.get_device(device.id).unwrap().status, DeviceStatus::Online);
+        assert_eq!(
+            mgr.get_device(device.id).unwrap().status,
+            DeviceStatus::Online
+        );
 
         mgr.update_status(device.id, DeviceStatus::Offline).unwrap();
-        assert_eq!(mgr.get_device(device.id).unwrap().status, DeviceStatus::Offline);
+        assert_eq!(
+            mgr.get_device(device.id).unwrap().status,
+            DeviceStatus::Offline
+        );
 
         mgr.update_status(device.id, DeviceStatus::Revoked).unwrap();
-        assert_eq!(mgr.get_device(device.id).unwrap().status, DeviceStatus::Revoked);
+        assert_eq!(
+            mgr.get_device(device.id).unwrap().status,
+            DeviceStatus::Revoked
+        );
     }
 
     #[test]
@@ -398,10 +419,16 @@ mod tests {
     fn test_capabilities_update() {
         let mut mgr = DeviceManager::new();
         let device = mgr.register_device("Test".into(), DeviceType::Phone, vec!["push".into()]);
-        assert_eq!(mgr.get_device(device.id).unwrap().capabilities, vec!["push"]);
+        assert_eq!(
+            mgr.get_device(device.id).unwrap().capabilities,
+            vec!["push"]
+        );
 
-        mgr.update_capabilities(device.id, vec!["push".into(), "camera".into(), "biometric".into()])
-            .unwrap();
+        mgr.update_capabilities(
+            device.id,
+            vec!["push".into(), "camera".into(), "biometric".into()],
+        )
+        .unwrap();
         assert_eq!(
             mgr.get_device(device.id).unwrap().capabilities,
             vec!["push", "camera", "biometric"]
@@ -447,7 +474,10 @@ mod tests {
 
         let swept = mgr.sweep_stale_devices();
         assert_eq!(swept, 0);
-        assert_eq!(mgr.get_device(device.id).unwrap().status, DeviceStatus::Revoked);
+        assert_eq!(
+            mgr.get_device(device.id).unwrap().status,
+            DeviceStatus::Revoked
+        );
     }
 
     #[test]
@@ -473,10 +503,22 @@ mod tests {
 
     #[test]
     fn test_device_status_parsing() {
-        assert_eq!(DeviceStatus::from_str_checked("online").unwrap(), DeviceStatus::Online);
-        assert_eq!(DeviceStatus::from_str_checked("offline").unwrap(), DeviceStatus::Offline);
-        assert_eq!(DeviceStatus::from_str_checked("paired").unwrap(), DeviceStatus::Paired);
-        assert_eq!(DeviceStatus::from_str_checked("revoked").unwrap(), DeviceStatus::Revoked);
+        assert_eq!(
+            DeviceStatus::from_str_checked("online").unwrap(),
+            DeviceStatus::Online
+        );
+        assert_eq!(
+            DeviceStatus::from_str_checked("offline").unwrap(),
+            DeviceStatus::Offline
+        );
+        assert_eq!(
+            DeviceStatus::from_str_checked("paired").unwrap(),
+            DeviceStatus::Paired
+        );
+        assert_eq!(
+            DeviceStatus::from_str_checked("revoked").unwrap(),
+            DeviceStatus::Revoked
+        );
         assert!(DeviceStatus::from_str_checked("unknown").is_err());
     }
 }

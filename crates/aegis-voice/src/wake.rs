@@ -135,10 +135,7 @@ pub fn matches_wake_phrase(transcript: &str, phrase: &str) -> bool {
 /// Normalize text for comparison: lowercase, collapse whitespace, trim.
 fn normalize_text(text: &str) -> String {
     let lowered = text.to_ascii_lowercase();
-    let collapsed: String = lowered
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ");
+    let collapsed: String = lowered.split_whitespace().collect::<Vec<&str>>().join(" ");
     collapsed.trim().to_string()
 }
 
@@ -272,8 +269,7 @@ async fn wake_loop(
 
         // Check for voice activity before transcribing (saves API calls).
         let samples = crate::capture::wav_to_samples(&audio);
-        let vad_ratio =
-            crate::capture::voice_activity_ratio(&samples, config.sensitivity, 480);
+        let vad_ratio = crate::capture::voice_activity_ratio(&samples, config.sensitivity, 480);
         if vad_ratio < 0.1 {
             // Less than 10% of frames have speech -- skip transcription.
             continue;
@@ -441,10 +437,7 @@ mod tests {
 
     #[test]
     fn matches_with_surrounding_text() {
-        assert!(matches_wake_phrase(
-            "um hey aegis what's up",
-            "hey aegis"
-        ));
+        assert!(matches_wake_phrase("um hey aegis what's up", "hey aegis"));
         assert!(matches_wake_phrase(
             "so hey aegis can you help",
             "hey aegis"

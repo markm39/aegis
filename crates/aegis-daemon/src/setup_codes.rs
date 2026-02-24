@@ -319,7 +319,9 @@ mod tests {
         let mut mgr = SetupCodeManager::new(test_hmac_key());
         let result = mgr.generate("http://localhost:9090");
 
-        let verification = mgr.verify(&result.code).expect("verification should succeed");
+        let verification = mgr
+            .verify(&result.code)
+            .expect("verification should succeed");
         assert!(!verification.device_token.is_empty());
         assert!(!verification.device_id.is_empty());
 
@@ -346,12 +348,10 @@ mod tests {
 
         let result = mgr.verify("123456");
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("invalid or expired")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid or expired"));
     }
 
     #[test]
@@ -374,12 +374,10 @@ mod tests {
         // Now the correct code should be locked out.
         let locked_result = mgr.verify(&correct_code);
         assert!(locked_result.is_err());
-        assert!(
-            locked_result
-                .unwrap_err()
-                .to_string()
-                .contains("locked out")
-        );
+        assert!(locked_result
+            .unwrap_err()
+            .to_string()
+            .contains("locked out"));
     }
 
     #[test]
@@ -441,7 +439,9 @@ mod tests {
         let mut mgr = SetupCodeManager::new(test_hmac_key());
         let result = mgr.generate("http://localhost:9090");
 
-        let verification = mgr.verify(&result.code).expect("verification should succeed");
+        let verification = mgr
+            .verify(&result.code)
+            .expect("verification should succeed");
 
         // Token must follow HMAC pattern: hex(tag):device_id:nonce
         let parts: Vec<&str> = verification.device_token.split(':').collect();

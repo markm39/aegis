@@ -426,10 +426,12 @@ mod tests {
         let pre_handlers = pre_inner.as_array().expect("should be array");
         assert_eq!(pre_handlers.len(), 1);
         assert_eq!(pre_handlers[0]["type"].as_str().unwrap(), "command");
-        assert!(pre_handlers[0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("aegis hook pre-tool-use"));
+        assert!(
+            pre_handlers[0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("aegis hook pre-tool-use")
+        );
 
         // PostToolUse
         let post = hooks.get("PostToolUse").expect("should have PostToolUse");
@@ -442,10 +444,12 @@ mod tests {
         let post_handlers = post_inner.as_array().expect("should be array");
         assert_eq!(post_handlers.len(), 1);
         assert_eq!(post_handlers[0]["type"].as_str().unwrap(), "command");
-        assert!(post_handlers[0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("aegis hook post-tool-use"));
+        assert!(
+            post_handlers[0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("aegis hook post-tool-use")
+        );
     }
 
     #[test]

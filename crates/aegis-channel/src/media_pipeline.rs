@@ -146,11 +146,7 @@ pub struct MediaAttachment {
 
 impl MediaAttachment {
     /// Create a new attachment with required fields.
-    pub fn new(
-        filename: impl Into<String>,
-        mime_type: impl Into<String>,
-        size_bytes: u64,
-    ) -> Self {
+    pub fn new(filename: impl Into<String>, mime_type: impl Into<String>, size_bytes: u64) -> Self {
         let mime = mime_type.into();
         let media_type = MediaType::from_mime(&mime);
         Self {
@@ -259,9 +255,7 @@ impl MediaLimits {
         }
 
         // Check allowed types
-        if !self.allowed_types.is_empty()
-            && !self.allowed_types.contains(&attachment.media_type)
-        {
+        if !self.allowed_types.is_empty() && !self.allowed_types.contains(&attachment.media_type) {
             return Err(MediaError::TypeNotAllowed {
                 media_type: attachment.media_type,
                 channel: self.channel_name.clone(),
@@ -270,7 +264,11 @@ impl MediaLimits {
 
         // Check blocked MIME types
         let lower_mime = attachment.mime_type.to_ascii_lowercase();
-        if self.blocked_mimes.iter().any(|b| b.to_ascii_lowercase() == lower_mime) {
+        if self
+            .blocked_mimes
+            .iter()
+            .any(|b| b.to_ascii_lowercase() == lower_mime)
+        {
             return Err(MediaError::MimeBlocked {
                 mime: attachment.mime_type.clone(),
                 channel: self.channel_name.clone(),
@@ -313,13 +311,24 @@ impl MediaLimits {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaError {
     /// File exceeds size limit.
-    FileTooLarge { size: u64, limit: u64, channel: String },
+    FileTooLarge {
+        size: u64,
+        limit: u64,
+        channel: String,
+    },
     /// Media type not allowed for this channel.
-    TypeNotAllowed { media_type: MediaType, channel: String },
+    TypeNotAllowed {
+        media_type: MediaType,
+        channel: String,
+    },
     /// MIME type is explicitly blocked.
     MimeBlocked { mime: String, channel: String },
     /// Image exceeds pixel limit.
-    ImageTooLarge { pixels: u64, limit: u64, channel: String },
+    ImageTooLarge {
+        pixels: u64,
+        limit: u64,
+        channel: String,
+    },
     /// Thumbnail exceeds size limit.
     ThumbnailTooLarge { size: u64, limit: u64 },
     /// Attachment not found in registry.
@@ -492,9 +501,7 @@ impl MediaPipeline {
         self.registry
             .get(id)
             .map(|c| &c.attachment)
-            .ok_or_else(|| MediaError::NotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| MediaError::NotFound { id: id.to_string() })
     }
 
     /// Remove an attachment from the cache.
@@ -502,9 +509,7 @@ impl MediaPipeline {
         self.registry
             .remove(id)
             .map(|c| c.attachment)
-            .ok_or_else(|| MediaError::NotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| MediaError::NotFound { id: id.to_string() })
     }
 
     /// Number of cached attachments.
@@ -555,7 +560,10 @@ mod tests {
         assert_eq!(MediaType::from_mime("audio/ogg"), MediaType::Audio);
         assert_eq!(MediaType::from_mime("application/pdf"), MediaType::Document);
         assert_eq!(MediaType::from_mime("text/plain"), MediaType::Document);
-        assert_eq!(MediaType::from_mime("application/json"), MediaType::Document);
+        assert_eq!(
+            MediaType::from_mime("application/json"),
+            MediaType::Document
+        );
         assert_eq!(MediaType::from_mime("application/zip"), MediaType::Archive);
         assert_eq!(
             MediaType::from_mime("application/octet-stream"),
@@ -619,7 +627,10 @@ mod tests {
             .with_dimensions(1920, 1080)
             .with_duration(120.5);
 
-        assert_eq!(att.url.as_deref(), Some("https://cdn.example.com/video.mp4"));
+        assert_eq!(
+            att.url.as_deref(),
+            Some("https://cdn.example.com/video.mp4")
+        );
         assert_eq!(
             att.thumbnail_url.as_deref(),
             Some("https://cdn.example.com/thumb.jpg")
@@ -665,8 +676,8 @@ mod tests {
 
     #[test]
     fn limits_validate_allowed_types() {
-        let limits =
-            MediaLimits::new("test").with_allowed_types(vec![MediaType::Image, MediaType::Document]);
+        let limits = MediaLimits::new("test")
+            .with_allowed_types(vec![MediaType::Image, MediaType::Document]);
 
         let img = MediaAttachment::new("photo.png", "image/png", 100);
         assert!(limits.validate(&img).is_ok());
@@ -685,8 +696,8 @@ mod tests {
 
     #[test]
     fn limits_validate_blocked_mimes() {
-        let limits =
-            MediaLimits::new("test").with_blocked_mimes(vec!["application/x-executable".to_string()]);
+        let limits = MediaLimits::new("test")
+            .with_blocked_mimes(vec!["application/x-executable".to_string()]);
 
         let exe = MediaAttachment::new("bad.exe", "application/x-executable", 100);
         let err = limits.validate(&exe).unwrap_err();

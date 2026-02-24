@@ -7,9 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use aegis_control::message_routing::{
-    validate_agent_name, ContentSanitizer, MessageEnvelope,
-};
+use aegis_control::message_routing::{validate_agent_name, ContentSanitizer, MessageEnvelope};
 use uuid::Uuid;
 
 /// Maximum messages per minute per agent (default, configurable).
@@ -41,7 +39,11 @@ impl RateWindow {
     fn check_and_record(&mut self, now: Instant) -> bool {
         let window = std::time::Duration::from_secs(60);
         // Prune timestamps older than the window
-        while self.timestamps.front().is_some_and(|t| now.duration_since(*t) > window) {
+        while self
+            .timestamps
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > window)
+        {
             self.timestamps.pop_front();
         }
         if self.timestamps.len() >= self.limit {
@@ -124,10 +126,7 @@ impl MessageRouter {
         self.store_message(envelope.clone());
 
         // Enqueue for the target agent
-        let queue = self
-            .queues
-            .entry(envelope.to.clone())
-            .or_default();
+        let queue = self.queues.entry(envelope.to.clone()).or_default();
 
         // Enforce queue size limit (drop oldest)
         while queue.len() >= MAX_QUEUE_SIZE {
@@ -262,12 +261,12 @@ mod tests {
         let parent_id = router.route_message(parent).unwrap();
 
         // Send child replies
-        let child1 = MessageEnvelope::new("agent-2", "agent-1", "direct", "reply 1")
-            .with_parent(parent_id);
+        let child1 =
+            MessageEnvelope::new("agent-2", "agent-1", "direct", "reply 1").with_parent(parent_id);
         let child1_id = router.route_message(child1).unwrap();
 
-        let child2 = MessageEnvelope::new("agent-1", "agent-2", "direct", "reply 2")
-            .with_parent(parent_id);
+        let child2 =
+            MessageEnvelope::new("agent-1", "agent-2", "direct", "reply 2").with_parent(parent_id);
         let _child2_id = router.route_message(child2).unwrap();
 
         // Get the thread

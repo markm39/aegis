@@ -92,10 +92,7 @@ impl SlackPoller {
         // Find the oldest message that is strictly newer than our last_ts.
         // Since messages are newest-first, iterate in reverse for chronological order.
         for msg in user_messages.iter().rev() {
-            let dominated_by_last = self
-                .last_ts
-                .as_ref()
-                .is_some_and(|last| msg.ts <= *last);
+            let dominated_by_last = self.last_ts.as_ref().is_some_and(|last| msg.ts <= *last);
 
             if dominated_by_last {
                 continue;
@@ -109,11 +106,7 @@ impl SlackPoller {
         // Update last_ts to the newest message timestamp even if all were filtered,
         // so we don't re-fetch the same batch.
         if let Some(newest) = parsed.messages.first() {
-            if self
-                .last_ts
-                .as_ref()
-                .is_none_or(|last| newest.ts > *last)
-            {
+            if self.last_ts.as_ref().is_none_or(|last| newest.ts > *last) {
                 self.last_ts = Some(newest.ts.clone());
             }
         }

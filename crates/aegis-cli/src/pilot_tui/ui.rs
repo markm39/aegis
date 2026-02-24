@@ -17,11 +17,11 @@
 //! +----------------------------------------------------------+
 //! ```
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::{LineAnnotation, PilotApp, PilotMode};
 use crate::tui_utils::truncate_str;
@@ -418,8 +418,8 @@ fn labeled_line<'a>(label: &str, value: impl Into<String>, color: Color, bold: b
 mod tests {
     use super::*;
     use crate::pilot_tui::PilotApp;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use std::sync::mpsc;
 
     fn make_test_app() -> PilotApp {

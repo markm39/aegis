@@ -138,10 +138,7 @@ impl Channel for SlackChannel {
         Ok(())
     }
 
-    async fn send_with_id(
-        &self,
-        message: OutboundMessage,
-    ) -> Result<Option<String>, ChannelError> {
+    async fn send_with_id(&self, message: OutboundMessage) -> Result<Option<String>, ChannelError> {
         let text = message.text;
         let ts = self
             .api

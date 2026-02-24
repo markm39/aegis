@@ -99,7 +99,9 @@ fn validate_voter_id(voter_id: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
-        return Err("voter ID must contain only alphanumeric characters, dashes, or underscores".into());
+        return Err(
+            "voter ID must contain only alphanumeric characters, dashes, or underscores".into(),
+        );
     }
     Ok(())
 }
@@ -152,14 +154,10 @@ impl PollManager {
 
         // Validate options count
         if options.len() < MIN_OPTIONS {
-            return Err(format!(
-                "poll must have at least {MIN_OPTIONS} options"
-            ));
+            return Err(format!("poll must have at least {MIN_OPTIONS} options"));
         }
         if options.len() > MAX_OPTIONS {
-            return Err(format!(
-                "poll must have at most {MAX_OPTIONS} options"
-            ));
+            return Err(format!("poll must have at most {MAX_OPTIONS} options"));
         }
 
         // Validate and sanitize each option
@@ -237,7 +235,9 @@ impl PollManager {
             .ok_or_else(|| format!("poll {poll_id} not found"))?;
 
         if poll.closed {
-            return Err(format!("poll {poll_id} is closed and no longer accepts votes"));
+            return Err(format!(
+                "poll {poll_id} is closed and no longer accepts votes"
+            ));
         }
 
         // Check expiry
@@ -447,7 +447,13 @@ mod tests {
         assert!(res.unwrap_err().contains("between"));
 
         // Valid poll creation
-        let res = mgr.create_poll("Favorite color?", &["Red".into(), "Blue".into()], "test", "user1", 0);
+        let res = mgr.create_poll(
+            "Favorite color?",
+            &["Red".into(), "Blue".into()],
+            "test",
+            "user1",
+            0,
+        );
         assert!(res.is_ok());
         let poll = res.unwrap();
         assert_eq!(poll.question, "Favorite color?");
@@ -465,14 +471,23 @@ mod tests {
     fn vote_recording_and_deduplication() {
         let mut mgr = PollManager::new();
         let poll = mgr
-            .create_poll("Pick?", &["A".into(), "B".into(), "C".into()], "test", "user1", 0)
+            .create_poll(
+                "Pick?",
+                &["A".into(), "B".into(), "C".into()],
+                "test",
+                "user1",
+                0,
+            )
             .unwrap();
         let pid = poll.id;
 
         // First vote
         mgr.vote(pid, "A", "voter-1").unwrap();
         let results = mgr.get_results(pid).unwrap();
-        assert_eq!(results.iter().find(|r| r.option == "A").unwrap().vote_count, 1);
+        assert_eq!(
+            results.iter().find(|r| r.option == "A").unwrap().vote_count,
+            1
+        );
 
         // Second voter
         mgr.vote(pid, "B", "voter-2").unwrap();
@@ -480,20 +495,35 @@ mod tests {
         // Voter-1 changes vote from A to B (deduplication)
         mgr.vote(pid, "B", "voter-1").unwrap();
         let results = mgr.get_results(pid).unwrap();
-        assert_eq!(results.iter().find(|r| r.option == "A").unwrap().vote_count, 0);
-        assert_eq!(results.iter().find(|r| r.option == "B").unwrap().vote_count, 2);
+        assert_eq!(
+            results.iter().find(|r| r.option == "A").unwrap().vote_count,
+            0
+        );
+        assert_eq!(
+            results.iter().find(|r| r.option == "B").unwrap().vote_count,
+            2
+        );
 
         // Voting for same option again is a no-op (idempotent)
         mgr.vote(pid, "B", "voter-1").unwrap();
         let results = mgr.get_results(pid).unwrap();
-        assert_eq!(results.iter().find(|r| r.option == "B").unwrap().vote_count, 2);
+        assert_eq!(
+            results.iter().find(|r| r.option == "B").unwrap().vote_count,
+            2
+        );
     }
 
     #[test]
     fn result_aggregation_correct() {
         let mut mgr = PollManager::new();
         let poll = mgr
-            .create_poll("Best?", &["X".into(), "Y".into(), "Z".into()], "test", "user1", 0)
+            .create_poll(
+                "Best?",
+                &["X".into(), "Y".into(), "Z".into()],
+                "test",
+                "user1",
+                0,
+            )
             .unwrap();
         let pid = poll.id;
 
@@ -609,7 +639,13 @@ mod tests {
         let first_id = mgr.list_active_polls()[0].id;
         mgr.close_poll(first_id).unwrap();
 
-        let res = mgr.create_poll("After close?", &["A".into(), "B".into()], "test", "user1", 0);
+        let res = mgr.create_poll(
+            "After close?",
+            &["A".into(), "B".into()],
+            "test",
+            "user1",
+            0,
+        );
         assert!(res.is_ok());
     }
 

@@ -372,9 +372,7 @@ mod tests {
         let context = "I prefer Rust.\n";
 
         // Pass None for longterm -- should still work.
-        let result = flusher
-            .flush(context, 8000, 10000, &daily, None)
-            .unwrap();
+        let result = flusher.flush(context, 8000, 10000, &daily, None).unwrap();
 
         assert!(!result.skipped_below_threshold);
         assert_eq!(result.longterm_entries, 0);

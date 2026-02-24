@@ -125,7 +125,10 @@ impl VoiceCatalog {
 
     /// Return all voices for a specific provider.
     pub fn voices_for_provider(&self, provider: &str) -> &[VoiceInfo] {
-        self.voices.get(provider).map(|v| v.as_slice()).unwrap_or(&[])
+        self.voices
+            .get(provider)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Return all voices across all providers.
@@ -616,7 +619,10 @@ mod tests {
         let voice = result.unwrap();
 
         // Rachel should win: she matches all three criteria.
-        assert_eq!(voice.name, "Rachel", "Rachel should be best match for en + female + conversational");
+        assert_eq!(
+            voice.name, "Rachel",
+            "Rachel should be best match for en + female + conversational"
+        );
 
         // Match English + male + narrative.
         // Josh is male + narrative + English = score 3.
@@ -627,7 +633,10 @@ mod tests {
         );
         assert!(result.is_some());
         let voice = result.unwrap();
-        assert_eq!(voice.name, "Josh", "Josh should be best match for en + male + narrative");
+        assert_eq!(
+            voice.name, "Josh",
+            "Josh should be best match for en + male + narrative"
+        );
 
         // Verify that a 2-criteria match beats a 1-criteria match.
         // English + female: Nova or Shimmer (openai) or Rachel/Bella/Elli (elevenlabs).
@@ -663,11 +672,7 @@ mod tests {
         }
 
         // Filter by provider + gender.
-        let openai_male = catalog.filter_voices(
-            Some("openai"),
-            None,
-            Some(VoiceGender::Male),
-        );
+        let openai_male = catalog.filter_voices(Some("openai"), None, Some(VoiceGender::Male));
         // OpenAI has Echo and Onyx as male voices.
         assert_eq!(openai_male.len(), 2);
         for v in &openai_male {
@@ -689,17 +694,11 @@ mod tests {
         let catalog = VoiceCatalog::all_providers();
 
         // Cache with very short TTL (already expired via helper).
-        let cache = VoiceCatalogCache::new_expired(
-            catalog.clone(),
-            Duration::from_millis(1),
-        );
+        let cache = VoiceCatalogCache::new_expired(catalog.clone(), Duration::from_millis(1));
         assert!(cache.is_expired(), "cache should be expired");
 
         // Cache with long TTL should not be expired.
-        let cache = VoiceCatalogCache::new(
-            catalog.clone(),
-            Duration::from_secs(3600),
-        );
+        let cache = VoiceCatalogCache::new(catalog.clone(), Duration::from_secs(3600));
         assert!(!cache.is_expired(), "fresh cache should not be expired");
         assert_eq!(cache.catalog().voice_count(), 12);
         assert_eq!(cache.ttl(), Duration::from_secs(3600));
@@ -713,16 +712,17 @@ mod tests {
     #[test]
     fn voice_cache_refresh() {
         let catalog = VoiceCatalog::all_providers();
-        let mut cache = VoiceCatalogCache::new_expired(
-            VoiceCatalog::new(),
-            Duration::from_millis(1),
-        );
+        let mut cache =
+            VoiceCatalogCache::new_expired(VoiceCatalog::new(), Duration::from_millis(1));
         assert!(cache.is_expired());
         assert_eq!(cache.catalog().voice_count(), 0);
 
         // Refresh with full catalog.
         cache.refresh(catalog);
-        assert!(!cache.is_expired(), "cache should not be expired after refresh");
+        assert!(
+            !cache.is_expired(),
+            "cache should not be expired after refresh"
+        );
         assert_eq!(cache.catalog().voice_count(), 12);
     }
 

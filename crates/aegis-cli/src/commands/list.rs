@@ -11,8 +11,8 @@ use chrono::{DateTime, Utc};
 use aegis_ledger::AuditStore;
 use aegis_types::{AegisConfig, CONFIG_FILENAME};
 
-use crate::commands::init::{dirs_from_env, load_config_from_dir};
 use crate::commands::DATETIME_SHORT_FMT;
+use crate::commands::init::{dirs_from_env, load_config_from_dir};
 
 /// Table separator width for config listings.
 const CONFIG_TABLE_WIDTH: usize = 90;

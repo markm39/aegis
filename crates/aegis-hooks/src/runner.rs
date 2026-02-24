@@ -21,6 +21,47 @@ use crate::events::{HookEvent, HookResponse, HookResponseAction};
 /// Maximum bytes to read from hook stdout/stderr to prevent memory exhaustion.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
+/// Policy for how hook execution errors (timeout, crash, parse failure) are treated.
+///
+/// `FailClosed` (the default) blocks the triggering action when a hook fails.
+/// `FailOpen` permits the action, matching pre-hardening behavior. Can be set
+/// via the `AEGIS_HOOK_FAIL_OPEN=1` environment variable for development.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookFailurePolicy {
+    /// Block the action when a hook fails to produce a valid response.
+    FailClosed,
+    /// Permit the action when a hook fails (use only in development).
+    FailOpen,
+}
+
+impl Default for HookFailurePolicy {
+    fn default() -> Self {
+        if std::env::var("AEGIS_HOOK_FAIL_OPEN")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            HookFailurePolicy::FailOpen
+        } else {
+            HookFailurePolicy::FailClosed
+        }
+    }
+}
+
+impl HookFailurePolicy {
+    /// Return the appropriate response for an error condition.
+    fn error_response(&self, reason: &str, message: String) -> HookResponse {
+        match self {
+            HookFailurePolicy::FailClosed => HookResponse::block(reason, message),
+            HookFailurePolicy::FailOpen => HookResponse {
+                action: HookResponseAction::Allow,
+                message: format!("[fail-open] {message}"),
+                payload: None,
+                reason: Some(reason.to_string()),
+            },
+        }
+    }
+}
+
 /// Result of executing a single hook script.
 #[derive(Debug, Clone)]
 pub struct HookExecution {
@@ -50,25 +91,35 @@ pub struct HookExecution {
 /// [`HookResponse`]. Exit codes are interpreted as:
 /// - 0: success, stdout is parsed as the response
 /// - 1: hook wants to block/modify (stdout is parsed for details)
-/// - 2+: hook error (logged and treated as allow-with-warning)
+/// - 2+: hook error (blocked by default under fail-closed policy)
 ///
 /// Execution is bounded by `timeout_ms`. If the script exceeds the timeout,
-/// the process is killed and the hook is treated as an error.
-pub async fn execute_hook(
+/// the process is killed and the action is blocked (under fail-closed policy).
+///
+/// The `failure_policy` controls whether errors result in Block or Allow.
+/// Default is `FailClosed`; set `AEGIS_HOOK_FAIL_OPEN=1` for development.
+pub async fn execute_hook(hook: &DiscoveredHook, event: &HookEvent) -> HookExecution {
+    execute_hook_with_policy(hook, event, HookFailurePolicy::default()).await
+}
+
+/// Execute a hook with an explicit failure policy.
+pub async fn execute_hook_with_policy(
     hook: &DiscoveredHook,
     event: &HookEvent,
+    failure_policy: HookFailurePolicy,
 ) -> HookExecution {
     let start = std::time::Instant::now();
     let event_json = match serde_json::to_string(event) {
         Ok(json) => json,
         Err(e) => {
+            let msg = format!("failed to serialize event: {e}");
             return HookExecution {
                 event_name: event.event_name().to_string(),
                 script_path: hook.script_path.clone(),
-                response: HookResponse::default(),
+                response: failure_policy.error_response("serialize_failure", msg.clone()),
                 duration: start.elapsed(),
                 success: false,
-                error: Some(format!("failed to serialize event: {e}")),
+                error: Some(msg),
             };
         }
     };
@@ -84,18 +135,25 @@ pub async fn execute_hook(
     let duration = start.elapsed();
 
     match result {
-        Ok(Ok((exit_code, stdout, stderr))) => {
-            interpret_result(event, hook, exit_code, &stdout, &stderr, duration)
-        }
+        Ok(Ok((exit_code, stdout, stderr))) => interpret_result(
+            event,
+            hook,
+            exit_code,
+            &stdout,
+            &stderr,
+            duration,
+            failure_policy,
+        ),
         Ok(Err(e)) => HookExecution {
             event_name: event.event_name().to_string(),
             script_path: hook.script_path.clone(),
-            response: HookResponse::default(),
+            response: failure_policy.error_response("execution_failure", e.clone()),
             duration,
             success: false,
             error: Some(e),
         },
         Err(_elapsed) => {
+            let msg = format!("hook timed out after {}ms", hook.timeout_ms);
             tracing::warn!(
                 script = %hook.script_path.display(),
                 timeout_ms = hook.timeout_ms,
@@ -104,13 +162,10 @@ pub async fn execute_hook(
             HookExecution {
                 event_name: event.event_name().to_string(),
                 script_path: hook.script_path.clone(),
-                response: HookResponse::default(),
+                response: failure_policy.error_response("hook_timeout", msg.clone()),
                 duration,
                 success: false,
-                error: Some(format!(
-                    "hook timed out after {}ms",
-                    hook.timeout_ms
-                )),
+                error: Some(msg),
             }
         }
     }
@@ -124,6 +179,7 @@ fn interpret_result(
     stdout: &str,
     stderr: &str,
     duration: Duration,
+    failure_policy: HookFailurePolicy,
 ) -> HookExecution {
     let event_name = event.event_name().to_string();
     let script_path = hook.script_path.clone();
@@ -141,7 +197,7 @@ fn interpret_result(
         0 | 1 => {
             // Exit 0: success. Exit 1: hook wants to block/modify.
             // In both cases, try to parse stdout as HookResponse.
-            let response = parse_hook_stdout(stdout);
+            let response = parse_hook_stdout(stdout, failure_policy);
             HookExecution {
                 event_name,
                 script_path,
@@ -152,14 +208,11 @@ fn interpret_result(
             }
         }
         code => {
-            // Exit 2+: hook error. Log and continue with default allow.
+            // Exit 2+: hook error. Apply failure policy (default: block).
             let err_msg = if stderr.is_empty() {
                 format!("hook exited with code {code}")
             } else {
-                format!(
-                    "hook exited with code {code}: {}",
-                    truncate(stderr, 500)
-                )
+                format!("hook exited with code {code}: {}", truncate(stderr, 500))
             };
             tracing::warn!(
                 script = %hook.script_path.display(),
@@ -169,7 +222,8 @@ fn interpret_result(
             HookExecution {
                 event_name,
                 script_path,
-                response: HookResponse::default(),
+                response: failure_policy
+                    .error_response(&format!("exit_code_{code}"), err_msg.clone()),
                 duration,
                 success: false,
                 error: Some(err_msg),
@@ -180,11 +234,15 @@ fn interpret_result(
 
 /// Parse hook stdout as a JSON [`HookResponse`].
 ///
-/// If stdout is empty or not valid JSON, returns a default allow response.
-fn parse_hook_stdout(stdout: &str) -> HookResponse {
+/// If stdout is empty, the hook is treated as a successful no-op (allow).
+/// A hook that exits 0 with no output is intentionally permitting the action.
+/// If stdout is present but not valid JSON, the failure policy applies.
+fn parse_hook_stdout(stdout: &str, failure_policy: HookFailurePolicy) -> HookResponse {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
-        return HookResponse::default();
+        // Empty stdout from a successfully-exited hook (exit 0/1) means
+        // the hook chose not to interfere. This is an explicit allow.
+        return HookResponse::allow();
     }
 
     match serde_json::from_str::<HookResponse>(trimmed) {
@@ -193,9 +251,10 @@ fn parse_hook_stdout(stdout: &str) -> HookResponse {
             tracing::debug!(
                 error = %e,
                 stdout = %truncate(trimmed, 200),
-                "hook stdout is not valid HookResponse JSON, treating as allow"
+                "hook stdout is not valid HookResponse JSON"
             );
-            HookResponse::default()
+            failure_policy
+                .error_response("parse_failure", format!("hook produced invalid JSON: {e}"))
         }
     }
 }
@@ -214,6 +273,37 @@ async fn run_script(
     }
 }
 
+/// Set the safe environment variables on a hook subprocess command.
+///
+/// Clears inherited env and provides only:
+/// - PATH, HOME, TMPDIR -- required for basic operation
+/// - AEGIS_HOOK_EVENT -- the serialized event data
+/// - LANG, LC_ALL -- locale for consistent text processing
+///
+/// This prevents hook scripts from accessing secrets like API keys,
+/// bot tokens, or database credentials from the parent process.
+fn apply_safe_env(cmd: &mut Command, event_json: &str) {
+    cmd.env_clear();
+
+    // System essentials.
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        cmd.env("HOME", home);
+    }
+    if let Ok(tmpdir) = std::env::var("TMPDIR") {
+        cmd.env("TMPDIR", tmpdir);
+    }
+
+    // Locale.
+    cmd.env("LANG", "en_US.UTF-8");
+    cmd.env("LC_ALL", "en_US.UTF-8");
+
+    // Hook-specific data.
+    cmd.env("AEGIS_HOOK_EVENT", event_json);
+}
+
 /// Run a shell script via `sh`.
 ///
 /// Shell scripts receive the event JSON in the `AEGIS_HOOK_EVENT` environment
@@ -224,10 +314,10 @@ async fn run_shell_script(
 ) -> Result<(i32, String, String), String> {
     let mut cmd = Command::new("sh");
     cmd.arg(script_path)
-        .env("AEGIS_HOOK_EVENT", event_json)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    apply_safe_env(&mut cmd, event_json);
 
     if let Some(parent) = script_path.parent() {
         cmd.current_dir(parent);
@@ -246,6 +336,7 @@ async fn run_node_script(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    apply_safe_env(&mut cmd, event_json);
 
     if let Some(parent) = script_path.parent() {
         cmd.current_dir(parent);
@@ -260,28 +351,49 @@ async fn run_typescript_script(
     event_json: &str,
 ) -> Result<(i32, String, String), String> {
     // Try npx tsx first (most common in Node.js projects).
-    let npx_result = try_typescript_runner("npx", &["tsx", &script_path.to_string_lossy()], script_path, event_json).await;
+    let npx_result = try_typescript_runner(
+        "npx",
+        &["tsx", &script_path.to_string_lossy()],
+        script_path,
+        event_json,
+    )
+    .await;
     if npx_result.is_ok() {
         return npx_result;
     }
 
     // Try deno.
-    let deno_result = try_typescript_runner("deno", &["run", "--allow-read", "--allow-env", &script_path.to_string_lossy()], script_path, event_json).await;
+    let deno_result = try_typescript_runner(
+        "deno",
+        &[
+            "run",
+            "--allow-read",
+            "--allow-env",
+            &script_path.to_string_lossy(),
+        ],
+        script_path,
+        event_json,
+    )
+    .await;
     if deno_result.is_ok() {
         return deno_result;
     }
 
     // Try bun.
-    let bun_result = try_typescript_runner("bun", &["run", &script_path.to_string_lossy()], script_path, event_json).await;
+    let bun_result = try_typescript_runner(
+        "bun",
+        &["run", &script_path.to_string_lossy()],
+        script_path,
+        event_json,
+    )
+    .await;
     if bun_result.is_ok() {
         return bun_result;
     }
 
-    Err(
-        "no TypeScript runtime found (tried npx tsx, deno, bun). \
+    Err("no TypeScript runtime found (tried npx tsx, deno, bun). \
          Install one of: tsx (npm i -g tsx), deno, or bun"
-            .to_string(),
-    )
+        .to_string())
 }
 
 /// Try a single TypeScript runner command.
@@ -296,6 +408,7 @@ async fn try_typescript_runner(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    apply_safe_env(&mut cmd, event_json);
 
     if let Some(parent) = script_path.parent() {
         cmd.current_dir(parent);
@@ -314,6 +427,7 @@ async fn run_python_script(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    apply_safe_env(&mut cmd, event_json);
 
     if let Some(parent) = script_path.parent() {
         cmd.current_dir(parent);
@@ -323,9 +437,7 @@ async fn run_python_script(
 }
 
 /// Spawn a command and collect its stdout/stderr (no stdin writing).
-async fn spawn_and_collect(
-    cmd: &mut Command,
-) -> Result<(i32, String, String), String> {
+async fn spawn_and_collect(cmd: &mut Command) -> Result<(i32, String, String), String> {
     let child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn hook process: {e}"))?;
@@ -419,7 +531,9 @@ pub async fn execute_hooks_for_event(
 ///   `Modify` with the last modifier's payload.
 /// - Otherwise, the aggregate is `Allow`.
 pub fn aggregate_responses(executions: &[HookExecution]) -> HookResponse {
-    let mut aggregate = HookResponse::default();
+    // Start from Allow: aggregation combines explicit hook responses.
+    // Individual hooks already applied the failure policy on errors.
+    let mut aggregate = HookResponse::allow();
 
     for exec in executions {
         match exec.response.action {
@@ -461,14 +575,15 @@ mod tests {
 
     #[test]
     fn parse_empty_stdout_returns_allow() {
-        let resp = parse_hook_stdout("");
+        // Empty stdout from a successfully-exited hook is an explicit allow.
+        let resp = parse_hook_stdout("", HookFailurePolicy::FailClosed);
         assert_eq!(resp.action, HookResponseAction::Allow);
     }
 
     #[test]
     fn parse_valid_block_response() {
         let stdout = r#"{"action": "block", "message": "denied by policy"}"#;
-        let resp = parse_hook_stdout(stdout);
+        let resp = parse_hook_stdout(stdout, HookFailurePolicy::FailClosed);
         assert_eq!(resp.action, HookResponseAction::Block);
         assert_eq!(resp.message, "denied by policy");
     }
@@ -477,15 +592,23 @@ mod tests {
     fn parse_modify_with_payload() {
         let stdout =
             r#"{"action": "modify", "message": "redacted", "payload": {"content": "***"}}"#;
-        let resp = parse_hook_stdout(stdout);
+        let resp = parse_hook_stdout(stdout, HookFailurePolicy::FailClosed);
         assert_eq!(resp.action, HookResponseAction::Modify);
         assert_eq!(resp.payload.unwrap()["content"], "***");
     }
 
     #[test]
-    fn parse_invalid_json_returns_allow() {
-        let resp = parse_hook_stdout("not json at all");
+    fn parse_invalid_json_blocks_under_fail_closed() {
+        let resp = parse_hook_stdout("not json at all", HookFailurePolicy::FailClosed);
+        assert_eq!(resp.action, HookResponseAction::Block);
+        assert_eq!(resp.reason.as_deref(), Some("parse_failure"));
+    }
+
+    #[test]
+    fn parse_invalid_json_allows_under_fail_open() {
+        let resp = parse_hook_stdout("not json at all", HookFailurePolicy::FailOpen);
         assert_eq!(resp.action, HookResponseAction::Allow);
+        assert_eq!(resp.reason.as_deref(), Some("parse_failure"));
     }
 
     #[test]
@@ -555,6 +678,7 @@ mod tests {
                 action,
                 message: String::new(),
                 payload,
+                reason: None,
             },
             duration: Duration::from_millis(10),
             success: true,
@@ -694,9 +818,14 @@ mod tests {
 
         let result = execute_hook(&hook, &event).await;
         assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("exited with code 2"));
-        // Default allow on error.
-        assert_eq!(result.response.action, HookResponseAction::Allow);
+        assert!(result
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("exited with code 2"));
+        // Fail-closed: error exit blocks the action.
+        assert_eq!(result.response.action, HookResponseAction::Block);
+        assert_eq!(result.response.reason.as_deref(), Some("exit_code_2"));
     }
 
     #[tokio::test]
@@ -735,6 +864,56 @@ print(json.dumps({"action": "allow", "message": f"processed {event['event']}"}))
         assert!(result.success, "error: {:?}", result.error);
         assert_eq!(result.response.action, HookResponseAction::Allow);
         assert!(result.response.message.contains("on_agent_start"));
+    }
+
+    #[tokio::test]
+    async fn hook_env_isolation_blocks_secrets() {
+        // Set a fake secret in the parent environment.
+        std::env::set_var("AEGIS_TEST_SECRET_TOKEN", "super-secret-value");
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("env_check.sh");
+        // Hook that tries to read the secret and reports it.
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+if [ -n "$AEGIS_TEST_SECRET_TOKEN" ]; then
+    echo '{"action": "block", "message": "LEAKED"}'
+    exit 1
+else
+    echo '{"action": "allow", "message": "isolated"}'
+fi
+"#,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let hook = DiscoveredHook {
+            event: "pre_tool_use".to_string(),
+            script_path: script,
+            language: ScriptLanguage::Shell,
+            timeout_ms: 5000,
+            enabled: true,
+            source: crate::discovery::DiscoverySource::Convention,
+        };
+
+        let event = HookEvent::PreToolUse {
+            tool_name: "Bash".to_string(),
+            arguments: serde_json::json!({"command": "test"}),
+        };
+
+        let result = execute_hook(&hook, &event).await;
+        assert!(result.success);
+        assert_eq!(result.response.action, HookResponseAction::Allow);
+        assert_eq!(result.response.message, "isolated");
+
+        // Clean up.
+        std::env::remove_var("AEGIS_TEST_SECRET_TOKEN");
     }
 
     /// Check if a command is available in PATH.

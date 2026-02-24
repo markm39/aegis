@@ -8,10 +8,10 @@ pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod compiler;
 pub mod docker;
+pub mod injection_detector;
 pub mod process;
 #[cfg(target_os = "macos")]
 pub mod profile;
-pub mod injection_detector;
 pub mod sanitizer;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;

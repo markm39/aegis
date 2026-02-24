@@ -162,9 +162,7 @@ mod tests {
 
         registry.register(Box::new(MockTool::new("alpha"))).unwrap();
         registry.register(Box::new(MockTool::new("beta"))).unwrap();
-        registry
-            .register(Box::new(MockTool::new("gamma")))
-            .unwrap();
+        registry.register(Box::new(MockTool::new("gamma"))).unwrap();
 
         let tools = registry.list_tools();
         assert_eq!(tools.len(), 3);
@@ -287,8 +285,7 @@ mod tests {
         assert!(result.is_err());
 
         // Schema missing "type" field
-        let tool =
-            MockTool::new("missing_type").with_schema(serde_json::json!({"properties": {}}));
+        let tool = MockTool::new("missing_type").with_schema(serde_json::json!({"properties": {}}));
         let result = registry.register(Box::new(tool));
         assert!(result.is_err());
     }
@@ -303,9 +300,7 @@ mod tests {
     fn test_to_llm_definitions() {
         let registry = ToolRegistry::new();
         registry.register(Box::new(MockTool::new("zeta"))).unwrap();
-        registry
-            .register(Box::new(MockTool::new("alpha")))
-            .unwrap();
+        registry.register(Box::new(MockTool::new("alpha"))).unwrap();
         registry.register(Box::new(MockTool::new("mu"))).unwrap();
 
         let defs = registry.to_llm_definitions();

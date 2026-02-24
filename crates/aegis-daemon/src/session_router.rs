@@ -118,12 +118,7 @@ impl SessionRouter {
         }
 
         // 4. Create a new session.
-        let session_id = store.begin_session(
-            &self.default_config,
-            agent_name,
-            &[],
-            None,
-        )?;
+        let session_id = store.begin_session(&self.default_config, agent_name, &[], None)?;
 
         // Set sender/channel/thread metadata on the new session.
         store.set_session_sender(session_id, sender_id, channel_type, thread_id)?;
@@ -168,12 +163,8 @@ impl SessionRouter {
         }
 
         // Create a new isolated session.
-        let session_id = store.begin_session(
-            &self.default_config,
-            agent_name,
-            &[],
-            Some("isolated"),
-        )?;
+        let session_id =
+            store.begin_session(&self.default_config, agent_name, &[], Some("isolated"))?;
 
         store.set_session_sender(session_id, sender_id, channel_type, None)?;
 

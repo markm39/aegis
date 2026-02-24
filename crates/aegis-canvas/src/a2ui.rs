@@ -467,27 +467,23 @@ impl TerminalRenderer {
                     .unwrap_or_default();
 
                 // Render header.
-                let headers: Vec<&str> = columns
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect();
+                let headers: Vec<&str> = columns.iter().filter_map(|v| v.as_str()).collect();
                 if !headers.is_empty() {
+                    output.push_str(&format!("{prefix}{}\n", headers.join(" | ")));
                     output.push_str(&format!(
                         "{prefix}{}\n",
-                        headers.join(" | ")
-                    ));
-                    output.push_str(&format!(
-                        "{prefix}{}\n",
-                        headers.iter().map(|h| "-".repeat(h.len())).collect::<Vec<_>>().join("-+-")
+                        headers
+                            .iter()
+                            .map(|h| "-".repeat(h.len()))
+                            .collect::<Vec<_>>()
+                            .join("-+-")
                     ));
                 }
                 // Render rows.
                 for row in &rows {
                     if let Some(cells) = row.as_array() {
-                        let cell_strs: Vec<&str> = cells
-                            .iter()
-                            .filter_map(|v| v.as_str())
-                            .collect();
+                        let cell_strs: Vec<&str> =
+                            cells.iter().filter_map(|v| v.as_str()).collect();
                         output.push_str(&format!("{prefix}{}\n", cell_strs.join(" | ")));
                     }
                 }
@@ -612,7 +608,8 @@ impl HtmlRenderer {
                     .cloned()
                     .unwrap_or_default();
 
-                output.push_str("<table style=\"border-collapse:collapse;border:1px solid #ccc\">\n");
+                output
+                    .push_str("<table style=\"border-collapse:collapse;border:1px solid #ccc\">\n");
                 // Header.
                 output.push_str("<thead><tr>\n");
                 for col in &columns {
@@ -754,7 +751,9 @@ impl Component {
     pub fn table(columns: Vec<&str>, rows: Vec<Vec<&str>>) -> Self {
         let row_values: Vec<serde_json::Value> = rows
             .into_iter()
-            .map(|r| serde_json::Value::Array(r.into_iter().map(|c| serde_json::json!(c)).collect()))
+            .map(|r| {
+                serde_json::Value::Array(r.into_iter().map(|c| serde_json::json!(c)).collect())
+            })
             .collect();
         Self {
             id: Uuid::new_v4(),
@@ -897,7 +896,10 @@ mod tests {
             "children": []
         }"#;
         let result: Result<Component, _> = serde_json::from_str(json_str);
-        assert!(result.is_err(), "unknown component type should fail deserialization");
+        assert!(
+            result.is_err(),
+            "unknown component type should fail deserialization"
+        );
     }
 
     // -- Validation: depth limit --
@@ -972,7 +974,10 @@ mod tests {
 
     #[test]
     fn test_image_ssrf_in_validation() {
-        let spec = make_spec(vec![Component::image("https://192.168.1.1/evil.png", "evil")]);
+        let spec = make_spec(vec![Component::image(
+            "https://192.168.1.1/evil.png",
+            "evil",
+        )]);
         let result = validate_spec(&spec);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), A2uiError::SsrfViolation(_)));
@@ -1042,7 +1047,10 @@ mod tests {
         let spec = make_spec(vec![component]);
         let result = validate_spec(&spec);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), A2uiError::CircularReference(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            A2uiError::CircularReference(_)
+        ));
     }
 
     // -- XSS prevention --
@@ -1100,7 +1108,10 @@ mod tests {
         let spec = make_spec(vec![component]);
         let result = validate_spec(&spec);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), A2uiError::InvalidProps { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            A2uiError::InvalidProps { .. }
+        ));
     }
 
     #[test]
@@ -1133,10 +1144,7 @@ mod tests {
 
     #[test]
     fn test_spec_serialization_roundtrip() {
-        let spec = make_spec(vec![
-            Component::text("Hello"),
-            Component::button("OK"),
-        ]);
+        let spec = make_spec(vec![Component::text("Hello"), Component::button("OK")]);
         let json = serde_json::to_string(&spec).unwrap();
         let back: UiSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(back.version, 1);
@@ -1163,10 +1171,7 @@ mod tests {
 
     #[test]
     fn test_table_html_rendering() {
-        let spec = make_spec(vec![Component::table(
-            vec!["Col1"],
-            vec![vec!["Val1"]],
-        )]);
+        let spec = make_spec(vec![Component::table(vec!["Col1"], vec![vec!["Val1"]])]);
         let html = HtmlRenderer::render(&spec);
         assert!(html.contains("<table"));
         assert!(html.contains("<th"));
@@ -1206,7 +1211,8 @@ mod tests {
 
     #[test]
     fn test_spec_at_exact_max_components_passes() {
-        let components: Vec<Component> = (0..MAX_COMPONENTS).map(|_| Component::divider()).collect();
+        let components: Vec<Component> =
+            (0..MAX_COMPONENTS).map(|_| Component::divider()).collect();
         let spec = make_spec(components);
         assert!(validate_spec(&spec).is_ok());
     }

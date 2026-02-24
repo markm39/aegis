@@ -110,10 +110,7 @@ impl BrowserDriver {
     ///
     /// Listens for the `Page.loadEventFired` CDP event. If the event does not
     /// arrive within `timeout`, returns `BrowserError::PageLoadTimeout`.
-    pub async fn wait_for_navigation(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<(), BrowserError> {
+    pub async fn wait_for_navigation(&mut self, timeout: Duration) -> Result<(), BrowserError> {
         let deadline = tokio::time::Instant::now() + timeout;
 
         loop {
@@ -172,11 +169,7 @@ impl BrowserDriver {
                 .get("exception")
                 .and_then(|e| e.get("description"))
                 .and_then(|d| d.as_str())
-                .or_else(|| {
-                    exception
-                        .get("text")
-                        .and_then(|t| t.as_str())
-                })
+                .or_else(|| exception.get("text").and_then(|t| t.as_str()))
                 .unwrap_or("unknown exception")
                 .to_string();
             return Err(BrowserError::JsException { message });
@@ -216,10 +209,7 @@ impl BrowserDriver {
     ///
     /// Returns `Ok(None)` if no element matches. Returns the CDP `NodeId`
     /// which can be used for further DOM operations.
-    pub async fn query_selector(
-        &self,
-        selector: &str,
-    ) -> Result<Option<NodeId>, BrowserError> {
+    pub async fn query_selector(&self, selector: &str) -> Result<Option<NodeId>, BrowserError> {
         let root_id = self.get_document_root().await?;
 
         let result = self
@@ -233,10 +223,7 @@ impl BrowserDriver {
             )
             .await?;
 
-        let node_id = result
-            .get("nodeId")
-            .and_then(|n| n.as_i64())
-            .unwrap_or(0);
+        let node_id = result.get("nodeId").and_then(|n| n.as_i64()).unwrap_or(0);
 
         if node_id == 0 {
             Ok(None)
@@ -248,10 +235,7 @@ impl BrowserDriver {
     /// Find all elements matching a CSS selector.
     ///
     /// Returns an empty vector if no elements match.
-    pub async fn query_selector_all(
-        &self,
-        selector: &str,
-    ) -> Result<Vec<NodeId>, BrowserError> {
+    pub async fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>, BrowserError> {
         let root_id = self.get_document_root().await?;
 
         let result = self
@@ -308,15 +292,21 @@ impl BrowserDriver {
 
         if content.len() < 8 {
             return Err(BrowserError::Protocol {
-                detail: format!(
-                    "content quad has {} values, expected 8",
-                    content.len()
-                ),
+                detail: format!("content quad has {} values, expected 8", content.len()),
             });
         }
 
-        let xs: Vec<f64> = content.iter().step_by(2).filter_map(|v| v.as_f64()).collect();
-        let ys: Vec<f64> = content.iter().skip(1).step_by(2).filter_map(|v| v.as_f64()).collect();
+        let xs: Vec<f64> = content
+            .iter()
+            .step_by(2)
+            .filter_map(|v| v.as_f64())
+            .collect();
+        let ys: Vec<f64> = content
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .filter_map(|v| v.as_f64())
+            .collect();
 
         if xs.len() < 4 || ys.len() < 4 {
             return Err(BrowserError::Protocol {
@@ -334,9 +324,7 @@ impl BrowserDriver {
 
         if width <= 0.0 || height <= 0.0 {
             return Err(BrowserError::ElementNotInteractable {
-                reason: format!(
-                    "element has zero or negative size: {width}x{height}"
-                ),
+                reason: format!("element has zero or negative size: {width}x{height}"),
             });
         }
 
@@ -354,12 +342,12 @@ impl BrowserDriver {
     /// via `DOM.getBoxModel`, computes the center point, and dispatches
     /// `mousePressed` and `mouseReleased` events at that location.
     pub async fn click(&self, selector: &str) -> Result<(), BrowserError> {
-        let node_id = self
-            .query_selector(selector)
-            .await?
-            .ok_or_else(|| BrowserError::ElementNotFound {
-                selector: selector.to_string(),
-            })?;
+        let node_id =
+            self.query_selector(selector)
+                .await?
+                .ok_or_else(|| BrowserError::ElementNotFound {
+                    selector: selector.to_string(),
+                })?;
 
         let bbox = self.get_element_box(node_id).await?;
         let cx = bbox.x + bbox.width / 2.0;
@@ -401,24 +389,17 @@ impl BrowserDriver {
     /// Finds the element, focuses it via `DOM.focus`, then dispatches
     /// individual `keyDown`, `keyUp` events with a `char` event for each
     /// character in the text.
-    pub async fn type_text(
-        &self,
-        selector: &str,
-        text: &str,
-    ) -> Result<(), BrowserError> {
-        let node_id = self
-            .query_selector(selector)
-            .await?
-            .ok_or_else(|| BrowserError::ElementNotFound {
-                selector: selector.to_string(),
-            })?;
+    pub async fn type_text(&self, selector: &str, text: &str) -> Result<(), BrowserError> {
+        let node_id =
+            self.query_selector(selector)
+                .await?
+                .ok_or_else(|| BrowserError::ElementNotFound {
+                    selector: selector.to_string(),
+                })?;
 
         // Focus the element.
         self.client
-            .send_command(
-                "DOM.focus",
-                serde_json::json!({ "nodeId": node_id.0 }),
-            )
+            .send_command("DOM.focus", serde_json::json!({ "nodeId": node_id.0 }))
             .await?;
 
         // Type each character using Input.dispatchKeyEvent.
@@ -472,12 +453,13 @@ impl BrowserDriver {
             )
             .await?;
 
-        let data_b64 = result
-            .get("data")
-            .and_then(|d| d.as_str())
-            .ok_or_else(|| BrowserError::Protocol {
-                detail: "Page.captureScreenshot did not return 'data' field".to_string(),
-            })?;
+        let data_b64 =
+            result
+                .get("data")
+                .and_then(|d| d.as_str())
+                .ok_or_else(|| BrowserError::Protocol {
+                    detail: "Page.captureScreenshot did not return 'data' field".to_string(),
+                })?;
 
         let bytes = B64.decode(data_b64).map_err(|e| BrowserError::Protocol {
             detail: format!("failed to decode screenshot base64: {e}"),
@@ -494,15 +476,14 @@ impl BrowserDriver {
     ///
     /// Evaluates `document.documentElement.outerHTML` in the page context.
     pub async fn get_html(&self) -> Result<String, BrowserError> {
-        let value = self
-            .evaluate("document.documentElement.outerHTML")
-            .await?;
+        let value = self.evaluate("document.documentElement.outerHTML").await?;
 
-        value.as_str().map(|s| s.to_string()).ok_or_else(|| {
-            BrowserError::Protocol {
+        value
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| BrowserError::Protocol {
                 detail: "outerHTML evaluation did not return a string".to_string(),
-            }
-        })
+            })
     }
 
     /// Get the current page URL.
@@ -510,11 +491,12 @@ impl BrowserDriver {
     /// Evaluates `window.location.href` in the page context.
     pub async fn get_url(&self) -> Result<String, BrowserError> {
         let value = self.evaluate("window.location.href").await?;
-        value.as_str().map(|s| s.to_string()).ok_or_else(|| {
-            BrowserError::Protocol {
+        value
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| BrowserError::Protocol {
                 detail: "location.href evaluation did not return a string".to_string(),
-            }
-        })
+            })
     }
 
     /// Get the current page title.

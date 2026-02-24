@@ -140,7 +140,9 @@ entry_point = "run.sh"
         let mut registry = SkillRegistry::new();
 
         // Register an Active skill
-        registry.register(make_active_instance("active-skill")).unwrap();
+        registry
+            .register(make_active_instance("active-skill"))
+            .unwrap();
 
         // Removing an Active skill should fail
         let err = registry.remove("active-skill").unwrap_err();

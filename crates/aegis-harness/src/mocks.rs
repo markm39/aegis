@@ -393,6 +393,12 @@ fn action_kind_name(kind: &ActionKind) -> &'static str {
         ActionKind::MakeVoiceCall { .. } => "MakeVoiceCall",
         ActionKind::SpeechRecognition { .. } => "SpeechRecognition",
         ActionKind::VoiceSession { .. } => "VoiceSession",
+        ActionKind::AdminAgentAdd { .. } => "AdminAgentAdd",
+        ActionKind::AdminAgentRemove { .. } => "AdminAgentRemove",
+        ActionKind::AdminHookInstall { .. } => "AdminHookInstall",
+        ActionKind::AdminHookRemove { .. } => "AdminHookRemove",
+        ActionKind::AdminConfigChange { .. } => "AdminConfigChange",
+        ActionKind::AdminAuditPurge { .. } => "AdminAuditPurge",
     }
 }
 
@@ -502,8 +508,7 @@ impl MockAuditStore {
     /// Append an action and its verdict to the store.
     pub fn append(&self, action: &Action, verdict: &Verdict) {
         let mut inner = self.inner.lock().expect("mock audit lock poisoned");
-        let action_kind =
-            serde_json::to_string(&action.kind).unwrap_or_else(|_| "unknown".into());
+        let action_kind = serde_json::to_string(&action.kind).unwrap_or_else(|_| "unknown".into());
         inner.entries.push(MockAuditEntry {
             entry_id: Uuid::new_v4(),
             action: action.clone(),
@@ -693,12 +698,7 @@ impl MockHttpServer {
     }
 
     /// Configure a JSON response for a specific path.
-    pub fn configure_json_response(
-        &self,
-        path: impl Into<String>,
-        status: u16,
-        body: &[u8],
-    ) {
+    pub fn configure_json_response(&self, path: impl Into<String>, status: u16, body: &[u8]) {
         let mut inner = self.inner.lock().expect("mock http lock poisoned");
         inner.responses.insert(
             path.into(),
@@ -1241,8 +1241,7 @@ mod tests {
         // Make a request using raw TCP (no reqwest dependency needed).
         let url = server.url();
         let addr = server.addr();
-        let mut stream =
-            std::net::TcpStream::connect(addr).expect("should connect to mock server");
+        let mut stream = std::net::TcpStream::connect(addr).expect("should connect to mock server");
         use std::io::Write;
         write!(
             stream,
@@ -1277,8 +1276,7 @@ mod tests {
         server.configure_response("/api/status", 200, b"all good");
 
         let addr = server.addr();
-        let mut stream =
-            std::net::TcpStream::connect(addr).expect("should connect to mock server");
+        let mut stream = std::net::TcpStream::connect(addr).expect("should connect to mock server");
         use std::io::Write;
         write!(
             stream,
@@ -1305,8 +1303,7 @@ mod tests {
         let server = MockHttpServer::start();
 
         let addr = server.addr();
-        let mut stream =
-            std::net::TcpStream::connect(addr).expect("should connect to mock server");
+        let mut stream = std::net::TcpStream::connect(addr).expect("should connect to mock server");
         use std::io::Write;
         write!(
             stream,
@@ -1334,8 +1331,7 @@ mod tests {
 
         let addr = server.addr();
         let body = b"request body data";
-        let mut stream =
-            std::net::TcpStream::connect(addr).expect("should connect to mock server");
+        let mut stream = std::net::TcpStream::connect(addr).expect("should connect to mock server");
         use std::io::Write;
         write!(
             stream,
@@ -1388,9 +1384,7 @@ mod tests {
 
     #[test]
     fn test_scenario_builder_deny_all_policy() {
-        let env = TestScenarioBuilder::new()
-            .with_policy("deny_all")
-            .build();
+        let env = TestScenarioBuilder::new().with_policy("deny_all").build();
 
         let action = file_read_action("agent", "/tmp/f");
         let verdict = env.policy.evaluate(&action);

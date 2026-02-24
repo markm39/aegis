@@ -67,7 +67,9 @@ pub enum ScreenshotError {
 pub enum ScreenshotFormat {
     #[default]
     Png,
-    Jpeg { quality: u8 },
+    Jpeg {
+        quality: u8,
+    },
 }
 
 impl ScreenshotFormat {
@@ -119,7 +121,6 @@ impl std::str::FromStr for ScreenshotFormat {
         Self::parse(s)
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Bounding box
@@ -202,10 +203,7 @@ pub struct ScreenshotResult {
 /// browser.
 pub fn validate_selector(selector: &str) -> Result<String, ScreenshotError> {
     // Strip control characters first.
-    let cleaned: String = selector
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
+    let cleaned: String = selector.chars().filter(|c| !c.is_control()).collect();
 
     if cleaned.len() != selector.len() {
         return Err(ScreenshotError::SelectorControlChars);
@@ -327,7 +325,10 @@ pub fn build_capture_params(
         }
         ScreenshotFormat::Jpeg { quality } => {
             params.insert("format".into(), serde_json::Value::String("jpeg".into()));
-            params.insert("quality".into(), serde_json::Value::Number((*quality).into()));
+            params.insert(
+                "quality".into(),
+                serde_json::Value::Number((*quality).into()),
+            );
         }
     }
 
@@ -476,7 +477,10 @@ mod tests {
 
     #[test]
     fn test_screenshot_format_from_str() {
-        assert_eq!(ScreenshotFormat::parse("png").unwrap(), ScreenshotFormat::Png);
+        assert_eq!(
+            ScreenshotFormat::parse("png").unwrap(),
+            ScreenshotFormat::Png
+        );
         assert_eq!(
             ScreenshotFormat::parse("jpeg").unwrap(),
             ScreenshotFormat::Jpeg { quality: 80 }
@@ -494,7 +498,10 @@ mod tests {
         assert!(ScreenshotFormat::parse("").is_err());
 
         // Also verify std::str::FromStr works.
-        assert_eq!("png".parse::<ScreenshotFormat>().unwrap(), ScreenshotFormat::Png);
+        assert_eq!(
+            "png".parse::<ScreenshotFormat>().unwrap(),
+            ScreenshotFormat::Png
+        );
         assert!("bmp".parse::<ScreenshotFormat>().is_err());
     }
 
@@ -609,11 +616,17 @@ mod tests {
         // Over limit: rejected.
         assert!(matches!(
             validate_dimensions(4097, 1080),
-            Err(ScreenshotError::DimensionTooLarge { axis: "width", value: 4097 })
+            Err(ScreenshotError::DimensionTooLarge {
+                axis: "width",
+                value: 4097
+            })
         ));
         assert!(matches!(
             validate_dimensions(1920, 4097),
-            Err(ScreenshotError::DimensionTooLarge { axis: "height", value: 4097 })
+            Err(ScreenshotError::DimensionTooLarge {
+                axis: "height",
+                value: 4097
+            })
         ));
 
         // Both over.
@@ -700,9 +713,13 @@ mod tests {
     #[test]
     fn test_encode_screenshot_rejects_bad_quality() {
         let data = vec![0u8; 100];
-        assert!(
-            encode_screenshot(&data, &ScreenshotFormat::Jpeg { quality: 0 }, 100, 100, true)
-                .is_err()
-        );
+        assert!(encode_screenshot(
+            &data,
+            &ScreenshotFormat::Jpeg { quality: 0 },
+            100,
+            100,
+            true
+        )
+        .is_err());
     }
 }

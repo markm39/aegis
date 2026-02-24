@@ -263,7 +263,9 @@ fn render_node(node: &SnapshotNode, config: &SnapshotConfig, output: &mut String
                     let val = truncate_value(&val, config.max_value_len);
                     line.push_str(&format!(" value='{val}'"));
                 }
-            } else if should_redact(node, config) && node.name.to_ascii_lowercase().contains("password") {
+            } else if should_redact(node, config)
+                && node.name.to_ascii_lowercase().contains("password")
+            {
                 // Even if value is None, mark the field as redacted so the AI
                 // knows not to attempt reading it.
             }
@@ -277,11 +279,7 @@ fn render_node(node: &SnapshotNode, config: &SnapshotConfig, output: &mut String
             line.push_str(" disabled");
         }
         if let Some(expanded) = node.expanded {
-            line.push_str(if expanded {
-                " expanded"
-            } else {
-                " collapsed"
-            });
+            line.push_str(if expanded { " expanded" } else { " collapsed" });
         }
 
         line.push('\n');
@@ -386,11 +384,7 @@ fn render_single_node(node: &SnapshotNode, config: &SnapshotConfig) -> String {
         line.push_str(" disabled");
     }
     if let Some(expanded) = node.expanded {
-        line.push_str(if expanded {
-            " expanded"
-        } else {
-            " collapsed"
-        });
+        line.push_str(if expanded { " expanded" } else { " collapsed" });
     }
 
     line.push('\n');
@@ -477,12 +471,9 @@ pub fn build_snapshot(
     page_url: &str,
     page_title: &str,
 ) -> Result<PageSnapshot, SnapshotError> {
-    let nodes_array = ax_tree_json
-        .get("nodes")
-        .and_then(|v| v.as_array())
-        .ok_or(SnapshotError::InvalidFormat(
-            "missing or invalid 'nodes' array".into(),
-        ))?;
+    let nodes_array = ax_tree_json.get("nodes").and_then(|v| v.as_array()).ok_or(
+        SnapshotError::InvalidFormat("missing or invalid 'nodes' array".into()),
+    )?;
 
     if nodes_array.is_empty() {
         return Ok(PageSnapshot {
@@ -592,9 +583,7 @@ fn parse_cdp_nodes(nodes: &[serde_json::Value]) -> Result<Vec<CdpNode>, Snapshot
             })
             .unwrap_or_default();
 
-        let backend_node_id = node_json
-            .get("backendDOMNodeId")
-            .and_then(|v| v.as_i64());
+        let backend_node_id = node_json.get("backendDOMNodeId").and_then(|v| v.as_i64());
 
         let ignored = node_json
             .get("ignored")
@@ -905,7 +894,10 @@ mod tests {
         }];
 
         let text = render_ax_tree(&nodes, &default_config());
-        assert!(text.contains(REDACTION_MARKER), "password value should be redacted");
+        assert!(
+            text.contains(REDACTION_MARKER),
+            "password value should be redacted"
+        );
         assert!(
             !text.contains("my-secret-pass"),
             "raw password must not appear in output"
@@ -990,10 +982,10 @@ mod tests {
     #[test]
     fn test_generic_nodes_skipped() {
         let nodes = vec![
-            make_node(1, "generic", "", 0, false),       // Should be skipped.
-            make_node(2, "none", "hidden", 0, false),     // Should be skipped.
-            make_node(3, "button", "Click me", 0, true),  // Should be present.
-            make_node(4, "generic", "Named", 0, false),   // Has a name, should appear.
+            make_node(1, "generic", "", 0, false),    // Should be skipped.
+            make_node(2, "none", "hidden", 0, false), // Should be skipped.
+            make_node(3, "button", "Click me", 0, true), // Should be present.
+            make_node(4, "generic", "Named", 0, false), // Has a name, should appear.
         ];
 
         let text = render_ax_tree(&nodes, &default_config());
@@ -1001,10 +993,7 @@ mod tests {
             !text.contains("[1] generic"),
             "generic with no name should be skipped"
         );
-        assert!(
-            !text.contains("[2] none"),
-            "none role should be skipped"
-        );
+        assert!(!text.contains("[2] none"), "none role should be skipped");
         assert!(text.contains("[3] button 'Click me'"));
         assert!(text.contains("[4] generic 'Named'"));
     }
@@ -1321,14 +1310,8 @@ mod tests {
         }];
 
         let text = render_ax_tree(&nodes, &default_config());
-        assert!(
-            !text.contains('\x00'),
-            "null bytes must be stripped"
-        );
-        assert!(
-            !text.contains('\x01'),
-            "control chars must be stripped"
-        );
+        assert!(!text.contains('\x00'), "null bytes must be stripped");
+        assert!(!text.contains('\x01'), "control chars must be stripped");
         assert!(text.contains("Titlewithcontrolchars"));
     }
 
@@ -1408,7 +1391,10 @@ mod tests {
 
         let text = render_ax_tree(&nodes, &default_config());
         assert!(text.contains("checked"), "checked attribute should appear");
-        assert!(text.contains("disabled"), "disabled attribute should appear");
+        assert!(
+            text.contains("disabled"),
+            "disabled attribute should appear"
+        );
         assert!(
             text.contains("collapsed"),
             "collapsed (expanded=false) attribute should appear"

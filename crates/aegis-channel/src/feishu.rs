@@ -7,13 +7,22 @@ use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, Outb
 use crate::webhook::{WebhookChannel, WebhookConfig};
 
 /// Configuration for the Feishu channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeishuConfig {
     /// Feishu bot webhook URL.
     pub webhook_url: String,
     /// Optional webhook signing secret.
     #[serde(default)]
     pub secret: Option<String>,
+}
+
+impl std::fmt::Debug for FeishuConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeishuConfig")
+            .field("webhook_url", &self.webhook_url)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Feishu channel wrapping the generic webhook adapter.

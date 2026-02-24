@@ -228,11 +228,11 @@ impl InvocationStore {
 
         results.retain(|_, result| {
             match result.status {
-                InvocationStatus::Completed | InvocationStatus::Failed | InvocationStatus::Cancelled => {
+                InvocationStatus::Completed
+                | InvocationStatus::Failed
+                | InvocationStatus::Cancelled => {
                     // Keep if completed after cutoff
-                    result
-                        .completed_at
-                        .is_some_and(|t| t > cutoff)
+                    result.completed_at.is_some_and(|t| t > cutoff)
                 }
                 // Always keep pending/running
                 _ => true,
@@ -483,10 +483,7 @@ pub fn default_tool_catalog() -> Vec<ToolInfo> {
 ///
 /// Returns an error string if the tool name is unknown or required parameters
 /// are missing.
-fn tool_to_command(
-    tool_name: &str,
-    params: &serde_json::Value,
-) -> Result<DaemonCommand, String> {
+fn tool_to_command(tool_name: &str, params: &serde_json::Value) -> Result<DaemonCommand, String> {
     match tool_name {
         "list_agents" => Ok(DaemonCommand::ListAgents),
         "agent_status" => {
@@ -626,10 +623,7 @@ pub fn tool_api_routes(state: Arc<ToolApiState>) -> Router {
             "/v1/tools/{name}/invoke_async",
             post(invoke_tool_async_handler),
         )
-        .route(
-            "/v1/tools/invocations/{id}",
-            get(get_invocation_handler),
-        )
+        .route("/v1/tools/invocations/{id}", get(get_invocation_handler))
         .with_state(state)
 }
 
@@ -648,7 +642,11 @@ async fn list_tools_handler(
     }
 
     let tools: Vec<&ToolInfo> = if let Some(ref category) = params.category {
-        state.tools.iter().filter(|t| &t.category == category).collect()
+        state
+            .tools
+            .iter()
+            .filter(|t| &t.category == category)
+            .collect()
     } else {
         state.tools.iter().collect()
     };
@@ -943,11 +941,8 @@ mod tests {
 
     #[test]
     fn test_tool_to_command_agent_status() {
-        let cmd = tool_to_command(
-            "agent_status",
-            &serde_json::json!({"name": "claude-1"}),
-        )
-        .unwrap();
+        let cmd =
+            tool_to_command("agent_status", &serde_json::json!({"name": "claude-1"})).unwrap();
         match cmd {
             DaemonCommand::AgentStatus { name } => assert_eq!(name, "claude-1"),
             other => panic!("expected AgentStatus, got: {other:?}"),
@@ -995,11 +990,7 @@ mod tests {
 
     #[test]
     fn test_tool_to_command_fleet_goal_set() {
-        let cmd = tool_to_command(
-            "fleet_goal",
-            &serde_json::json!({"goal": "ship v2"}),
-        )
-        .unwrap();
+        let cmd = tool_to_command("fleet_goal", &serde_json::json!({"goal": "ship v2"})).unwrap();
         match cmd {
             DaemonCommand::FleetGoal { goal } => {
                 assert_eq!(goal.as_deref(), Some("ship v2"));
@@ -1084,8 +1075,8 @@ mod tests {
 
         // Add a completed invocation
         let id = Uuid::new_v4();
-        let result = InvocationResult::pending(id, "test".to_string())
-            .complete(serde_json::json!({}));
+        let result =
+            InvocationResult::pending(id, "test".to_string()).complete(serde_json::json!({}));
         store.store(result);
 
         // Add a pending invocation
@@ -1176,10 +1167,7 @@ mod tests {
     fn test_require_param_string() {
         let params = serde_json::json!({"name": "agent-1", "count": 5});
 
-        assert_eq!(
-            require_param_string(&params, "name").unwrap(),
-            "agent-1"
-        );
+        assert_eq!(require_param_string(&params, "name").unwrap(), "agent-1");
         assert!(require_param_string(&params, "missing").is_err());
         assert!(require_param_string(&params, "count").is_err()); // not a string
     }

@@ -10,8 +10,8 @@ use anyhow::Result;
 
 use aegis_control::daemon::DaemonClient;
 use aegis_ledger::AuditStore;
-use aegis_types::daemon::{daemon_config_path, daemon_dir, DaemonConfig};
 use aegis_types::ChannelConfig;
+use aegis_types::daemon::{DaemonConfig, daemon_config_path, daemon_dir};
 
 /// Severity level for a diagnostic check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

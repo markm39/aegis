@@ -14,9 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::{
-    sanitize_text, AudioFormat, TtsConfig, TtsError, TtsProvider, TtsResult, VoiceInfo,
-};
+use crate::{sanitize_text, AudioFormat, TtsConfig, TtsError, TtsProvider, TtsResult, VoiceInfo};
 
 /// A sliding-window rate limiter based on request timestamps.
 ///
@@ -50,7 +48,8 @@ impl RateLimiter {
         let window = std::time::Duration::from_secs(60);
 
         // Evict expired timestamps.
-        self.timestamps.retain(|ts| now.duration_since(*ts) < window);
+        self.timestamps
+            .retain(|ts| now.duration_since(*ts) < window);
 
         if self.timestamps.len() >= self.max_rpm as usize {
             return Err(TtsError::ProviderError(format!(
@@ -69,7 +68,8 @@ impl RateLimiter {
     fn current_count(&mut self) -> usize {
         let now = std::time::Instant::now();
         let window = std::time::Duration::from_secs(60);
-        self.timestamps.retain(|ts| now.duration_since(*ts) < window);
+        self.timestamps
+            .retain(|ts| now.duration_since(*ts) < window);
         self.timestamps.len()
     }
 }
@@ -298,10 +298,7 @@ mod tests {
         };
 
         let mut manager = TtsManager::new(&config);
-        manager.add_provider(
-            "mock",
-            Box::new(MockProvider::new("mock", vec![0x00])),
-        );
+        manager.add_provider("mock", Box::new(MockProvider::new("mock", vec![0x00])));
 
         // First 3 requests should succeed.
         for _ in 0..3 {
@@ -327,10 +324,7 @@ mod tests {
         };
 
         let mut manager = TtsManager::new(&config);
-        manager.add_provider(
-            "mock",
-            Box::new(MockProvider::new("mock", vec![0x00])),
-        );
+        manager.add_provider("mock", Box::new(MockProvider::new("mock", vec![0x00])));
 
         // Text too long should be rejected.
         let long_text = "a".repeat(11);
@@ -365,14 +359,8 @@ mod tests {
         };
 
         let mut manager = TtsManager::new(&config);
-        manager.add_provider(
-            "mock-a",
-            Box::new(MockProvider::new("mock-a", vec![])),
-        );
-        manager.add_provider(
-            "mock-b",
-            Box::new(MockProvider::new("mock-b", vec![])),
-        );
+        manager.add_provider("mock-a", Box::new(MockProvider::new("mock-a", vec![])));
+        manager.add_provider("mock-b", Box::new(MockProvider::new("mock-b", vec![])));
 
         // list_voices returns only the active provider's voices.
         let voices = manager.list_voices().unwrap();

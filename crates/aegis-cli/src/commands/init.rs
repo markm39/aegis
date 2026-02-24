@@ -7,17 +7,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dialoguer::Confirm;
 
-use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::PolicyEngine;
+use aegis_policy::builtin::get_builtin_policy;
 
 /// Maximum display width for a resource path before truncation.
 const MAX_RESOURCE_DISPLAY_LEN: usize = 40;
 use aegis_types::{
-    Action, ActionKind, AegisConfig, Decision, IsolationConfig, CONFIG_FILENAME,
-    DEFAULT_POLICY_FILENAME,
+    Action, ActionKind, AegisConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, Decision,
+    IsolationConfig,
 };
 
 /// Run the `aegis init` command.
@@ -400,10 +400,12 @@ mod tests {
         // Config file should exist
         assert!(base_dir.join(CONFIG_FILENAME).exists());
         // Policy file should exist
-        assert!(base_dir
-            .join("policies")
-            .join(DEFAULT_POLICY_FILENAME)
-            .exists());
+        assert!(
+            base_dir
+                .join("policies")
+                .join(DEFAULT_POLICY_FILENAME)
+                .exists()
+        );
         // Sandbox dir should exist
         assert!(base_dir.join("sandbox").is_dir());
     }

@@ -5,7 +5,7 @@
 //! 2. Legacy audit configs only -> monitor dashboard
 //! 3. Nothing configured -> onboard wizard -> chat TUI
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use aegis_control::daemon::DaemonClient;

@@ -65,8 +65,8 @@ impl QueuedCommand {
     /// Create a new pending command with validated payload.
     fn new(command: serde_json::Value, priority: u8) -> Result<Self, String> {
         // Validate payload size (security: prevent memory exhaustion).
-        let serialized = serde_json::to_string(&command)
-            .map_err(|e| format!("invalid command payload: {e}"))?;
+        let serialized =
+            serde_json::to_string(&command).map_err(|e| format!("invalid command payload: {e}"))?;
         if serialized.len() > MAX_COMMAND_PAYLOAD_BYTES {
             return Err(format!(
                 "command payload exceeds maximum size of {} bytes (got {} bytes)",
@@ -312,11 +312,7 @@ impl CommandQueue {
     /// Writes to a temporary file first, then renames to the target path.
     /// This prevents corruption if the process crashes during the write.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
-        let pending: Vec<QueuedCommand> = self
-            .heap
-            .iter()
-            .map(|entry| entry.0.clone())
-            .collect();
+        let pending: Vec<QueuedCommand> = self.heap.iter().map(|entry| entry.0.clone()).collect();
 
         let envelope = QueuePersistence {
             pending,
@@ -345,11 +341,11 @@ impl CommandQueue {
     /// Restores pending commands, dead letter queue, and counters.
     /// Active commands are not restored (they were interrupted by shutdown).
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
-        let data = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read queue file: {e}"))?;
+        let data =
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read queue file: {e}"))?;
 
-        let envelope: QueuePersistence = serde_json::from_str(&data)
-            .map_err(|e| format!("failed to parse queue file: {e}"))?;
+        let envelope: QueuePersistence =
+            serde_json::from_str(&data).map_err(|e| format!("failed to parse queue file: {e}"))?;
 
         let mut queue = Self::with_limits(envelope.max_queue_size, envelope.max_concurrent);
         queue.completed_total = envelope.completed_total;
@@ -596,7 +592,10 @@ mod tests {
 
         let restored = CommandQueue::load_from_file(&path).unwrap();
         assert_eq!(restored.dlq_count(), 1);
-        assert_eq!(restored.dead_letter_queue()[0].status, QueueStatus::DeadLettered);
+        assert_eq!(
+            restored.dead_letter_queue()[0].status,
+            QueueStatus::DeadLettered
+        );
     }
 
     #[test]

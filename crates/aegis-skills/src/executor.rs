@@ -95,12 +95,15 @@ impl SkillExecutor {
         }
 
         // Validate the entry point stays inside the skill directory
-        let canonical_dir = skill_dir
-            .canonicalize()
-            .with_context(|| format!("failed to canonicalize skill dir: {}", skill_dir.display()))?;
-        let canonical_entry = entry_point
-            .canonicalize()
-            .with_context(|| format!("failed to canonicalize entry point: {}", entry_point.display()))?;
+        let canonical_dir = skill_dir.canonicalize().with_context(|| {
+            format!("failed to canonicalize skill dir: {}", skill_dir.display())
+        })?;
+        let canonical_entry = entry_point.canonicalize().with_context(|| {
+            format!(
+                "failed to canonicalize entry point: {}",
+                entry_point.display()
+            )
+        })?;
         if !canonical_entry.starts_with(&canonical_dir) {
             bail!(
                 "skill entry point escapes skill directory: {}",
@@ -118,11 +121,7 @@ impl SkillExecutor {
             serde_json::to_string(&input).context("failed to serialize skill input")?;
 
         let (program, args) = resolve_interpreter(&entry_point)?;
-        let work_dir = self
-            .config
-            .working_dir
-            .as_deref()
-            .unwrap_or(skill_dir);
+        let work_dir = self.config.working_dir.as_deref().unwrap_or(skill_dir);
 
         debug!(
             skill = manifest.name,
@@ -363,8 +362,7 @@ echo '{"result": "hello", "artifacts": [], "messages": ["ok"]}'
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let manifest = crate::manifest::parse_manifest(
@@ -406,8 +404,7 @@ entry_point = "run.sh"
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let manifest = crate::manifest::parse_manifest(

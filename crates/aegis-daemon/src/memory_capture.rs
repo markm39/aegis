@@ -145,7 +145,11 @@ impl MemoryCapturer {
         entries
             .into_iter()
             .filter(|e| e.confidence >= self.config.confidence_threshold)
-            .filter(|e| self.config.categories.contains(&e.category.as_str().to_string()))
+            .filter(|e| {
+                self.config
+                    .categories
+                    .contains(&e.category.as_str().to_string())
+            })
             .take(self.config.max_per_turn)
             .collect()
     }
@@ -184,7 +188,10 @@ impl MemoryCapturer {
 
             let namespace = format!("{}:{}", agent_id, entry.category.as_str());
 
-            if store.set(&namespace, &sanitized_key, &sanitized_value).is_ok() {
+            if store
+                .set(&namespace, &sanitized_key, &sanitized_value)
+                .is_ok()
+            {
                 self.writes_this_turn += 1;
                 stored += 1;
             }
@@ -282,7 +289,9 @@ impl MemoryCapturer {
     fn extract_entity(line: &str, entries: &mut Vec<ExtractionEntry>) {
         // Email pattern: simple heuristic, not a full RFC 5322 parser.
         for word in line.split_whitespace() {
-            let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '-' && c != '_' && c != '+');
+            let clean = word.trim_matches(|c: char| {
+                !c.is_alphanumeric() && c != '@' && c != '.' && c != '-' && c != '_' && c != '+'
+            });
             if is_email_like(clean) {
                 entries.push(ExtractionEntry {
                     category: ExtractionCategory::Entity,
@@ -459,20 +468,39 @@ mod tests {
         let entries = MemoryCapturer::extract_from_conversation(text);
 
         // Should extract at least one entry per category present.
-        let has_preference = entries.iter().any(|e| e.category == ExtractionCategory::Preference);
-        let has_decision = entries.iter().any(|e| e.category == ExtractionCategory::Decision);
-        let has_fact = entries.iter().any(|e| e.category == ExtractionCategory::Fact);
-        let has_entity = entries.iter().any(|e| e.category == ExtractionCategory::Entity);
-        let has_instruction = entries.iter().any(|e| e.category == ExtractionCategory::Instruction);
+        let has_preference = entries
+            .iter()
+            .any(|e| e.category == ExtractionCategory::Preference);
+        let has_decision = entries
+            .iter()
+            .any(|e| e.category == ExtractionCategory::Decision);
+        let has_fact = entries
+            .iter()
+            .any(|e| e.category == ExtractionCategory::Fact);
+        let has_entity = entries
+            .iter()
+            .any(|e| e.category == ExtractionCategory::Entity);
+        let has_instruction = entries
+            .iter()
+            .any(|e| e.category == ExtractionCategory::Instruction);
 
-        assert!(has_preference, "should extract a preference from 'I prefer'");
+        assert!(
+            has_preference,
+            "should extract a preference from 'I prefer'"
+        );
         assert!(has_decision, "should extract a decision from 'decided to'");
         assert!(has_fact, "should extract a fact from 'is located at'");
         assert!(has_entity, "should extract an entity from email address");
-        assert!(has_instruction, "should extract an instruction from 'Remember to'");
+        assert!(
+            has_instruction,
+            "should extract an instruction from 'Remember to'"
+        );
 
         // Verify content is sane.
-        let pref = entries.iter().find(|e| e.category == ExtractionCategory::Preference).unwrap();
+        let pref = entries
+            .iter()
+            .find(|e| e.category == ExtractionCategory::Preference)
+            .unwrap();
         assert!(
             pref.value.contains("Rust") || pref.value.contains("rust"),
             "preference should mention Rust, got: {}",
@@ -584,7 +612,10 @@ mod tests {
         // After reset, writing should work again.
         capturer.reset_turn_counter();
         let stored3 = capturer.store_extractions(&store, "agent-1", &entries);
-        assert_eq!(stored3, 2, "after reset, should allow max_per_turn writes again");
+        assert_eq!(
+            stored3, 2,
+            "after reset, should allow max_per_turn writes again"
+        );
     }
 
     // -- test_sanitization_of_extracted_content --
@@ -623,7 +654,10 @@ mod tests {
         let capturer = MemoryCapturer::new(disabled_config());
         let text = "I prefer using Rust. Remember to run tests.";
         let entries = capturer.extract_filtered(text);
-        assert!(entries.is_empty(), "disabled capturer should return empty vec");
+        assert!(
+            entries.is_empty(),
+            "disabled capturer should return empty vec"
+        );
     }
 
     // -- Security test: injection/traversal --
@@ -671,7 +705,10 @@ mod tests {
         }];
 
         let stored = capturer.store_extractions(&store, "agent-1", &entries);
-        assert_eq!(stored, 0, "entries with empty key after sanitization should be rejected");
+        assert_eq!(
+            stored, 0,
+            "entries with empty key after sanitization should be rejected"
+        );
     }
 
     #[test]

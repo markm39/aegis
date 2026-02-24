@@ -180,22 +180,14 @@ async fn acp_ws_upgrade(
         Some(t) if !t.is_empty() => t,
         _ => {
             warn!("ACP WebSocket: missing authentication token");
-            return (
-                StatusCode::UNAUTHORIZED,
-                "missing authentication token",
-            )
-                .into_response();
+            return (StatusCode::UNAUTHORIZED, "missing authentication token").into_response();
         }
     };
 
     // Validate token using constant-time SHA-256 hash comparison
     if !validate_bearer_token(&token, &state.token_hashes) {
         warn!("ACP WebSocket: invalid authentication token");
-        return (
-            StatusCode::UNAUTHORIZED,
-            "invalid authentication token",
-        )
-            .into_response();
+        return (StatusCode::UNAUTHORIZED, "invalid authentication token").into_response();
     }
 
     // Determine which hash matched (for connection identity tracking)
@@ -228,10 +220,7 @@ async fn acp_ws_upgrade(
 /// Extract the bearer token from either the Authorization header or query param.
 fn extract_token(headers: &HeaderMap, params: &WsAuthParams) -> Option<String> {
     // Try Authorization header first
-    if let Some(auth) = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(token) = auth.strip_prefix("Bearer ") {
             if !token.is_empty() {
                 return Some(token.to_string());
@@ -493,9 +482,9 @@ async fn process_ws_message(
         Err(e) => {
             let err_msg = translator.error_to_acp(
                 None,
-                &crate::acp_translator::TranslationError::Internal(
-                    format!("failed to parse frame: {e}"),
-                ),
+                &crate::acp_translator::TranslationError::Internal(format!(
+                    "failed to parse frame: {e}"
+                )),
             );
             return Some(serialize_acp_message(&err_msg));
         }
@@ -606,10 +595,7 @@ mod tests {
         let params = WsAuthParams { token: None };
 
         let token = extract_token(&headers, &params);
-        assert!(
-            token.is_none(),
-            "missing auth should yield no token"
-        );
+        assert!(token.is_none(), "missing auth should yield no token");
 
         // Empty Authorization header should yield no token
         let mut headers = HeaderMap::new();
@@ -716,8 +702,7 @@ mod tests {
         let session_id = Uuid::new_v4().to_string();
 
         // Create a daemon channel
-        let (daemon_tx, mut daemon_rx): (DaemonCommandTx, _) =
-            tokio::sync::mpsc::channel(16);
+        let (daemon_tx, mut daemon_rx): (DaemonCommandTx, _) = tokio::sync::mpsc::channel(16);
 
         // Build a valid ACP request
         let request_id = Uuid::new_v4();
@@ -742,14 +727,8 @@ mod tests {
         });
 
         // Process the message
-        let result = process_ws_message(
-            &frame_json,
-            &translator,
-            &session_id,
-            1_048_576,
-            &daemon_tx,
-        )
-        .await;
+        let result =
+            process_ws_message(&frame_json, &translator, &session_id, 1_048_576, &daemon_tx).await;
 
         daemon_handle.await.unwrap();
 
@@ -867,14 +846,8 @@ mod tests {
         .unwrap();
         let frame_json = serde_json::to_string(&frame).unwrap();
 
-        let result = process_ws_message(
-            &frame_json,
-            &translator,
-            &session_id,
-            1_048_576,
-            &daemon_tx,
-        )
-        .await;
+        let result =
+            process_ws_message(&frame_json, &translator, &session_id, 1_048_576, &daemon_tx).await;
         let response_text = result.expect("should have error response");
         let response: AcpMessage = serde_json::from_str(&response_text).unwrap();
         assert!(
@@ -909,14 +882,8 @@ mod tests {
         let frame = AcpMessageFrame::new(payload);
         let frame_json = serde_json::to_string(&frame).unwrap();
 
-        let result = process_ws_message(
-            &frame_json,
-            &translator,
-            &session_id,
-            1_048_576,
-            &daemon_tx,
-        )
-        .await;
+        let result =
+            process_ws_message(&frame_json, &translator, &session_id, 1_048_576, &daemon_tx).await;
         let response_text = result.expect("should have error response");
         let response: AcpMessage = serde_json::from_str(&response_text).unwrap();
         assert!(
@@ -955,10 +922,7 @@ mod tests {
 
         // 1. Valid token from header
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            format!("Bearer {token}").parse().unwrap(),
-        );
+        headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
         let params = WsAuthParams { token: None };
         let extracted = extract_token(&headers, &params).unwrap();
         assert!(

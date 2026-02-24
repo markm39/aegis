@@ -264,9 +264,7 @@ pub fn validate_tab_url(raw_url: &str, blocked_patterns: &[String]) -> Result<()
         url::Host::Domain(domain) => {
             // Block known localhost aliases.
             if domain.eq_ignore_ascii_case("localhost") {
-                return Err(TabError::BlockedUrl(
-                    "localhost is not allowed".to_string(),
-                ));
+                return Err(TabError::BlockedUrl("localhost is not allowed".to_string()));
             }
         }
     }
@@ -605,9 +603,7 @@ mod tests {
         // ::ffff:10.0.0.1
         assert!(mgr.open_tab("http://[::ffff:10.0.0.1]/admin").is_err());
         // ::ffff:192.168.1.1
-        assert!(mgr
-            .open_tab("http://[::ffff:192.168.1.1]/admin")
-            .is_err());
+        assert!(mgr.open_tab("http://[::ffff:192.168.1.1]/admin").is_err());
     }
 
     #[test]

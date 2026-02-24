@@ -1,6 +1,6 @@
+use aegis_execpolicy::execpolicycheck::ExecPolicyCheckCommand;
 use anyhow::Result;
 use clap::Parser;
-use aegis_execpolicy::execpolicycheck::ExecPolicyCheckCommand;
 
 /// CLI for evaluating exec policies
 #[derive(Parser)]

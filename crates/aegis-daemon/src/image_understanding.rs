@@ -164,13 +164,19 @@ impl ImageProcessor {
 
         // 3. Reject SVG unconditionally (can contain embedded scripts/XSS).
         if is_svg(data) {
-            return Err("SVG format is rejected for security reasons (may contain embedded scripts)".to_string());
+            return Err(
+                "SVG format is rejected for security reasons (may contain embedded scripts)"
+                    .to_string(),
+            );
         }
 
         // 4. Detect format from magic bytes.
         let format = detect_format_from_magic_bytes(data);
         if format == ImageFormat::Unknown {
-            return Err("unrecognized image format (magic bytes do not match any supported format)".to_string());
+            return Err(
+                "unrecognized image format (magic bytes do not match any supported format)"
+                    .to_string(),
+            );
         }
 
         // 5. Check format is allowed.
@@ -225,7 +231,9 @@ impl ImageProcessor {
         // Placeholder: no external vision API call.
         Ok(format!(
             "Image description placeholder: format={}, size={} bytes, hash={}, prompt='{}'",
-            meta.format, meta.size_bytes, meta.content_hash,
+            meta.format,
+            meta.size_bytes,
+            meta.content_hash,
             sanitize_prompt(prompt),
         ))
     }
@@ -264,7 +272,9 @@ fn is_svg(data: &[u8]) -> bool {
     let text = String::from_utf8_lossy(prefix).to_lowercase();
 
     // Check for SVG indicators.
-    text.contains("<svg") || text.contains("<!doctype svg") || text.contains("xmlns=\"http://www.w3.org/2000/svg\"")
+    text.contains("<svg")
+        || text.contains("<!doctype svg")
+        || text.contains("xmlns=\"http://www.w3.org/2000/svg\"")
 }
 
 /// Compute the SHA-256 hex digest of a byte slice.
@@ -413,7 +423,7 @@ mod tests {
     /// Minimal JPEG: SOI + SOF0 marker.
     fn minimal_jpeg() -> Vec<u8> {
         let mut data = vec![0xFF, 0xD8]; // SOI
-        // SOF0 marker
+                                         // SOF0 marker
         data.push(0xFF);
         data.push(0xC0);
         // Segment length (11 bytes)
@@ -455,10 +465,10 @@ mod tests {
         // VP8 chunk
         data.extend_from_slice(b"VP8 ");
         data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // chunk size (dummy)
-        // VP8 bitstream: frame tag (3 bytes) + start code + dimensions
+                                                           // VP8 bitstream: frame tag (3 bytes) + start code + dimensions
         data.extend_from_slice(&[0x00, 0x00, 0x00]); // frame tag
-        data.extend_from_slice(&[0x9D, 0x01, 0x2A]);  // start code
-        // Width: 800 (little-endian, lower 14 bits)
+        data.extend_from_slice(&[0x9D, 0x01, 0x2A]); // start code
+                                                     // Width: 800 (little-endian, lower 14 bits)
         data.extend_from_slice(&800u16.to_le_bytes());
         // Height: 600 (little-endian, lower 14 bits)
         data.extend_from_slice(&600u16.to_le_bytes());

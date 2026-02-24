@@ -4,16 +4,16 @@
 //! into a ratatui frame. Overlays the command bar on the status line
 //! when command mode is active.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::markdown;
 use super::message::MessageRole;
 use super::render;
-use super::{filter_model_items, ApprovalProfile, ChatApp, InputMode, Overlay};
+use super::{ApprovalProfile, ChatApp, InputMode, Overlay, filter_model_items};
 
 /// Draw the complete chat TUI frame.
 pub fn draw(f: &mut Frame, app: &mut ChatApp) {

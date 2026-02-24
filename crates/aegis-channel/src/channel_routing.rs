@@ -88,9 +88,7 @@ fn validate_identifier(value: &str, kind: &str, max_len: usize) -> Result<(), Ch
     {
         return Err(ChannelRoutingError::InvalidCommand {
             command: value.to_string(),
-            reason: format!(
-                "{kind} may only contain letters, digits, hyphens, and underscores"
-            ),
+            reason: format!("{kind} may only contain letters, digits, hyphens, and underscores"),
         });
     }
 
@@ -219,10 +217,7 @@ impl ChannelCommandRouter {
             if channel_sets.contains_key(&set.channel_type) {
                 return Err(ChannelRoutingError::InvalidCommand {
                     command: set.channel_type.clone(),
-                    reason: format!(
-                        "duplicate channel command set for {:?}",
-                        set.channel_type
-                    ),
+                    reason: format!("duplicate channel command set for {:?}", set.channel_type),
                 });
             }
             channel_sets.insert(set.channel_type.clone(), set);
@@ -481,12 +476,7 @@ mod tests {
         aliases.insert("a".to_string(), "b".to_string());
         aliases.insert("b".to_string(), "status".to_string());
 
-        let result = ChannelCommandSet::new(
-            "telegram".to_string(),
-            None,
-            Vec::new(),
-            aliases,
-        );
+        let result = ChannelCommandSet::new("telegram".to_string(), None, Vec::new(), aliases);
 
         assert!(result.is_err(), "alias chains should be rejected");
         match result.unwrap_err() {
@@ -553,7 +543,9 @@ mod tests {
         let router = test_router();
 
         // Path traversal in command
-        let err = router.resolve_command("slack", "../etc/passwd").unwrap_err();
+        let err = router
+            .resolve_command("slack", "../etc/passwd")
+            .unwrap_err();
         assert!(matches!(err, ChannelRoutingError::InvalidCommand { .. }));
 
         // Null bytes in direct validation are rejected
@@ -568,7 +560,9 @@ mod tests {
         let err = router.resolve_command("slack", "cmd;rm -rf /").unwrap_err();
         assert!(matches!(err, ChannelRoutingError::InvalidCommand { .. }));
 
-        let err = router.resolve_command("slack", "cmd|cat /etc/passwd").unwrap_err();
+        let err = router
+            .resolve_command("slack", "cmd|cat /etc/passwd")
+            .unwrap_err();
         assert!(matches!(err, ChannelRoutingError::InvalidCommand { .. }));
 
         let err = router.resolve_command("slack", "$(whoami)").unwrap_err();
@@ -604,13 +598,9 @@ mod tests {
         )
         .unwrap();
 
-        let default_set = ChannelCommandSet::new(
-            "default".to_string(),
-            None,
-            Vec::new(),
-            HashMap::new(),
-        )
-        .unwrap();
+        let default_set =
+            ChannelCommandSet::new("default".to_string(), None, Vec::new(), HashMap::new())
+                .unwrap();
 
         let router = ChannelCommandRouter::new(vec![telegram, slack], default_set).unwrap();
 
@@ -684,29 +674,15 @@ mod tests {
 
     #[test]
     fn test_duplicate_channel_set_rejected() {
-        let set1 = ChannelCommandSet::new(
-            "telegram".to_string(),
-            None,
-            Vec::new(),
-            HashMap::new(),
-        )
-        .unwrap();
+        let set1 = ChannelCommandSet::new("telegram".to_string(), None, Vec::new(), HashMap::new())
+            .unwrap();
 
-        let set2 = ChannelCommandSet::new(
-            "telegram".to_string(),
-            None,
-            Vec::new(),
-            HashMap::new(),
-        )
-        .unwrap();
+        let set2 = ChannelCommandSet::new("telegram".to_string(), None, Vec::new(), HashMap::new())
+            .unwrap();
 
-        let default = ChannelCommandSet::new(
-            "default".to_string(),
-            None,
-            Vec::new(),
-            HashMap::new(),
-        )
-        .unwrap();
+        let default =
+            ChannelCommandSet::new("default".to_string(), None, Vec::new(), HashMap::new())
+                .unwrap();
 
         let result = ChannelCommandRouter::new(vec![set1, set2], default);
         assert!(result.is_err());
@@ -740,10 +716,7 @@ mod tests {
         let router = router_from_config(&config).unwrap();
 
         // Telegram: alias works
-        assert_eq!(
-            router.resolve_command("telegram", "s").unwrap(),
-            "status"
-        );
+        assert_eq!(router.resolve_command("telegram", "s").unwrap(), "status");
         // Telegram: blocked
         assert!(router.resolve_command("telegram", "stop").is_err());
         // Default: blocks "dangerous"
@@ -763,13 +736,9 @@ mod tests {
         )
         .unwrap();
 
-        let default = ChannelCommandSet::new(
-            "default".to_string(),
-            None,
-            Vec::new(),
-            HashMap::new(),
-        )
-        .unwrap();
+        let default =
+            ChannelCommandSet::new("default".to_string(), None, Vec::new(), HashMap::new())
+                .unwrap();
 
         let router = ChannelCommandRouter::new(vec![set], default).unwrap();
 
@@ -784,25 +753,16 @@ mod tests {
     #[test]
     fn test_alias_to_blocked_command_is_blocked() {
         // Alias "x" -> "stop", and "stop" is blocked.
-        let set = ChannelCommandSet::new(
-            "telegram".to_string(),
-            None,
-            vec!["stop".to_string()],
-            {
-                let mut m = HashMap::new();
-                m.insert("x".to_string(), "stop".to_string());
-                m
-            },
-        )
+        let set = ChannelCommandSet::new("telegram".to_string(), None, vec!["stop".to_string()], {
+            let mut m = HashMap::new();
+            m.insert("x".to_string(), "stop".to_string());
+            m
+        })
         .unwrap();
 
-        let default = ChannelCommandSet::new(
-            "default".to_string(),
-            None,
-            Vec::new(),
-            HashMap::new(),
-        )
-        .unwrap();
+        let default =
+            ChannelCommandSet::new("default".to_string(), None, Vec::new(), HashMap::new())
+                .unwrap();
 
         let router = ChannelCommandRouter::new(vec![set], default).unwrap();
 
@@ -816,11 +776,15 @@ mod tests {
         let router = test_router();
 
         // "status agent-1" should extract "status" as the command name
-        let resolved = router.resolve_command("telegram", "status agent-1").unwrap();
+        let resolved = router
+            .resolve_command("telegram", "status agent-1")
+            .unwrap();
         assert_eq!(resolved, "status");
 
         // "/approve abc-123" should extract "approve"
-        let resolved = router.resolve_command("telegram", "/approve abc-123").unwrap();
+        let resolved = router
+            .resolve_command("telegram", "/approve abc-123")
+            .unwrap();
         assert_eq!(resolved, "approve");
     }
 }

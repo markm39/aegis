@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use aegis_control::server::ControlServerConfig;

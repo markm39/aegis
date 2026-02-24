@@ -174,10 +174,7 @@ fn install_launchd(aegis_binary: &str) -> ServiceResult {
     match output {
         Ok(o) if o.status.success() => ServiceResult {
             success: true,
-            message: format!(
-                "installed and loaded: {}",
-                plist_path.display()
-            ),
+            message: format!("installed and loaded: {}", plist_path.display()),
         },
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
@@ -298,7 +295,8 @@ fn status_launchd() -> ServiceStatus {
             // Format: "PID\tStatus\tLabel" or "-\tStatus\tLabel" if not running.
             if stdout.contains(LAUNCHD_LABEL) {
                 // Check if PID field is a number (running) or "-" (stopped).
-                if let Some(first_field) = stdout.lines().last().and_then(|l| l.split('\t').next()) {
+                if let Some(first_field) = stdout.lines().last().and_then(|l| l.split('\t').next())
+                {
                     if first_field.trim().parse::<u32>().is_ok() {
                         return ServiceStatus::Running;
                     }
@@ -397,10 +395,7 @@ fn install_systemd(aegis_binary: &str) -> ServiceResult {
     match enable {
         Ok(o) if o.status.success() => ServiceResult {
             success: true,
-            message: format!(
-                "installed and enabled: {}",
-                unit_path.display()
-            ),
+            message: format!("installed and enabled: {}", unit_path.display()),
         },
         Ok(o) => ServiceResult {
             success: false,
@@ -542,9 +537,7 @@ pub fn is_lingering_enabled() -> bool {
 
 /// Enable systemd lingering for the current user.
 pub fn enable_lingering() -> ServiceResult {
-    let output = Command::new("loginctl")
-        .args(["enable-linger"])
-        .output();
+    let output = Command::new("loginctl").args(["enable-linger"]).output();
 
     match output {
         Ok(o) if o.status.success() => ServiceResult {

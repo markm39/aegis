@@ -281,7 +281,9 @@ impl PendingRequests {
         reqs.sort_by(|a, b| {
             let risk_ord_a = risk_sort_key(a.risk_level.as_deref());
             let risk_ord_b = risk_sort_key(b.risk_level.as_deref());
-            risk_ord_a.cmp(&risk_ord_b).then(a.created_at.cmp(&b.created_at))
+            risk_ord_a
+                .cmp(&risk_ord_b)
+                .then(a.created_at.cmp(&b.created_at))
         });
         reqs
     }
@@ -462,13 +464,8 @@ mod tests {
             &config,
             Some("high"),
         );
-        let id_low = pending.add_with_config(
-            "Safe".into(),
-            "y".into(),
-            "n".into(),
-            &config,
-            Some("low"),
-        );
+        let id_low =
+            pending.add_with_config("Safe".into(), "y".into(), "n".into(), &config, Some("low"));
         let after = Utc::now();
 
         let req_high = pending.requests.get(&id_high).unwrap();
@@ -498,13 +495,7 @@ mod tests {
             allow_delegation: true,
         };
 
-        let id = pending.add_with_config(
-            "Expire me".into(),
-            "y".into(),
-            "n".into(),
-            &config,
-            None,
-        );
+        let id = pending.add_with_config("Expire me".into(), "y".into(), "n".into(), &config, None);
 
         // With 0-second timeout, request should already be past deadline
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -544,13 +535,7 @@ mod tests {
             allow_delegation: true,
         };
 
-        let id = pending.add_with_config(
-            "Allow?".into(),
-            "y".into(),
-            "n".into(),
-            &config,
-            None,
-        );
+        let id = pending.add_with_config("Allow?".into(), "y".into(), "n".into(), &config, None);
 
         let status = pending.partial_approve(id, "admin").unwrap();
         assert_eq!(status, ApprovalStatus::Approved);
@@ -567,13 +552,7 @@ mod tests {
             allow_delegation: true,
         };
 
-        let id = pending.add_with_config(
-            "Allow?".into(),
-            "y".into(),
-            "n".into(),
-            &config,
-            None,
-        );
+        let id = pending.add_with_config("Allow?".into(), "y".into(), "n".into(), &config, None);
 
         // First approval -- should still be pending
         let status = pending.partial_approve(id, "admin1").unwrap();

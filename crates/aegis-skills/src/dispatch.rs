@@ -112,8 +112,7 @@ impl CommandRouter {
     ///
     /// For example, alias "s" -> command "search".
     pub fn register_alias(&mut self, alias: &str, command: &str) {
-        self.aliases
-            .insert(alias.to_string(), command.to_string());
+        self.aliases.insert(alias.to_string(), command.to_string());
         // Update the info entry with this alias if it exists
         if let Some(info) = self.info.get_mut(command) {
             if !info.aliases.contains(&alias.to_string()) {
@@ -272,7 +271,7 @@ fn parse_args(input: &str) -> Vec<String> {
             }
             '"' => {
                 chars.next(); // consume opening quote
-                // Read until closing quote
+                              // Read until closing quote
                 loop {
                     match chars.next() {
                         Some('\\') => {
@@ -345,7 +344,12 @@ pub async fn dispatch(
             context,
         )
         .await
-        .with_context(|| format!("failed to execute /{} via skill '{}'", command.name, skill_name))
+        .with_context(|| {
+            format!(
+                "failed to execute /{} via skill '{}'",
+                command.name, skill_name
+            )
+        })
 }
 
 /// A command entry declared in a skill manifest.
@@ -410,8 +414,7 @@ mod tests {
 
     #[test]
     fn parse_command_with_escaped_quotes() {
-        let cmd =
-            parse_slash_command(r#"/echo "say \"hello\"""#, CommandSource::Cli).unwrap();
+        let cmd = parse_slash_command(r#"/echo "say \"hello\"""#, CommandSource::Cli).unwrap();
         assert_eq!(cmd.name, "echo");
         assert_eq!(cmd.args, vec![r#"say "hello""#]);
     }
@@ -502,7 +505,12 @@ mod tests {
     #[test]
     fn router_list_commands() {
         let mut router = CommandRouter::new();
-        router.register_command_with_info("search", "web-search", "Search the web", "/search <query>");
+        router.register_command_with_info(
+            "search",
+            "web-search",
+            "Search the web",
+            "/search <query>",
+        );
         router.register_command_with_info("calc", "calculator", "Calculate", "/calc <expr>");
         router.register_alias("s", "search");
 

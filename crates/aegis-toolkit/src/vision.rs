@@ -1,7 +1,7 @@
 //! Vision utilities for image analysis (OCR, object recognition stubs).
 
-use serde::{Deserialize, Serialize};
 use crate::{ToolkitError, ToolkitResult};
+use serde::{Deserialize, Serialize};
 
 /// Result from OCR processing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +37,12 @@ pub trait VisionProvider: Send + Sync {
     fn ocr(&self, rgba: &[u8], width: u32, height: u32) -> ToolkitResult<OcrResult>;
 
     /// Analyze an image for objects and content description.
-    fn analyze_image(&self, rgba: &[u8], width: u32, height: u32) -> ToolkitResult<ImageAnalysisResult>;
+    fn analyze_image(
+        &self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> ToolkitResult<ImageAnalysisResult>;
 }
 
 /// Stub implementation that returns unavailable errors.
@@ -48,9 +53,15 @@ impl VisionProvider for UnavailableVision {
         Err(ToolkitError::Unavailable("vision not supported".into()))
     }
 
-    fn analyze_image(&self, _rgba: &[u8], _width: u32, _height: u32) -> ToolkitResult<ImageAnalysisResult> {
+    fn analyze_image(
+        &self,
+        _rgba: &[u8],
+        _width: u32,
+        _height: u32,
+    ) -> ToolkitResult<ImageAnalysisResult> {
         Err(ToolkitError::Unavailable(
-            "image analysis requires a vision backend (configure toolkit.vision in daemon.toml)".into(),
+            "image analysis requires a vision backend (configure toolkit.vision in daemon.toml)"
+                .into(),
         ))
     }
 }
@@ -65,7 +76,12 @@ impl VisionProvider for StubVision {
         })
     }
 
-    fn analyze_image(&self, _rgba: &[u8], width: u32, height: u32) -> ToolkitResult<ImageAnalysisResult> {
+    fn analyze_image(
+        &self,
+        _rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> ToolkitResult<ImageAnalysisResult> {
         Ok(ImageAnalysisResult {
             description: format!("Stub analysis of {width}x{height} image"),
             objects: vec![],

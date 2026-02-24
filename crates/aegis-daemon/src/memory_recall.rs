@@ -76,7 +76,14 @@ impl MemoryRecaller {
             return Vec::new();
         }
 
-        self.recall_inner(store, context, namespace, max_tokens, threshold, half_life_hours)
+        self.recall_inner(
+            store,
+            context,
+            namespace,
+            max_tokens,
+            threshold,
+            half_life_hours,
+        )
     }
 
     /// Recall with per-request options, allowing callers to skip recall.
@@ -172,12 +179,12 @@ impl MemoryRecaller {
 /// keywords are found.
 fn extract_keywords(context: &str) -> String {
     const STOP_WORDS: &[&str] = &[
-        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was",
-        "one", "our", "out", "has", "its", "let", "may", "who", "did", "get", "him", "his",
-        "how", "its", "may", "new", "now", "old", "see", "way", "day", "too", "use", "she",
-        "this", "that", "with", "have", "from", "they", "been", "some", "them", "than",
-        "each", "make", "like", "will", "when", "what", "your", "said", "into", "does",
-        "then", "just", "also", "more", "very", "much", "such", "here", "there", "where",
+        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one",
+        "our", "out", "has", "its", "let", "may", "who", "did", "get", "him", "his", "how", "its",
+        "may", "new", "now", "old", "see", "way", "day", "too", "use", "she", "this", "that",
+        "with", "have", "from", "they", "been", "some", "them", "than", "each", "make", "like",
+        "will", "when", "what", "your", "said", "into", "does", "then", "just", "also", "more",
+        "very", "much", "such", "here", "there", "where",
     ];
 
     let words: Vec<&str> = context
@@ -275,7 +282,10 @@ pub fn format_recalled_memories(memories: &[RecalledMemory]) -> String {
         let clean_value = mask_secrets(&sanitize_content(&m.value));
         let clean_ts = sanitize_content(&m.updated_at);
 
-        let line = format!("- [{}]: {} (last updated: {})\n", clean_key, clean_value, clean_ts);
+        let line = format!(
+            "- [{}]: {} (last updated: {})\n",
+            clean_key, clean_value, clean_ts
+        );
         output.push_str(&line);
 
         if output.len() >= MAX_FORMATTED_SIZE {
@@ -312,7 +322,11 @@ mod tests {
     fn test_recall_returns_relevant_memories() {
         let (store, _dir) = test_store();
         store
-            .set("agent1", "api_design", "REST API design patterns for user service")
+            .set(
+                "agent1",
+                "api_design",
+                "REST API design patterns for user service",
+            )
             .unwrap();
         store
             .set("agent1", "db_schema", "PostgreSQL schema for user table")
@@ -363,7 +377,11 @@ mod tests {
     fn test_recall_filters_below_threshold() {
         let (store, _dir) = test_store();
         store
-            .set("agent1", "rust_tips", "Rust ownership and borrowing patterns")
+            .set(
+                "agent1",
+                "rust_tips",
+                "Rust ownership and borrowing patterns",
+            )
             .unwrap();
 
         let recaller = MemoryRecaller::new(AutoRecallConfig {
@@ -409,9 +427,7 @@ mod tests {
     #[test]
     fn test_recall_disabled_returns_empty() {
         let (store, _dir) = test_store();
-        store
-            .set("agent1", "key1", "some important value")
-            .unwrap();
+        store.set("agent1", "key1", "some important value").unwrap();
 
         let recaller = MemoryRecaller::new(AutoRecallConfig {
             enabled: false,
@@ -419,7 +435,10 @@ mod tests {
         });
 
         let results = recaller.recall(&store, "important value", "agent1", 1024, 0.0, None);
-        assert!(results.is_empty(), "disabled recall should return empty vec");
+        assert!(
+            results.is_empty(),
+            "disabled recall should return empty vec"
+        );
     }
 
     #[test]
@@ -478,7 +497,8 @@ mod tests {
         let memories = vec![
             RecalledMemory {
                 key: "config\x00\x07".into(),
-                value: "api_key=sk-abc123456789012345678901234567890 and \x1b[31mred text\x1b[0m".into(),
+                value: "api_key=sk-abc123456789012345678901234567890 and \x1b[31mred text\x1b[0m"
+                    .into(),
                 relevance: 0.9,
                 updated_at: "2026-02-21T10:00:00+00:00".into(),
                 namespace: "agent1".into(),
@@ -599,22 +619,19 @@ mod tests {
     #[test]
     fn test_format_empty_memories() {
         let formatted = format_recalled_memories(&[]);
-        assert!(formatted.is_empty(), "empty memories should produce empty string");
+        assert!(
+            formatted.is_empty(),
+            "empty memories should produce empty string"
+        );
     }
 
     #[test]
     fn test_mask_secrets_patterns() {
-        assert_eq!(
-            mask_secrets("key is sk-abcdef123456"),
-            "key is [REDACTED]"
-        );
+        assert_eq!(mask_secrets("key is sk-abcdef123456"), "key is [REDACTED]");
         assert_eq!(
             mask_secrets("token: ghp_abcdefghijklmnop"),
             "token: [REDACTED]"
         );
-        assert_eq!(
-            mask_secrets("no secrets here"),
-            "no secrets here"
-        );
+        assert_eq!(mask_secrets("no secrets here"), "no secrets here");
     }
 }

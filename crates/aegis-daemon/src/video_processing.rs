@@ -82,7 +82,7 @@ impl Default for VideoConfig {
     fn default() -> Self {
         Self {
             max_video_size_bytes: 100 * 1024 * 1024, // 100 MB
-            max_duration_secs: 300,                    // 5 minutes
+            max_duration_secs: 300,                  // 5 minutes
             frame_interval_secs: 1.0,
             keyframes_only: false,
             allowed_formats: vec![
@@ -143,10 +143,7 @@ pub struct TempFrameDir {
 impl TempFrameDir {
     /// Create a new temporary directory for frame output.
     pub fn new() -> Result<Self, String> {
-        let dir = std::env::temp_dir().join(format!(
-            "aegis-video-frames-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("aegis-video-frames-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("failed to create temp frame directory: {e}"))?;
         Ok(Self { path: dir })
@@ -288,10 +285,10 @@ impl VideoProcessor {
         let output_pattern = format!("{}/frame_%04d.png", output_str);
 
         let mut args = vec![
-            "-y".to_string(),              // Overwrite output files
-            "-i".to_string(),              // Input file
+            "-y".to_string(), // Overwrite output files
+            "-i".to_string(), // Input file
             input_str.to_string(),
-            "-t".to_string(),              // Duration limit
+            "-t".to_string(), // Duration limit
             self.config.max_duration_secs.to_string(),
         ];
 
@@ -312,11 +309,7 @@ impl VideoProcessor {
             ]);
         }
 
-        args.extend_from_slice(&[
-            "-f".to_string(),
-            "image2".to_string(),
-            output_pattern,
-        ]);
+        args.extend_from_slice(&["-f".to_string(), "image2".to_string(), output_pattern]);
 
         Ok((ffmpeg, args))
     }
@@ -343,7 +336,9 @@ impl VideoProcessor {
             .ok_or_else(|| "output path contains non-UTF-8 characters".to_string())?;
 
         // Clamp timestamp to max duration.
-        let clamped = timestamp_secs.min(self.config.max_duration_secs as f64).max(0.0);
+        let clamped = timestamp_secs
+            .min(self.config.max_duration_secs as f64)
+            .max(0.0);
 
         let args = vec![
             "-y".to_string(),
@@ -479,7 +474,9 @@ fn validate_ffmpeg_path(path: &str) -> Result<String, String> {
     // For absolute paths, verify they point to a reasonable location.
     let p = Path::new(path);
     if !p.is_absolute() {
-        return Err("ffmpeg path must be either a bare binary name or an absolute path".to_string());
+        return Err(
+            "ffmpeg path must be either a bare binary name or an absolute path".to_string(),
+        );
     }
 
     Ok(path.to_string())
@@ -746,7 +743,10 @@ mod tests {
         {
             let temp = TempFrameDir::new().unwrap();
             path = temp.path().to_path_buf();
-            assert!(path.exists(), "temp directory should exist while guard is alive");
+            assert!(
+                path.exists(),
+                "temp directory should exist while guard is alive"
+            );
 
             // Create a file inside to verify recursive cleanup.
             std::fs::write(path.join("test_frame.png"), b"fake png data").unwrap();

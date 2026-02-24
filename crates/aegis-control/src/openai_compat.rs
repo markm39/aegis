@@ -453,10 +453,7 @@ async fn models_handler(
     if state.daemon_tx.send((cmd, resp_tx)).await.is_err() {
         return (
             StatusCode::BAD_GATEWAY,
-            Json(OpenAiError::new(
-                "daemon unavailable",
-                "server_error",
-            )),
+            Json(OpenAiError::new("daemon unavailable", "server_error")),
         )
             .into_response();
     }
@@ -500,10 +497,7 @@ async fn handle_non_streaming_completion(
     if state.daemon_tx.send((cmd, resp_tx)).await.is_err() {
         return (
             StatusCode::BAD_GATEWAY,
-            Json(OpenAiError::new(
-                "daemon unavailable",
-                "server_error",
-            )),
+            Json(OpenAiError::new("daemon unavailable", "server_error")),
         )
             .into_response();
     }
@@ -570,10 +564,7 @@ async fn handle_streaming_completion(
     if state.daemon_tx.send((cmd, resp_tx)).await.is_err() {
         return (
             StatusCode::BAD_GATEWAY,
-            Json(OpenAiError::new(
-                "daemon unavailable",
-                "server_error",
-            )),
+            Json(OpenAiError::new("daemon unavailable", "server_error")),
         )
             .into_response();
     }
@@ -1066,9 +1057,6 @@ mod tests {
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         assert!(req.tools.is_some());
         assert_eq!(req.tools.as_ref().unwrap().len(), 1);
-        assert_eq!(
-            req.tools.as_ref().unwrap()[0].function.name,
-            "web_search"
-        );
+        assert_eq!(req.tools.as_ref().unwrap()[0].function.name, "web_search");
     }
 }

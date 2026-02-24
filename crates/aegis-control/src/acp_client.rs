@@ -387,11 +387,9 @@ fn validate_endpoint(endpoint: &str) -> Result<url::Url, AcpError> {
     }
 
     // Must have a host
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| AcpError::InvalidEndpoint {
-            reason: "URL has no host".into(),
-        })?;
+    let host = parsed.host_str().ok_or_else(|| AcpError::InvalidEndpoint {
+        reason: "URL has no host".into(),
+    })?;
 
     // Block localhost by name
     if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
@@ -472,11 +470,10 @@ impl AcpClient {
         let url = validate_endpoint(&self.config.endpoint)?;
 
         // Read auth token from env (never from config)
-        let _token = std::env::var(&self.config.auth_token_env).map_err(|_| {
-            AcpError::AuthTokenMissing {
+        let _token =
+            std::env::var(&self.config.auth_token_env).map_err(|_| AcpError::AuthTokenMissing {
                 var: self.config.auth_token_env.clone(),
-            }
-        })?;
+            })?;
 
         let mut conn = AcpConnection::new(url);
         conn.state = ConnectionState::Connected;

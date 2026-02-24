@@ -46,7 +46,10 @@ pub enum JobStatus {
 impl JobStatus {
     /// Whether this status is a terminal state (no further transitions possible).
     pub fn is_terminal(&self) -> bool {
-        matches!(self, JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled)
+        matches!(
+            self,
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled
+        )
     }
 }
 
@@ -275,9 +278,7 @@ impl JobTracker {
     /// Validates that `pct` is in the range 0-100.
     pub fn update_progress(&mut self, job_id: Uuid, pct: u8) -> Result<&Job, String> {
         if pct > 100 {
-            return Err(format!(
-                "progress percentage must be 0-100, got {pct}"
-            ));
+            return Err(format!("progress percentage must be 0-100, got {pct}"));
         }
 
         let job = self.find_job_mut(job_id)?;
@@ -315,7 +316,11 @@ impl JobTracker {
     pub fn active_job_count(&self, agent: &str) -> usize {
         self.jobs
             .get(agent)
-            .map(|jobs| jobs.iter().filter(|j| j.status == JobStatus::Running).count())
+            .map(|jobs| {
+                jobs.iter()
+                    .filter(|j| j.status == JobStatus::Running)
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -428,10 +433,7 @@ mod tests {
         assert_eq!(restored.list_jobs("agent-1").len(), 1);
         assert_eq!(restored.list_jobs("agent-2").len(), 1);
         assert_eq!(restored.list_jobs("agent-1")[0].description, "Persist me");
-        assert_eq!(
-            restored.list_jobs("agent-2")[0].description,
-            "Another job"
-        );
+        assert_eq!(restored.list_jobs("agent-2")[0].description, "Another job");
     }
 
     #[test]
@@ -485,17 +487,13 @@ mod tests {
         let mut tracker = JobTracker::new();
 
         for i in 0..MAX_JOBS_PER_AGENT {
-            tracker
-                .create_job("agent-1", &format!("Job {i}"))
-                .unwrap();
+            tracker.create_job("agent-1", &format!("Job {i}")).unwrap();
         }
 
         // The next job should be rejected
         let result = tracker.create_job("agent-1", "One too many");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("maximum"));
+        assert!(result.unwrap_err().contains("maximum"));
 
         // But a different agent should still work
         assert!(tracker.create_job("agent-2", "No problem").is_ok());

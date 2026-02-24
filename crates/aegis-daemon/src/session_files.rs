@@ -50,8 +50,8 @@ impl Default for SessionFilesConfig {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
         Self {
             enabled: false,
-            max_file_size_bytes: 10_485_760,     // 10 MB
-            max_total_size_bytes: 104_857_600,    // 100 MB
+            max_file_size_bytes: 10_485_760,   // 10 MB
+            max_total_size_bytes: 104_857_600, // 100 MB
             base_dir: PathBuf::from(home).join(".aegis").join("sessions"),
         }
     }
@@ -133,8 +133,7 @@ impl SessionFileStore {
         // Atomic write: tmp file then rename.
         let tmp_name = format!(".{name}.tmp");
         let tmp_path = self.session_dir.join(&tmp_name);
-        std::fs::write(&tmp_path, bytes)
-            .map_err(|e| format!("failed to write tmp file: {e}"))?;
+        std::fs::write(&tmp_path, bytes).map_err(|e| format!("failed to write tmp file: {e}"))?;
         std::fs::rename(&tmp_path, &target)
             .map_err(|e| format!("failed to rename tmp to target: {e}"))?;
 
@@ -185,8 +184,8 @@ impl SessionFileStore {
                 continue;
             }
 
-            let bytes = std::fs::read(&path)
-                .map_err(|e| format!("failed to read file {fname}: {e}"))?;
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("failed to read file {fname}: {e}"))?;
             let metadata = std::fs::metadata(&path)
                 .map_err(|e| format!("failed to stat file {fname}: {e}"))?;
 
@@ -291,8 +290,8 @@ impl SessionFileStore {
                 continue;
             }
 
-            let meta = std::fs::metadata(&path)
-                .map_err(|e| format!("failed to stat {fname}: {e}"))?;
+            let meta =
+                std::fs::metadata(&path).map_err(|e| format!("failed to stat {fname}: {e}"))?;
             total = total.saturating_add(meta.len());
         }
 
@@ -339,12 +338,10 @@ fn validate_name(name: &str, label: &str) -> Result<(), String> {
 fn reject_symlink(path: &Path) -> Result<(), String> {
     // Use symlink_metadata to check the link itself, not its target.
     match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            Err(format!(
-                "refusing to operate on symlink: {}",
-                path.display()
-            ))
-        }
+        Ok(meta) if meta.file_type().is_symlink() => Err(format!(
+            "refusing to operate on symlink: {}",
+            path.display()
+        )),
         _ => Ok(()),
     }
 }

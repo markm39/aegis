@@ -69,12 +69,8 @@ pub fn render_markdown(text: &str, base_style: Style) -> Vec<Line<'static>> {
         // Outside code blocks: check for line-level patterns.
         if let Some((level, content)) = strip_header_prefix(raw_line) {
             let header_style = match level {
-                1 => base_style
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                _ => base_style
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                1 => base_style.fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                _ => base_style.fg(Color::White).add_modifier(Modifier::BOLD),
             };
             // Apply inline styling within the header content, inheriting
             // the header's base style for non-formatted segments.
@@ -166,10 +162,7 @@ fn style_inline(text: &str, base: Style) -> Vec<Span<'static>> {
             if i < len {
                 i += 1; // skip closing backtick
             }
-            spans.push(Span::styled(
-                code,
-                base.fg(Color::Yellow),
-            ));
+            spans.push(Span::styled(code, base.fg(Color::Yellow)));
             continue;
         }
 
@@ -186,10 +179,7 @@ fn style_inline(text: &str, base: Style) -> Vec<Span<'static>> {
                     };
                     spans.push(Span::styled(std::mem::take(&mut current), style));
                 }
-                spans.push(Span::styled(
-                    link_text,
-                    base.fg(Color::Cyan),
-                ));
+                spans.push(Span::styled(link_text, base.fg(Color::Cyan)));
                 i = url_end;
                 continue;
             }
@@ -361,7 +351,10 @@ mod tests {
             "expected a yellow span for inline code"
         );
         // The code content should be "cargo build" (without backticks).
-        let code_span = spans.iter().find(|s| s.style.fg == Some(Color::Yellow)).unwrap();
+        let code_span = spans
+            .iter()
+            .find(|s| s.style.fg == Some(Color::Yellow))
+            .unwrap();
         assert_eq!(code_span.content.as_ref(), "cargo build");
     }
 
@@ -460,7 +453,10 @@ mod tests {
     fn link_shows_text_in_cyan() {
         let lines = render_markdown("See [docs](https://example.com)", Style::default());
         let spans = &lines[0].spans;
-        let link_span = spans.iter().find(|s| s.style.fg == Some(Color::Cyan)).unwrap();
+        let link_span = spans
+            .iter()
+            .find(|s| s.style.fg == Some(Color::Cyan))
+            .unwrap();
         assert_eq!(link_span.content.as_ref(), "docs");
     }
 
@@ -535,7 +531,10 @@ mod tests {
     fn inline_code_in_bullet() {
         let lines = render_markdown("- use `foo` here", Style::default());
         let spans = &lines[0].spans;
-        let code_span = spans.iter().find(|s| s.style.fg == Some(Color::Yellow)).unwrap();
+        let code_span = spans
+            .iter()
+            .find(|s| s.style.fg == Some(Color::Yellow))
+            .unwrap();
         assert_eq!(code_span.content.as_ref(), "foo");
     }
 

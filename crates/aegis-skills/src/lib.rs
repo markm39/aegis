@@ -47,6 +47,4 @@ pub use manifest::{
 };
 pub use registry::SkillRegistry;
 pub use scanner::{ScanFinding, ScanResult, Severity, SkillScanner};
-pub use sdk::{
-    Artifact, SkillCapabilities, SkillContext, SkillInput, SkillOutput, SkillPlugin,
-};
+pub use sdk::{Artifact, SkillCapabilities, SkillContext, SkillInput, SkillOutput, SkillPlugin};

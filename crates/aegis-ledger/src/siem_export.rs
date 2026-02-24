@@ -137,9 +137,8 @@ fn format_json_lines_entry(entry: &AuditEntry) -> Result<String, AegisError> {
         prev_hash: &entry.prev_hash,
         entry_hash: &entry.entry_hash,
     };
-    serde_json::to_string(&jl).map_err(|e| {
-        AegisError::LedgerError(format!("failed to serialize SIEM JSON entry: {e}"))
-    })
+    serde_json::to_string(&jl)
+        .map_err(|e| AegisError::LedgerError(format!("failed to serialize SIEM JSON entry: {e}")))
 }
 
 /// Extract the action variant name from a JSON-serialized `ActionKind`.
@@ -253,7 +252,10 @@ mod tests {
         let line = output.lines().next().unwrap();
 
         // Verify CEF header structure
-        assert!(line.starts_with("CEF:0|Aegis|AuditLog|1.0|"), "line: {line}");
+        assert!(
+            line.starts_with("CEF:0|Aegis|AuditLog|1.0|"),
+            "line: {line}"
+        );
 
         // Verify severity mapping for Deny (should be 7)
         let parts: Vec<&str> = line.splitn(8, '|').collect();
@@ -270,7 +272,10 @@ mod tests {
         let extensions = parts[7];
         assert!(extensions.contains("src=agent-1"), "ext: {extensions}");
         assert!(extensions.contains("outcome=Deny"), "ext: {extensions}");
-        assert!(extensions.contains("reason=blocked by policy"), "ext: {extensions}");
+        assert!(
+            extensions.contains("reason=blocked by policy"),
+            "ext: {extensions}"
+        );
     }
 
     #[test]

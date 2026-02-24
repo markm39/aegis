@@ -42,8 +42,8 @@ mod tests {
     use super::*;
     use crate::channel_audit::{hash_message_content, ChannelDirection};
     use crate::fs_audit::{hash_file_content, FsOperation};
-    use crate::test_helpers::test_db_path;
     use crate::store::AuditStore;
+    use crate::test_helpers::test_db_path;
     use aegis_types::{Action, ActionKind, Verdict};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};

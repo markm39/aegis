@@ -291,10 +291,7 @@ impl ToolDefinition for GlobTool {
             .and_then(|v| v.as_str())
             .context("missing required field: pattern")?;
 
-        let base_path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let base_path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let start = Instant::now();
 
@@ -386,10 +383,7 @@ impl ToolDefinition for GrepTool {
             .and_then(|v| v.as_str())
             .context("missing required field: pattern")?;
 
-        let search_path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let search_path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let include_glob = input.get("include").and_then(|v| v.as_str());
 
@@ -645,10 +639,7 @@ impl ToolDefinition for FileSearchTool {
             .and_then(|v| v.as_str())
             .context("missing required field: query")?;
 
-        let search_path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let search_path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let start = Instant::now();
 
@@ -879,7 +870,11 @@ mod tests {
         register_builtins(&registry).unwrap();
 
         for info in registry.list_tools() {
-            assert!(info.input_schema.is_object(), "schema for {} is not object", info.name);
+            assert!(
+                info.input_schema.is_object(),
+                "schema for {} is not object",
+                info.name
+            );
             assert!(
                 info.input_schema.get("type").is_some(),
                 "schema for {} missing type",
@@ -1003,7 +998,10 @@ mod tests {
             "new_string": "goodbye world"
         });
         let output = tool.execute(input).await.unwrap();
-        assert!(output.result["message"].as_str().unwrap().contains("replaced 1 occurrence"));
+        assert!(output.result["message"]
+            .as_str()
+            .unwrap()
+            .contains("replaced 1 occurrence"));
 
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "goodbye world, hello universe");
@@ -1043,8 +1041,11 @@ mod tests {
     #[tokio::test]
     async fn test_grep_tool() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("test.rs"), "fn main() {\n    println!(\"hello\");\n}\n")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("test.rs"),
+            "fn main() {\n    println!(\"hello\");\n}\n",
+        )
+        .unwrap();
 
         let tool = GrepTool;
         let input = serde_json::json!({
@@ -1150,7 +1151,10 @@ prefix_rule(pattern = ["rm"], decision = "forbidden")
         let input = serde_json::json!({ "command": "rm -rf /tmp/test" });
         let result = tool.execute(input).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("blocked by execution policy"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("blocked by execution policy"));
     }
 
     #[tokio::test]

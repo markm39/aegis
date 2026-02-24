@@ -83,18 +83,10 @@ impl RateLimit {
     /// Evict entries older than `WINDOW` from the sliding windows.
     fn prune(&mut self, now: Instant) {
         let cutoff = now.checked_sub(WINDOW).unwrap_or(now);
-        while self
-            .request_times
-            .front()
-            .is_some_and(|&t| t <= cutoff)
-        {
+        while self.request_times.front().is_some_and(|&t| t <= cutoff) {
             self.request_times.pop_front();
         }
-        while self
-            .token_counts
-            .front()
-            .is_some_and(|(t, _)| *t <= cutoff)
-        {
+        while self.token_counts.front().is_some_and(|(t, _)| *t <= cutoff) {
             self.token_counts.pop_front();
         }
     }
@@ -123,11 +115,7 @@ impl RateLimit {
         if self.tokens_per_minute > 0 {
             let current_tokens: u64 = self.token_counts.iter().map(|(_, c)| c).sum();
             if current_tokens >= self.tokens_per_minute {
-                let oldest = self
-                    .token_counts
-                    .front()
-                    .map(|(t, _)| *t)
-                    .unwrap_or(now);
+                let oldest = self.token_counts.front().map(|(t, _)| *t).unwrap_or(now);
                 let retry_after = WINDOW
                     .checked_sub(now.duration_since(oldest))
                     .unwrap_or(Duration::ZERO);
@@ -257,11 +245,7 @@ impl ProviderRateLimiter {
 
     // -- Internal methods that accept an `Instant` for testability --
 
-    fn check_request_at(
-        &mut self,
-        provider: &str,
-        now: Instant,
-    ) -> Result<(), RateLimitError> {
+    fn check_request_at(&mut self, provider: &str, now: Instant) -> Result<(), RateLimitError> {
         match self.limits.get_mut(provider) {
             Some(limit) => limit.check_request(provider, now),
             None => Ok(()), // Unknown provider => unlimited

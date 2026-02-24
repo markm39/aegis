@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use crate::channel::{Channel, ChannelError, OutboundMessage, MediaPayload};
+use crate::channel::{Channel, ChannelError, MediaPayload, OutboundMessage};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -332,9 +332,7 @@ pub struct ChannelInfo {
 /// and any character outside `[a-zA-Z0-9_-]`.
 fn validate_channel_name(name: &str) -> Result<(), ChannelError> {
     if name.is_empty() {
-        return Err(ChannelError::Other(
-            "channel name cannot be empty".into(),
-        ));
+        return Err(ChannelError::Other("channel name cannot be empty".into()));
     }
     if name.len() > MAX_CHANNEL_NAME_LEN {
         return Err(ChannelError::Other(format!(
@@ -365,9 +363,7 @@ fn validate_channel_name(name: &str) -> Result<(), ChannelError> {
 /// Validate a channel type identifier for the factory registry.
 fn validate_channel_type(name: &str) -> Result<(), ChannelError> {
     if name.is_empty() {
-        return Err(ChannelError::Other(
-            "channel type cannot be empty".into(),
-        ));
+        return Err(ChannelError::Other("channel type cannot be empty".into()));
     }
     if name.len() > MAX_CHANNEL_TYPE_LEN {
         return Err(ChannelError::Other(format!(
@@ -469,7 +465,11 @@ impl ChannelRouter {
     /// Send a message to a specific channel by name.
     ///
     /// Fails closed: if the channel is not registered, returns an error.
-    pub async fn send_to(&mut self, name: &str, message: OutboundMessage) -> Result<(), ChannelError> {
+    pub async fn send_to(
+        &mut self,
+        name: &str,
+        message: OutboundMessage,
+    ) -> Result<(), ChannelError> {
         let channel = self.channels.get(name).ok_or_else(|| {
             warn!(channel = %name, "send_to: channel not found");
             ChannelError::Other(format!("channel {name:?} not found"))
@@ -517,7 +517,9 @@ impl ChannelRouter {
         );
 
         let channel = self.channels.get(&target_name).ok_or_else(|| {
-            ChannelError::Other(format!("channel {target_name:?} disappeared during routing"))
+            ChannelError::Other(format!(
+                "channel {target_name:?} disappeared during routing"
+            ))
         })?;
 
         channel.send(message).await?;
@@ -553,7 +555,10 @@ impl ChannelRouter {
             )));
         }
 
-        info!(count = connected.len(), "broadcasting message to all channels");
+        info!(
+            count = connected.len(),
+            "broadcasting message to all channels"
+        );
 
         let mut last_error: Option<ChannelError> = None;
         for name in &connected {
@@ -751,17 +756,13 @@ mod tests {
 
         // supports_all: only true if all requested bits are present
         assert!(caps.supports_all(ChannelCapabilities::THREADS));
-        assert!(caps.supports_all(
-            ChannelCapabilities::THREADS | ChannelCapabilities::INLINE_BUTTONS
-        ));
-        assert!(!caps.supports_all(
-            ChannelCapabilities::THREADS | ChannelCapabilities::REACTIONS
-        ));
+        assert!(
+            caps.supports_all(ChannelCapabilities::THREADS | ChannelCapabilities::INLINE_BUTTONS)
+        );
+        assert!(!caps.supports_all(ChannelCapabilities::THREADS | ChannelCapabilities::REACTIONS));
 
         // supports_any: true if any requested bit is present
-        assert!(caps.supports_any(
-            ChannelCapabilities::THREADS | ChannelCapabilities::REACTIONS
-        ));
+        assert!(caps.supports_any(ChannelCapabilities::THREADS | ChannelCapabilities::REACTIONS));
         assert!(!caps.supports_any(ChannelCapabilities::REACTIONS));
 
         // NONE has nothing
@@ -793,7 +794,11 @@ mod tests {
         let (ch, sent) = MockChannel::new("telegram");
 
         router
-            .register_channel("telegram", Box::new(ch), ChannelCapabilities::INLINE_BUTTONS)
+            .register_channel(
+                "telegram",
+                Box::new(ch),
+                ChannelCapabilities::INLINE_BUTTONS,
+            )
             .unwrap();
 
         let msg = OutboundMessage::text("hello");
@@ -860,11 +865,7 @@ mod tests {
         let mut router = ChannelRouter::new();
         let (ch, _sent) = MockChannel::new("plain");
         router
-            .register_channel(
-                "plain",
-                Box::new(ch),
-                ChannelCapabilities::RICH_FORMATTING,
-            )
+            .register_channel("plain", Box::new(ch), ChannelCapabilities::RICH_FORMATTING)
             .unwrap();
 
         let msg = OutboundMessage::text("test");
@@ -1196,11 +1197,7 @@ mod tests {
         // Register should also fail
         let mut router = ChannelRouter::new();
         let (ch, _sent) = MockChannel::new("bad");
-        let result = router.register_channel(
-            "../escape",
-            Box::new(ch),
-            ChannelCapabilities::NONE,
-        );
+        let result = router.register_channel("../escape", Box::new(ch), ChannelCapabilities::NONE);
         assert!(result.is_err());
     }
 
@@ -1266,18 +1263,16 @@ mod tests {
             )
             .unwrap();
         router
-            .register_channel(
-                "ch2",
-                Box::new(ch2),
-                ChannelCapabilities::WEBHOOKS,
-            )
+            .register_channel("ch2", Box::new(ch2), ChannelCapabilities::WEBHOOKS)
             .unwrap();
 
         let channels = router.list_channels();
         assert_eq!(channels.len(), 2);
 
         let ch1_info = channels.iter().find(|i| i.name == "ch1").unwrap();
-        assert!(ch1_info.capabilities.has(ChannelCapabilities::INLINE_BUTTONS));
+        assert!(ch1_info
+            .capabilities
+            .has(ChannelCapabilities::INLINE_BUTTONS));
         assert!(ch1_info.capabilities.has(ChannelCapabilities::THREADS));
         assert!(ch1_info.is_connected);
         assert_eq!(ch1_info.message_count, 0);

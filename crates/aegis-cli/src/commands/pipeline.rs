@@ -228,7 +228,9 @@ pub fn start_observer(
             }
         }
         ObserverConfig::EndpointSecurity => {
-            eprintln!("Warning: EndpointSecurity observer is not yet implemented; running without observation");
+            eprintln!(
+                "Warning: EndpointSecurity observer is not yet implemented; running without observation"
+            );
             None
         }
         ObserverConfig::None => None,

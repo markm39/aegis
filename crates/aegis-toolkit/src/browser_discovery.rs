@@ -200,7 +200,10 @@ pub fn validate_binary_path(path: &Path) -> Result<(), BrowserDiscoveryError> {
     let path_str = path.to_string_lossy();
 
     // Reject directory traversal.
-    if path.components().any(|c| c == std::path::Component::ParentDir) {
+    if path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
         return Err(BrowserDiscoveryError::InvalidBinaryPath {
             path: path_str.into_owned(),
             reason: "path contains directory traversal (..)".to_string(),
@@ -234,13 +237,14 @@ pub fn validate_binary_path(path: &Path) -> Result<(), BrowserDiscoveryError> {
                         target
                     } else {
                         // Resolve relative symlinks against the link's parent.
-                        path.parent()
-                            .map(|p| p.join(&target))
-                            .unwrap_or(target)
+                        path.parent().map(|p| p.join(&target)).unwrap_or(target)
                     };
                     let resolved_str = resolved.to_string_lossy();
 
-                    if resolved.components().any(|c| c == std::path::Component::ParentDir) {
+                    if resolved
+                        .components()
+                        .any(|c| c == std::path::Component::ParentDir)
+                    {
                         return Err(BrowserDiscoveryError::InvalidBinaryPath {
                             path: path_str.into_owned(),
                             reason: format!(
@@ -331,7 +335,9 @@ fn is_better_candidate(current: &ChromeInfo, challenger: &ChromeInfo) -> bool {
     }
     // Same channel -- prefer higher version.
     match (&challenger.version, &current.version) {
-        (Some(new_v), Some(cur_v)) => compare_version_strings(new_v, cur_v) == std::cmp::Ordering::Greater,
+        (Some(new_v), Some(cur_v)) => {
+            compare_version_strings(new_v, cur_v) == std::cmp::Ordering::Greater
+        }
         (Some(_), None) => true,
         _ => false,
     }
@@ -445,9 +451,8 @@ static CACHED_CHROME: OnceLock<Result<ChromeInfo, String>> = OnceLock::new();
 pub fn discover_chrome_cached(
     configured_path: Option<&Path>,
 ) -> Result<&'static ChromeInfo, BrowserDiscoveryError> {
-    let result = CACHED_CHROME.get_or_init(|| {
-        discover_chrome(configured_path).map_err(|e| e.to_string())
-    });
+    let result =
+        CACHED_CHROME.get_or_init(|| discover_chrome(configured_path).map_err(|e| e.to_string()));
 
     match result {
         Ok(info) => Ok(info),
@@ -486,10 +491,7 @@ mod tests {
             assert!(paths.iter().any(|p| *p == "/opt/homebrew/bin/chromium"));
             // All must be absolute.
             for p in paths {
-                assert!(
-                    p.starts_with('/'),
-                    "candidate path is not absolute: {p}"
-                );
+                assert!(p.starts_with('/'), "candidate path is not absolute: {p}");
             }
         }
     }
@@ -507,10 +509,7 @@ mod tests {
             assert!(paths.iter().any(|p| *p == "/snap/bin/chromium"));
             assert!(paths.iter().any(|p| *p == "/usr/lib/chromium/chromium"));
             for p in paths {
-                assert!(
-                    p.starts_with('/'),
-                    "candidate path is not absolute: {p}"
-                );
+                assert!(p.starts_with('/'), "candidate path is not absolute: {p}");
             }
         }
     }
@@ -544,10 +543,7 @@ mod tests {
 
         for (input, expected) in cases {
             let result = parse_chrome_version(input);
-            assert_eq!(
-                result, expected,
-                "parse_chrome_version({input:?}) mismatch"
-            );
+            assert_eq!(result, expected, "parse_chrome_version({input:?}) mismatch");
         }
     }
 
@@ -694,7 +690,9 @@ mod tests {
 
     #[test]
     fn test_channel_preference_order() {
-        assert!(ChromeChannel::Stable.preference_rank() < ChromeChannel::Chromium.preference_rank());
+        assert!(
+            ChromeChannel::Stable.preference_rank() < ChromeChannel::Chromium.preference_rank()
+        );
         assert!(ChromeChannel::Chromium.preference_rank() < ChromeChannel::Beta.preference_rank());
         assert!(ChromeChannel::Beta.preference_rank() < ChromeChannel::Dev.preference_rank());
         assert!(ChromeChannel::Dev.preference_rank() < ChromeChannel::Canary.preference_rank());
@@ -708,9 +706,7 @@ mod tests {
         let good_path = Path::new("/usr/bin/google-chrome-stable");
         assert!(validate_binary_path(good_path).is_ok());
 
-        let mac_path = Path::new(
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        );
+        let mac_path = Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
         assert!(validate_binary_path(mac_path).is_ok());
     }
 }

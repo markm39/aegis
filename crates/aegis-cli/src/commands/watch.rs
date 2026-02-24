@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -104,7 +104,9 @@ fn run_watch(
             if is_process_alive(existing.pid) {
                 bail!(
                     "watch already running for '{}' (PID {}). Use `aegis watch --name {} --stop` to stop it.",
-                    name, existing.pid, name
+                    name,
+                    existing.pid,
+                    name
                 );
             }
             // Stale PID file -- remove it
@@ -164,7 +166,9 @@ fn run_watch(
             .context("failed to start filesystem observer")?
         }
         ObserverConfig::EndpointSecurity => {
-            eprintln!("Warning: EndpointSecurity observer requires Apple entitlement; falling back to FSEvents");
+            eprintln!(
+                "Warning: EndpointSecurity observer requires Apple entitlement; falling back to FSEvents"
+            );
             aegis_observer::start_observer(
                 &config.sandbox_dir,
                 Arc::clone(&store_arc),

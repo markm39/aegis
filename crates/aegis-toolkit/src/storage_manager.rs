@@ -223,8 +223,7 @@ impl StorageManager {
     ///
     /// This expands the set of domains that are valid targets for cookie writes.
     pub fn record_navigation(&mut self, domain: &str) {
-        self.navigation_history
-            .insert(domain.to_ascii_lowercase());
+        self.navigation_history.insert(domain.to_ascii_lowercase());
     }
 
     /// Check whether a domain is allowed for storage operations.
@@ -302,14 +301,8 @@ impl StorageManager {
                     .and_then(|v| v.as_str())
                     .unwrap_or("/")
                     .to_string(),
-                http_only: c
-                    .get("httpOnly")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                secure: c
-                    .get("secure")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+                http_only: c.get("httpOnly").and_then(|v| v.as_bool()).unwrap_or(false),
+                secure: c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
                 same_site: c
                     .get("sameSite")
                     .and_then(|v| v.as_str())
@@ -516,9 +509,7 @@ pub fn validate_cookie_domain(
     domain: &str,
     navigation_history: &HashSet<String>,
 ) -> Result<(), StorageError> {
-    let domain_lower = domain
-        .trim_start_matches('.')
-        .to_ascii_lowercase();
+    let domain_lower = domain.trim_start_matches('.').to_ascii_lowercase();
 
     if domain_lower.is_empty() {
         return Err(StorageError::DomainNotVisited {
@@ -706,7 +697,8 @@ mod tests {
         let mgr = default_manager();
 
         // Get params.
-        let get_params = mgr.build_get_storage_params("https://example.com", StorageType::LocalStorage);
+        let get_params =
+            mgr.build_get_storage_params("https://example.com", StorageType::LocalStorage);
         let expr = get_params["expression"].as_str().unwrap();
         assert!(expr.contains("localStorage"));
         assert!(expr.contains("JSON.stringify"));

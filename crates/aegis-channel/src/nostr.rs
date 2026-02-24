@@ -7,12 +7,21 @@ use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, Outb
 use crate::webhook::{WebhookChannel, WebhookConfig};
 
 /// Configuration for the Nostr channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NostrConfig {
     /// Nostr relay WebSocket URL (e.g., `"wss://relay.damus.io"`).
     pub relay_url: String,
     /// Private key in hex format for signing events.
     pub private_key_hex: String,
+}
+
+impl std::fmt::Debug for NostrConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NostrConfig")
+            .field("relay_url", &self.relay_url)
+            .field("private_key_hex", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Nostr channel wrapping the generic webhook adapter.

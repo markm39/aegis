@@ -512,7 +512,7 @@ pub enum ChannelConfig {
 }
 
 /// Configuration for the Telegram messaging channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TelegramConfig {
     /// Bot token from @BotFather (or `$AEGIS_TELEGRAM_BOT_TOKEN` env var).
     pub bot_token: String,
@@ -544,8 +544,25 @@ pub struct TelegramConfig {
     pub inline_queries_enabled: bool,
 }
 
+impl std::fmt::Debug for TelegramConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramConfig")
+            .field("bot_token", &"[REDACTED]")
+            .field("chat_id", &self.chat_id)
+            .field("poll_timeout_secs", &self.poll_timeout_secs)
+            .field("allow_group_commands", &self.allow_group_commands)
+            .field("active_hours", &self.active_hours)
+            .field("webhook_mode", &self.webhook_mode)
+            .field("webhook_port", &self.webhook_port)
+            .field("webhook_url", &self.webhook_url)
+            .field("webhook_secret", &self.webhook_secret)
+            .field("inline_queries_enabled", &self.inline_queries_enabled)
+            .finish()
+    }
+}
+
 /// Configuration for the Slack messaging channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlackConfig {
     /// Bot token (xoxb-...).
     pub bot_token: String,
@@ -572,6 +589,22 @@ pub struct SlackConfig {
     /// Port for the interactive message endpoint listener.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interactive_endpoint_port: Option<u16>,
+}
+
+impl std::fmt::Debug for SlackConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackConfig")
+            .field("bot_token", &"[REDACTED]")
+            .field("channel_id", &self.channel_id)
+            .field("recipient_team_id", &self.recipient_team_id)
+            .field("recipient_user_id", &self.recipient_user_id)
+            .field("streaming", &self.streaming)
+            .field("active_hours", &self.active_hours)
+            .field("signing_secret", &self.signing_secret)
+            .field("oauth_client_id", &self.oauth_client_id)
+            .field("interactive_endpoint_port", &self.interactive_endpoint_port)
+            .finish()
+    }
 }
 
 /// Configuration for a generic webhook channel.
@@ -997,6 +1030,48 @@ impl Default for UsageProxyConfig {
             port: 0,
         }
     }
+}
+
+/// Configuration for audit log data retention (GDPR/CCPA compliance).
+///
+/// When set, the daemon periodically purges audit entries that exceed
+/// the retention window or total entry cap.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetentionConfig {
+    /// Automatically purge entries older than this many days.
+    /// None = keep forever.
+    #[serde(default)]
+    pub max_age_days: Option<u64>,
+    /// Cap total audit entries at this count, removing oldest first.
+    /// None = no cap.
+    #[serde(default)]
+    pub max_entries: Option<u64>,
+}
+
+/// Configuration for PII redaction in audit logs (GDPR compliance).
+///
+/// When enabled, the ledger applies pattern-based redaction to entry
+/// content before persisting it. Built-in patterns cover email addresses,
+/// phone numbers, and IP addresses; custom patterns can be added.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RedactionConfig {
+    /// Master toggle for redaction. Default: false (disabled).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Additional regex patterns to redact (pattern -> replacement).
+    ///
+    /// Example: `{"\\b\\d{3}-\\d{2}-\\d{4}\\b": "[SSN]"}`
+    #[serde(default)]
+    pub custom_patterns: Vec<RedactionPattern>,
+}
+
+/// A single custom PII redaction pattern.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RedactionPattern {
+    /// Regex pattern to match.
+    pub pattern: String,
+    /// Replacement text (e.g., "[SSN]").
+    pub replacement: String,
 }
 
 /// Top-level configuration for an Aegis agent instance.

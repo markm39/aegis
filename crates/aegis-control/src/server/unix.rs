@@ -46,6 +46,18 @@ pub async fn serve(
         )
     })?;
 
+    // Restrict socket permissions to owner-only (0o600) to prevent other
+    // local users from sending commands to the control plane.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+        {
+            warn!("failed to set socket permissions to 0600: {e}");
+        }
+    }
+
     info!(path = %socket_path.display(), "started Unix socket control server");
 
     loop {

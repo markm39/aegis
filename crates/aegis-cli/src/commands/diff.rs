@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::commands::init::open_store;
 use crate::commands::DATETIME_SHORT_FMT;
+use crate::commands::init::open_store;
 
 /// Run `aegis diff NAME --session1 UUID1 --session2 UUID2`.
 pub fn run(config_name: &str, session1_str: &str, session2_str: &str) -> Result<()> {

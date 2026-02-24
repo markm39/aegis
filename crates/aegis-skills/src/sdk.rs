@@ -182,8 +182,7 @@ mod tests {
 
     #[test]
     fn test_skill_output_with_messages() {
-        let output =
-            SkillOutput::with_messages(serde_json::json!(42), vec!["done".into()]);
+        let output = SkillOutput::with_messages(serde_json::json!(42), vec!["done".into()]);
         assert_eq!(output.result, 42);
         assert_eq!(output.messages, vec!["done"]);
     }
@@ -213,7 +212,10 @@ mod tests {
         let json = serde_json::to_string(&ctx).unwrap();
         let back: SkillContext = serde_json::from_str(&json).unwrap();
         assert_eq!(back.agent_name.as_deref(), Some("agent-1"));
-        assert_eq!(back.env_vars.get("API_KEY").map(|s| s.as_str()), Some("secret"));
+        assert_eq!(
+            back.env_vars.get("API_KEY").map(|s| s.as_str()),
+            Some("secret")
+        );
     }
 
     #[test]

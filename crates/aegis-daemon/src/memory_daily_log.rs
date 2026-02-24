@@ -74,12 +74,8 @@ impl DailyLogManager {
     ///
     /// Creates the log directory if it does not exist.
     pub fn new(config: DailyLogConfig) -> Result<Self> {
-        fs::create_dir_all(&config.log_dir).with_context(|| {
-            format!(
-                "create daily log directory: {}",
-                config.log_dir.display()
-            )
-        })?;
+        fs::create_dir_all(&config.log_dir)
+            .with_context(|| format!("create daily log directory: {}", config.log_dir.display()))?;
         Ok(Self { config })
     }
 
@@ -170,10 +166,8 @@ impl DailyLogManager {
 
         let mut removed = 0;
 
-        let entries =
-            fs::read_dir(&self.config.log_dir).with_context(|| {
-                format!("read log directory: {}", self.config.log_dir.display())
-            })?;
+        let entries = fs::read_dir(&self.config.log_dir)
+            .with_context(|| format!("read log directory: {}", self.config.log_dir.display()))?;
 
         for dir_entry in entries {
             let dir_entry = dir_entry?;
@@ -269,8 +263,7 @@ fn parse_daily_log(content: &str) -> Vec<DailyLogEntry> {
             if let Some(bracket_start) = rest.find('[') {
                 if let Some(bracket_end) = rest.find(']') {
                     current_timestamp = rest[..bracket_start].trim().to_string();
-                    current_category =
-                        rest[bracket_start + 1..bracket_end].trim().to_string();
+                    current_category = rest[bracket_start + 1..bracket_end].trim().to_string();
                     in_entry = true;
                     continue;
                 }
@@ -414,12 +407,8 @@ mod tests {
         manager.append_entry_for_date(&entry, old_date).unwrap();
 
         // Create a recent log file (5 days ago, within retention).
-        let recent_date = today
-            .checked_sub_signed(chrono::Duration::days(5))
-            .unwrap();
-        manager
-            .append_entry_for_date(&entry, recent_date)
-            .unwrap();
+        let recent_date = today.checked_sub_signed(chrono::Duration::days(5)).unwrap();
+        manager.append_entry_for_date(&entry, recent_date).unwrap();
 
         // Prune should remove the old file.
         let removed = manager.prune_old_logs().unwrap();

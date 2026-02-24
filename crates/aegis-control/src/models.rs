@@ -156,7 +156,11 @@ impl ModelCatalog {
     ///
     /// If an entry with the same `model_id` already exists, it is replaced.
     pub fn add(&mut self, model: ModelInfo) {
-        if let Some(existing) = self.models.iter_mut().find(|m| m.model_id == model.model_id) {
+        if let Some(existing) = self
+            .models
+            .iter_mut()
+            .find(|m| m.model_id == model.model_id)
+        {
             *existing = model;
         } else {
             self.models.push(model);
@@ -299,10 +303,7 @@ mod tests {
         let mut catalog = ModelCatalog::new();
 
         // A fresh catalog with no last_refreshed should need refresh.
-        assert!(
-            catalog.needs_refresh(),
-            "new catalog should need refresh"
-        );
+        assert!(catalog.needs_refresh(), "new catalog should need refresh");
 
         // After marking refreshed, should no longer need refresh (ttl=6h).
         catalog.mark_refreshed();
@@ -348,10 +349,7 @@ mod tests {
             filtered.iter().all(|m| m.provider == "anthropic"),
             "filtered list should only contain Anthropic models"
         );
-        assert!(
-            !filtered.is_empty(),
-            "filtered list should not be empty"
-        );
+        assert!(!filtered.is_empty(), "filtered list should not be empty");
         assert!(
             filtered.iter().all(|m| m.model_id.starts_with("claude-")),
             "all filtered models should start with 'claude-'"
@@ -384,18 +382,12 @@ mod tests {
             allowlist.is_allowed("claude-opus-4-6"),
             "should allow claude family"
         );
-        assert!(
-            allowlist.is_allowed("gpt-5.2"),
-            "should allow gpt-5.2"
-        );
+        assert!(allowlist.is_allowed("gpt-5.2"), "should allow gpt-5.2");
         assert!(
             allowlist.is_allowed("gpt-5.1-codex"),
             "should allow gpt-5.1-codex"
         );
-        assert!(
-            !allowlist.is_allowed("llama-3"),
-            "should reject llama-3"
-        );
+        assert!(!allowlist.is_allowed("llama-3"), "should reject llama-3");
     }
 
     /// SECURITY: An empty allowlist must reject everything (fail-closed).

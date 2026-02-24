@@ -197,11 +197,7 @@ pub trait SttProvider: Send + Sync {
     ) -> Result<tokio::sync::mpsc::Receiver<Transcript>, anyhow::Error>;
 
     /// Transcribe a complete audio file in batch mode.
-    fn transcribe_batch(
-        &self,
-        audio: &[u8],
-        format: AudioFormat,
-    ) -> Result<String, anyhow::Error>;
+    fn transcribe_batch(&self, audio: &[u8], format: AudioFormat) -> Result<String, anyhow::Error>;
 
     /// Return the provider name for logging and audit.
     fn provider_name(&self) -> &str;
@@ -228,11 +224,7 @@ impl DeepgramProvider {
     /// Create a new Deepgram provider.
     ///
     /// Reads the API key from the `DEEPGRAM_API_KEY` environment variable.
-    pub fn new(
-        api_key: String,
-        language_hint: Option<String>,
-        model: Option<String>,
-    ) -> Self {
+    pub fn new(api_key: String, language_hint: Option<String>, model: Option<String>) -> Self {
         Self {
             api_key,
             language_hint,
@@ -288,11 +280,7 @@ impl SttProvider for DeepgramProvider {
         Ok(rx)
     }
 
-    fn transcribe_batch(
-        &self,
-        audio: &[u8],
-        format: AudioFormat,
-    ) -> Result<String, anyhow::Error> {
+    fn transcribe_batch(&self, audio: &[u8], format: AudioFormat) -> Result<String, anyhow::Error> {
         if audio.len() > MAX_BATCH_AUDIO_SIZE {
             return Err(anyhow::anyhow!(
                 "audio data exceeds maximum size: {} bytes > {} bytes",
@@ -376,11 +364,7 @@ impl WhisperProvider {
     /// Create a new Whisper provider.
     ///
     /// Reads the API key from the `OPENAI_API_KEY` environment variable.
-    pub fn new(
-        api_key: String,
-        language_hint: Option<String>,
-        model: Option<String>,
-    ) -> Self {
+    pub fn new(api_key: String, language_hint: Option<String>, model: Option<String>) -> Self {
         Self {
             api_key,
             language_hint,
@@ -415,11 +399,7 @@ impl SttProvider for WhisperProvider {
         ))
     }
 
-    fn transcribe_batch(
-        &self,
-        audio: &[u8],
-        format: AudioFormat,
-    ) -> Result<String, anyhow::Error> {
+    fn transcribe_batch(&self, audio: &[u8], format: AudioFormat) -> Result<String, anyhow::Error> {
         if audio.len() > MAX_BATCH_AUDIO_SIZE {
             return Err(anyhow::anyhow!(
                 "audio data exceeds maximum size: {} bytes > {} bytes",
@@ -476,10 +456,7 @@ impl SttProvider for WhisperProvider {
         let client = reqwest::blocking::Client::new();
         let response = client
             .post(Self::api_url())
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.api_key),
-            )
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .header(
                 "Content-Type",
                 format!("multipart/form-data; boundary={boundary}"),
@@ -531,7 +508,10 @@ impl std::fmt::Debug for SpeechRecognitionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpeechRecognitionManager")
             .field("provider", &self.provider.provider_name())
-            .field("active_sessions", &self.active_sessions.load(Ordering::Acquire))
+            .field(
+                "active_sessions",
+                &self.active_sessions.load(Ordering::Acquire),
+            )
             .field("config", &self.config)
             .finish()
     }
@@ -797,23 +777,37 @@ mod tests {
 
     #[test]
     fn test_deepgram_url_construction() {
-        let provider = DeepgramProvider::new(
-            "test_key".into(),
-            Some("en".into()),
-            None,
-        );
+        let provider = DeepgramProvider::new("test_key".into(), Some("en".into()), None);
 
         let url = provider.build_ws_url(AudioFormat::Pcm16kHz);
         assert!(
             url.starts_with("wss://api.deepgram.com/v1/listen"),
             "URL should use Deepgram host, got: {url}"
         );
-        assert!(url.contains("model=nova-2"), "should use nova-2 model, got: {url}");
-        assert!(url.contains("punctuate=true"), "should enable punctuation, got: {url}");
-        assert!(url.contains("interim_results=true"), "should enable interim results, got: {url}");
-        assert!(url.contains("encoding=linear16"), "should set encoding, got: {url}");
-        assert!(url.contains("sample_rate=16000"), "should set sample rate, got: {url}");
-        assert!(url.contains("language=en"), "should include language hint, got: {url}");
+        assert!(
+            url.contains("model=nova-2"),
+            "should use nova-2 model, got: {url}"
+        );
+        assert!(
+            url.contains("punctuate=true"),
+            "should enable punctuation, got: {url}"
+        );
+        assert!(
+            url.contains("interim_results=true"),
+            "should enable interim results, got: {url}"
+        );
+        assert!(
+            url.contains("encoding=linear16"),
+            "should set encoding, got: {url}"
+        );
+        assert!(
+            url.contains("sample_rate=16000"),
+            "should set sample rate, got: {url}"
+        );
+        assert!(
+            url.contains("language=en"),
+            "should include language hint, got: {url}"
+        );
 
         // Validate the constructed URL passes SSRF check.
         assert!(
@@ -824,7 +818,10 @@ mod tests {
         // Without language hint.
         let provider_no_lang = DeepgramProvider::new("test_key".into(), None, None);
         let url_no_lang = provider_no_lang.build_ws_url(AudioFormat::Mp3);
-        assert!(!url_no_lang.contains("language="), "should not include language without hint");
+        assert!(
+            !url_no_lang.contains("language="),
+            "should not include language without hint"
+        );
     }
 
     #[test]
@@ -857,7 +854,10 @@ mod tests {
 
         // Verify it can be serialized (integration with policy engine).
         let json = serde_json::to_string(&action).expect("should serialize");
-        assert!(json.contains("SpeechRecognition"), "JSON should contain variant name");
+        assert!(
+            json.contains("SpeechRecognition"),
+            "JSON should contain variant name"
+        );
         assert!(json.contains("deepgram"), "JSON should contain provider");
 
         // Verify Display impl works.

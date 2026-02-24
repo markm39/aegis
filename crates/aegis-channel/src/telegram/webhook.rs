@@ -62,12 +62,7 @@ impl WebhookReceiver {
     /// The `secret_token` is compared against the
     /// `X-Telegram-Bot-Api-Secret-Token` header on each request using
     /// constant-time equality to prevent timing attacks.
-    pub fn new(
-        port: u16,
-        secret_token: String,
-        api: Arc<TelegramApi>,
-        chat_id: i64,
-    ) -> Self {
+    pub fn new(port: u16, secret_token: String, api: Arc<TelegramApi>, chat_id: i64) -> Self {
         Self {
             port,
             secret_token,
@@ -83,13 +78,7 @@ impl WebhookReceiver {
     /// or the process exits.
     pub async fn start(
         self,
-    ) -> Result<
-        (
-            mpsc::Receiver<InboundAction>,
-            tokio::task::JoinHandle<()>,
-        ),
-        std::io::Error,
-    > {
+    ) -> Result<(mpsc::Receiver<InboundAction>, tokio::task::JoinHandle<()>), std::io::Error> {
         let (action_tx, action_rx) = mpsc::channel(64);
 
         let state = Arc::new(WebhookState {
@@ -271,13 +260,7 @@ async fn process_update(state: &WebhookState, update: Update) {
                     };
                     let _ = state
                         .api
-                        .send_message(
-                            state.chat_id,
-                            &help,
-                            Some("MarkdownV2"),
-                            None,
-                            false,
-                        )
+                        .send_message(state.chat_id, &help, Some("MarkdownV2"), None, false)
                         .await;
                 }
                 InboundAction::Command(_) => {
@@ -307,7 +290,10 @@ async fn process_update(state: &WebhookState, update: Update) {
                 } else {
                     "OK"
                 };
-                let _ = state.api.answer_callback_query(&cb.id, Some(ack_text)).await;
+                let _ = state
+                    .api
+                    .answer_callback_query(&cb.id, Some(ack_text))
+                    .await;
 
                 if let Some(msg) = &cb.message {
                     let _ = state
@@ -337,7 +323,10 @@ mod tests {
 
     #[test]
     fn test_webhook_secret_validation_valid() {
-        assert!(validate_secret("my-secret-token-123", "my-secret-token-123"));
+        assert!(validate_secret(
+            "my-secret-token-123",
+            "my-secret-token-123"
+        ));
     }
 
     #[test]
@@ -518,10 +507,7 @@ mod tests {
             parsed.webhook_url.as_deref(),
             Some("https://aegis.example.com/webhook")
         );
-        assert_eq!(
-            parsed.webhook_secret.as_deref(),
-            Some("super-secret-token")
-        );
+        assert_eq!(parsed.webhook_secret.as_deref(), Some("super-secret-token"));
         assert!(parsed.inline_queries_enabled);
     }
 

@@ -76,7 +76,9 @@ impl Schedule {
             return Ok(Schedule::Daily { hour, minute });
         }
 
-        bail!("unrecognized schedule format: {s} (expected 'every Nm', 'every Nh', or 'daily HH:MM')");
+        bail!(
+            "unrecognized schedule format: {s} (expected 'every Nm', 'every Nh', or 'daily HH:MM')"
+        );
     }
 
     /// Duration until the next tick for interval-based schedules.
@@ -98,7 +100,9 @@ impl Schedule {
                 let target_utc = target_dt.and_utc();
 
                 if target_utc > now {
-                    (target_utc - now).to_std().unwrap_or(Duration::from_secs(1))
+                    (target_utc - now)
+                        .to_std()
+                        .unwrap_or(Duration::from_secs(1))
                 } else {
                     // Already past today's time; schedule for tomorrow.
                     let tomorrow = today
@@ -157,7 +161,10 @@ impl CronScheduler {
     /// Look up a job by name and return its command for execution.
     /// Returns `None` if the job does not exist.
     pub fn trigger(&self, name: &str) -> Option<&serde_json::Value> {
-        self.jobs.iter().find(|j| j.name == name).map(|j| &j.command)
+        self.jobs
+            .iter()
+            .find(|j| j.name == name)
+            .map(|j| &j.command)
     }
 }
 
@@ -180,7 +187,13 @@ mod tests {
     #[test]
     fn parse_daily() {
         let s = Schedule::parse("daily 09:30").unwrap();
-        assert_eq!(s, Schedule::Daily { hour: 9, minute: 30 });
+        assert_eq!(
+            s,
+            Schedule::Daily {
+                hour: 9,
+                minute: 30
+            }
+        );
     }
 
     #[test]
@@ -214,7 +227,10 @@ mod tests {
 
     #[test]
     fn next_tick_duration_daily_is_within_24h() {
-        let s = Schedule::Daily { hour: 12, minute: 0 };
+        let s = Schedule::Daily {
+            hour: 12,
+            minute: 0,
+        };
         let dur = s.next_tick_duration();
         // Should always be <= 24 hours.
         assert!(dur <= Duration::from_secs(24 * 3600));

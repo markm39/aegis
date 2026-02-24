@@ -480,12 +480,12 @@ impl WebChatRegistry {
     ) -> Result<ChatMessage, WebChatError> {
         validate_message_text(text)?;
 
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| WebChatError::SessionNotFound {
-                session_id: session_id.to_string(),
-            })?;
+        let session =
+            self.sessions
+                .get_mut(session_id)
+                .ok_or_else(|| WebChatError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
 
         session.touch();
         session.set_typing(false);

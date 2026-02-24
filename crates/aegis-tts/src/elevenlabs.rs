@@ -162,10 +162,7 @@ impl ElevenLabsProvider {
     /// to prevent path traversal.
     fn build_url(&self, voice_id: &str) -> TtsResult<String> {
         validate_voice_id(voice_id)?;
-        Ok(format!(
-            "{}/v1/text-to-speech/{}",
-            self.base_url, voice_id
-        ))
+        Ok(format!("{}/v1/text-to-speech/{}", self.base_url, voice_id))
     }
 
     /// Build the request body for the ElevenLabs TTS API.
@@ -388,7 +385,9 @@ mod tests {
         // Valid voice ID.
         let url = provider.build_url("21m00Tcm4TlvDq8ikWAM");
         assert!(url.is_ok());
-        assert!(url.unwrap().ends_with("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"));
+        assert!(url
+            .unwrap()
+            .ends_with("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"));
 
         // Path traversal attempt must be rejected.
         let result = provider.build_url("../../etc/passwd");
@@ -552,12 +551,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let provider = ElevenLabsProvider::new(
-            "xi-mock-key".to_string(),
-            Some(mock_server.uri()),
-            None,
-        )
-        .unwrap();
+        let provider =
+            ElevenLabsProvider::new("xi-mock-key".to_string(), Some(mock_server.uri()), None)
+                .unwrap();
 
         let result = provider
             .synthesize("Hello, world!", None, AudioFormat::Mp3)
@@ -581,16 +577,11 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let provider = ElevenLabsProvider::new(
-            "xi-bad-key".to_string(),
-            Some(mock_server.uri()),
-            None,
-        )
-        .unwrap();
+        let provider =
+            ElevenLabsProvider::new("xi-bad-key".to_string(), Some(mock_server.uri()), None)
+                .unwrap();
 
-        let result = provider
-            .synthesize("Hello", None, AudioFormat::Mp3)
-            .await;
+        let result = provider.synthesize("Hello", None, AudioFormat::Mp3).await;
 
         assert!(matches!(result, Err(TtsError::ProviderError(_))));
         if let Err(TtsError::ProviderError(msg)) = result {
@@ -604,19 +595,14 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/text-to-speech/TxGEqnHWrfWFTfGW9XjX"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_bytes(vec![0x00]),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x00]))
             .expect(1)
             .mount(&mock_server)
             .await;
 
-        let provider = ElevenLabsProvider::new(
-            "xi-mock-key".to_string(),
-            Some(mock_server.uri()),
-            None,
-        )
-        .unwrap();
+        let provider =
+            ElevenLabsProvider::new("xi-mock-key".to_string(), Some(mock_server.uri()), None)
+                .unwrap();
 
         let result = provider
             .synthesize("Test", Some("TxGEqnHWrfWFTfGW9XjX"), AudioFormat::Mp3)

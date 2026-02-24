@@ -138,19 +138,15 @@ impl SkillWatcher {
                     None => {
                         // New skill
                         changes.push(SkillChange::Added(skill_path.clone()));
-                        self.known_skills.insert(
-                            skill_path.clone(),
-                            WatchedSkill { file_mtimes },
-                        );
+                        self.known_skills
+                            .insert(skill_path.clone(), WatchedSkill { file_mtimes });
                     }
                     Some(known) => {
                         // Check if any files changed
                         if files_changed(&known.file_mtimes, &file_mtimes) {
                             changes.push(SkillChange::Modified(skill_path.clone()));
-                            self.known_skills.insert(
-                                skill_path.clone(),
-                                WatchedSkill { file_mtimes },
-                            );
+                            self.known_skills
+                                .insert(skill_path.clone(), WatchedSkill { file_mtimes });
                         }
                     }
                 }
@@ -238,57 +234,42 @@ impl HotReloader {
 
         for change in changes {
             match change {
-                SkillChange::Added(path) => {
-                    match self.load_skill(&path) {
-                        Ok(name) => {
-                            info!("hot-reload: added skill '{name}'");
-                            messages.push(format!("added skill '{name}'"));
-                        }
-                        Err(e) => {
-                            warn!("hot-reload: failed to add skill at {}: {e}", path.display());
-                            messages.push(format!(
-                                "failed to add skill at {}: {e}",
-                                path.display()
-                            ));
-                        }
+                SkillChange::Added(path) => match self.load_skill(&path) {
+                    Ok(name) => {
+                        info!("hot-reload: added skill '{name}'");
+                        messages.push(format!("added skill '{name}'"));
                     }
-                }
-                SkillChange::Modified(path) => {
-                    match self.reload_skill_at_path(&path) {
-                        Ok(name) => {
-                            info!("hot-reload: reloaded skill '{name}'");
-                            messages.push(format!("reloaded skill '{name}'"));
-                        }
-                        Err(e) => {
-                            warn!(
-                                "hot-reload: failed to reload skill at {}: {e}",
-                                path.display()
-                            );
-                            messages.push(format!(
-                                "failed to reload skill at {}: {e}",
-                                path.display()
-                            ));
-                        }
+                    Err(e) => {
+                        warn!("hot-reload: failed to add skill at {}: {e}", path.display());
+                        messages.push(format!("failed to add skill at {}: {e}", path.display()));
                     }
-                }
-                SkillChange::Removed(path) => {
-                    match self.remove_skill_at_path(&path) {
-                        Ok(name) => {
-                            info!("hot-reload: removed skill '{name}'");
-                            messages.push(format!("removed skill '{name}'"));
-                        }
-                        Err(e) => {
-                            warn!(
-                                "hot-reload: failed to remove skill at {}: {e}",
-                                path.display()
-                            );
-                            messages.push(format!(
-                                "failed to remove skill at {}: {e}",
-                                path.display()
-                            ));
-                        }
+                },
+                SkillChange::Modified(path) => match self.reload_skill_at_path(&path) {
+                    Ok(name) => {
+                        info!("hot-reload: reloaded skill '{name}'");
+                        messages.push(format!("reloaded skill '{name}'"));
                     }
-                }
+                    Err(e) => {
+                        warn!(
+                            "hot-reload: failed to reload skill at {}: {e}",
+                            path.display()
+                        );
+                        messages.push(format!("failed to reload skill at {}: {e}", path.display()));
+                    }
+                },
+                SkillChange::Removed(path) => match self.remove_skill_at_path(&path) {
+                    Ok(name) => {
+                        info!("hot-reload: removed skill '{name}'");
+                        messages.push(format!("removed skill '{name}'"));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "hot-reload: failed to remove skill at {}: {e}",
+                            path.display()
+                        );
+                        messages.push(format!("failed to remove skill at {}: {e}", path.display()));
+                    }
+                },
             }
         }
 
@@ -488,10 +469,7 @@ fn collect_file_mtimes(dir: &Path) -> Result<HashMap<PathBuf, SystemTime>> {
 }
 
 /// Check if any files changed between two mtime snapshots.
-fn files_changed(
-    old: &HashMap<PathBuf, SystemTime>,
-    new: &HashMap<PathBuf, SystemTime>,
-) -> bool {
+fn files_changed(old: &HashMap<PathBuf, SystemTime>, new: &HashMap<PathBuf, SystemTime>) -> bool {
     // Different number of files means something changed
     if old.len() != new.len() {
         return true;
@@ -844,9 +822,18 @@ entry_point = "run.sh"
         let p1 = PathBuf::from("/a");
         let p2 = PathBuf::from("/b");
 
-        assert_eq!(SkillChange::Added(p1.clone()), SkillChange::Added(p1.clone()));
-        assert_ne!(SkillChange::Added(p1.clone()), SkillChange::Added(p2.clone()));
-        assert_ne!(SkillChange::Added(p1.clone()), SkillChange::Modified(p1.clone()));
+        assert_eq!(
+            SkillChange::Added(p1.clone()),
+            SkillChange::Added(p1.clone())
+        );
+        assert_ne!(
+            SkillChange::Added(p1.clone()),
+            SkillChange::Added(p2.clone())
+        );
+        assert_ne!(
+            SkillChange::Added(p1.clone()),
+            SkillChange::Modified(p1.clone())
+        );
         assert_ne!(SkillChange::Added(p1.clone()), SkillChange::Removed(p1));
     }
 }

@@ -172,10 +172,7 @@ impl SessionStore {
         session_id: Uuid,
         client_capabilities: AgentCapabilities,
     ) -> Result<AcpSession, String> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 
         if sessions.len() >= MAX_SESSIONS {
             return Err(format!(
@@ -206,10 +203,7 @@ impl SessionStore {
 
     /// Mark a session as active (update timestamps and increment message count).
     pub fn touch(&self, session_id: &Uuid) -> bool {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = sessions.get_mut(session_id) {
             entry.session.last_activity = Utc::now();
@@ -223,52 +217,36 @@ impl SessionStore {
 
     /// Get session info by ID.
     pub fn get(&self, session_id: &Uuid) -> Option<AcpSession> {
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.get(session_id).map(|e| e.session.clone())
     }
 
     /// Remove a session by ID. Returns the session if it existed.
     pub fn remove(&self, session_id: &Uuid) -> Option<AcpSession> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.remove(session_id).map(|e| e.session)
     }
 
     /// List all active sessions.
     pub fn list(&self) -> Vec<AcpSession> {
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.values().map(|e| e.session.clone()).collect()
     }
 
     /// Remove sessions that have been idle longer than the given timeout.
     /// Returns the number of sessions pruned.
     pub fn prune_idle(&self, timeout_secs: u64) -> usize {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 
         let before = sessions.len();
-        sessions.retain(|_, entry| {
-            entry.last_activity_monotonic.elapsed().as_secs() < timeout_secs
-        });
+        sessions
+            .retain(|_, entry| entry.last_activity_monotonic.elapsed().as_secs() < timeout_secs);
         before - sessions.len()
     }
 
     /// Add an event subscription to a session.
     pub fn subscribe(&self, session_id: &Uuid, event_type: String) -> bool {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = sessions.get_mut(session_id) {
             if !entry.session.subscriptions.contains(&event_type) {
@@ -282,10 +260,7 @@ impl SessionStore {
 
     /// Remove an event subscription from a session.
     pub fn unsubscribe(&self, session_id: &Uuid, event_type: &str) -> bool {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = sessions.get_mut(session_id) {
             entry.session.subscriptions.retain(|s| s != event_type);
@@ -297,10 +272,7 @@ impl SessionStore {
 
     /// Get the count of active sessions.
     pub fn count(&self) -> usize {
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.len()
     }
 }
@@ -517,9 +489,7 @@ async fn handshake_handler(
             let response = HandshakeResponse {
                 session_id,
                 protocol_version: PROTOCOL_VERSION.to_string(),
-                server_capabilities: AgentCapabilities::daemon_capabilities(
-                    state.max_body_size,
-                ),
+                server_capabilities: AgentCapabilities::daemon_capabilities(state.max_body_size),
                 established_at: Utc::now(),
             };
 
@@ -572,8 +542,7 @@ async fn discover_handler(
                 agents: extract_discoverable_agents(&resp),
             };
 
-            let json_data = serde_json::to_value(&discovery)
-                .unwrap_or(serde_json::json!({}));
+            let json_data = serde_json::to_value(&discovery).unwrap_or(serde_json::json!({}));
 
             (
                 StatusCode::OK,
@@ -607,8 +576,8 @@ async fn session_info_handler(
 
     match state.sessions.get(&id) {
         Some(session) => {
-            let json_data = serde_json::to_string(&session)
-                .unwrap_or_else(|_| "session found".to_string());
+            let json_data =
+                serde_json::to_string(&session).unwrap_or_else(|_| "session found".to_string());
             (
                 StatusCode::OK,
                 Json(AcpErrorResponse {
@@ -707,8 +676,7 @@ async fn subscribe_handler(
         active_subscriptions,
     };
 
-    let json_data = serde_json::to_string(&response)
-        .unwrap_or_else(|_| "subscribed".to_string());
+    let json_data = serde_json::to_string(&response).unwrap_or_else(|_| "subscribed".to_string());
 
     (
         StatusCode::OK,
@@ -728,15 +696,11 @@ async fn subscribe_handler(
 ///
 /// Currently accepts any version starting with "1.".
 fn is_compatible_version(version: &str) -> bool {
-    version.starts_with("1.")
-        || version == "1"
-        || version == PROTOCOL_VERSION
+    version.starts_with("1.") || version == "1" || version == PROTOCOL_VERSION
 }
 
 /// Extract discoverable agent information from a daemon list response.
-fn extract_discoverable_agents(
-    response: &crate::daemon::DaemonResponse,
-) -> Vec<DiscoverableAgent> {
+fn extract_discoverable_agents(response: &crate::daemon::DaemonResponse) -> Vec<DiscoverableAgent> {
     // Try to parse the data field as an array of agent summaries
     let data = match &response.data {
         Some(d) => d,

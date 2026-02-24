@@ -390,7 +390,7 @@ mod tests {
 
     fn test_config(name: &str) -> AgentSlotConfig {
         AgentSlotConfig {
-            name: name.to_string(),
+            name: name.into(),
             tool: AgentToolConfig::ClaudeCode {
                 skip_permissions: false,
                 one_shot: false,

@@ -312,8 +312,8 @@ entry_point = "run.sh"
     fn test_bundled_manifests_parse_and_validate() {
         // Walk up from the test binary to find the project root skills/ dir.
         let project_skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()  // crates/
-            .and_then(|p| p.parent())  // project root
+            .parent() // crates/
+            .and_then(|p| p.parent()) // project root
             .map(|p| p.join("skills"));
 
         let skills_dir = match project_skills_dir {
@@ -334,8 +334,12 @@ entry_point = "run.sh"
 
         // Verify each manifest validates.
         for skill in &skills {
-            crate::manifest::validate_manifest(&skill.manifest)
-                .unwrap_or_else(|e| panic!("manifest for '{}' failed validation: {e}", skill.manifest.name));
+            crate::manifest::validate_manifest(&skill.manifest).unwrap_or_else(|e| {
+                panic!(
+                    "manifest for '{}' failed validation: {e}",
+                    skill.manifest.name
+                )
+            });
         }
     }
 
@@ -343,6 +347,9 @@ entry_point = "run.sh"
     #[test]
     fn test_bundled_skills_candidates_not_empty() {
         let candidates = super::bundled_skills_candidates();
-        assert!(!candidates.is_empty(), "should have at least one candidate path");
+        assert!(
+            !candidates.is_empty(),
+            "should have at least one candidate path"
+        );
     }
 }

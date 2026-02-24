@@ -3,18 +3,18 @@
 //! Renders all 9 wizard steps with consistent layout: title bar, content area,
 //! and help bar.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 
-use aegis_types::provider_auth::{auth_flows_for, AuthFlowKind};
+use aegis_types::provider_auth::{AuthFlowKind, auth_flows_for};
 use aegis_types::providers::format_context_window;
 
 use super::app::{
-    filtered_providers, ConfigAction, GatewayField, OnboardApp, OnboardStep, ProviderSubStep,
-    BIND_OPTIONS,
+    BIND_OPTIONS, ConfigAction, GatewayField, OnboardApp, OnboardStep, ProviderSubStep,
+    filtered_providers,
 };
 
 // ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Title
+            Constraint::Length(3), // Title
             Constraint::Min(5),    // Content
             Constraint::Length(3), // Help
         ])
@@ -120,9 +120,7 @@ fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
         },
         OnboardStep::WorkspaceConfig => "Enter: confirm  Esc: back",
         OnboardStep::GatewayConfig => "Tab/Shift+Tab: next/prev field  Enter: continue  Esc: back",
-        OnboardStep::ChannelSelection => {
-            "j/k: navigate  Space: toggle  Enter: continue  Esc: back"
-        }
+        OnboardStep::ChannelSelection => "j/k: navigate  Space: toggle  Enter: continue  Esc: back",
         OnboardStep::ServiceInstall => "j/k: navigate  Enter: confirm  Esc: back",
         OnboardStep::HealthCheck => {
             if app.health_checked {
@@ -174,10 +172,7 @@ fn draw_config_detection(f: &mut Frame, app: &OnboardApp, area: Rect) {
             Style::default().fg(WHITE),
         )));
         lines.push(Line::from(Span::styled(
-            format!(
-                "  {}",
-                aegis_types::daemon::daemon_config_path().display()
-            ),
+            format!("  {}", aegis_types::daemon::daemon_config_path().display()),
             Style::default().fg(YELLOW),
         )));
         lines.push(Line::from(""));
@@ -270,7 +265,12 @@ fn draw_provider_list(f: &mut Frame, app: &OnboardApp, area: Rect) {
         let end = (app.provider_scroll_offset + visible_height).min(filtered.len());
 
         let mut current_tier = None;
-        for (pos, &idx) in filtered.iter().enumerate().take(end).skip(app.provider_scroll_offset) {
+        for (pos, &idx) in filtered
+            .iter()
+            .enumerate()
+            .take(end)
+            .skip(app.provider_scroll_offset)
+        {
             let provider = &app.providers[idx];
             let tier = provider.info.tier;
 
@@ -404,14 +404,8 @@ fn draw_model_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
     // Column headers.
     lines.push(Line::from(vec![
         Span::styled("    ", Style::default()),
-        Span::styled(
-            format!("{:<36}", "MODEL"),
-            Style::default().fg(DIM),
-        ),
-        Span::styled(
-            format!("{:<8}", "CTX"),
-            Style::default().fg(DIM),
-        ),
+        Span::styled(format!("{:<36}", "MODEL"), Style::default().fg(DIM)),
+        Span::styled(format!("{:<8}", "CTX"), Style::default().fg(DIM)),
         Span::styled("FLAGS", Style::default().fg(DIM)),
     ]));
 
@@ -781,9 +775,7 @@ fn draw_device_flow_waiting(f: &mut Frame, app: &OnboardApp, area: Rect) {
         )));
         lines.push(Line::from(Span::styled(
             format!("  {}", state.response.user_code),
-            Style::default()
-                .fg(GREEN)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
 
@@ -877,9 +869,7 @@ fn draw_pkce_browser_waiting(f: &mut Frame, app: &OnboardApp, area: Rect) {
 fn auth_flow_label(flow: &AuthFlowKind) -> (String, String) {
     match flow {
         AuthFlowKind::ApiKey => ("Paste API Key".into(), "Enter your key manually".into()),
-        AuthFlowKind::SetupToken { .. } => {
-            ("Setup Token".into(), "Paste a setup token".into())
-        }
+        AuthFlowKind::SetupToken { .. } => ("Setup Token".into(), "Paste a setup token".into()),
         AuthFlowKind::CliExtract { cli_name, .. } => (
             format!("Extract from {cli_name}"),
             "Auto-detect from installed CLI".into(),
@@ -1015,10 +1005,7 @@ fn draw_gateway_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
     } else {
         Style::default().fg(WHITE)
     };
-    lines.push(Line::from(Span::styled(
-        "  API Token:",
-        token_label_style,
-    )));
+    lines.push(Line::from(Span::styled("  API Token:", token_label_style)));
 
     if token_active {
         let cursor_spans = build_cursor_spans(&app.gateway_token, app.gateway_token_cursor);
@@ -1144,10 +1131,7 @@ fn draw_service_install(f: &mut Frame, app: &OnboardApp, area: Rect) {
         } else {
             Style::default().fg(WHITE)
         };
-        lines.push(Line::from(Span::styled(
-            format!("  {marker}{opt}"),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(format!("  {marker}{opt}"), style)));
     }
 
     if let Some(ref status) = app.service_status {
@@ -1200,10 +1184,7 @@ fn draw_health_check(f: &mut Frame, app: &OnboardApp, area: Rect) {
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("  {icon} "), Style::default().fg(color)),
-                Span::styled(
-                    format!("{:<20}", result.label),
-                    Style::default().fg(WHITE),
-                ),
+                Span::styled(format!("{:<20}", result.label), Style::default().fg(WHITE)),
                 Span::styled(&result.message, Style::default().fg(DIM)),
             ]));
         }
@@ -1370,10 +1351,7 @@ fn draw_finish(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let skill_count = app.skills.iter().filter(|s| s.selected).count();
     lines.push(Line::from(vec![
         Span::styled("  Skills:    ", Style::default().fg(WHITE)),
-        Span::styled(
-            format!("{skill_count} selected"),
-            Style::default().fg(CYAN),
-        ),
+        Span::styled(format!("{skill_count} selected"), Style::default().fg(CYAN)),
     ]));
 
     lines.push(Line::from(""));
@@ -1428,10 +1406,7 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
 
     // Before cursor.
     if pos > 0 {
-        spans.push(Span::styled(
-            &text[..pos],
-            Style::default().fg(YELLOW),
-        ));
+        spans.push(Span::styled(&text[..pos], Style::default().fg(YELLOW)));
     }
 
     // At cursor.
@@ -1444,17 +1419,11 @@ fn build_cursor_spans(text: &str, cursor_pos: usize) -> Vec<Span<'_>> {
         ));
         // After cursor.
         if end < text.len() {
-            spans.push(Span::styled(
-                &text[end..],
-                Style::default().fg(YELLOW),
-            ));
+            spans.push(Span::styled(&text[end..], Style::default().fg(YELLOW)));
         }
     } else {
         // At end of line: show cursor as space with background.
-        spans.push(Span::styled(
-            " ",
-            Style::default().bg(YELLOW),
-        ));
+        spans.push(Span::styled(" ", Style::default().bg(YELLOW)));
     }
 
     spans

@@ -18,7 +18,7 @@ pub fn tool_color(name: &str) -> Color {
         "Bash" => Color::Rgb(253, 93, 177), // hot pink (Claude Code bash border)
         "Read" | "Write" | "Edit" | "Glob" | "NotebookRead" | "NotebookEdit" => Color::Cyan,
         "Grep" | "WebSearch" | "WebFetch" => Color::Rgb(177, 185, 249), // light purple-blue
-        "Task" | "task" => Color::Rgb(215, 119, 87),                      // Claude brand color
+        "Task" | "task" => Color::Rgb(215, 119, 87),                    // Claude brand color
         "LSP" => Color::Rgb(177, 185, 249),
         _ => Color::White,
     }
@@ -238,7 +238,10 @@ pub fn render_header(
                 "auto-high" => ("Auto-high", Color::Yellow),
                 _ => (mode, Color::Yellow),
             };
-            spans.push(Span::styled(" | ".to_string(), Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                " | ".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
             spans.push(Span::styled(
                 label.to_string(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -264,12 +267,10 @@ pub struct UsageInfo {
 }
 
 pub fn render_status_bar(model: &str, _width: u16, usage: Option<&UsageInfo>) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(
-            format!(" {model}"),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        format!(" {model}"),
+        Style::default().fg(Color::DarkGray),
+    )];
 
     if let Some(u) = usage {
         spans.push(Span::raw("  ".to_string()));
@@ -280,7 +281,10 @@ pub fn render_status_bar(model: &str, _width: u16, usage: Option<&UsageInfo>) ->
     }
 
     spans.push(Span::raw("  ".to_string()));
-    spans.push(Span::styled("/help".to_string(), Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(
+        "/help".to_string(),
+        Style::default().fg(Color::DarkGray),
+    ));
 
     Line::from(spans)
 }
@@ -426,7 +430,14 @@ mod tests {
 
     #[test]
     fn render_header_connected() {
-        let line = render_header("claude-sonnet-4-20250514", Some("anthropic"), true, false, None, 80);
+        let line = render_header(
+            "claude-sonnet-4-20250514",
+            Some("anthropic"),
+            true,
+            false,
+            None,
+            80,
+        );
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Aegis"));
         assert!(text.contains("claude-sonnet-4-20250514"));

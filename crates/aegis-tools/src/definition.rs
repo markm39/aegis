@@ -67,14 +67,9 @@ pub fn validate_tool_name(name: &str) -> Result<()> {
         anyhow::bail!("tool name must not be empty");
     }
     if name.len() > MAX_TOOL_NAME_LEN {
-        anyhow::bail!(
-            "tool name exceeds maximum length of {MAX_TOOL_NAME_LEN} characters: {name}"
-        );
+        anyhow::bail!("tool name exceeds maximum length of {MAX_TOOL_NAME_LEN} characters: {name}");
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         anyhow::bail!(
             "tool name must contain only alphanumeric characters and underscores: {name}"
         );
@@ -241,12 +236,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_tool_execute() {
-        let tool = MockTool::new(
-            "test_tool",
-            "a test",
-            serde_json::json!({"type": "object"}),
-        )
-        .with_response(serde_json::json!({"answer": 42}));
+        let tool = MockTool::new("test_tool", "a test", serde_json::json!({"type": "object"}))
+            .with_response(serde_json::json!({"answer": 42}));
 
         assert_eq!(tool.name(), "test_tool");
         assert_eq!(tool.description(), "a test");

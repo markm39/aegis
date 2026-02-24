@@ -7,7 +7,7 @@ use crate::channel::{Channel, ChannelError, InboundAction, OutboundMessage, Outb
 use crate::webhook::{WebhookChannel, WebhookConfig};
 
 /// Configuration for the Matrix channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MatrixConfig {
     /// Matrix homeserver URL (e.g., `"https://matrix.org"`).
     pub homeserver_url: String,
@@ -15,6 +15,16 @@ pub struct MatrixConfig {
     pub access_token: String,
     /// Room ID to send messages to (e.g., `"!abc:matrix.org"`).
     pub room_id: String,
+}
+
+impl std::fmt::Debug for MatrixConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatrixConfig")
+            .field("homeserver_url", &self.homeserver_url)
+            .field("access_token", &"[REDACTED]")
+            .field("room_id", &self.room_id)
+            .finish()
+    }
 }
 
 /// Matrix channel wrapping the generic webhook adapter.

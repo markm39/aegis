@@ -63,8 +63,8 @@ impl MemoryStore {
     /// Creates the SQLite database file and runs schema migrations
     /// if needed. Enables WAL mode for concurrent read performance.
     pub fn new(path: &Path) -> Result<Self> {
-        let conn =
-            Connection::open(path).with_context(|| format!("open memory db: {}", path.display()))?;
+        let conn = Connection::open(path)
+            .with_context(|| format!("open memory db: {}", path.display()))?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
@@ -95,19 +95,21 @@ impl MemoryStore {
         // SQLite's ALTER TABLE ADD COLUMN is idempotent-safe when we check
         // for the column first.
         let has_embedding: bool = conn
-            .prepare("SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'embedding'")?
+            .prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'embedding'",
+            )?
             .query_row([], |row| row.get::<_, i64>(0))
             .map(|count| count > 0)?;
 
         if !has_embedding {
-            conn.execute_batch(
-                "ALTER TABLE agent_memory ADD COLUMN embedding BLOB;",
-            )?;
+            conn.execute_batch("ALTER TABLE agent_memory ADD COLUMN embedding BLOB;")?;
         }
 
         // Migration: add quarantine columns if they don't exist yet.
         let has_quarantined: bool = conn
-            .prepare("SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'quarantined'")?
+            .prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'quarantined'",
+            )?
             .query_row([], |row| row.get::<_, i64>(0))
             .map(|count| count > 0)?;
 
@@ -115,9 +117,7 @@ impl MemoryStore {
             conn.execute_batch(
                 "ALTER TABLE agent_memory ADD COLUMN quarantined INTEGER DEFAULT 0;",
             )?;
-            conn.execute_batch(
-                "ALTER TABLE agent_memory ADD COLUMN quarantine_reason TEXT;",
-            )?;
+            conn.execute_batch("ALTER TABLE agent_memory ADD COLUMN quarantine_reason TEXT;")?;
         }
 
         // Migration: add temporal decay columns if they don't exist yet.
@@ -133,9 +133,7 @@ impl MemoryStore {
             conn.execute_batch(
                 "ALTER TABLE agent_memory ADD COLUMN access_count INTEGER DEFAULT 0;",
             )?;
-            conn.execute_batch(
-                "ALTER TABLE agent_memory ADD COLUMN last_accessed TEXT;",
-            )?;
+            conn.execute_batch("ALTER TABLE agent_memory ADD COLUMN last_accessed TEXT;")?;
         }
 
         Ok(Self { conn })
@@ -161,9 +159,7 @@ impl MemoryStore {
         // Delete old FTS entry if the row already exists.
         let old_rowid: Option<i64> = self
             .conn
-            .prepare_cached(
-                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-            )?
+            .prepare_cached("SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
             .query_row(params![namespace, key], |row| row.get(0))
             .ok();
 
@@ -171,9 +167,7 @@ impl MemoryStore {
             // Grab old values for FTS delete.
             let (old_val,): (String,) = self
                 .conn
-                .prepare_cached(
-                    "SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-                )?
+                .prepare_cached("SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
                 .query_row(params![namespace, key], |row| Ok((row.get(0)?,)))?;
 
             self.conn.execute(
@@ -193,9 +187,7 @@ impl MemoryStore {
         // Insert new FTS entry.
         let new_rowid: i64 = self
             .conn
-            .prepare_cached(
-                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-            )?
+            .prepare_cached("SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
             .query_row(params![namespace, key], |row| row.get(0))?;
 
         self.conn.execute(
@@ -214,7 +206,9 @@ impl MemoryStore {
             .prepare_cached(
                 "SELECT rowid, value FROM agent_memory WHERE namespace = ?1 AND key = ?2",
             )?
-            .query_row(params![namespace, key], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_row(params![namespace, key], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .ok();
 
         if let Some((rowid, old_val)) = maybe {
@@ -319,18 +313,14 @@ impl MemoryStore {
         // Delete old FTS entry if the row already exists.
         let old_rowid: Option<i64> = self
             .conn
-            .prepare_cached(
-                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-            )?
+            .prepare_cached("SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
             .query_row(params![namespace, key], |row| row.get(0))
             .ok();
 
         if let Some(rowid) = old_rowid {
             let (old_val,): (String,) = self
                 .conn
-                .prepare_cached(
-                    "SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-                )?
+                .prepare_cached("SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
                 .query_row(params![namespace, key], |row| Ok((row.get(0)?,)))?;
 
             self.conn.execute(
@@ -353,9 +343,7 @@ impl MemoryStore {
         // Insert new FTS entry.
         let new_rowid: i64 = self
             .conn
-            .prepare_cached(
-                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-            )?
+            .prepare_cached("SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
             .query_row(params![namespace, key], |row| row.get(0))?;
 
         self.conn.execute(
@@ -432,18 +420,14 @@ impl MemoryStore {
         // Delete old FTS entry if the row already exists.
         let old_rowid: Option<i64> = self
             .conn
-            .prepare_cached(
-                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-            )?
+            .prepare_cached("SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
             .query_row(params![namespace, key], |row| row.get(0))
             .ok();
 
         if let Some(rowid) = old_rowid {
             let (old_val,): (String,) = self
                 .conn
-                .prepare_cached(
-                    "SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-                )?
+                .prepare_cached("SELECT value FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
                 .query_row(params![namespace, key], |row| Ok((row.get(0)?,)))?;
 
             self.conn.execute(
@@ -467,9 +451,7 @@ impl MemoryStore {
         // Insert new FTS entry.
         let new_rowid: i64 = self
             .conn
-            .prepare_cached(
-                "SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2",
-            )?
+            .prepare_cached("SELECT rowid FROM agent_memory WHERE namespace = ?1 AND key = ?2")?
             .query_row(params![namespace, key], |row| row.get(0))?;
 
         self.conn.execute(
@@ -717,13 +699,19 @@ mod tests {
         let (store, _dir) = test_store();
 
         store
-            .set("ns1", "task1", "implement the login page with authentication")
+            .set(
+                "ns1",
+                "task1",
+                "implement the login page with authentication",
+            )
             .unwrap();
+        store.set("ns1", "task2", "fix the logout button").unwrap();
         store
-            .set("ns1", "task2", "fix the logout button")
-            .unwrap();
-        store
-            .set("ns1", "task3", "login flow redesign and login form validation")
+            .set(
+                "ns1",
+                "task3",
+                "login flow redesign and login form validation",
+            )
             .unwrap();
 
         let results = store.search("ns1", "login", 10, None).unwrap();
@@ -777,14 +765,18 @@ mod tests {
     fn set_updates_fts_correctly() {
         let (store, _dir) = test_store();
 
-        store.set("ns1", "task", "old description about cats").unwrap();
+        store
+            .set("ns1", "task", "old description about cats")
+            .unwrap();
 
         // Search for old content should find it.
         let results = store.search("ns1", "cats", 10, None).unwrap();
         assert_eq!(results.len(), 1);
 
         // Update the value.
-        store.set("ns1", "task", "new description about dogs").unwrap();
+        store
+            .set("ns1", "task", "new description about dogs")
+            .unwrap();
 
         // Old content should no longer match.
         let results = store.search("ns1", "cats", 10, None).unwrap();
@@ -829,7 +821,10 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "vec_key");
         assert_eq!(results[0].1, "vector value");
-        assert!((results[0].2 - 1.0).abs() < 1e-6, "exact match should have similarity ~1.0");
+        assert!(
+            (results[0].2 - 1.0).abs() < 1e-6,
+            "exact match should have similarity ~1.0"
+        );
     }
 
     #[test]
@@ -841,9 +836,15 @@ mod tests {
         let emb_b = vec![0.0_f32, 1.0, 0.0, 0.0]; // points along y (orthogonal to query)
         let emb_c = vec![0.9_f32, 0.1, 0.0, 0.0]; // mostly along x (close to query)
 
-        store.set_with_embedding("ns1", "a", "item a", &emb_a).unwrap();
-        store.set_with_embedding("ns1", "b", "item b", &emb_b).unwrap();
-        store.set_with_embedding("ns1", "c", "item c", &emb_c).unwrap();
+        store
+            .set_with_embedding("ns1", "a", "item a", &emb_a)
+            .unwrap();
+        store
+            .set_with_embedding("ns1", "b", "item b", &emb_b)
+            .unwrap();
+        store
+            .set_with_embedding("ns1", "c", "item c", &emb_c)
+            .unwrap();
 
         // Query along x axis -- should rank a first, then c, then b.
         let query = vec![1.0_f32, 0.0, 0.0, 0.0];
@@ -899,7 +900,9 @@ mod tests {
 
         // Insert an "old" entry by manually setting a past timestamp.
         let old_time = (Utc::now() - chrono::Duration::hours(168)).to_rfc3339(); // 1 week old
-        store.set("ns1", "old_login", "login page with authentication").unwrap();
+        store
+            .set("ns1", "old_login", "login page with authentication")
+            .unwrap();
         store.conn.execute(
             "UPDATE agent_memory SET updated_at = ?1 WHERE namespace = 'ns1' AND key = 'old_login'",
             params![old_time],
@@ -907,7 +910,9 @@ mod tests {
 
         // Also update the FTS index is already in place from set().
         // Insert a "new" entry (timestamp is now).
-        store.set("ns1", "new_login", "login page with authentication").unwrap();
+        store
+            .set("ns1", "new_login", "login page with authentication")
+            .unwrap();
 
         // Search with decay enabled (half-life = 168h = 1 week).
         let results = store.search("ns1", "login", 10, Some(168.0)).unwrap();
@@ -938,15 +943,23 @@ mod tests {
         // Insert a memory and then backdated it.
         store.set("ns1", "task", "important task details").unwrap();
         let old_time = (Utc::now() - chrono::Duration::hours(168)).to_rfc3339();
-        store.conn.execute(
-            "UPDATE agent_memory SET updated_at = ?1 WHERE namespace = 'ns1' AND key = 'task'",
-            params![old_time],
-        ).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE agent_memory SET updated_at = ?1 WHERE namespace = 'ns1' AND key = 'task'",
+                params![old_time],
+            )
+            .unwrap();
 
         // Verify it's old.
-        let updated_before: String = store.conn.prepare_cached(
-            "SELECT updated_at FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
-        ).unwrap().query_row([], |row| row.get(0)).unwrap();
+        let updated_before: String = store
+            .conn
+            .prepare_cached(
+                "SELECT updated_at FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+            )
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
         let decay_before = compute_decay(&updated_before, 168.0);
         assert!(
             decay_before < 0.6,
@@ -957,9 +970,14 @@ mod tests {
         store.refresh("ns1", "task").unwrap();
 
         // Verify updated_at was reset to approximately now.
-        let updated_after: String = store.conn.prepare_cached(
-            "SELECT updated_at FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
-        ).unwrap().query_row([], |row| row.get(0)).unwrap();
+        let updated_after: String = store
+            .conn
+            .prepare_cached(
+                "SELECT updated_at FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+            )
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
         let decay_after = compute_decay(&updated_after, 168.0);
         assert!(
             (decay_after - 1.0).abs() < 0.01,
@@ -967,17 +985,33 @@ mod tests {
         );
 
         // Verify access_count was incremented.
-        let access_count: i64 = store.conn.prepare_cached(
-            "SELECT access_count FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
-        ).unwrap().query_row([], |row| row.get(0)).unwrap();
-        assert_eq!(access_count, 1, "access_count should be 1 after one refresh");
+        let access_count: i64 = store
+            .conn
+            .prepare_cached(
+                "SELECT access_count FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+            )
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            access_count, 1,
+            "access_count should be 1 after one refresh"
+        );
 
         // Refresh again and check access_count increments.
         store.refresh("ns1", "task").unwrap();
-        let access_count: i64 = store.conn.prepare_cached(
-            "SELECT access_count FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
-        ).unwrap().query_row([], |row| row.get(0)).unwrap();
-        assert_eq!(access_count, 2, "access_count should be 2 after two refreshes");
+        let access_count: i64 = store
+            .conn
+            .prepare_cached(
+                "SELECT access_count FROM agent_memory WHERE namespace = 'ns1' AND key = 'task'",
+            )
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            access_count, 2,
+            "access_count should be 2 after two refreshes"
+        );
     }
 
     #[test]

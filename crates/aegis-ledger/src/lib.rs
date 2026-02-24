@@ -14,10 +14,12 @@ pub mod middleware;
 pub(crate) mod parse_helpers;
 pub mod policy_snapshot;
 pub mod query;
+pub mod redaction;
 pub mod session;
 pub mod siem_export;
 pub mod stats;
 pub mod store;
+pub mod writer;
 
 pub use async_pipeline::{AsyncAuditConfig, AsyncAuditWriter, AuditCommand};
 pub use channel_audit::{ChannelAuditEntry, ChannelDirection};
@@ -28,10 +30,12 @@ pub use integrity::IntegrityReport;
 pub use middleware::AuditMiddleware;
 pub use policy_snapshot::PolicySnapshot;
 pub use query::row_to_entry;
+pub use redaction::PiiRedactor;
 pub use session::{build_session_tree, Session, SessionFilter, SessionTreeNode};
 pub use siem_export::SiemFormat;
 pub use stats::AuditStats;
 pub use store::AuditStore;
+pub use writer::AuditWriter;
 
 #[cfg(test)]
 pub(crate) mod test_helpers {

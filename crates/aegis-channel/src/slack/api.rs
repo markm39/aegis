@@ -155,8 +155,7 @@ impl SlackApi {
     ) -> Result<(), ChannelError> {
         use reqwest::multipart;
 
-        let file_part =
-            multipart::Part::bytes(bytes.to_vec()).file_name(filename.to_string());
+        let file_part = multipart::Part::bytes(bytes.to_vec()).file_name(filename.to_string());
 
         let mut form = multipart::Form::new()
             .text("channels", channel.to_string())
@@ -304,11 +303,7 @@ impl SlackApi {
     }
 
     /// Pin a message in a channel.
-    pub async fn pin_message(
-        &self,
-        channel: &str,
-        timestamp: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn pin_message(&self, channel: &str, timestamp: &str) -> Result<(), ChannelError> {
         validate_channel(channel)?;
         validate_timestamp(timestamp)?;
 
@@ -330,11 +325,7 @@ impl SlackApi {
     }
 
     /// Unpin a message from a channel.
-    pub async fn unpin_message(
-        &self,
-        channel: &str,
-        timestamp: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn unpin_message(&self, channel: &str, timestamp: &str) -> Result<(), ChannelError> {
         validate_channel(channel)?;
         validate_timestamp(timestamp)?;
 
@@ -388,11 +379,7 @@ impl SlackApi {
     /// Delete a message using `chat.delete`.
     ///
     /// The `timestamp` is the message's `ts` value (its unique ID in Slack).
-    pub async fn delete_message(
-        &self,
-        channel: &str,
-        timestamp: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn delete_message(&self, channel: &str, timestamp: &str) -> Result<(), ChannelError> {
         validate_channel(channel)?;
         validate_timestamp(timestamp)?;
 
@@ -474,9 +461,7 @@ pub fn validate_timestamp(ts: &str) -> Result<(), ChannelError> {
         if c == '.' {
             dot_count += 1;
             if dot_count > 1 {
-                return Err(ChannelError::Api(
-                    "invalid timestamp: multiple dots".into(),
-                ));
+                return Err(ChannelError::Api("invalid timestamp: multiple dots".into()));
             }
         } else if !c.is_ascii_digit() {
             return Err(ChannelError::Api(format!(
@@ -581,7 +566,10 @@ mod tests {
         // Bad timestamp should fail before HTTP
         let result = rt.block_on(api.update_message("C123", "not-a-ts", "text"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid timestamp"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid timestamp"));
     }
 
     // -- delete_message validation --
@@ -599,6 +587,9 @@ mod tests {
         // Bad timestamp should fail before HTTP
         let result = rt.block_on(api.delete_message("C123", "not-a-ts"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid timestamp"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid timestamp"));
     }
 }

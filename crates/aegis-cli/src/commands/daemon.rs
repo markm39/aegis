@@ -27,11 +27,11 @@ use aegis_control::daemon::{
 };
 use aegis_daemon::persistence;
 use aegis_toolkit::contract::ToolAction;
-use aegis_types::daemon::{
-    daemon_config_path, daemon_dir, AgentSlotConfig, AgentToolConfig, DaemonConfig,
-    DaemonControlConfig, DashboardConfig, PersistenceConfig, RestartPolicy,
-};
 use aegis_types::AegisConfig;
+use aegis_types::daemon::{
+    AgentSlotConfig, AgentToolConfig, DaemonConfig, DaemonControlConfig, DashboardConfig,
+    PersistenceConfig, RestartPolicy, daemon_config_path, daemon_dir,
+};
 
 use crate::tui_utils::truncate_str;
 
@@ -129,7 +129,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         dashboard: DashboardConfig::default(),
         alerts: vec![],
         agents: vec![AgentSlotConfig {
-            name: "claude-1".to_string(),
+            name: "claude-1".into(),
             tool: AgentToolConfig::ClaudeCode {
                 skip_permissions: false,
                 one_shot: false,
@@ -1650,7 +1650,9 @@ pub fn add_agent() -> anyhow::Result<()> {
         match resp {
             Ok(r) if r.ok => println!("Agent '{name}' started in running daemon."),
             Ok(r) => println!("Daemon responded: {}", r.message),
-            Err(e) => println!("Could not notify running daemon: {e}\nRun 'aegis daemon reload' to pick up the new agent."),
+            Err(e) => println!(
+                "Could not notify running daemon: {e}\nRun 'aegis daemon reload' to pick up the new agent."
+            ),
         }
     } else {
         println!("Daemon is not running. Start it with: aegis daemon start");

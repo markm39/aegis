@@ -181,19 +181,13 @@ impl std::fmt::Display for AccountError {
             Self::InvalidName { value, reason } => {
                 write!(f, "invalid account name {value:?}: {reason}")
             }
-            Self::AccountExists {
-                name,
-                channel_type,
-            } => {
+            Self::AccountExists { name, channel_type } => {
                 write!(
                     f,
                     "account {name:?} already exists for channel type {channel_type:?}"
                 )
             }
-            Self::AccountNotFound {
-                name,
-                channel_type,
-            } => {
+            Self::AccountNotFound { name, channel_type } => {
                 write!(
                     f,
                     "account {name:?} not found for channel type {channel_type:?}"
@@ -215,7 +209,10 @@ impl std::fmt::Display for AccountError {
                 write!(f, "invalid token: {reason}")
             }
             Self::NoDefault { channel_type } => {
-                write!(f, "no default account set for channel type {channel_type:?}")
+                write!(
+                    f,
+                    "no default account set for channel type {channel_type:?}"
+                )
             }
         }
     }
@@ -265,7 +262,10 @@ fn validate_token(token: &str) -> Result<(), AccountError> {
             reason: format!("token exceeds maximum length of {MAX_TOKEN_LEN}"),
         });
     }
-    if token.chars().any(|c| c.is_control() && c != '\n' && c != '\r') {
+    if token
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\r')
+    {
         return Err(AccountError::InvalidToken {
             reason: "token contains control characters".to_string(),
         });
@@ -317,10 +317,7 @@ impl AccountRegistry {
             });
         }
 
-        let channel_accounts = self
-            .accounts
-            .entry(channel_type.clone())
-            .or_default();
+        let channel_accounts = self.accounts.entry(channel_type.clone()).or_default();
 
         if channel_accounts.len() >= MAX_ACCOUNTS_PER_CHANNEL {
             return Err(AccountError::TooManyAccounts {
@@ -330,10 +327,7 @@ impl AccountRegistry {
         }
 
         if channel_accounts.contains_key(&name) {
-            return Err(AccountError::AccountExists {
-                name,
-                channel_type,
-            });
+            return Err(AccountError::AccountExists { name, channel_type });
         }
 
         let is_first = channel_accounts.is_empty();
@@ -368,13 +362,12 @@ impl AccountRegistry {
                     channel_type: channel_type.to_string(),
                 })?;
 
-        let entry =
-            channel_accounts
-                .remove(name)
-                .ok_or_else(|| AccountError::AccountNotFound {
-                    name: name.to_string(),
-                    channel_type: channel_type.to_string(),
-                })?;
+        let entry = channel_accounts
+            .remove(name)
+            .ok_or_else(|| AccountError::AccountNotFound {
+                name: name.to_string(),
+                channel_type: channel_type.to_string(),
+            })?;
 
         // If we removed the default, promote the first remaining account
         if entry.is_default {
@@ -397,22 +390,14 @@ impl AccountRegistry {
     }
 
     /// Get an account by name and channel type.
-    pub fn get_account(
-        &self,
-        name: &str,
-        channel_type: &str,
-    ) -> Option<&AccountEntry> {
+    pub fn get_account(&self, name: &str, channel_type: &str) -> Option<&AccountEntry> {
         self.accounts
             .get(channel_type)
             .and_then(|accts| accts.get(name))
     }
 
     /// Get a mutable account by name and channel type.
-    pub fn get_account_mut(
-        &mut self,
-        name: &str,
-        channel_type: &str,
-    ) -> Option<&mut AccountEntry> {
+    pub fn get_account_mut(&mut self, name: &str, channel_type: &str) -> Option<&mut AccountEntry> {
         self.accounts
             .get_mut(channel_type)
             .and_then(|accts| accts.get_mut(name))
@@ -426,11 +411,7 @@ impl AccountRegistry {
     }
 
     /// Set an account as the default for its channel type.
-    pub fn set_default(
-        &mut self,
-        name: &str,
-        channel_type: &str,
-    ) -> Result<(), AccountError> {
+    pub fn set_default(&mut self, name: &str, channel_type: &str) -> Result<(), AccountError> {
         let channel_accounts =
             self.accounts
                 .get_mut(channel_type)
@@ -472,12 +453,12 @@ impl AccountRegistry {
         channel_type: &str,
         status: AccountStatus,
     ) -> Result<(), AccountError> {
-        let entry = self
-            .get_account_mut(name, channel_type)
-            .ok_or_else(|| AccountError::AccountNotFound {
+        let entry = self.get_account_mut(name, channel_type).ok_or_else(|| {
+            AccountError::AccountNotFound {
                 name: name.to_string(),
                 channel_type: channel_type.to_string(),
-            })?;
+            }
+        })?;
 
         if entry.status != status {
             debug!(
@@ -500,12 +481,12 @@ impl AccountRegistry {
         channel_type: &str,
         label: Option<String>,
     ) -> Result<(), AccountError> {
-        let entry = self
-            .get_account_mut(name, channel_type)
-            .ok_or_else(|| AccountError::AccountNotFound {
+        let entry = self.get_account_mut(name, channel_type).ok_or_else(|| {
+            AccountError::AccountNotFound {
                 name: name.to_string(),
                 channel_type: channel_type.to_string(),
-            })?;
+            }
+        })?;
 
         entry.label = label;
         Ok(())
@@ -521,12 +502,12 @@ impl AccountRegistry {
         let new_token = new_token.into();
         validate_token(&new_token)?;
 
-        let entry = self
-            .get_account_mut(name, channel_type)
-            .ok_or_else(|| AccountError::AccountNotFound {
+        let entry = self.get_account_mut(name, channel_type).ok_or_else(|| {
+            AccountError::AccountNotFound {
                 name: name.to_string(),
                 channel_type: channel_type.to_string(),
-            })?;
+            }
+        })?;
 
         entry.token = new_token;
         debug!(

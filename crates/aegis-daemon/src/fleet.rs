@@ -14,6 +14,7 @@ use nix::unistd::Pid;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use aegis_ledger::{AuditStore, AuditWriter};
 use aegis_pilot::supervisor::SupervisorCommand;
 use aegis_types::daemon::{
     AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig, RestartPolicy, ToolkitConfig,
@@ -33,22 +34,54 @@ pub struct Fleet {
     pub fleet_goal: Option<String>,
     /// Canonical computer-use toolkit contract source from daemon config.
     toolkit_config: ToolkitConfig,
+    /// Handle to the dedicated audit writer thread. Cloned into each agent thread.
+    audit_writer: AuditWriter,
+    /// JoinHandle for the audit writer thread, kept alive until fleet shutdown.
+    audit_writer_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Fleet {
     /// Create a new fleet from daemon configuration.
+    ///
+    /// Opens the audit store and spawns the dedicated writer thread. The writer
+    /// thread owns the `AuditStore` exclusively -- no mutex needed on the write
+    /// path. Each agent thread clones the `AuditWriter` handle.
     pub fn new(config: &DaemonConfig, aegis_config: AegisConfig) -> Self {
         let mut slots = HashMap::new();
         for agent_config in &config.agents {
             let slot = AgentSlot::new(agent_config.clone());
-            slots.insert(agent_config.name.clone(), slot);
+            slots.insert(agent_config.name.to_string(), slot);
         }
+
+        let store = AuditStore::open(&aegis_config.ledger_path).unwrap_or_else(|e| {
+            panic!(
+                "failed to open audit store at '{}': {e}",
+                aegis_config.ledger_path.display()
+            )
+        });
+        let (audit_writer, audit_writer_thread) = AuditWriter::spawn(store);
 
         Self {
             slots,
             default_aegis_config: aegis_config,
             fleet_goal: config.goal.clone(),
             toolkit_config: config.toolkit.clone(),
+            audit_writer,
+            audit_writer_thread: Some(audit_writer_thread),
+        }
+    }
+
+    /// Shut down the fleet's audit writer thread cleanly.
+    ///
+    /// Call after all agent threads have exited (e.g., after `stop_all()`
+    /// returns) to ensure all queued audit messages are processed before
+    /// the process exits.
+    pub fn shutdown_audit_writer(&mut self) {
+        self.audit_writer.shutdown();
+        if let Some(handle) = self.audit_writer_thread.take() {
+            if let Err(e) = handle.join() {
+                warn!("audit writer thread panicked on shutdown: {e:?}");
+            }
         }
     }
 
@@ -100,7 +133,7 @@ impl Fleet {
     /// slot config (policy_dir, isolation) on top of the fleet default.
     fn build_agent_aegis_config(&self, slot_config: &AgentSlotConfig) -> AegisConfig {
         let mut config = self.default_aegis_config.clone();
-        config.name = slot_config.name.clone();
+        config.name = slot_config.name.to_string();
         if let Some(ref policy_dir) = slot_config.policy_dir {
             config.policy_paths = vec![policy_dir.clone()];
         }
@@ -121,7 +154,7 @@ impl Fleet {
             self.slots
                 .values()
                 .find(|s| s.config.orchestrator.is_some())
-                .map(|s| s.config.name.clone())
+                .map(|s| s.config.name.to_string())
         } else {
             None
         };
@@ -177,6 +210,8 @@ impl Fleet {
 
         let fleet_goal = self.fleet_goal.clone();
         let child_pid = slot.child_pid.clone();
+        // Clone the writer handle so this agent thread has its own sender.
+        let audit_writer = self.audit_writer.clone();
 
         // Clear session_id before spawning the next run.
         *slot.session_id.lock() = None;
@@ -189,6 +224,7 @@ impl Fleet {
                     &slot_config,
                     &aegis_config,
                     &toolkit_config,
+                    audit_writer,
                     fleet_goal.as_deref(),
                     orchestrator_name.as_deref(),
                     output_tx,
@@ -719,7 +755,7 @@ impl Fleet {
     /// Add a new agent slot at runtime.
     pub fn add_agent(&mut self, config: AgentSlotConfig) {
         let slot = AgentSlot::new(config.clone());
-        self.slots.insert(config.name.clone(), slot);
+        self.slots.insert(config.name.to_string(), slot);
     }
 
     /// Remove an agent slot. Stops it first if running.
@@ -730,7 +766,7 @@ impl Fleet {
 
     /// Update the stored config for an existing agent slot (without restarting).
     pub fn update_agent_config(&mut self, config: &AgentSlotConfig) {
-        if let Some(slot) = self.slots.get_mut(&config.name) {
+        if let Some(slot) = self.slots.get_mut(config.name.as_str()) {
             slot.config = config.clone();
         }
     }
@@ -813,7 +849,7 @@ mod tests {
 
     fn test_slot_config(name: &str) -> AgentSlotConfig {
         AgentSlotConfig {
-            name: name.to_string(),
+            name: name.into(),
             tool: AgentToolConfig::ClaudeCode {
                 skip_permissions: false,
                 one_shot: false,

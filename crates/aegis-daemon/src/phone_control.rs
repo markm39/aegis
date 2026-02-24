@@ -159,10 +159,7 @@ impl PhoneController {
         self.enforce_timeouts(device_id);
 
         // Drain the remaining pending commands.
-        let commands = self
-            .pending
-            .remove(device_id)
-            .unwrap_or_default();
+        let commands = self.pending.remove(device_id).unwrap_or_default();
 
         // Move the drained commands to the completed map so results can be reported.
         for cmd in &commands {
@@ -316,7 +313,11 @@ mod tests {
 
         // Poll should only return the non-expired command.
         let polled = ctrl.poll_commands("device-1");
-        assert_eq!(polled.len(), 1, "only non-expired command should be returned");
+        assert_eq!(
+            polled.len(),
+            1,
+            "only non-expired command should be returned"
+        );
 
         // The expired command should be in completed with Timeout status.
         let timed_out = ctrl.completed.get(&expired_cmd.command_id).unwrap();
@@ -368,9 +369,7 @@ mod tests {
             DeviceCommand::CameraSnap {
                 resolution: "1920x1080".into(),
             },
-            DeviceCommand::ScreenRecord {
-                duration_secs: 30,
-            },
+            DeviceCommand::ScreenRecord { duration_secs: 30 },
             DeviceCommand::GetLocation,
             DeviceCommand::SendNotification {
                 title: "Alert".into(),
@@ -382,8 +381,7 @@ mod tests {
 
         for cmd in commands {
             let json = serde_json::to_string(&cmd).expect("should serialize");
-            let back: DeviceCommand =
-                serde_json::from_str(&json).expect("should deserialize");
+            let back: DeviceCommand = serde_json::from_str(&json).expect("should deserialize");
             // Verify round-trip by re-serializing.
             let json2 = serde_json::to_string(&back).expect("should re-serialize");
             assert_eq!(json, json2);

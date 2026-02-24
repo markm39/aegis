@@ -215,10 +215,7 @@ impl ScheduledReplyManager {
 
         // Check for duplicate name.
         if self.replies.iter().any(|r| r.name == reply.name) {
-            return Err(format!(
-                "scheduled reply '{}' already exists",
-                reply.name
-            ));
+            return Err(format!("scheduled reply '{}' already exists", reply.name));
         }
 
         // Register with cron scheduler.
@@ -483,7 +480,10 @@ mod tests {
 
         let reply2 = make_reply(
             "digest",
-            Schedule::Daily { hour: 18, minute: 0 },
+            Schedule::Daily {
+                hour: 18,
+                minute: 0,
+            },
             TEMPLATE_HEALTH_CHECK,
         );
         let err = mgr.add_scheduled_reply(reply2).unwrap_err();

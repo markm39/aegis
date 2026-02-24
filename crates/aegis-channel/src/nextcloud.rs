@@ -29,7 +29,7 @@ use crate::format;
 ///
 /// Connects to a Nextcloud instance via its OCS API. The app_password
 /// field is sensitive and must never appear in logs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NextcloudConfig {
     /// Nextcloud server URL (must be HTTPS).
     pub server_url: String,
@@ -42,6 +42,17 @@ pub struct NextcloudConfig {
     /// Room token for the Talk conversation.
     /// Alphanumeric only, max 32 characters.
     pub room_token: String,
+}
+
+impl std::fmt::Debug for NextcloudConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NextcloudConfig")
+            .field("server_url", &self.server_url)
+            .field("username", &self.username)
+            .field("app_password", &"[REDACTED]")
+            .field("room_token", &self.room_token)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -59,9 +70,8 @@ const MAX_ROOM_TOKEN_LEN: usize = 32;
 /// This is a critical SSRF prevention measure. All private, loopback,
 /// link-local, and reserved IP ranges are blocked.
 pub fn validate_server_url(url_str: &str) -> Result<Url, ChannelError> {
-    let url = Url::parse(url_str).map_err(|e| {
-        ChannelError::Api(format!("invalid Nextcloud server URL: {e}"))
-    })?;
+    let url = Url::parse(url_str)
+        .map_err(|e| ChannelError::Api(format!("invalid Nextcloud server URL: {e}")))?;
 
     // Enforce HTTPS
     if url.scheme() != "https" {
@@ -72,9 +82,9 @@ pub fn validate_server_url(url_str: &str) -> Result<Url, ChannelError> {
     }
 
     // Extract host
-    let host = url.host_str().ok_or_else(|| {
-        ChannelError::Api("Nextcloud server URL has no host".into())
-    })?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| ChannelError::Api("Nextcloud server URL has no host".into()))?;
 
     // Block private/reserved IPs (SSRF prevention)
     if is_private_host(host) {
@@ -307,10 +317,7 @@ impl NextcloudApi {
     ///
     /// `GET /ocs/v2.php/apps/spreed/api/v1/room`
     pub fn rooms_url(&self) -> String {
-        format!(
-            "{}/ocs/v2.php/apps/spreed/api/v1/room",
-            self.base_url
-        )
+        format!("{}/ocs/v2.php/apps/spreed/api/v1/room", self.base_url)
     }
 
     /// Build the Basic auth header value.
@@ -322,11 +329,7 @@ impl NextcloudApi {
     }
 
     /// Send a message to a room.
-    pub async fn send_message(
-        &self,
-        room_token: &str,
-        message: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn send_message(&self, room_token: &str, message: &str) -> Result<(), ChannelError> {
         validate_room_token(room_token)?;
 
         let url = self.chat_url(room_token);

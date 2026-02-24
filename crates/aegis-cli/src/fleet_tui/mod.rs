@@ -650,7 +650,7 @@ impl FleetApp {
         &self,
         agent: aegis_types::daemon::AgentSlotConfig,
     ) -> anyhow::Result<String> {
-        use aegis_types::daemon::{daemon_config_path, daemon_dir, DaemonConfig};
+        use aegis_types::daemon::{DaemonConfig, daemon_config_path, daemon_dir};
 
         let config_path = daemon_config_path();
         let name = agent.name.clone();
@@ -702,7 +702,7 @@ impl FleetApp {
         std::fs::write(&tmp_path, &toml_str)?;
         std::fs::rename(&tmp_path, &config_path)?;
 
-        Ok(name)
+        Ok(name.to_string())
     }
 
     /// Handle keys in the agent detail view.
@@ -1511,36 +1511,33 @@ impl FleetApp {
             FleetCommand::ConfigGet { key } => {
                 // Show result in status bar
                 match aegis_types::ConfigLoader::new().load() {
-                    Ok(effective) => {
-                        match toml::Value::try_from(&effective.config) {
-                            Ok(toml_val) => {
-                                match aegis_types::get_dot_value(&toml_val, &key) {
-                                    Some(val) => {
-                                        let display = if aegis_types::is_sensitive_field(&key) {
-                                            match &val {
-                                                toml::Value::String(s) => aegis_types::mask_sensitive(s),
-                                                other => aegis_types::format_toml_value(other),
-                                            }
-                                        } else {
-                                            aegis_types::format_toml_value(&val)
-                                        };
-                                        let source = effective
-                                            .sources
-                                            .get(&key)
-                                            .map(|s| format!("  [{s}]"))
-                                            .unwrap_or_default();
-                                        self.command_result = Some(format!("{key} = {display}{source}"));
+                    Ok(effective) => match toml::Value::try_from(&effective.config) {
+                        Ok(toml_val) => match aegis_types::get_dot_value(&toml_val, &key) {
+                            Some(val) => {
+                                let display = if aegis_types::is_sensitive_field(&key) {
+                                    match &val {
+                                        toml::Value::String(s) => aegis_types::mask_sensitive(s),
+                                        other => aegis_types::format_toml_value(other),
                                     }
-                                    None => {
-                                        self.last_error = Some(format!("Key '{key}' not found in effective config"));
-                                    }
-                                }
+                                } else {
+                                    aegis_types::format_toml_value(&val)
+                                };
+                                let source = effective
+                                    .sources
+                                    .get(&key)
+                                    .map(|s| format!("  [{s}]"))
+                                    .unwrap_or_default();
+                                self.command_result = Some(format!("{key} = {display}{source}"));
                             }
-                            Err(e) => {
-                                self.last_error = Some(format!("Failed to serialize config: {e}"));
+                            None => {
+                                self.last_error =
+                                    Some(format!("Key '{key}' not found in effective config"));
                             }
+                        },
+                        Err(e) => {
+                            self.last_error = Some(format!("Failed to serialize config: {e}"));
                         }
-                    }
+                    },
                     Err(e) => {
                         self.last_error = Some(format!("Failed to load config: {e}"));
                     }
@@ -1563,8 +1560,8 @@ impl FleetApp {
                 self.spawn_terminal("aegis config layers", "Showing config layers");
             }
             FleetCommand::Telegram => {
-                use aegis_types::daemon::daemon_config_path;
                 use aegis_types::daemon::DaemonConfig;
+                use aegis_types::daemon::daemon_config_path;
                 let config_path = daemon_config_path();
                 let status = if !config_path.exists() {
                     "Telegram: not configured. Run :telegram setup to configure.".to_string()
@@ -1588,9 +1585,7 @@ impl FleetApp {
                                     slack.channel_id
                                 )
                             }
-                            Some(_) => {
-                                "Telegram: disabled (other channel type active)".to_string()
-                            }
+                            Some(_) => "Telegram: disabled (other channel type active)".to_string(),
                             None => "Telegram: not configured. Run :telegram setup to configure."
                                 .to_string(),
                         },
@@ -2159,10 +2154,7 @@ impl FleetApp {
                 );
             }
             FleetCommand::Sessions => {
-                self.spawn_terminal(
-                    "aegis sessions list",
-                    "Opened session list in new terminal",
-                );
+                self.spawn_terminal("aegis sessions list", "Opened session list in new terminal");
             }
             FleetCommand::SessionsFiltered {
                 sender,
@@ -2210,7 +2202,10 @@ impl FleetApp {
                 );
                 self.spawn_terminal(&cmd, "Resetting session in new terminal");
             }
-            FleetCommand::SessionDelete { session_id, confirm } => {
+            FleetCommand::SessionDelete {
+                session_id,
+                confirm,
+            } => {
                 let cmd = if confirm {
                     format!(
                         "aegis sessions delete {} --confirm",
@@ -2325,7 +2320,10 @@ impl FleetApp {
                 args,
             } => {
                 // Apply locally for immediate use, then send to daemon for persistence.
-                match self.alias_registry.add(alias.clone(), command.clone(), args.clone()) {
+                match self
+                    .alias_registry
+                    .add(alias.clone(), command.clone(), args.clone())
+                {
                     Ok(()) => {
                         self.send_and_show_result(DaemonCommand::AddAlias {
                             alias,
@@ -2338,41 +2336,33 @@ impl FleetApp {
                     }
                 }
             }
-            FleetCommand::AliasRemove { alias } => {
-                match self.alias_registry.remove(&alias) {
-                    Ok(()) => {
-                        self.send_and_show_result(DaemonCommand::RemoveAlias { alias });
-                    }
-                    Err(e) => {
-                        self.set_result(e);
-                    }
+            FleetCommand::AliasRemove { alias } => match self.alias_registry.remove(&alias) {
+                Ok(()) => {
+                    self.send_and_show_result(DaemonCommand::RemoveAlias { alias });
                 }
-            }
+                Err(e) => {
+                    self.set_result(e);
+                }
+            },
             FleetCommand::Suspend { agent } => {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    self.send_and_show_result(DaemonCommand::SuspendSession {
-                        name: agent,
-                    });
+                    self.send_and_show_result(DaemonCommand::SuspendSession { name: agent });
                 }
             }
             FleetCommand::Resume { agent } => {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    self.send_and_show_result(DaemonCommand::ResumeSession {
-                        name: agent,
-                    });
+                    self.send_and_show_result(DaemonCommand::ResumeSession { name: agent });
                 }
             }
             FleetCommand::Terminate { agent } => {
                 if !self.agent_exists(&agent) {
                     self.set_result(format!("unknown agent: '{agent}'"));
                 } else {
-                    self.send_and_show_result(DaemonCommand::TerminateSession {
-                        name: agent,
-                    });
+                    self.send_and_show_result(DaemonCommand::TerminateSession { name: agent });
                 }
             }
             FleetCommand::ScheduleList => {
@@ -2403,26 +2393,22 @@ impl FleetApp {
             FleetCommand::JobCreate { agent, description } => {
                 self.send_and_show_result(DaemonCommand::CreateJob { agent, description });
             }
-            FleetCommand::JobCancel { id } => {
-                match uuid::Uuid::parse_str(&id) {
-                    Ok(job_id) => {
-                        self.send_and_show_result(DaemonCommand::CancelJob { job_id });
-                    }
-                    Err(_) => {
-                        self.set_result(format!("invalid job ID: {id}"));
-                    }
+            FleetCommand::JobCancel { id } => match uuid::Uuid::parse_str(&id) {
+                Ok(job_id) => {
+                    self.send_and_show_result(DaemonCommand::CancelJob { job_id });
                 }
-            }
-            FleetCommand::JobStatusCmd { id } => {
-                match uuid::Uuid::parse_str(&id) {
-                    Ok(job_id) => {
-                        self.send_and_show_result(DaemonCommand::JobStatus { job_id });
-                    }
-                    Err(_) => {
-                        self.set_result(format!("invalid job ID: {id}"));
-                    }
+                Err(_) => {
+                    self.set_result(format!("invalid job ID: {id}"));
                 }
-            }
+            },
+            FleetCommand::JobStatusCmd { id } => match uuid::Uuid::parse_str(&id) {
+                Ok(job_id) => {
+                    self.send_and_show_result(DaemonCommand::JobStatus { job_id });
+                }
+                Err(_) => {
+                    self.set_result(format!("invalid job ID: {id}"));
+                }
+            },
             FleetCommand::PushList => {
                 self.send_and_show_result(DaemonCommand::ListPush);
             }
@@ -2440,26 +2426,22 @@ impl FleetApp {
                     duration_secs: None,
                 });
             }
-            FleetCommand::PollClose { id } => {
-                match uuid::Uuid::parse_str(&id) {
-                    Ok(poll_id) => {
-                        self.send_and_show_result(DaemonCommand::ClosePoll { poll_id });
-                    }
-                    Err(_) => {
-                        self.set_result(format!("invalid poll ID: {id}"));
-                    }
+            FleetCommand::PollClose { id } => match uuid::Uuid::parse_str(&id) {
+                Ok(poll_id) => {
+                    self.send_and_show_result(DaemonCommand::ClosePoll { poll_id });
                 }
-            }
-            FleetCommand::PollResultsCmd { id } => {
-                match uuid::Uuid::parse_str(&id) {
-                    Ok(poll_id) => {
-                        self.send_and_show_result(DaemonCommand::PollResults { poll_id });
-                    }
-                    Err(_) => {
-                        self.set_result(format!("invalid poll ID: {id}"));
-                    }
+                Err(_) => {
+                    self.set_result(format!("invalid poll ID: {id}"));
                 }
-            }
+            },
+            FleetCommand::PollResultsCmd { id } => match uuid::Uuid::parse_str(&id) {
+                Ok(poll_id) => {
+                    self.send_and_show_result(DaemonCommand::PollResults { poll_id });
+                }
+                Err(_) => {
+                    self.set_result(format!("invalid poll ID: {id}"));
+                }
+            },
             FleetCommand::PollList => {
                 self.send_and_show_result(DaemonCommand::ListPolls);
             }
@@ -2482,10 +2464,7 @@ impl FleetApp {
                 self.send_and_show_result(DaemonCommand::ListLanes);
             }
             FleetCommand::SkillsList => {
-                self.spawn_terminal(
-                    "aegis skills list",
-                    "Opened skills list in new terminal",
-                );
+                self.spawn_terminal("aegis skills list", "Opened skills list in new terminal");
             }
             FleetCommand::SkillsSearch { query } => {
                 self.spawn_terminal(
@@ -3422,11 +3401,12 @@ mod tests {
         app.command_cursor = 5;
 
         app.handle_key(press(KeyCode::Enter));
-        assert!(app
-            .command_result
-            .as_ref()
-            .unwrap()
-            .contains("unknown command"));
+        assert!(
+            app.command_result
+                .as_ref()
+                .unwrap()
+                .contains("unknown command")
+        );
     }
 
     #[test]
@@ -3547,11 +3527,12 @@ mod tests {
         app.handle_key(press(KeyCode::Enter));
         // Should stay in overview (not switch to detail)
         assert_eq!(app.view, FleetView::Overview);
-        assert!(app
-            .command_result
-            .as_ref()
-            .unwrap()
-            .contains("unknown agent"));
+        assert!(
+            app.command_result
+                .as_ref()
+                .unwrap()
+                .contains("unknown agent")
+        );
     }
 
     #[test]
@@ -4009,11 +3990,12 @@ mod tests {
         app.jump_to_next_attention();
         // Should show a message, not crash
         assert!(app.command_result.is_some());
-        assert!(app
-            .command_result
-            .as_ref()
-            .unwrap()
-            .contains("No agents need attention"));
+        assert!(
+            app.command_result
+                .as_ref()
+                .unwrap()
+                .contains("No agents need attention")
+        );
     }
 
     #[test]

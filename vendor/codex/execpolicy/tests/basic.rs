@@ -2,8 +2,6 @@ use std::any::Any;
 use std::fs;
 use std::sync::Arc;
 
-use anyhow::Context;
-use anyhow::Result;
 use aegis_execpolicy::Decision;
 use aegis_execpolicy::Error;
 use aegis_execpolicy::Evaluation;
@@ -15,6 +13,8 @@ use aegis_execpolicy::blocking_append_allow_prefix_rule;
 use aegis_execpolicy::rule::PatternToken;
 use aegis_execpolicy::rule::PrefixPattern;
 use aegis_execpolicy::rule::PrefixRule;
+use anyhow::Context;
+use anyhow::Result;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 

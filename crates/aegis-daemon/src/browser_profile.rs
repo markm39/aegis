@@ -48,7 +48,8 @@ fn is_valid_agent_id(agent_id: &str) -> bool {
 
 /// Check whether a path contains any traversal components (..).
 fn contains_traversal(path: &Path) -> bool {
-    path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+    path.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 /// Build the Chrome Preferences JSON for a profile.
@@ -115,10 +116,7 @@ impl BrowserProfileManager {
 
         // Reject if already tracked.
         if self.profiles.contains_key(agent_id) {
-            return Err(format!(
-                "profile already exists for agent '{}'",
-                agent_id
-            ));
+            return Err(format!("profile already exists for agent '{}'", agent_id));
         }
 
         let profile_dir = self.data_root.join(agent_id);
@@ -133,9 +131,9 @@ impl BrowserProfileManager {
 
         // Reject if the target already exists as a symlink (do not follow).
         if profile_dir.symlink_metadata().is_ok() {
-            let meta = profile_dir
-                .symlink_metadata()
-                .map_err(|e| format!("failed to read metadata for {}: {e}", profile_dir.display()))?;
+            let meta = profile_dir.symlink_metadata().map_err(|e| {
+                format!("failed to read metadata for {}: {e}", profile_dir.display())
+            })?;
             if meta.file_type().is_symlink() {
                 return Err(format!(
                     "profile path is a symlink (refusing to follow): {}",
@@ -146,14 +144,22 @@ impl BrowserProfileManager {
 
         // Ensure data_root exists with proper permissions.
         if !self.data_root.exists() {
-            fs::create_dir_all(&self.data_root)
-                .map_err(|e| format!("failed to create data_root {}: {e}", self.data_root.display()))?;
+            fs::create_dir_all(&self.data_root).map_err(|e| {
+                format!(
+                    "failed to create data_root {}: {e}",
+                    self.data_root.display()
+                )
+            })?;
             set_owner_only_permissions(&self.data_root)?;
         }
 
         // Create profile directory.
-        fs::create_dir_all(&profile_dir)
-            .map_err(|e| format!("failed to create profile dir {}: {e}", profile_dir.display()))?;
+        fs::create_dir_all(&profile_dir).map_err(|e| {
+            format!(
+                "failed to create profile dir {}: {e}",
+                profile_dir.display()
+            )
+        })?;
         set_owner_only_permissions(&profile_dir)?;
 
         // Verify canonical path matches expected path to detect symlink races.
@@ -191,8 +197,12 @@ impl BrowserProfileManager {
         let prefs_path = default_dir.join("Preferences");
         let prefs_json = serde_json::to_string_pretty(&preferences)
             .map_err(|e| format!("failed to serialize preferences: {e}"))?;
-        fs::write(&prefs_path, prefs_json)
-            .map_err(|e| format!("failed to write preferences to {}: {e}", prefs_path.display()))?;
+        fs::write(&prefs_path, prefs_json).map_err(|e| {
+            format!(
+                "failed to write preferences to {}: {e}",
+                prefs_path.display()
+            )
+        })?;
 
         // Set permissions on the preferences file itself.
         #[cfg(unix)]
@@ -226,9 +236,10 @@ impl BrowserProfileManager {
             ));
         }
 
-        let info = self.profiles.remove(agent_id).ok_or_else(|| {
-            format!("no profile found for agent '{}'", agent_id)
-        })?;
+        let info = self
+            .profiles
+            .remove(agent_id)
+            .ok_or_else(|| format!("no profile found for agent '{}'", agent_id))?;
 
         // Verify the directory is still at the expected canonical path before removing.
         if info.profile_dir.exists() {
@@ -245,8 +256,12 @@ impl BrowserProfileManager {
                 }
             }
 
-            fs::remove_dir_all(&info.profile_dir)
-                .map_err(|e| format!("failed to remove profile dir {}: {e}", info.profile_dir.display()))?;
+            fs::remove_dir_all(&info.profile_dir).map_err(|e| {
+                format!(
+                    "failed to remove profile dir {}: {e}",
+                    info.profile_dir.display()
+                )
+            })?;
         }
 
         Ok(())
@@ -371,7 +386,9 @@ mod tests {
         let data_root = tmp.path().join("profiles");
         let mut mgr = BrowserProfileManager::new(data_root.clone());
 
-        let info = mgr.create_profile("agent-1").expect("create_profile failed");
+        let info = mgr
+            .create_profile("agent-1")
+            .expect("create_profile failed");
         assert_eq!(info.agent_id, "agent-1");
         assert!(info.profile_dir.exists());
 
@@ -379,24 +396,39 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let meta = fs::metadata(&info.profile_dir).expect("metadata failed");
         let mode = meta.permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "profile dir should have 0700 permissions, got {mode:o}");
+        assert_eq!(
+            mode, 0o700,
+            "profile dir should have 0700 permissions, got {mode:o}"
+        );
 
         // Verify downloads dir exists with correct permissions.
         let downloads = info.profile_dir.join("downloads");
         assert!(downloads.exists());
-        let dl_mode = fs::metadata(&downloads).expect("downloads metadata").permissions().mode() & 0o777;
+        let dl_mode = fs::metadata(&downloads)
+            .expect("downloads metadata")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(dl_mode, 0o700);
 
         // Verify Default dir exists with correct permissions.
         let default_dir = info.profile_dir.join("Default");
         assert!(default_dir.exists());
-        let def_mode = fs::metadata(&default_dir).expect("Default metadata").permissions().mode() & 0o777;
+        let def_mode = fs::metadata(&default_dir)
+            .expect("Default metadata")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(def_mode, 0o700);
 
         // Verify preferences file has 0600 permissions.
         let prefs_path = default_dir.join("Preferences");
         assert!(prefs_path.exists());
-        let prefs_mode = fs::metadata(&prefs_path).expect("prefs metadata").permissions().mode() & 0o777;
+        let prefs_mode = fs::metadata(&prefs_path)
+            .expect("prefs metadata")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(prefs_mode, 0o600);
     }
 
@@ -419,10 +451,18 @@ mod tests {
         assert!(!mgr.is_owned_by(&info_a.profile_dir, "agent-b"));
 
         // validate_profile_access should reject cross-agent access.
-        assert!(mgr.validate_profile_access("agent-a", &info_a.profile_dir).is_ok());
-        assert!(mgr.validate_profile_access("agent-a", &info_b.profile_dir).is_err());
-        assert!(mgr.validate_profile_access("agent-b", &info_b.profile_dir).is_ok());
-        assert!(mgr.validate_profile_access("agent-b", &info_a.profile_dir).is_err());
+        assert!(mgr
+            .validate_profile_access("agent-a", &info_a.profile_dir)
+            .is_ok());
+        assert!(mgr
+            .validate_profile_access("agent-a", &info_b.profile_dir)
+            .is_err());
+        assert!(mgr
+            .validate_profile_access("agent-b", &info_b.profile_dir)
+            .is_ok());
+        assert!(mgr
+            .validate_profile_access("agent-b", &info_a.profile_dir)
+            .is_err());
     }
 
     #[test]
@@ -436,7 +476,10 @@ mod tests {
         assert!(dir.exists());
 
         mgr.delete_profile("cleanup-agent").expect("delete");
-        assert!(!dir.exists(), "profile directory should be removed after delete");
+        assert!(
+            !dir.exists(),
+            "profile directory should be removed after delete"
+        );
         assert!(mgr.get_profile("cleanup-agent").is_none());
     }
 
@@ -464,7 +507,10 @@ mod tests {
         // Verify prompt_for_download is false.
         assert_eq!(parsed["download"]["prompt_for_download"], false);
         // Verify labs experiments is empty.
-        assert_eq!(parsed["browser"]["enabled_labs_experiments"], serde_json::json!([]));
+        assert_eq!(
+            parsed["browser"]["enabled_labs_experiments"],
+            serde_json::json!([])
+        );
     }
 
     #[test]
@@ -479,7 +525,10 @@ mod tests {
         // Attempting to use agent-x's profile as agent-y is rejected.
         let agent_x_dir = mgr.profile_dir("agent-x");
         let result = mgr.validate_profile_access("agent-y", &agent_x_dir);
-        assert!(result.is_err(), "agent-y should not be able to access agent-x's profile");
+        assert!(
+            result.is_err(),
+            "agent-y should not be able to access agent-x's profile"
+        );
 
         // Creating a duplicate profile for agent-x is rejected.
         let result = mgr.create_profile("agent-x");
@@ -549,12 +598,14 @@ mod tests {
         // Create a symlink at the expected profile path before the manager does.
         fs::create_dir_all(&data_root).expect("create data_root");
         let symlink_path = data_root.join("symlink-agent");
-        std::os::unix::fs::symlink(&evil_target, &symlink_path)
-            .expect("create symlink");
+        std::os::unix::fs::symlink(&evil_target, &symlink_path).expect("create symlink");
 
         // Attempting to create a profile where a symlink exists should fail.
         let result = mgr.create_profile("symlink-agent");
-        assert!(result.is_err(), "symlink profile creation should be rejected");
+        assert!(
+            result.is_err(),
+            "symlink profile creation should be rejected"
+        );
         assert!(
             result.unwrap_err().contains("symlink"),
             "error should mention symlink"

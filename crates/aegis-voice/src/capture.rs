@@ -221,9 +221,9 @@ impl AudioCapture {
 
         let path = self.record_to_file(&temp_path, duration_secs).await?;
 
-        let bytes = tokio::fs::read(&path).await.map_err(|e| {
-            VoiceError::CaptureError(format!("failed to read recorded audio: {e}"))
-        })?;
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| VoiceError::CaptureError(format!("failed to read recorded audio: {e}")))?;
 
         // Clean up temp file (best-effort).
         let _ = tokio::fs::remove_file(&path).await;
@@ -499,7 +499,9 @@ mod tests {
     fn rms_mixed_signal() {
         // Alternating positive and negative values should still produce
         // the same RMS as constant absolute values.
-        let signal: Vec<i16> = (0..100).map(|i| if i % 2 == 0 { 5000 } else { -5000 }).collect();
+        let signal: Vec<i16> = (0..100)
+            .map(|i| if i % 2 == 0 { 5000 } else { -5000 })
+            .collect();
         let rms = compute_rms(&signal);
         let expected = 5000.0 / 32767.0;
         assert!(

@@ -188,15 +188,24 @@ fn parse_duration_str(s: &str) -> Result<u64, String> {
     }
 
     if let Some(n) = s.strip_suffix('s') {
-        let val: u64 = n.trim().parse().map_err(|_| format!("invalid seconds: {n}"))?;
+        let val: u64 = n
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid seconds: {n}"))?;
         return Ok(val);
     }
     if let Some(n) = s.strip_suffix('m') {
-        let val: u64 = n.trim().parse().map_err(|_| format!("invalid minutes: {n}"))?;
+        let val: u64 = n
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid minutes: {n}"))?;
         return Ok(val * 60);
     }
     if let Some(n) = s.strip_suffix('h') {
-        let val: u64 = n.trim().parse().map_err(|_| format!("invalid hours: {n}"))?;
+        let val: u64 = n
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid hours: {n}"))?;
         return Ok(val * 3600);
     }
 
@@ -550,7 +559,12 @@ mod tests {
         assert!(queue.is_empty());
 
         queue
-            .enqueue("agent-1", "telegram", "Hello", DeferralKind::Delay { delay_secs: 10 })
+            .enqueue(
+                "agent-1",
+                "telegram",
+                "Hello",
+                DeferralKind::Delay { delay_secs: 10 },
+            )
             .unwrap();
 
         assert_eq!(queue.len(), 1);
@@ -613,13 +627,28 @@ mod tests {
         let mut queue = DeferredReplyQueue::new();
 
         queue
-            .enqueue("agent-1", "telegram", "Normal", DeferralKind::Delay { delay_secs: 60 })
+            .enqueue(
+                "agent-1",
+                "telegram",
+                "Normal",
+                DeferralKind::Delay { delay_secs: 60 },
+            )
             .unwrap();
         queue
-            .enqueue("agent-2", "telegram", "Heartbeat", DeferralKind::NextHeartbeat)
+            .enqueue(
+                "agent-2",
+                "telegram",
+                "Heartbeat",
+                DeferralKind::NextHeartbeat,
+            )
             .unwrap();
         queue
-            .enqueue("agent-3", "telegram", "Another HB", DeferralKind::NextHeartbeat)
+            .enqueue(
+                "agent-3",
+                "telegram",
+                "Another HB",
+                DeferralKind::NextHeartbeat,
+            )
             .unwrap();
 
         assert_eq!(queue.len(), 3);
@@ -637,7 +666,12 @@ mod tests {
         let mut queue = DeferredReplyQueue::new();
 
         let id = queue
-            .enqueue("agent-1", "telegram", "Cancel me", DeferralKind::NextHeartbeat)
+            .enqueue(
+                "agent-1",
+                "telegram",
+                "Cancel me",
+                DeferralKind::NextHeartbeat,
+            )
             .unwrap();
 
         assert_eq!(queue.len(), 1);
@@ -681,7 +715,12 @@ mod tests {
         {
             let mut queue = DeferredReplyQueue::with_persistence(&path).unwrap();
             queue
-                .enqueue("agent-1", "telegram", "Persist me", DeferralKind::NextHeartbeat)
+                .enqueue(
+                    "agent-1",
+                    "telegram",
+                    "Persist me",
+                    DeferralKind::NextHeartbeat,
+                )
                 .unwrap();
             queue
                 .enqueue(

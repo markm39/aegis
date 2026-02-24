@@ -118,8 +118,7 @@ pub fn discover_hooks(hooks_dir: &Path) -> Result<Vec<DiscoveredHook>, String> {
     if manifest_path.exists() {
         match config::load_manifest(&manifest_path) {
             Ok(manifest) => {
-                let (manifest_hooks, scripts) =
-                    discover_from_manifest(&manifest, hooks_dir);
+                let (manifest_hooks, scripts) = discover_from_manifest(&manifest, hooks_dir);
                 hooks.extend(manifest_hooks);
                 manifest_scripts = scripts;
             }
@@ -205,8 +204,8 @@ fn discover_by_convention(
     hooks_dir: &Path,
     manifest_scripts: &[PathBuf],
 ) -> Result<Vec<DiscoveredHook>, String> {
-    let entries = std::fs::read_dir(hooks_dir)
-        .map_err(|e| format!("failed to read hooks directory: {e}"))?;
+    let entries =
+        std::fs::read_dir(hooks_dir).map_err(|e| format!("failed to read hooks directory: {e}"))?;
 
     let mut hooks = Vec::new();
 

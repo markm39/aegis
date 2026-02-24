@@ -13,6 +13,7 @@ use aegis_alert::AlertEvent;
 use aegis_types::{Action, AegisError, Verdict};
 
 use crate::channel_audit::ChannelAuditEntry;
+use crate::redaction::PiiRedactor;
 use crate::entry::AuditEntry;
 use crate::fs_audit::FsAuditEntry;
 use crate::integrity::IntegrityReport;
@@ -143,6 +144,7 @@ pub struct AuditStore {
     latest_hash: String,
     alert_tx: Option<SyncSender<AlertEvent>>,
     middleware: Vec<Arc<dyn AuditMiddleware>>,
+    redactor: Option<PiiRedactor>,
 }
 
 impl AuditStore {
@@ -199,7 +201,16 @@ impl AuditStore {
             latest_hash,
             alert_tx: None,
             middleware: Vec::new(),
+            redactor: None,
         })
+    }
+
+    /// Attach a PII redactor to this store.
+    ///
+    /// When set, the redactor is applied to the `action_kind`, `principal`,
+    /// and `reason` fields of every audit entry before it is persisted.
+    pub fn set_redactor(&mut self, redactor: PiiRedactor) {
+        self.redactor = Some(redactor);
     }
 
     /// Set the alert channel sender for real-time webhook alerting.
@@ -327,25 +338,49 @@ impl AuditStore {
     /// Append a new entry to the ledger with a session ID attached.
     ///
     /// Like `append()`, but also sets the `session_id` column and increments
-    /// the session's action/denied counters.
+    /// the session's action/denied counters. Both operations are wrapped in
+    /// a SAVEPOINT so they succeed or fail atomically -- a crash between the
+    /// INSERT and UPDATE cannot leave the ledger in an inconsistent state.
     pub fn append_with_session(
         &mut self,
         action: &Action,
         verdict: &Verdict,
         session_id: &Uuid,
     ) -> Result<AuditEntry, AegisError> {
-        let entry = self.insert_entry(action, verdict, Some(session_id))?;
-
-        // Update session counters in a single query
-        let denied_incr: i64 = if entry.decision == "Deny" { 1 } else { 0 };
         self.conn
-            .execute(
-                "UPDATE sessions SET total_actions = total_actions + 1, denied_actions = denied_actions + ?1 WHERE session_id = ?2",
-                params![denied_incr, session_id.to_string()],
-            )
-            .map_err(|e| AegisError::LedgerError(format!("failed to update session counters for {session_id}: {e}")))?;
+            .execute_batch("SAVEPOINT append_session")
+            .map_err(|e| AegisError::LedgerError(format!("SAVEPOINT failed: {e}")))?;
 
-        Ok(entry)
+        let result = (|| {
+            let entry = self.insert_entry(action, verdict, Some(session_id))?;
+
+            let denied_incr: i64 = if entry.decision == "Deny" { 1 } else { 0 };
+            self.conn
+                .execute(
+                    "UPDATE sessions SET total_actions = total_actions + 1, denied_actions = denied_actions + ?1 WHERE session_id = ?2",
+                    params![denied_incr, session_id.to_string()],
+                )
+                .map_err(|e| AegisError::LedgerError(format!("failed to update session counters for {session_id}: {e}")))?;
+
+            Ok(entry)
+        })();
+
+        match &result {
+            Ok(_) => {
+                self.conn
+                    .execute_batch("RELEASE SAVEPOINT append_session")
+                    .map_err(|e| AegisError::LedgerError(format!("RELEASE failed: {e}")))?;
+            }
+            Err(_) => {
+                // Rollback on error to restore consistency.
+                let _ = self
+                    .conn
+                    .execute_batch("ROLLBACK TO SAVEPOINT append_session");
+                let _ = self.conn.execute_batch("RELEASE SAVEPOINT append_session");
+            }
+        }
+
+        result
     }
 
     /// Internal helper: create an AuditEntry, insert it, and update the chain tip.
@@ -355,7 +390,16 @@ impl AuditStore {
         verdict: &Verdict,
         session_id: Option<&Uuid>,
     ) -> Result<AuditEntry, AegisError> {
-        let entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
+        let mut entry = AuditEntry::new(action, verdict, self.latest_hash.clone())?;
+
+        // Apply PII redaction before persistence. Recompute the hash so
+        // integrity verification works against the redacted content.
+        if let Some(ref redactor) = self.redactor {
+            entry.action_kind = redactor.redact(&entry.action_kind);
+            entry.principal = redactor.redact(&entry.principal);
+            entry.reason = redactor.redact(&entry.reason);
+            entry.entry_hash = entry.recompute_hash();
+        }
 
         self.conn
             .execute(
@@ -465,6 +509,58 @@ impl AuditStore {
             Err(e) => {
                 let _ = self.conn.execute_batch("ROLLBACK TO purge_entries");
                 let _ = self.conn.execute_batch("RELEASE purge_entries");
+                Err(e)
+            }
+        }
+    }
+
+    /// Purge the oldest entries, keeping at most `keep` entries.
+    ///
+    /// If the ledger has fewer than or equal to `keep` entries, this is a
+    /// no-op. Otherwise, deletes the oldest entries (by rowid) until exactly
+    /// `keep` entries remain, then rebuilds the hash chain. Returns the number
+    /// of entries deleted.
+    pub fn purge_oldest(&mut self, keep: usize) -> Result<usize, AegisError> {
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
+            .map_err(|e| AegisError::LedgerError(format!("purge_oldest count failed: {e}")))?;
+
+        let to_delete = total.saturating_sub(keep as i64);
+        if to_delete <= 0 {
+            return Ok(0);
+        }
+
+        self.conn
+            .execute_batch("SAVEPOINT purge_oldest")
+            .map_err(|e| AegisError::LedgerError(format!("begin purge_oldest savepoint: {e}")))?;
+
+        let result = (|| {
+            self.conn
+                .execute(
+                    "DELETE FROM audit_log WHERE id IN (SELECT id FROM audit_log ORDER BY id ASC LIMIT ?1)",
+                    params![to_delete],
+                )
+                .map_err(|e| {
+                    AegisError::LedgerError(format!("purge_oldest delete failed: {e}"))
+                })?;
+
+            self.rebuild_hash_chain()?;
+            Ok::<(), AegisError>(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.conn
+                    .execute_batch("RELEASE purge_oldest")
+                    .map_err(|e| {
+                        AegisError::LedgerError(format!("release purge_oldest savepoint: {e}"))
+                    })?;
+                Ok(to_delete as usize)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO purge_oldest");
+                let _ = self.conn.execute_batch("RELEASE purge_oldest");
                 Err(e)
             }
         }
@@ -955,5 +1051,72 @@ mod tests {
     #[test]
     fn extract_action_variant_fallback() {
         assert_eq!(extract_action_variant("not json"), "not json");
+    }
+
+    #[test]
+    fn purge_oldest_keeps_n_entries() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        for i in 0..5 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, "ok", None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        // Keep only 2 entries, delete the oldest 3
+        let deleted = store.purge_oldest(2).unwrap();
+        assert_eq!(deleted, 3);
+        assert_eq!(store.count().unwrap(), 2);
+
+        // Hash chain should still be valid
+        let report = store.verify_integrity().unwrap();
+        assert!(report.valid, "chain should be valid: {}", report.message);
+    }
+
+    #[test]
+    fn purge_oldest_noop_when_below_limit() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        for i in 0..3 {
+            let action = sample_action(&format!("agent-{i}"));
+            let verdict = Verdict::allow(action.id, "ok", None);
+            store.append(&action, &verdict).unwrap();
+        }
+
+        let deleted = store.purge_oldest(10).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(store.count().unwrap(), 3);
+    }
+
+    #[test]
+    fn redactor_scrubs_pii_before_insert() {
+        let tmp = test_db_path();
+        let mut store = AuditStore::open(tmp.path()).unwrap();
+
+        let redactor = PiiRedactor::new(true);
+        store.set_redactor(redactor);
+
+        // Action with PII in the principal and reason fields
+        let action = Action::new(
+            "user@example.com",
+            ActionKind::FileRead {
+                path: PathBuf::from("/tmp/data.txt"),
+            },
+        );
+        let verdict = Verdict::deny(action.id, "blocked for user@test.org", None);
+        let entry = store.append(&action, &verdict).unwrap();
+
+        // The stored entry should have redacted PII
+        assert_eq!(entry.principal, "[EMAIL]");
+        assert_eq!(entry.reason, "blocked for [EMAIL]");
+
+        // Hash should match the redacted content
+        assert_eq!(entry.entry_hash, entry.recompute_hash());
+
+        // Integrity chain should still be valid
+        let report = store.verify_integrity().unwrap();
+        assert!(report.valid, "chain should be valid: {}", report.message);
     }
 }

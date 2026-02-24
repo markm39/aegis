@@ -34,7 +34,7 @@ use crate::format;
 // ---------------------------------------------------------------------------
 
 /// Configuration for the LINE channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LineConfig {
     /// LINE channel access token (Messaging API).
     pub channel_access_token: String,
@@ -52,6 +52,19 @@ pub struct LineConfig {
     /// Whether multicast sending is enabled.
     #[serde(default)]
     pub multicast_enabled: bool,
+}
+
+impl std::fmt::Debug for LineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LineConfig")
+            .field("channel_access_token", &"[REDACTED]")
+            .field("user_id", &self.user_id)
+            .field("channel_secret", &"[REDACTED]")
+            .field("webhook_port", &self.webhook_port)
+            .field("oauth_channel_id", &self.oauth_channel_id)
+            .field("multicast_enabled", &self.multicast_enabled)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -248,16 +261,14 @@ impl LineWebhook {
     /// timing attacks. Returns `true` if the signature is valid.
     pub fn verify_signature(&self, body: &[u8], signature: &str) -> bool {
         // Decode the base64 signature from the header
-        let sig_bytes = match base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            signature,
-        ) {
-            Ok(b) => b,
-            Err(_) => {
-                warn!("LINE webhook: invalid base64 in signature header");
-                return false;
-            }
-        };
+        let sig_bytes =
+            match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature) {
+                Ok(b) => b,
+                Err(_) => {
+                    warn!("LINE webhook: invalid base64 in signature header");
+                    return false;
+                }
+            };
 
         // Compute HMAC-SHA256 of the body using the channel secret
         let mut mac = match Hmac::<Sha256>::new_from_slice(self.channel_secret.as_bytes()) {
@@ -548,9 +559,7 @@ pub fn validate_user_id(user_id: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-')
     {
-        return Err(
-            "user ID must contain only alphanumeric characters and dashes".into(),
-        );
+        return Err("user ID must contain only alphanumeric characters and dashes".into());
     }
     Ok(())
 }
@@ -562,8 +571,7 @@ pub fn validate_user_id(user_id: &str) -> Result<(), String> {
 /// - Must use HTTPS scheme
 /// - Must not resolve to a private/reserved IP address
 pub fn validate_base_url(base_url: &str) -> Result<(), String> {
-    let parsed =
-        Url::parse(base_url).map_err(|e| format!("invalid URL: {e}"))?;
+    let parsed = Url::parse(base_url).map_err(|e| format!("invalid URL: {e}"))?;
 
     // Must be HTTPS
     if parsed.scheme() != "https" {
@@ -571,9 +579,7 @@ pub fn validate_base_url(base_url: &str) -> Result<(), String> {
     }
 
     // Must have a host
-    let host = parsed
-        .host_str()
-        .ok_or("base URL must have a host")?;
+    let host = parsed.host_str().ok_or("base URL must have a host")?;
 
     // Check for private/reserved IP addresses
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -697,7 +703,9 @@ impl LineApi {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(ChannelError::Api(format!("LINE push failed ({status}): {text}")));
+            return Err(ChannelError::Api(format!(
+                "LINE push failed ({status}): {text}"
+            )));
         }
 
         Ok(())
@@ -1072,10 +1080,8 @@ mod tests {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
         let expected = mac.finalize().into_bytes();
-        let valid_sig = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            expected,
-        );
+        let valid_sig =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, expected);
 
         // Valid signature should pass
         assert!(webhook.verify_signature(body, &valid_sig));
@@ -1105,10 +1111,8 @@ mod tests {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
         let expected = mac.finalize().into_bytes();
-        let valid_sig = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            expected,
-        );
+        let valid_sig =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, expected);
 
         assert!(webhook.verify_signature(body, &valid_sig));
 
@@ -1149,8 +1153,13 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         match &events[0] {
-            LineWebhookEvent::Postback { postback, source, .. } => {
-                assert_eq!(postback.data, "approve:550e8400-e29b-41d4-a716-446655440000");
+            LineWebhookEvent::Postback {
+                postback, source, ..
+            } => {
+                assert_eq!(
+                    postback.data,
+                    "approve:550e8400-e29b-41d4-a716-446655440000"
+                );
                 assert_eq!(source.source_type, "user");
                 assert_eq!(source.user_id.as_deref(), Some("U1234567890abcdef"));
             }
@@ -1162,7 +1171,10 @@ mod tests {
         assert!(action.is_some());
         match action.unwrap() {
             InboundAction::Command(cmd) => {
-                assert!(matches!(cmd, aegis_control::command::Command::Approve { .. }));
+                assert!(matches!(
+                    cmd,
+                    aegis_control::command::Command::Approve { .. }
+                ));
             }
             other => panic!("expected Command, got {other:?}"),
         }
@@ -1236,7 +1248,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multicast_api_call() {
-        use wiremock::matchers::{method, path, header};
+        use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
@@ -1251,9 +1263,7 @@ mod tests {
 
         let api = LineApi::with_base_url("test-token", &mock_server.uri());
 
-        let user_ids: Vec<String> = (0..3)
-            .map(|i| format!("U{:032x}", i))
-            .collect();
+        let user_ids: Vec<String> = (0..3).map(|i| format!("U{:032x}", i)).collect();
 
         let messages = vec![LineApi::text_message("hello multicast")];
 
@@ -1265,9 +1275,7 @@ mod tests {
     async fn test_multicast_exceeds_limit() {
         let api = LineApi::with_base_url("test-token", "https://api.line.me");
 
-        let user_ids: Vec<String> = (0..501)
-            .map(|i| format!("U{:032x}", i))
-            .collect();
+        let user_ids: Vec<String> = (0..501).map(|i| format!("U{:032x}", i)).collect();
 
         let messages = vec![LineApi::text_message("hello")];
 
@@ -1451,7 +1459,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_push_message() {
-        use wiremock::matchers::{method, path, header};
+        use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;

@@ -248,9 +248,7 @@ fn extract_and_validate_auth(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .unwrap_or("");
+    let token = auth_header.strip_prefix("Bearer ").unwrap_or("");
 
     if token.is_empty() {
         return Err((
@@ -305,9 +303,7 @@ fn check_rate_limit(
 }
 
 /// Validate that Content-Type is application/json.
-fn validate_content_type(
-    headers: &HeaderMap,
-) -> Result<(), (StatusCode, Json<AcpErrorResponse>)> {
+fn validate_content_type(headers: &HeaderMap) -> Result<(), (StatusCode, Json<AcpErrorResponse>)> {
     let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -558,20 +554,15 @@ async fn acp_list_sessions(
 /// Validate the fields of an ACP message.
 ///
 /// Rejects messages with empty required fields or suspicious content.
-fn validate_acp_message(
-    msg: &AcpMessage,
-) -> Result<(), (StatusCode, Json<AcpErrorResponse>)> {
+fn validate_acp_message(msg: &AcpMessage) -> Result<(), (StatusCode, Json<AcpErrorResponse>)> {
     match msg {
         AcpMessage::Request { id, method, .. } => {
             if method.is_empty() {
                 return Err((
                     StatusCode::BAD_REQUEST,
                     Json(
-                        AcpErrorResponse::new(
-                            "INVALID_METHOD",
-                            "request method must not be empty",
-                        )
-                        .with_request_id(*id),
+                        AcpErrorResponse::new("INVALID_METHOD", "request method must not be empty")
+                            .with_request_id(*id),
                     ),
                 ));
             }
@@ -616,8 +607,7 @@ fn validate_acp_message(
                 (
                     StatusCode::BAD_REQUEST,
                     Json(
-                        AcpErrorResponse::new("INVALID_PAYLOAD", msg)
-                            .with_request_id(*request_id),
+                        AcpErrorResponse::new("INVALID_PAYLOAD", msg).with_request_id(*request_id),
                     ),
                 )
             })
@@ -681,9 +671,7 @@ fn validate_acp_message(
 fn validate_json_depth(value: &serde_json::Value, max_depth: usize) -> Result<(), String> {
     fn check(value: &serde_json::Value, depth: usize, max: usize) -> Result<(), String> {
         if depth > max {
-            return Err(format!(
-                "JSON nesting depth exceeds maximum of {max}"
-            ));
+            return Err(format!("JSON nesting depth exceeds maximum of {max}"));
         }
         match value {
             serde_json::Value::Array(arr) => {
@@ -709,7 +697,9 @@ fn validate_json_depth(value: &serde_json::Value, max_depth: usize) -> Result<()
 /// to "default" if not specified in the payload.
 fn extract_routing_info(msg: &AcpMessage) -> (String, String) {
     match msg {
-        AcpMessage::Request { method, payload, .. } => {
+        AcpMessage::Request {
+            method, payload, ..
+        } => {
             let target = payload
                 .get("target_agent")
                 .and_then(|v| v.as_str())

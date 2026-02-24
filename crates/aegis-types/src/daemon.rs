@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{
     AdapterConfig, AlertRule, ChannelConfig, ChannelRoutingConfig, IsolationConfig, PilotConfig,
 };
+use crate::ids::AgentName;
 
 /// Security preset applied during onboarding.
 ///
@@ -523,7 +524,7 @@ pub struct PluginConfig {
 #[serde(deny_unknown_fields)]
 pub struct AgentSlotConfig {
     /// Unique name for this slot (used in CLI commands and logs).
-    pub name: String,
+    pub name: AgentName,
     /// Which AI tool to run and how to configure it.
     pub tool: AgentToolConfig,
     /// Working directory for the agent process.
@@ -938,7 +939,7 @@ impl DaemonConfig {
             .map_err(|e| crate::AegisError::DaemonError(format!("invalid daemon config: {e}")))?;
 
         for agent in &config.agents {
-            crate::validate_config_name(&agent.name).map_err(|e| {
+            crate::validate_config_name(agent.name.as_str()).map_err(|e| {
                 crate::AegisError::DaemonError(format!("invalid agent name {:?}: {e}", agent.name))
             })?;
             if let Some(ref lane) = agent.lane {

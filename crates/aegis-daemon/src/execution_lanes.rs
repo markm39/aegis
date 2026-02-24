@@ -162,9 +162,7 @@ impl LaneManager {
             .ok_or_else(|| format!("lane {lane_name:?} does not exist"))?;
 
         if lane.current == 0 {
-            return Err(format!(
-                "lane {lane_name:?} has no active slots to release"
-            ));
+            return Err(format!("lane {lane_name:?} has no active slots to release"));
         }
 
         lane.current -= 1;

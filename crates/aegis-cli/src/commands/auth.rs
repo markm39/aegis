@@ -295,7 +295,9 @@ pub fn logout(provider: &str) -> anyhow::Result<()> {
     let mut store = load_store(&path)?;
 
     let removed_count = store.profiles.len();
-    store.profiles.retain(|p| p.provider != provider && p.id != provider);
+    store
+        .profiles
+        .retain(|p| p.provider != provider && p.id != provider);
     let removed = removed_count - store.profiles.len();
 
     if removed == 0 {
@@ -350,8 +352,7 @@ pub fn status() -> anyhow::Result<()> {
     }
 
     // Show stored OAuth tokens.
-    let stored = aegis_types::oauth::list_stored_providers()
-        .unwrap_or_default();
+    let stored = aegis_types::oauth::list_stored_providers().unwrap_or_default();
 
     if stored.is_empty() {
         println!("\nNo stored OAuth tokens.");
@@ -367,13 +368,9 @@ pub fn status() -> anyhow::Result<()> {
                         expires_in_secs,
                         scope,
                     }) => {
-                        let scope_str = scope
-                            .as_deref()
-                            .unwrap_or("(none)");
+                        let scope_str = scope.as_deref().unwrap_or("(none)");
                         let minutes = expires_in_secs / 60;
-                        println!(
-                            "  {provider}: valid (expires in {minutes}m, scope={scope_str})"
-                        );
+                        println!("  {provider}: valid (expires in {minutes}m, scope={scope_str})");
                     }
                     Ok(aegis_types::oauth::TokenStatus::Expired { has_refresh }) => {
                         let refresh_note = if has_refresh {
@@ -461,10 +458,7 @@ pub fn refresh(provider: &str) -> anyhow::Result<()> {
     // Build the token refresh request.
     let config = aegis_types::oauth::OAuthConfig {
         client_id,
-        client_secret_env: endpoints
-            .client_secret_env
-            .clone()
-            .unwrap_or_default(),
+        client_secret_env: endpoints.client_secret_env.clone().unwrap_or_default(),
         auth_url: endpoints.authorize_url.clone(),
         token_url: endpoints.token_url.clone(),
         scopes: endpoints.default_scopes.clone(),

@@ -247,11 +247,7 @@ impl TelegramApi {
     ///
     /// The action automatically expires after about 5 seconds or when a message
     /// is sent. Call repeatedly for long-running operations.
-    pub async fn send_chat_action(
-        &self,
-        chat_id: i64,
-        action: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn send_chat_action(&self, chat_id: i64, action: &str) -> Result<(), ChannelError> {
         let body = json!({
             "chat_id": chat_id,
             "action": action,
@@ -322,11 +318,7 @@ impl TelegramApi {
     /// The bot can delete messages it sent, or (in groups) messages from other
     /// users if it has the `can_delete_messages` admin permission. Messages
     /// older than 48 hours cannot be deleted.
-    pub async fn delete_message(
-        &self,
-        chat_id: i64,
-        message_id: i64,
-    ) -> Result<(), ChannelError> {
+    pub async fn delete_message(&self, chat_id: i64, message_id: i64) -> Result<(), ChannelError> {
         let body = json!({
             "chat_id": chat_id,
             "message_id": message_id,
@@ -451,12 +443,9 @@ impl TelegramApi {
             return Err(ChannelError::Api(desc));
         }
 
-        api_resp
-            .result
-            .map(|m| m.message_id)
-            .ok_or_else(|| {
-                ChannelError::Api("sendMessage (thread) returned ok but no result".into())
-            })
+        api_resp.result.map(|m| m.message_id).ok_or_else(|| {
+            ChannelError::Api("sendMessage (thread) returned ok but no result".into())
+        })
     }
 
     /// Remove inline keyboard buttons from a message (prevents double-tap).
@@ -625,11 +614,7 @@ impl TelegramApi {
     ///
     /// The `sticker` parameter should be a validated file_id. Use
     /// [`super::types::validate_sticker_file_id`] to validate before calling.
-    pub async fn send_sticker(
-        &self,
-        chat_id: i64,
-        sticker: &str,
-    ) -> Result<i64, ChannelError> {
+    pub async fn send_sticker(&self, chat_id: i64, sticker: &str) -> Result<i64, ChannelError> {
         // Validate the sticker file_id before sending
         super::types::validate_sticker_file_id(sticker)
             .map_err(|e| ChannelError::Other(format!("invalid sticker file_id: {e}")))?;
@@ -867,8 +852,8 @@ impl HtmlBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{InputMessageContent, Invoice as InvoiceType};
+    use super::*;
 
     #[test]
     fn build_keyboard_from_buttons() {
@@ -929,10 +914,7 @@ mod tests {
             b.text("Visit ");
             b.link("https://example.com", "Example");
         });
-        assert_eq!(
-            result,
-            "Visit <a href=\"https://example.com\">Example</a>"
-        );
+        assert_eq!(result, "Visit <a href=\"https://example.com\">Example</a>");
     }
 
     #[test]
@@ -940,10 +922,7 @@ mod tests {
         let result = format_html(|b| {
             b.bold("<script>alert(1)</script>");
         });
-        assert_eq!(
-            result,
-            "<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>"
-        );
+        assert_eq!(result, "<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>");
     }
 
     #[test]
@@ -982,10 +961,7 @@ mod tests {
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["type"], "article");
         assert_eq!(arr[0]["title"], "Agent Status");
-        assert_eq!(
-            arr[0]["input_message_content"]["message_text"],
-            "/status"
-        );
+        assert_eq!(arr[0]["input_message_content"]["message_text"], "/status");
     }
 
     // -- Payment invoice construction tests --
@@ -1080,12 +1056,10 @@ mod tests {
                 "text": "updated text",
                 "parse_mode": "MarkdownV2"
             })))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "ok": true,
-                    "result": {"message_id": 42, "text": "updated text"}
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "result": {"message_id": 42, "text": "updated text"}
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1107,12 +1081,10 @@ mod tests {
                 "message_id": 42,
                 "text": "plain text"
             })))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "ok": true,
-                    "result": {"message_id": 42, "text": "plain text"}
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "result": {"message_id": 42, "text": "plain text"}
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1244,12 +1216,10 @@ mod tests {
 
         Mock::given(matchers::method("POST"))
             .and(matchers::path_regex(r"/bot.*/deleteMessage"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "ok": false,
-                    "description": "message to delete not found"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": false,
+                "description": "message to delete not found"
+            })))
             .mount(&server)
             .await;
 

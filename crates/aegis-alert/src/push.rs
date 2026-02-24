@@ -219,10 +219,7 @@ pub fn validate_auth_key(key: &str) -> Result<(), String> {
         .map_err(|e| format!("auth key is not valid base64: {e}"))?;
 
     if bytes.len() != 16 {
-        return Err(format!(
-            "auth key must be 16 bytes, got {}",
-            bytes.len()
-        ));
+        return Err(format!("auth key must be 16 bytes, got {}", bytes.len()));
     }
 
     Ok(())
@@ -313,8 +310,7 @@ impl PushSubscriptionStore {
     ///
     /// Creates the `push_subscriptions` table if it does not exist.
     pub fn open(db_path: &str) -> Result<Self, String> {
-        let conn =
-            Connection::open(db_path).map_err(|e| format!("failed to open push DB: {e}"))?;
+        let conn = Connection::open(db_path).map_err(|e| format!("failed to open push DB: {e}"))?;
         Self::init_table(&conn)?;
         Ok(Self { conn })
     }
@@ -418,13 +414,11 @@ impl PushSubscriptionStore {
                     p256dh: row.get(2)?,
                     auth: row.get(3)?,
                     user_label: row.get(4)?,
-                    created_at: row
-                        .get::<_, String>(5)
-                        .map(|s| {
-                            DateTime::parse_from_rfc3339(&s)
-                                .map(|dt| dt.with_timezone(&Utc))
-                                .unwrap_or_default()
-                        })?,
+                    created_at: row.get::<_, String>(5).map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_default()
+                    })?,
                     last_used_at: row.get::<_, Option<String>>(6).map(|opt| {
                         opt.and_then(|s| {
                             DateTime::parse_from_rfc3339(&s)
@@ -470,13 +464,11 @@ impl PushSubscriptionStore {
                     p256dh: row.get(2)?,
                     auth: row.get(3)?,
                     user_label: row.get(4)?,
-                    created_at: row
-                        .get::<_, String>(5)
-                        .map(|s| {
-                            DateTime::parse_from_rfc3339(&s)
-                                .map(|dt| dt.with_timezone(&Utc))
-                                .unwrap_or_default()
-                        })?,
+                    created_at: row.get::<_, String>(5).map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_default()
+                    })?,
                     last_used_at: row.get::<_, Option<String>>(6).map(|opt| {
                         opt.and_then(|s| {
                             DateTime::parse_from_rfc3339(&s)
@@ -595,12 +587,10 @@ pub fn generate_vapid_jwt(vapid: &VapidConfig, audience: &str) -> Result<String,
         "sub": vapid.subject,
     });
 
-    let header_b64 = URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&header).map_err(|e| format!("JSON encode error: {e}"))?,
-    );
-    let payload_b64 = URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&payload).map_err(|e| format!("JSON encode error: {e}"))?,
-    );
+    let header_b64 = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&header).map_err(|e| format!("JSON encode error: {e}"))?);
+    let payload_b64 = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&payload).map_err(|e| format!("JSON encode error: {e}"))?);
     let signing_input = format!("{header_b64}.{payload_b64}");
 
     // Sign with ES256 (ECDSA P-256 + SHA-256).
@@ -664,8 +654,10 @@ pub async fn deliver_push_notification(
 
     // 4. RFC 8291 key derivation.
     // Step A: Extract IKM from auth secret + ECDH shared secret.
-    let hkdf_auth =
-        Hkdf::<Sha256>::new(Some(&auth_secret), shared_secret.raw_secret_bytes().as_slice());
+    let hkdf_auth = Hkdf::<Sha256>::new(
+        Some(&auth_secret),
+        shared_secret.raw_secret_bytes().as_slice(),
+    );
 
     // key_info = "WebPush: info\x00" + ua_public (65 bytes) + server_public (65 bytes)
     let mut key_info = Vec::with_capacity(144);
@@ -857,25 +849,16 @@ mod tests {
         assert!(result.unwrap_err().contains("HTTPS"));
 
         // Private IP rejected.
-        let result = store.add_subscription(
-            "https://192.168.1.1/push",
-            &p256dh,
-            &auth,
-            None,
-            None,
-        );
+        let result = store.add_subscription("https://192.168.1.1/push", &p256dh, &auth, None, None);
         assert!(result.is_err());
 
         // Unknown host rejected.
-        let result = store.add_subscription(
-            "https://evil.example.com/push",
-            &p256dh,
-            &auth,
-            None,
-            None,
-        );
+        let result =
+            store.add_subscription("https://evil.example.com/push", &p256dh, &auth, None, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not a recognized push service"));
+        assert!(result
+            .unwrap_err()
+            .contains("not a recognized push service"));
 
         // Valid FCM endpoint accepted.
         let result = store.add_subscription(&valid_endpoint(), &p256dh, &auth, None, None);
@@ -883,8 +866,7 @@ mod tests {
 
         // Valid Mozilla endpoint accepted.
         let store2 = PushSubscriptionStore::open_memory().unwrap();
-        let result =
-            store2.add_subscription(&valid_mozilla_endpoint(), &p256dh, &auth, None, None);
+        let result = store2.add_subscription(&valid_mozilla_endpoint(), &p256dh, &auth, None, None);
         assert!(result.is_ok());
     }
 
@@ -905,13 +887,8 @@ mod tests {
 
         // Wrong length p256dh (32 bytes instead of 65).
         let short_key = URL_SAFE_NO_PAD.encode(&[0xAA; 32]);
-        let result = store.add_subscription(
-            &valid_endpoint(),
-            &short_key,
-            &valid_auth(),
-            None,
-            None,
-        );
+        let result =
+            store.add_subscription(&valid_endpoint(), &short_key, &valid_auth(), None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("65 bytes"));
 
@@ -919,13 +896,7 @@ mod tests {
         let mut bad_point = vec![0x03u8];
         bad_point.extend_from_slice(&[0xAA; 64]);
         let bad_key = URL_SAFE_NO_PAD.encode(&bad_point);
-        let result = store.add_subscription(
-            &valid_endpoint(),
-            &bad_key,
-            &valid_auth(),
-            None,
-            None,
-        );
+        let result = store.add_subscription(&valid_endpoint(), &bad_key, &valid_auth(), None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("0x04"));
 
@@ -942,13 +913,8 @@ mod tests {
 
         // Wrong length auth (8 bytes instead of 16).
         let short_auth = URL_SAFE_NO_PAD.encode(&[0xCC; 8]);
-        let result = store.add_subscription(
-            &valid_endpoint(),
-            &valid_p256dh(),
-            &short_auth,
-            None,
-            None,
-        );
+        let result =
+            store.add_subscription(&valid_endpoint(), &valid_p256dh(), &short_auth, None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("16 bytes"));
     }
@@ -1007,10 +973,7 @@ mod tests {
         // Control characters stripped, but newline preserved.
         assert_eq!(notif.title, "Alert from Aegis");
         assert_eq!(notif.body, "Agent claude-1 needs\nattention");
-        assert_eq!(
-            notif.url.as_deref(),
-            Some("https://example.com/dashboard")
-        );
+        assert_eq!(notif.url.as_deref(), Some("https://example.com/dashboard"));
         assert_eq!(notif.tag.as_deref(), Some("urgent"));
     }
 

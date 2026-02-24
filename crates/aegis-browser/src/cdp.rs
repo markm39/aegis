@@ -134,11 +134,7 @@ impl CdpClient {
     ///
     /// Returns the result value from the CDP response. If the CDP response
     /// contains an error, it is returned as a `BrowserError::CdpError`.
-    pub async fn send_command(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, BrowserError> {
+    pub async fn send_command(&self, method: &str, params: Value) -> Result<Value, BrowserError> {
         self.send_command_with_timeout(method, params, Duration::from_secs(30))
             .await
     }
@@ -228,9 +224,7 @@ impl CdpClient {
     /// - Messages with an `id` field are responses to pending commands.
     /// - Messages with a `method` field (and no `id`) are events.
     async fn read_loop(
-        mut reader: futures_util::stream::SplitStream<
-            WebSocketStream<MaybeTlsStream<TcpStream>>,
-        >,
+        mut reader: futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         pending: Arc<Mutex<HashMap<u64, oneshot::Sender<CdpResponse>>>>,
         event_tx: mpsc::UnboundedSender<CdpEvent>,
     ) {
@@ -245,12 +239,10 @@ impl CdpClient {
 
             let text = match msg {
                 Message::Text(t) => t.to_string(),
-                Message::Binary(b) => {
-                    match String::from_utf8(b.to_vec()) {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    }
-                }
+                Message::Binary(b) => match String::from_utf8(b.to_vec()) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                },
                 Message::Close(_) => {
                     tracing::info!("WebSocket closed by remote");
                     break;
@@ -357,7 +349,11 @@ mod tests {
 
     #[test]
     fn test_build_cdp_message() {
-        let msg = build_cdp_message(42, "Page.navigate", serde_json::json!({"url": "https://example.com"}));
+        let msg = build_cdp_message(
+            42,
+            "Page.navigate",
+            serde_json::json!({"url": "https://example.com"}),
+        );
         assert_eq!(msg["id"], 42);
         assert_eq!(msg["method"], "Page.navigate");
         assert_eq!(msg["params"]["url"], "https://example.com");

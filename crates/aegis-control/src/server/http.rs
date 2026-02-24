@@ -370,10 +370,7 @@ async fn fleet_list_agents(
     };
     match send_daemon_cmd(daemon_tx, DaemonCommand::ListAgents).await {
         Ok(resp) => daemon_resp_to_http(resp),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(CommandResponse::error(e)),
-        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(CommandResponse::error(e))),
     }
 }
 
@@ -392,10 +389,7 @@ async fn fleet_start_agent(
     };
     match send_daemon_cmd(daemon_tx, DaemonCommand::StartAgent { name }).await {
         Ok(resp) => daemon_resp_to_http(resp),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(CommandResponse::error(e)),
-        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(CommandResponse::error(e))),
     }
 }
 
@@ -414,10 +408,7 @@ async fn fleet_stop_agent(
     };
     match send_daemon_cmd(daemon_tx, DaemonCommand::StopAgent { name }).await {
         Ok(resp) => daemon_resp_to_http(resp),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(CommandResponse::error(e)),
-        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(CommandResponse::error(e))),
     }
 }
 
@@ -436,10 +427,7 @@ async fn fleet_restart_agent(
     };
     match send_daemon_cmd(daemon_tx, DaemonCommand::RestartAgent { name }).await {
         Ok(resp) => daemon_resp_to_http(resp),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(CommandResponse::error(e)),
-        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(CommandResponse::error(e))),
     }
 }
 
@@ -458,10 +446,7 @@ async fn fleet_agent_context(
     };
     match send_daemon_cmd(daemon_tx, DaemonCommand::GetAgentContext { name }).await {
         Ok(resp) => daemon_resp_to_http(resp),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(CommandResponse::error(e)),
-        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(CommandResponse::error(e))),
     }
 }
 
@@ -479,10 +464,7 @@ async fn fleet_config_reload(
     };
     match send_daemon_cmd(daemon_tx, DaemonCommand::ReloadConfig).await {
         Ok(resp) => daemon_resp_to_http(resp),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(CommandResponse::error(e)),
-        ),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(CommandResponse::error(e))),
     }
 }
 

@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 
 use aegis_ledger::SessionFilter;
 
-use crate::commands::init::open_store;
 use crate::commands::DATETIME_FULL_FMT;
+use crate::commands::init::open_store;
 
 /// Table separator width for session listings.
 const SESSION_TABLE_WIDTH: usize = 140;
@@ -377,9 +377,7 @@ pub fn delete(config_name: &str, session_id_str: &str, confirm: bool) -> Result<
         .delete_session(&session_id)
         .with_context(|| format!("failed to delete session {session_id_str}"))?;
 
-    println!(
-        "Deleted session {session_id} and {entry_count} audit entries."
-    );
+    println!("Deleted session {session_id} and {entry_count} audit entries.");
     Ok(())
 }
 
@@ -454,7 +452,11 @@ fn print_tree_node(node: &aegis_ledger::SessionTreeNode, prefix: &str) {
         format!("{} {}", node.session.command, node.session.args.join(" "))
     };
     let start = node.session.start_time.format(DATETIME_FULL_FMT);
-    let resumable = if node.session.resumable { " [resumable]" } else { "" };
+    let resumable = if node.session.resumable {
+        " [resumable]"
+    } else {
+        ""
+    };
 
     println!(
         "{prefix}{} [{status}] {start} {cmd}{resumable}",
@@ -479,11 +481,7 @@ fn print_tree_node(node: &aegis_ledger::SessionTreeNode, prefix: &str) {
         let child_cmd = if child.session.args.is_empty() {
             child.session.command.clone()
         } else {
-            format!(
-                "{} {}",
-                child.session.command,
-                child.session.args.join(" ")
-            )
+            format!("{} {}", child.session.command, child.session.args.join(" "))
         };
         let child_start = child.session.start_time.format(DATETIME_FULL_FMT);
         let child_resumable = if child.session.resumable {
@@ -523,7 +521,11 @@ fn print_tree_node_inline(node: &aegis_ledger::SessionTreeNode, prefix: &str) {
         format!("{} {}", node.session.command, node.session.args.join(" "))
     };
     let start = node.session.start_time.format(DATETIME_FULL_FMT);
-    let resumable = if node.session.resumable { " [resumable]" } else { "" };
+    let resumable = if node.session.resumable {
+        " [resumable]"
+    } else {
+        ""
+    };
 
     println!(
         "{} [{status}] {start} {cmd}{resumable}",

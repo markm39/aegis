@@ -239,9 +239,8 @@ impl OAuthTokenStore for FileTokenStore {
             })?;
         }
 
-        let content = serde_json::to_string_pretty(token).map_err(|e| {
-            AegisError::ConfigError(format!("failed to serialize token: {e}"))
-        })?;
+        let content = serde_json::to_string_pretty(token)
+            .map_err(|e| AegisError::ConfigError(format!("failed to serialize token: {e}")))?;
 
         std::fs::write(&self.path, &content).map_err(|e| {
             AegisError::ConfigError(format!(
@@ -382,11 +381,11 @@ fn validate_token_url(url: &str) -> Result<(), AegisError> {
 /// Extract the host portion from a URL string.
 fn extract_host(url: &str) -> Option<String> {
     // Strip scheme
-    let after_scheme = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let after_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     // Take everything up to the first `/`, `?`, or `:`
-    let host = after_scheme
-        .split(['/', '?', '#'])
-        .next()?;
+    let host = after_scheme.split(['/', '?', '#']).next()?;
     // Strip port if present
     let host = if let Some((h, _port)) = host.rsplit_once(':') {
         // Verify port is numeric to avoid stripping IPv6 addresses
@@ -413,7 +412,8 @@ fn is_private_or_loopback(host: &str) -> bool {
             || addr.is_private()
             || addr.is_link_local()
             || addr.is_unspecified()
-            || addr.octets()[0] == 100 && addr.octets()[1] >= 64 && addr.octets()[1] <= 127; // CGNAT
+            || addr.octets()[0] == 100 && addr.octets()[1] >= 64 && addr.octets()[1] <= 127;
+        // CGNAT
     }
 
     if let Ok(addr) = host.parse::<std::net::Ipv6Addr>() {
@@ -545,9 +545,10 @@ impl OAuthFlow {
             .map_err(|e| AegisError::ConfigError(format!("token exchange request failed: {e}")))?;
 
         let status = resp.status();
-        let body: serde_json::Value = resp.json().await.map_err(|e| {
-            AegisError::ConfigError(format!("failed to parse token response: {e}"))
-        })?;
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AegisError::ConfigError(format!("failed to parse token response: {e}")))?;
 
         if !status.is_success() {
             let error_desc = body
@@ -776,7 +777,12 @@ impl OAuthProviderRegistry {
                 authorize_url: "https://auth.openai.com/oauth/authorize".to_string(),
                 token_url: "https://auth.openai.com/oauth/token".to_string(),
                 device_code_url: Some("https://auth.openai.com/oauth/device/code".to_string()),
-                default_scopes: vec!["openid".to_string(), "profile".to_string(), "email".to_string(), "offline_access".to_string()],
+                default_scopes: vec![
+                    "openid".to_string(),
+                    "profile".to_string(),
+                    "email".to_string(),
+                    "offline_access".to_string(),
+                ],
                 client_id_env: "OPENAI_OAUTH_CLIENT_ID".to_string(),
                 client_secret_env: Some("OPENAI_OAUTH_CLIENT_SECRET".to_string()),
             },
@@ -920,9 +926,9 @@ pub fn request_device_code(
         .map_err(|e| AegisError::ConfigError(format!("device code request failed: {e}")))?;
 
     let status = resp.status();
-    let body: serde_json::Value = resp
-        .json()
-        .map_err(|e| AegisError::ConfigError(format!("failed to parse device code response: {e}")))?;
+    let body: serde_json::Value = resp.json().map_err(|e| {
+        AegisError::ConfigError(format!("failed to parse device code response: {e}"))
+    })?;
 
     if !status.is_success() {
         let error_desc = body
@@ -935,9 +941,8 @@ pub fn request_device_code(
         )));
     }
 
-    serde_json::from_value(body).map_err(|e| {
-        AegisError::ConfigError(format!("failed to parse device code response: {e}"))
-    })
+    serde_json::from_value(body)
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse device code response: {e}")))
 }
 
 /// Poll a token endpoint once during a device code flow.
@@ -1038,9 +1043,9 @@ pub fn request_device_code_with_pkce(
         .map_err(|e| AegisError::ConfigError(format!("device code request failed: {e}")))?;
 
     let status = resp.status();
-    let body: serde_json::Value = resp
-        .json()
-        .map_err(|e| AegisError::ConfigError(format!("failed to parse device code response: {e}")))?;
+    let body: serde_json::Value = resp.json().map_err(|e| {
+        AegisError::ConfigError(format!("failed to parse device code response: {e}"))
+    })?;
 
     if !status.is_success() {
         let error_desc = body
@@ -1053,9 +1058,8 @@ pub fn request_device_code_with_pkce(
         )));
     }
 
-    serde_json::from_value(body).map_err(|e| {
-        AegisError::ConfigError(format!("failed to parse device code response: {e}"))
-    })
+    serde_json::from_value(body)
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse device code response: {e}")))
 }
 
 /// Poll a token endpoint with PKCE code_verifier during a device code flow.
@@ -1161,15 +1165,12 @@ pub fn poll_minimax_device_code(
         .send()
         .map_err(|e| AegisError::ConfigError(format!("MiniMax poll request failed: {e}")))?;
 
-    let body: serde_json::Value = resp
-        .json()
-        .map_err(|e| AegisError::ConfigError(format!("failed to parse MiniMax poll response: {e}")))?;
+    let body: serde_json::Value = resp.json().map_err(|e| {
+        AegisError::ConfigError(format!("failed to parse MiniMax poll response: {e}"))
+    })?;
 
     // MiniMax uses a "status" field instead of standard OAuth error codes
-    let status = body
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
     match status {
         "success" => {
@@ -1272,7 +1273,13 @@ impl KeychainTokenStore {
 
         // Delete any existing entry first (ignore errors).
         let _ = std::process::Command::new("security")
-            .args(["delete-generic-password", "-s", &self.service, "-a", &self.account])
+            .args([
+                "delete-generic-password",
+                "-s",
+                &self.service,
+                "-a",
+                &self.account,
+            ])
             .output();
 
         let output = std::process::Command::new("security")
@@ -1327,9 +1334,8 @@ impl KeychainTokenStore {
             return Ok(None);
         }
 
-        let token: OAuthToken = serde_json::from_str(json).map_err(|e| {
-            AegisError::ConfigError(format!("failed to parse Keychain token: {e}"))
-        })?;
+        let token: OAuthToken = serde_json::from_str(json)
+            .map_err(|e| AegisError::ConfigError(format!("failed to parse Keychain token: {e}")))?;
         Ok(Some(token))
     }
 
@@ -1337,7 +1343,13 @@ impl KeychainTokenStore {
     #[cfg(target_os = "macos")]
     fn keychain_delete(&self) -> Result<(), AegisError> {
         let _ = std::process::Command::new("security")
-            .args(["delete-generic-password", "-s", &self.service, "-a", &self.account])
+            .args([
+                "delete-generic-password",
+                "-s",
+                &self.service,
+                "-a",
+                &self.account,
+            ])
             .output();
         Ok(())
     }
@@ -1753,10 +1765,22 @@ mod tests {
 
     #[test]
     fn test_extract_host() {
-        assert_eq!(extract_host("https://example.com/path"), Some("example.com".into()));
-        assert_eq!(extract_host("https://example.com:443/path"), Some("example.com".into()));
-        assert_eq!(extract_host("https://10.0.0.1/token"), Some("10.0.0.1".into()));
-        assert_eq!(extract_host("https://localhost/x"), Some("localhost".into()));
+        assert_eq!(
+            extract_host("https://example.com/path"),
+            Some("example.com".into())
+        );
+        assert_eq!(
+            extract_host("https://example.com:443/path"),
+            Some("example.com".into())
+        );
+        assert_eq!(
+            extract_host("https://10.0.0.1/token"),
+            Some("10.0.0.1".into())
+        );
+        assert_eq!(
+            extract_host("https://localhost/x"),
+            Some("localhost".into())
+        );
     }
 
     #[test]
@@ -1886,7 +1910,10 @@ mod tests {
 
         assert!(registry.get("custom-provider").is_some());
         let endpoints = registry.get("custom-provider").unwrap();
-        assert_eq!(endpoints.authorize_url, "https://custom.example.com/authorize");
+        assert_eq!(
+            endpoints.authorize_url,
+            "https://custom.example.com/authorize"
+        );
         assert!(!registry.supports_device_flow("custom-provider"));
     }
 
@@ -2085,11 +2112,7 @@ mod tests {
 
     #[test]
     fn test_device_code_url_must_be_https() {
-        let result = request_device_code(
-            "http://example.com/device/code",
-            "client-id",
-            "read",
-        );
+        let result = request_device_code("http://example.com/device/code", "client-id", "read");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("HTTPS"), "error should mention HTTPS: {err}");
@@ -2097,11 +2120,7 @@ mod tests {
 
     #[test]
     fn test_device_code_empty_client_id_rejected() {
-        let result = request_device_code(
-            "https://example.com/device/code",
-            "",
-            "read",
-        );
+        let result = request_device_code("https://example.com/device/code", "", "read");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -2112,11 +2131,7 @@ mod tests {
 
     #[test]
     fn test_poll_device_code_url_must_be_https() {
-        let result = poll_device_code(
-            "http://example.com/token",
-            "client-id",
-            "device-code-123",
-        );
+        let result = poll_device_code("http://example.com/token", "client-id", "device-code-123");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("HTTPS"), "error should mention HTTPS: {err}");

@@ -19,13 +19,22 @@ use crate::webhook::{WebhookChannel, WebhookConfig};
 // ---------------------------------------------------------------------------
 
 /// Configuration for the Lobster channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LobsterConfig {
     /// Lobster API base URL.
     pub api_url: String,
     /// API key for authentication.
     /// Sensitive: never log this value.
     pub api_key: String,
+}
+
+impl std::fmt::Debug for LobsterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LobsterConfig")
+            .field("api_url", &self.api_url)
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -59,10 +68,7 @@ impl LobsterChannel {
 
         let webhook = WebhookConfig {
             name: "lobster".to_string(),
-            outbound_url: format!(
-                "{}/api/messages",
-                config.api_url.trim_end_matches('/')
-            ),
+            outbound_url: format!("{}/api/messages", config.api_url.trim_end_matches('/')),
             inbound_url: None,
             auth_header: Some(format!("Bearer {}", config.api_key)),
             payload_template: r#"{"text":"{text}"}"#.to_string(),

@@ -177,8 +177,7 @@ mod tests {
     #[test]
     fn message_envelope_with_parent() {
         let parent_id = Uuid::new_v4();
-        let env = MessageEnvelope::new("a", "b", "direct", "reply")
-            .with_parent(parent_id);
+        let env = MessageEnvelope::new("a", "b", "direct", "reply").with_parent(parent_id);
         assert_eq!(env.parent_id, Some(parent_id));
     }
 

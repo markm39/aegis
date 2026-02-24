@@ -142,8 +142,8 @@ pub fn parse_manifest(toml_str: &str) -> Result<SkillManifest> {
 
 /// Parse a skill manifest from a file path.
 pub fn parse_manifest_file(path: &Path) -> Result<SkillManifest> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     parse_manifest(&content)
 }
 

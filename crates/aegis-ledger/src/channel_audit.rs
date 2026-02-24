@@ -124,7 +124,9 @@ impl AuditStore {
     ) -> Result<ChannelAuditEntry, AegisError> {
         let entry_id = Uuid::new_v4();
         let timestamp = Utc::now();
-        let prev_hash = self.latest_channel_hash().unwrap_or_else(|| "genesis".to_string());
+        let prev_hash = self
+            .latest_channel_hash()
+            .unwrap_or_else(|| "genesis".to_string());
 
         let entry_hash = compute_channel_entry_hash(
             &entry_id,
@@ -186,13 +188,17 @@ impl AuditStore {
         let rows = stmt
             .query_map(params![n as i64], |row| {
                 let direction_str: String = row.get(2)?;
-                let direction: ChannelDirection = direction_str.parse().map_err(|e: AegisError| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
-                    )
-                })?;
+                let direction: ChannelDirection =
+                    direction_str.parse().map_err(|e: AegisError| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                e.to_string(),
+                            )),
+                        )
+                    })?;
 
                 Ok(ChannelAuditEntry {
                     entry_id: crate::parse_helpers::parse_uuid(&row.get::<_, String>(0)?, 0)?,
@@ -206,7 +212,9 @@ impl AuditStore {
                     entry_hash: row.get(8)?,
                 })
             })
-            .map_err(|e| AegisError::LedgerError(format!("query_channel_audit_last failed: {e}")))?;
+            .map_err(|e| {
+                AegisError::LedgerError(format!("query_channel_audit_last failed: {e}"))
+            })?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| AegisError::LedgerError(format!("query_channel_audit_last read: {e}")))
@@ -309,8 +317,14 @@ mod tests {
         assert_eq!(inbound.to_string(), "Inbound");
         assert_eq!(outbound.to_string(), "Outbound");
 
-        assert_eq!("Inbound".parse::<ChannelDirection>().unwrap(), ChannelDirection::Inbound);
-        assert_eq!("Outbound".parse::<ChannelDirection>().unwrap(), ChannelDirection::Outbound);
+        assert_eq!(
+            "Inbound".parse::<ChannelDirection>().unwrap(),
+            ChannelDirection::Inbound
+        );
+        assert_eq!(
+            "Outbound".parse::<ChannelDirection>().unwrap(),
+            ChannelDirection::Outbound
+        );
         assert!("Invalid".parse::<ChannelDirection>().is_err());
 
         // JSON serialization

@@ -308,12 +308,18 @@ mod tests {
 
     #[test]
     fn acl_warning_display() {
-        assert_eq!(AclWarning::WorldWritable.to_string(), "file is world-writable");
+        assert_eq!(
+            AclWarning::WorldWritable.to_string(),
+            "file is world-writable"
+        );
         assert_eq!(
             AclWarning::SuspiciousOwner.to_string(),
             "file has a suspicious owner"
         );
-        assert_eq!(AclWarning::GuestAccess.to_string(), "Guest account has access");
+        assert_eq!(
+            AclWarning::GuestAccess.to_string(),
+            "Guest account has access"
+        );
         assert_eq!(
             AclWarning::EveryoneAccess.to_string(),
             "Everyone group has non-read access"
@@ -371,9 +377,7 @@ mod tests {
             fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).expect("chmod");
 
             let checker = UnixFileSecurityChecker::new();
-            let warnings = checker
-                .validate_safe_permissions(&file)
-                .expect("validate");
+            let warnings = checker.validate_safe_permissions(&file).expect("validate");
 
             assert!(
                 warnings.contains(&AclWarning::WorldWritable),
@@ -403,9 +407,7 @@ mod tests {
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("chmod");
 
             let checker = UnixFileSecurityChecker::new();
-            let warnings = checker
-                .validate_safe_permissions(&file)
-                .expect("validate");
+            let warnings = checker.validate_safe_permissions(&file).expect("validate");
 
             assert!(
                 warnings.is_empty(),
@@ -425,9 +427,7 @@ mod tests {
             fs::set_permissions(&file, fs::Permissions::from_mode(0o602)).expect("chmod");
 
             let checker = UnixFileSecurityChecker::new();
-            let warnings = checker
-                .validate_safe_permissions(&file)
-                .expect("validate");
+            let warnings = checker.validate_safe_permissions(&file).expect("validate");
 
             assert!(
                 warnings.contains(&AclWarning::WorldWritable),

@@ -120,9 +120,7 @@ impl<'a> HybridSearchEngine<'a> {
 
         // 3. Fuse results.
         match self.config.fusion_method {
-            FusionMethod::ReciprocalRankFusion => {
-                self.fuse_rrf(&bm25_results, &vector_results)
-            }
+            FusionMethod::ReciprocalRankFusion => self.fuse_rrf(&bm25_results, &vector_results),
             FusionMethod::WeightedLinear => {
                 self.fuse_weighted_linear(&bm25_results, &vector_results)
             }
@@ -307,16 +305,32 @@ mod tests {
 
     fn populate_store(store: &MemoryStore) {
         store
-            .set("ns1", "rust_intro", "Rust is a systems programming language focused on safety")
+            .set(
+                "ns1",
+                "rust_intro",
+                "Rust is a systems programming language focused on safety",
+            )
             .unwrap();
         store
-            .set("ns1", "python_intro", "Python is a dynamic programming language for data science")
+            .set(
+                "ns1",
+                "python_intro",
+                "Python is a dynamic programming language for data science",
+            )
             .unwrap();
         store
-            .set("ns1", "go_intro", "Go is a programming language by Google for cloud services")
+            .set(
+                "ns1",
+                "go_intro",
+                "Go is a programming language by Google for cloud services",
+            )
             .unwrap();
         store
-            .set("ns1", "cooking", "How to make pasta carbonara with bacon and eggs")
+            .set(
+                "ns1",
+                "cooking",
+                "How to make pasta carbonara with bacon and eggs",
+            )
             .unwrap();
     }
 
@@ -412,10 +426,7 @@ mod tests {
             .search("ns1", "Rust programming", Some(&query_emb), None)
             .unwrap();
 
-        assert!(
-            !results.is_empty(),
-            "hybrid search should return results"
-        );
+        assert!(!results.is_empty(), "hybrid search should return results");
 
         // Results should be sorted by fused score descending.
         for window in results.windows(2) {
@@ -473,9 +484,7 @@ mod tests {
             },
         );
 
-        let results = engine
-            .search_bm25_only("ns1", "programming", None)
-            .unwrap();
+        let results = engine.search_bm25_only("ns1", "programming", None).unwrap();
 
         assert!(
             results.len() <= 2,
@@ -498,14 +507,9 @@ mod tests {
             },
         );
 
-        let results = engine
-            .search_bm25_only("ns1", "programming", None)
-            .unwrap();
+        let results = engine.search_bm25_only("ns1", "programming", None).unwrap();
 
-        assert!(
-            results.is_empty(),
-            "no results should pass min_score=999.0"
-        );
+        assert!(results.is_empty(), "no results should pass min_score=999.0");
     }
 
     #[test]
@@ -545,9 +549,7 @@ mod tests {
             },
         );
 
-        let results = engine
-            .search_bm25_only("ns1", "programming", None)
-            .unwrap();
+        let results = engine.search_bm25_only("ns1", "programming", None).unwrap();
 
         for r in &results {
             assert!(

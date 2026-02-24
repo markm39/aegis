@@ -320,9 +320,10 @@ impl VoiceGateway {
 
         // Transition through Ending to Ended.
         if session.state != VoiceSessionState::Ending {
-            session.state = session.state.transition_to(VoiceSessionState::Ending).map_err(
-                |e| anyhow::anyhow!("{e}"),
-            )?;
+            session.state = session
+                .state
+                .transition_to(VoiceSessionState::Ending)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         session.state = session
             .state
@@ -410,9 +411,8 @@ pub fn validate_base64_audio(data: &str) -> Result<Vec<u8>, anyhow::Error> {
         return Err(anyhow::anyhow!("audio data is empty"));
     }
 
-    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).map_err(|e| {
-        anyhow::anyhow!("invalid base64 audio data: {e}")
-    })
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+        .map_err(|e| anyhow::anyhow!("invalid base64 audio data: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -446,19 +446,31 @@ mod tests {
                 .transition_to(VoiceSessionState::Active)
                 .expect("connecting -> active");
         }
-        assert_eq!(gw.get_session(&sid).unwrap().state, VoiceSessionState::Active);
+        assert_eq!(
+            gw.get_session(&sid).unwrap().state,
+            VoiceSessionState::Active
+        );
 
         // Pause (Active -> Paused).
         gw.pause_session(&sid).expect("should pause");
-        assert_eq!(gw.get_session(&sid).unwrap().state, VoiceSessionState::Paused);
+        assert_eq!(
+            gw.get_session(&sid).unwrap().state,
+            VoiceSessionState::Paused
+        );
 
         // Resume (Paused -> Active).
         gw.resume_session(&sid).expect("should resume");
-        assert_eq!(gw.get_session(&sid).unwrap().state, VoiceSessionState::Active);
+        assert_eq!(
+            gw.get_session(&sid).unwrap().state,
+            VoiceSessionState::Active
+        );
 
         // Stop (Active -> Ending -> Ended).
         gw.stop_session(&sid).expect("should stop");
-        assert_eq!(gw.get_session(&sid).unwrap().state, VoiceSessionState::Ended);
+        assert_eq!(
+            gw.get_session(&sid).unwrap().state,
+            VoiceSessionState::Ended
+        );
     }
 
     // -- Test 2: Session limit enforced --
@@ -547,8 +559,7 @@ mod tests {
 
         for msg in &messages {
             let json = serde_json::to_string(msg).expect("should serialize");
-            let back: VoiceWsMessage =
-                serde_json::from_str(&json).expect("should deserialize");
+            let back: VoiceWsMessage = serde_json::from_str(&json).expect("should deserialize");
             assert_eq!(&back, msg, "roundtrip failed for {json}");
         }
     }
@@ -596,7 +607,9 @@ mod tests {
         // transition_to returns error for invalid transitions.
         let result = VoiceSessionState::Ended.transition_to(VoiceSessionState::Active);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("invalid voice session state transition"));
+        assert!(result
+            .unwrap_err()
+            .contains("invalid voice session state transition"));
     }
 
     // -- Test 7: VoiceSession ActionKind exists --
@@ -611,7 +624,10 @@ mod tests {
 
         // Verify it can be serialized.
         let json = serde_json::to_string(&action).expect("should serialize");
-        assert!(json.contains("VoiceSession"), "JSON should contain variant name");
+        assert!(
+            json.contains("VoiceSession"),
+            "JSON should contain variant name"
+        );
         assert!(json.contains("agent-1"), "JSON should contain agent_id");
 
         // Verify Display impl works.
@@ -630,7 +646,10 @@ mod tests {
         assert!(config.tts_enabled, "tts_enabled should default to true");
         assert!(config.stt_enabled, "stt_enabled should default to true");
         assert!(config.language.is_none(), "language should default to None");
-        assert!(config.tts_voice.is_none(), "tts_voice should default to None");
+        assert!(
+            config.tts_voice.is_none(),
+            "tts_voice should default to None"
+        );
         assert!(config.call_id.is_none(), "call_id should default to None");
 
         // Verify serde defaults match.

@@ -158,7 +158,11 @@ impl ConfigLoader {
             let layer: toml::Value = toml::from_str(&content)
                 .map_err(|e| AegisError::ConfigError(format!("invalid system config: {e}")))?;
             deep_merge(&mut merged, &layer);
-            record_sources(&layer, &mut sources, ConfigSource::SystemFile(system_path.clone()));
+            record_sources(
+                &layer,
+                &mut sources,
+                ConfigSource::SystemFile(system_path.clone()),
+            );
             source_files.push(system_path);
         }
 
@@ -172,7 +176,11 @@ impl ConfigLoader {
             let layer: toml::Value = toml::from_str(&content)
                 .map_err(|e| AegisError::ConfigError(format!("invalid user config: {e}")))?;
             deep_merge(&mut merged, &layer);
-            record_sources(&layer, &mut sources, ConfigSource::UserFile(user_path.clone()));
+            record_sources(
+                &layer,
+                &mut sources,
+                ConfigSource::UserFile(user_path.clone()),
+            );
             source_files.push(user_path);
         }
 
@@ -752,11 +760,7 @@ pub fn format_toml_value(value: &toml::Value) -> String {
 /// Flatten a TOML value into dot-separated key-value pairs.
 ///
 /// Used by `config list` to show all effective config values.
-pub fn flatten_toml(
-    value: &toml::Value,
-    prefix: &str,
-    out: &mut Vec<(String, String)>,
-) {
+pub fn flatten_toml(value: &toml::Value, prefix: &str, out: &mut Vec<(String, String)>) {
     match value {
         toml::Value::Table(table) => {
             for (key, val) in table {
@@ -939,10 +943,7 @@ mod tests {
         // Workspace overrides user overrides system
         assert_eq!(effective.config.name, "workspace-name");
         // User overrides system for sandbox_dir
-        assert_eq!(
-            effective.config.sandbox_dir,
-            PathBuf::from("/user/sandbox")
-        );
+        assert_eq!(effective.config.sandbox_dir, PathBuf::from("/user/sandbox"));
         // System value preserved for ledger_path (not overridden)
         assert_eq!(
             effective.config.ledger_path,
@@ -986,10 +987,7 @@ mod tests {
         let effective = loader.load().unwrap();
         assert_eq!(effective.config.name, "workspace-agent");
         // sandbox_dir from user config persists
-        assert_eq!(
-            effective.config.sandbox_dir,
-            PathBuf::from("/user/sandbox")
-        );
+        assert_eq!(effective.config.sandbox_dir, PathBuf::from("/user/sandbox"));
     }
 
     #[test]
@@ -1018,10 +1016,7 @@ mod tests {
             .skip_ownership_check();
 
         let effective = loader.load().unwrap();
-        assert_eq!(
-            effective.config.sandbox_dir,
-            PathBuf::from("/env/sandbox")
-        );
+        assert_eq!(effective.config.sandbox_dir, PathBuf::from("/env/sandbox"));
 
         // Source should be EnvVar
         assert!(matches!(
@@ -1254,10 +1249,7 @@ mod tests {
         deep_merge(&mut base, &overlay);
 
         let table = base.as_table().unwrap();
-        assert_eq!(
-            table["name"].as_str().unwrap(),
-            "overlay"
-        );
+        assert_eq!(table["name"].as_str().unwrap(), "overlay");
         // pilot.output_buffer_lines preserved from base
         assert_eq!(
             table["pilot"]["output_buffer_lines"].as_integer().unwrap(),
@@ -1265,7 +1257,9 @@ mod tests {
         );
         // pilot.stall.timeout_secs overridden by overlay
         assert_eq!(
-            table["pilot"]["stall"]["timeout_secs"].as_integer().unwrap(),
+            table["pilot"]["stall"]["timeout_secs"]
+                .as_integer()
+                .unwrap(),
             60
         );
         // pilot.stall.max_nudges preserved from base
@@ -1337,20 +1331,16 @@ mod tests {
 
     #[test]
     fn isolation_env_var_parsing() {
-        let result =
-            env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "seatbelt").unwrap();
+        let result = env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "seatbelt").unwrap();
         assert_eq!(result.as_str().unwrap(), "Seatbelt");
 
-        let result =
-            env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "process").unwrap();
+        let result = env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "process").unwrap();
         assert_eq!(result.as_str().unwrap(), "Process");
 
-        let result =
-            env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "none").unwrap();
+        let result = env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "none").unwrap();
         assert_eq!(result.as_str().unwrap(), "None");
 
-        let result =
-            env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "invalid");
+        let result = env_value_to_toml("AEGIS_ISOLATION", &["isolation"], "invalid");
         assert!(result.is_err());
     }
 
@@ -1507,7 +1497,10 @@ mod tests {
         assert!(token_entry.is_some());
         let (_, display) = token_entry.unwrap();
         assert!(display.contains("***"), "should mask token, got: {display}");
-        assert!(!display.contains("1234567890"), "should not show full token");
+        assert!(
+            !display.contains("1234567890"),
+            "should not show full token"
+        );
     }
 
     #[test]

@@ -600,10 +600,7 @@ impl ToolkitRuntime {
     /// - `halt_on_high_risk`: stop if a High-risk action is encountered
     ///
     /// Returns partial results if halted early.
-    pub fn execute_batch_with_budget(
-        &mut self,
-        actions: &[ToolAction],
-    ) -> BatchResult {
+    pub fn execute_batch_with_budget(&mut self, actions: &[ToolAction]) -> BatchResult {
         let time_budget_ms = self.config.loop_executor.time_budget_ms;
         let time_budget = Duration::from_millis(time_budget_ms);
         let max_micro_actions = self.config.loop_executor.max_micro_actions;
@@ -850,8 +847,10 @@ impl ToolkitRuntime {
                     .managed_browsers
                     .get(session_id)
                     .map(|browser| browser.ws_url.as_str());
-                let (client, endpoint) =
-                    CdpClient::connect(ws_override.or(self.config.browser.cdp_ws_url.as_deref()), self.config.browser.max_response_bytes)?;
+                let (client, endpoint) = CdpClient::connect(
+                    ws_override.or(self.config.browser.cdp_ws_url.as_deref()),
+                    self.config.browser.max_response_bytes,
+                )?;
                 self.browser_sessions.insert(
                     session_id.to_string(),
                     BrowserSession {
@@ -896,7 +895,8 @@ impl ToolkitRuntime {
         }
 
         let (child, ws_url, data_dir) = self.spawn_managed_browser(session_id, headless, url)?;
-        let (client, endpoint) = CdpClient::connect(Some(&ws_url), self.config.browser.max_response_bytes)?;
+        let (client, endpoint) =
+            CdpClient::connect(Some(&ws_url), self.config.browser.max_response_bytes)?;
         self.browser_sessions.insert(
             session_id.to_string(),
             BrowserSession {
@@ -1087,7 +1087,10 @@ struct CdpClient {
 }
 
 impl CdpClient {
-    fn connect(ws_url_override: Option<&str>, max_response_bytes: usize) -> Result<(Self, String), String> {
+    fn connect(
+        ws_url_override: Option<&str>,
+        max_response_bytes: usize,
+    ) -> Result<(Self, String), String> {
         let ws_url = match ws_url_override {
             Some(url) if !url.trim().is_empty() => url.to_string(),
             _ => env::var("AEGIS_CDP_WS")
@@ -1102,14 +1105,21 @@ impl CdpClient {
             .map_err(|e| format!("invalid CDP websocket URL ({ws_url}): {e}"))?;
         let (socket, _) = connect(url).map_err(|e| format!("cdp connect failed: {e}"))?;
 
-        Ok((Self { socket, next_id: 1, ws_url: ws_url.clone(), max_response_bytes }, ws_url))
+        Ok((
+            Self {
+                socket,
+                next_id: 1,
+                ws_url: ws_url.clone(),
+                max_response_bytes,
+            },
+            ws_url,
+        ))
     }
 
     fn reconnect(&mut self) -> Result<(), String> {
-        let url = Url::parse(&self.ws_url)
-            .map_err(|e| format!("invalid CDP URL for reconnect: {e}"))?;
-        let (socket, _) = connect(url)
-            .map_err(|e| format!("cdp reconnect failed: {e}"))?;
+        let url =
+            Url::parse(&self.ws_url).map_err(|e| format!("invalid CDP URL for reconnect: {e}"))?;
+        let (socket, _) = connect(url).map_err(|e| format!("cdp reconnect failed: {e}"))?;
         self.socket = socket;
         self.next_id = 1;
         Ok(())
@@ -1122,7 +1132,11 @@ impl CdpClient {
     ) -> Result<serde_json::Value, String> {
         match self.call_inner(method, &params) {
             Ok(v) => Ok(v),
-            Err(e) if e.contains("cdp send failed") || e.contains("cdp read failed") || e.contains("cdp socket closed") => {
+            Err(e)
+                if e.contains("cdp send failed")
+                    || e.contains("cdp read failed")
+                    || e.contains("cdp socket closed") =>
+            {
                 tracing::warn!(error = %e, "CDP socket error, attempting reconnect");
                 self.reconnect()?;
                 self.call_inner(method, &params)

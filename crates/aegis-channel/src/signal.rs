@@ -276,13 +276,12 @@ struct IdentityEntry {
 /// Signal-cli REST API should never be exposed to the network. This
 /// prevents SSRF attacks by ensuring only loopback addresses are accepted.
 pub fn validate_api_url(api_url: &str) -> Result<(), ChannelError> {
-    let parsed = Url::parse(api_url).map_err(|e| {
-        ChannelError::Other(format!("invalid signal-cli API URL: {e}"))
-    })?;
+    let parsed = Url::parse(api_url)
+        .map_err(|e| ChannelError::Other(format!("invalid signal-cli API URL: {e}")))?;
 
-    let host = parsed.host_str().ok_or_else(|| {
-        ChannelError::Other("signal-cli API URL has no host".to_string())
-    })?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| ChannelError::Other("signal-cli API URL has no host".to_string()))?;
 
     match host {
         "localhost" | "127.0.0.1" | "::1" | "[::1]" => Ok(()),
@@ -464,9 +463,10 @@ impl SignalApi {
             )));
         }
 
-        let about: AboutResponse = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse /v1/about response: {e}"))
-        })?;
+        let about: AboutResponse = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse /v1/about response: {e}")))?;
 
         Ok(about)
     }
@@ -618,9 +618,10 @@ impl SignalApi {
             )));
         }
 
-        let envelopes: Vec<SignalEnvelope> = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse receive response: {e}"))
-        })?;
+        let envelopes: Vec<SignalEnvelope> = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse receive response: {e}")))?;
 
         Ok(envelopes)
     }
@@ -644,9 +645,10 @@ impl SignalApi {
             )));
         }
 
-        let entries: Vec<IdentityEntry> = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse identities response: {e}"))
-        })?;
+        let entries: Vec<IdentityEntry> = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse identities response: {e}")))?;
 
         let infos = entries
             .into_iter()
@@ -661,10 +663,7 @@ impl SignalApi {
     }
 
     /// Verify that all recipients are trusted (for VerifyFirst mode).
-    async fn verify_recipients_trusted(
-        &self,
-        recipients: &[String],
-    ) -> Result<(), ChannelError> {
+    async fn verify_recipients_trusted(&self, recipients: &[String]) -> Result<(), ChannelError> {
         let identities = self.get_identities().await?;
 
         // Build a set of trusted identity keys / numbers.
@@ -710,10 +709,7 @@ impl SignalApi {
 
         let resp = self
             .client
-            .post(format!(
-                "{}/v1/groups/{}",
-                self.base_url, self.phone_number
-            ))
+            .post(format!("{}/v1/groups/{}", self.base_url, self.phone_number))
             .json(&body)
             .send()
             .await?;
@@ -740,10 +736,7 @@ impl SignalApi {
     pub async fn list_groups(&self) -> Result<Vec<GroupInfo>, ChannelError> {
         let resp = self
             .client
-            .get(format!(
-                "{}/v1/groups/{}",
-                self.base_url, self.phone_number
-            ))
+            .get(format!("{}/v1/groups/{}", self.base_url, self.phone_number))
             .send()
             .await?;
 
@@ -755,19 +748,16 @@ impl SignalApi {
             )));
         }
 
-        let groups: Vec<GroupInfo> = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse groups response: {e}"))
-        })?;
+        let groups: Vec<GroupInfo> = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse groups response: {e}")))?;
 
         Ok(groups)
     }
 
     /// Add a member to a group.
-    pub async fn add_member(
-        &self,
-        group_id: &str,
-        number: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn add_member(&self, group_id: &str, number: &str) -> Result<(), ChannelError> {
         validate_group_id(group_id)?;
         validate_phone_number(number)?;
 
@@ -797,11 +787,7 @@ impl SignalApi {
     }
 
     /// Remove a member from a group.
-    pub async fn remove_member(
-        &self,
-        group_id: &str,
-        number: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn remove_member(&self, group_id: &str, number: &str) -> Result<(), ChannelError> {
         validate_group_id(group_id)?;
         validate_phone_number(number)?;
 
@@ -859,11 +845,7 @@ impl SignalApi {
             "timestamp": timestamp,
         });
 
-        debug!(
-            recipient = recipient,
-            emoji = emoji,
-            "signal send_reaction"
-        );
+        debug!(recipient = recipient, emoji = emoji, "signal send_reaction");
 
         let resp = self
             .client
@@ -958,9 +940,7 @@ impl SignalPoller {
 /// Parse a signal-cli envelope into inbound actions.
 ///
 /// Returns pairs of (action, optional source number).
-fn parse_signal_envelope(
-    envelope: &SignalEnvelope,
-) -> Vec<(InboundAction, Option<String>)> {
+fn parse_signal_envelope(envelope: &SignalEnvelope) -> Vec<(InboundAction, Option<String>)> {
     let mut results = Vec::new();
 
     let env_data = match &envelope.envelope {
@@ -1062,9 +1042,7 @@ impl Channel for SignalChannel {
 
         // Send to groups.
         for group_id in &self.group_ids {
-            self.api
-                .send_group_message(group_id, &message.text)
-                .await?;
+            self.api.send_group_message(group_id, &message.text).await?;
         }
 
         if self.recipients.is_empty() && self.group_ids.is_empty() {
@@ -1486,11 +1464,8 @@ mod tests {
         // Create an API client in VerifyFirst mode pointing to a port
         // that won't have signal-cli running. The identity check will
         // fail, which effectively blocks sending.
-        let api = SignalApi::with_base_url(
-            "http://127.0.0.1:1",
-            "+15551234567",
-            TrustMode::VerifyFirst,
-        );
+        let api =
+            SignalApi::with_base_url("http://127.0.0.1:1", "+15551234567", TrustMode::VerifyFirst);
 
         // Attempting to send should fail because we can't verify identities.
         let result = api
@@ -1529,19 +1504,13 @@ mod tests {
 
     #[test]
     fn test_poll_interval_respected() {
-        let api = SignalApi::with_base_url(
-            "http://127.0.0.1:1",
-            "+15551234567",
-            TrustMode::TrustAll,
-        );
+        let api =
+            SignalApi::with_base_url("http://127.0.0.1:1", "+15551234567", TrustMode::TrustAll);
         let poller = SignalPoller::new(api, 10);
         assert_eq!(poller.poll_interval(), Duration::from_secs(10));
 
-        let api2 = SignalApi::with_base_url(
-            "http://127.0.0.1:1",
-            "+15551234567",
-            TrustMode::TrustAll,
-        );
+        let api2 =
+            SignalApi::with_base_url("http://127.0.0.1:1", "+15551234567", TrustMode::TrustAll);
         let poller2 = SignalPoller::new(api2, 1);
         assert_eq!(poller2.poll_interval(), Duration::from_secs(1));
     }
@@ -1685,10 +1654,7 @@ mod tests {
         let attachments = data_msg.attachments.unwrap();
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].content_type, Some("image/png".to_string()));
-        assert_eq!(
-            attachments[0].filename,
-            Some("screenshot.png".to_string())
-        );
+        assert_eq!(attachments[0].filename, Some("screenshot.png".to_string()));
     }
 
     // -- Capabilities --
@@ -1751,13 +1717,11 @@ mod tests {
 
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/about"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "versions": ["0.13.4"],
-                    "build": 2,
-                    "mode": "json-rpc"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "versions": ["0.13.4"],
+                "build": 2,
+                "mode": "json-rpc"
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1834,30 +1798,28 @@ mod tests {
 
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/receive/+15551234567"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([
-                    {
-                        "envelope": {
-                            "source": "+15559876543",
-                            "sourceNumber": "+15559876543",
-                            "dataMessage": {
-                                "message": "/status",
-                                "timestamp": 1700000001000_i64
-                            }
-                        }
-                    },
-                    {
-                        "envelope": {
-                            "source": "+15559876543",
-                            "sourceNumber": "+15559876543",
-                            "dataMessage": {
-                                "message": "hello world",
-                                "timestamp": 1700000002000_i64
-                            }
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "envelope": {
+                        "source": "+15559876543",
+                        "sourceNumber": "+15559876543",
+                        "dataMessage": {
+                            "message": "/status",
+                            "timestamp": 1700000001000_i64
                         }
                     }
-                ])),
-            )
+                },
+                {
+                    "envelope": {
+                        "source": "+15559876543",
+                        "sourceNumber": "+15559876543",
+                        "dataMessage": {
+                            "message": "hello world",
+                            "timestamp": 1700000002000_i64
+                        }
+                    }
+                }
+            ])))
             .expect(1)
             .mount(&server)
             .await;
@@ -1882,9 +1844,7 @@ mod tests {
 
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/receive/+15551234567"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
             .expect(1)
             .mount(&server)
             .await;
@@ -1908,9 +1868,7 @@ mod tests {
             .await;
 
         let api = SignalApi::with_base_url(&server.uri(), "+15551234567", TrustMode::TrustAll);
-        let result = api
-            .send_group_message("dGVzdGdyb3Vw", "Hello group")
-            .await;
+        let result = api.send_group_message("dGVzdGdyb3Vw", "Hello group").await;
         assert!(result.is_ok());
     }
 
@@ -1989,20 +1947,18 @@ mod tests {
 
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/identities/+15551234567"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([
-                    {
-                        "number": "+15559876543",
-                        "safety_number": "abc123def456",
-                        "trust_level": "TRUSTED_VERIFIED",
-                        "added_timestamp": 1700000000
-                    },
-                    {
-                        "number": "+15550001111",
-                        "trust_level": "UNTRUSTED"
-                    }
-                ])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "number": "+15559876543",
+                    "safety_number": "abc123def456",
+                    "trust_level": "TRUSTED_VERIFIED",
+                    "added_timestamp": 1700000000
+                },
+                {
+                    "number": "+15550001111",
+                    "trust_level": "UNTRUSTED"
+                }
+            ])))
             .expect(1)
             .mount(&server)
             .await;
@@ -2023,14 +1979,12 @@ mod tests {
 
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/v1/groups/+15551234567"))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(json!({
-                    "id": "bmV3Z3JvdXA=",
-                    "name": "New Group",
-                    "members": ["+15559876543", "+15550001111"],
-                    "is_admin": true
-                })),
-            )
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "id": "bmV3Z3JvdXA=",
+                "name": "New Group",
+                "members": ["+15559876543", "+15550001111"],
+                "is_admin": true
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -2056,22 +2010,20 @@ mod tests {
 
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/groups/+15551234567"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([
-                    {
-                        "id": "Z3JvdXAx",
-                        "name": "Group 1",
-                        "members": ["+15559876543"],
-                        "is_admin": true
-                    },
-                    {
-                        "id": "Z3JvdXAy",
-                        "name": "Group 2",
-                        "members": ["+15550001111", "+15550002222"],
-                        "is_admin": false
-                    }
-                ])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "id": "Z3JvdXAx",
+                    "name": "Group 1",
+                    "members": ["+15559876543"],
+                    "is_admin": true
+                },
+                {
+                    "id": "Z3JvdXAy",
+                    "name": "Group 2",
+                    "members": ["+15550001111", "+15550002222"],
+                    "is_admin": false
+                }
+            ])))
             .expect(1)
             .mount(&server)
             .await;
@@ -2092,19 +2044,17 @@ mod tests {
 
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/v1/receive/+15551234567"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!([
-                    {
-                        "envelope": {
-                            "source": "+15559876543",
-                            "sourceNumber": "+15559876543",
-                            "dataMessage": {
-                                "message": "/status"
-                            }
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "envelope": {
+                        "source": "+15559876543",
+                        "sourceNumber": "+15559876543",
+                        "dataMessage": {
+                            "message": "/status"
                         }
                     }
-                ])),
-            )
+                }
+            ])))
             .expect(1)
             .mount(&server)
             .await;

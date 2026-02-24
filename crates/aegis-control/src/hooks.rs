@@ -200,9 +200,7 @@ pub fn install_daemon_hooks(working_dir: &Path) -> Result<(), String> {
 
     // Install Stop hook (session end lifecycle)
     {
-        let stop = hooks_obj
-            .entry("Stop")
-            .or_insert(serde_json::json!([]));
+        let stop = hooks_obj.entry("Stop").or_insert(serde_json::json!([]));
         let stop_array = stop
             .as_array_mut()
             .ok_or_else(|| "Stop is not an array".to_string())?;
@@ -290,9 +288,7 @@ pub fn install_project_hooks(project_dir: &Path) -> Result<(), String> {
 
     // Install Stop hook (session end lifecycle)
     {
-        let stop = hooks_obj
-            .entry("Stop")
-            .or_insert(serde_json::json!([]));
+        let stop = hooks_obj.entry("Stop").or_insert(serde_json::json!([]));
         let stop_array = stop
             .as_array_mut()
             .ok_or_else(|| "Stop is not an array".to_string())?;
@@ -717,8 +713,8 @@ impl HookRegistry {
     ) -> Result<String, String> {
         let content = std::fs::read_to_string(manifest_path)
             .map_err(|e| format!("failed to read manifest: {e}"))?;
-        let manifest: HookManifest = toml::from_str(&content)
-            .map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
+        let manifest: HookManifest =
+            toml::from_str(&content).map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
 
         // Validate entry_point: must not contain path traversal components.
         validate_entry_point(&manifest.entry_point)?;
@@ -782,8 +778,8 @@ impl HookRegistry {
 
         let content = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("failed to read manifest: {e}"))?;
-        let manifest: HookManifest = toml::from_str(&content)
-            .map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
+        let manifest: HookManifest =
+            toml::from_str(&content).map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
 
         validate_entry_point(&manifest.entry_point)?;
 
@@ -807,9 +803,7 @@ impl HookRegistry {
     pub fn get_hooks_for_trigger(&self, trigger: &HookTrigger) -> Vec<&LoadedHook> {
         self.hooks
             .values()
-            .filter(|h| {
-                h.manifest.trigger == *trigger && h.status.state == HookState::Active
-            })
+            .filter(|h| h.manifest.trigger == *trigger && h.status.state == HookState::Active)
             .collect()
     }
 
@@ -858,19 +852,14 @@ impl HookRegistry {
             return Err(msg);
         }
 
-        let timeout_duration =
-            std::time::Duration::from_secs(hook.manifest.timeout_secs);
+        let timeout_duration = std::time::Duration::from_secs(hook.manifest.timeout_secs);
         let entry_point = hook.entry_point_abs.clone();
         let hook_dir = hook.hook_dir.clone();
         let hook_name = hook.manifest.name.clone();
 
         // Build restricted environment (includes AEGIS_HOOK_WORKSPACE for workspace hooks).
         let workspace_path = hook.manifest.workspace_path.clone();
-        let env = build_workspace_hook_env(
-            &hook_name,
-            &hook_dir,
-            workspace_path.as_deref(),
-        );
+        let env = build_workspace_hook_env(&hook_name, &hook_dir, workspace_path.as_deref());
 
         let input_json = serde_json::to_string(input)
             .map_err(|e| format!("failed to serialize hook input: {e}"))?;
@@ -1166,9 +1155,12 @@ pub fn validate_workspace_hooks_dir(
     working_dir: &Path,
 ) -> Result<PathBuf, String> {
     // The working directory must exist for canonicalize to succeed.
-    let canonical_working_dir = working_dir
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize working dir {}: {e}", working_dir.display()))?;
+    let canonical_working_dir = working_dir.canonicalize().map_err(|e| {
+        format!(
+            "cannot canonicalize working dir {}: {e}",
+            working_dir.display()
+        )
+    })?;
 
     // The hooks dir may not exist yet; validate the parent chain.
     let canonical_hooks_dir = hooks_dir
@@ -1257,8 +1249,8 @@ fn load_workspace_hook(
 ) -> Result<LoadedHook, String> {
     let content = std::fs::read_to_string(manifest_path)
         .map_err(|e| format!("failed to read manifest: {e}"))?;
-    let mut manifest: HookManifest = toml::from_str(&content)
-        .map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
+    let mut manifest: HookManifest =
+        toml::from_str(&content).map_err(|e| format!("failed to parse manifest.toml: {e}"))?;
 
     // Set workspace path on the manifest.
     manifest.workspace_path = Some(workspace_path.to_path_buf());
@@ -1366,12 +1358,12 @@ pub fn matches_workspace(hook: &LoadedHook, agent_working_dir: &Path) -> bool {
         HookSource::Global => true,
         HookSource::Workspace(workspace_path) => {
             // Try canonicalizing both for accurate comparison.
-            let canonical_agent = agent_working_dir.canonicalize().unwrap_or_else(|_| {
-                agent_working_dir.to_path_buf()
-            });
-            let canonical_workspace = workspace_path.canonicalize().unwrap_or_else(|_| {
-                workspace_path.to_path_buf()
-            });
+            let canonical_agent = agent_working_dir
+                .canonicalize()
+                .unwrap_or_else(|_| agent_working_dir.to_path_buf());
+            let canonical_workspace = workspace_path
+                .canonicalize()
+                .unwrap_or_else(|_| workspace_path.to_path_buf());
             canonical_agent.starts_with(&canonical_workspace)
         }
     }
@@ -1694,8 +1686,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            config_json["hooks"]["internal"]["entries"]["aegis-policy-gate"]["enabled"]
-                .as_bool(),
+            config_json["hooks"]["internal"]["entries"]["aegis-policy-gate"]["enabled"].as_bool(),
             Some(true)
         );
     }
@@ -1782,7 +1773,10 @@ trigger = { "custom" = "my_event" }
 entry_point = "hook.sh"
 "#;
         let manifest: HookManifest = toml::from_str(toml_str).unwrap();
-        assert_eq!(manifest.trigger, HookTrigger::Custom("my_event".to_string()));
+        assert_eq!(
+            manifest.trigger,
+            HookTrigger::Custom("my_event".to_string())
+        );
     }
 
     #[test]
@@ -2079,7 +2073,11 @@ entry_point = "../../../etc/passwd"
 
         // Not enabled: should not appear in trigger results.
         let hooks = registry.get_hooks_for_trigger(&HookTrigger::PreToolUse);
-        assert_eq!(hooks.len(), 0, "installed-but-not-active hooks should be excluded");
+        assert_eq!(
+            hooks.len(),
+            0,
+            "installed-but-not-active hooks should be excluded"
+        );
 
         // Enable, then disable.
         registry.enable("hook-x").unwrap();
@@ -2200,9 +2198,7 @@ entry_point = "run.sh"
         // Should contain only safe vars.
         for key in &keys {
             assert!(
-                *key == "PATH"
-                    || *key == "HOME"
-                    || key.starts_with("AEGIS_HOOK_"),
+                *key == "PATH" || *key == "HOME" || key.starts_with("AEGIS_HOOK_"),
                 "unexpected env var: {key}"
             );
         }
@@ -2319,12 +2315,7 @@ entry_point = "run.sh"
         std::fs::create_dir_all(&workspace_b).unwrap();
 
         // Create a hook in workspace_a.
-        create_workspace_hook(
-            &workspace_a,
-            "ws-a-hook",
-            "pre_tool_use",
-            "#!/bin/sh\ntrue",
-        );
+        create_workspace_hook(&workspace_a, "ws-a-hook", "pre_tool_use", "#!/bin/sh\ntrue");
 
         let hooks = load_workspace_hooks(&workspace_a).expect("load");
         assert_eq!(hooks.len(), 1);
@@ -2387,20 +2378,10 @@ entry_point = "run.sh"
             "pre_tool_use",
             "#!/bin/sh\ntrue",
         );
-        create_test_hook(
-            &global_hooks_dir,
-            "shared",
-            "on_exit",
-            "#!/bin/sh\ntrue",
-        );
+        create_test_hook(&global_hooks_dir, "shared", "on_exit", "#!/bin/sh\ntrue");
 
         // Create one workspace hook that overrides "shared".
-        create_workspace_hook(
-            &working_dir,
-            "shared",
-            "on_exit",
-            "#!/bin/sh\ntrue",
-        );
+        create_workspace_hook(&working_dir, "shared", "on_exit", "#!/bin/sh\ntrue");
 
         let mut global_registry = HookRegistry::new(global_hooks_dir);
         global_registry.load_all().expect("load global");
@@ -2416,7 +2397,10 @@ entry_point = "run.sh"
         assert!(names.contains(&"shared"));
 
         // The "global-only" hook should have Global source.
-        let global_only = merged.iter().find(|h| h.manifest.name == "global-only").unwrap();
+        let global_only = merged
+            .iter()
+            .find(|h| h.manifest.name == "global-only")
+            .unwrap();
         assert_eq!(global_only.source, HookSource::Global);
     }
 
@@ -2436,12 +2420,7 @@ entry_point = "run.sh"
         );
 
         // Create a workspace-only hook (no global counterpart).
-        create_workspace_hook(
-            &working_dir,
-            "ws-only-hook",
-            "on_stall",
-            "#!/bin/sh\ntrue",
-        );
+        create_workspace_hook(&working_dir, "ws-only-hook", "on_stall", "#!/bin/sh\ntrue");
 
         let mut global_registry = HookRegistry::new(global_hooks_dir);
         global_registry.load_all().expect("load global");
@@ -2482,11 +2461,11 @@ entry_point = "run.sh"
         // validate_workspace_hooks_dir should reject this.
         #[cfg(unix)]
         {
-            let result = validate_workspace_hooks_dir(
-                &workspace_aegis.join("hooks"),
-                &working_dir,
+            let result = validate_workspace_hooks_dir(&workspace_aegis.join("hooks"), &working_dir);
+            assert!(
+                result.is_err(),
+                "symlink escaping workspace should be rejected"
             );
-            assert!(result.is_err(), "symlink escaping workspace should be rejected");
             let err = result.unwrap_err();
             assert!(
                 err.contains("not within working dir"),
@@ -2508,12 +2487,11 @@ entry_point = "../../../etc/passwd"
         std::fs::write(hook_dir.join("hook.sh"), "#!/bin/sh").unwrap();
 
         // The entry-point validation should catch the ../ traversal.
-        let result = load_workspace_hook(
-            &hook_dir,
-            &hook_dir.join("manifest.toml"),
-            &working_dir,
+        let result = load_workspace_hook(&hook_dir, &hook_dir.join("manifest.toml"), &working_dir);
+        assert!(
+            result.is_err(),
+            "path traversal in entry point should be rejected"
         );
-        assert!(result.is_err(), "path traversal in entry point should be rejected");
     }
 
     #[test]
@@ -2575,11 +2553,7 @@ entry_point = "../../../etc/passwd"
 
     #[test]
     fn test_workspace_hook_env_without_workspace() {
-        let env = build_workspace_hook_env(
-            "test-hook",
-            Path::new("/tmp/hooks/test"),
-            None,
-        );
+        let env = build_workspace_hook_env("test-hook", Path::new("/tmp/hooks/test"), None);
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
         assert!(!keys.contains(&"AEGIS_HOOK_WORKSPACE"));
     }

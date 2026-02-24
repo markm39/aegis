@@ -149,9 +149,7 @@ pub fn validate_identifier(identifier: &str) -> Result<(), AccessControlError> {
     if identifier.len() > MAX_IDENTIFIER_LEN {
         return Err(AccessControlError::InvalidIdentifier {
             identifier: identifier.chars().take(16).collect::<String>() + "...",
-            reason: format!(
-                "identifier exceeds maximum length of {MAX_IDENTIFIER_LEN} characters"
-            ),
+            reason: format!("identifier exceeds maximum length of {MAX_IDENTIFIER_LEN} characters"),
         });
     }
 
@@ -538,9 +536,7 @@ impl ChannelAccessControl {
             // subtle::ConstantTimeEq only works on same-length slices.
             // We still need to iterate all entries to prevent timing leaks
             // on the number of admin_ids.
-            if id_bytes.len() == admin_bytes.len()
-                && id_bytes.ct_eq(admin_bytes).into()
-            {
+            if id_bytes.len() == admin_bytes.len() && id_bytes.ct_eq(admin_bytes).into() {
                 found = true;
             }
         }
@@ -581,7 +577,9 @@ mod tests {
         tracker.max_tokens = 20;
         ac.rate_tracker.insert("admin-001".to_string(), tracker);
 
-        for cmd in &["stop", "goal", "approve", "status", "help", "config", "deny"] {
+        for cmd in &[
+            "stop", "goal", "approve", "status", "help", "config", "deny",
+        ] {
             assert!(
                 ac.check_access("admin-001", cmd).is_ok(),
                 "admin should be able to execute '{cmd}'"
@@ -595,9 +593,7 @@ mod tests {
         let result = ac.check_access("user-001", "stop");
         assert!(result.is_err(), "user should not be able to stop agents");
         match result.unwrap_err() {
-            AccessControlError::AccessDenied {
-                command, role, ..
-            } => {
+            AccessControlError::AccessDenied { command, role, .. } => {
                 assert_eq!(command, "stop");
                 assert_eq!(role, ChannelRole::User);
             }
@@ -613,7 +609,9 @@ mod tests {
         assert!(ac.check_access("viewer-001", "status").is_ok());
         assert!(ac.check_access("viewer-001", "help").is_ok());
 
-        for cmd in &["approve", "deny", "stop", "goal", "nudge", "input", "output"] {
+        for cmd in &[
+            "approve", "deny", "stop", "goal", "nudge", "input", "output",
+        ] {
             assert!(
                 ac.check_access("viewer-001", cmd).is_err(),
                 "viewer should not be able to execute '{cmd}'"

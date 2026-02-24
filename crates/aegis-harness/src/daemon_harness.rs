@@ -64,9 +64,8 @@ impl DaemonTestHarness {
     /// [`start_daemon`](Self::start_daemon) for that.
     pub fn from_fixture(fixture: TestFixture) -> Result<Self, HarnessError> {
         // Validate fixture security before proceeding
-        fixtures::validate_fixture_security(&fixture).map_err(|e| {
-            HarnessError::Other(format!("fixture security validation failed: {e}"))
-        })?;
+        fixtures::validate_fixture_security(&fixture)
+            .map_err(|e| HarnessError::Other(format!("fixture security validation failed: {e}")))?;
 
         // Create temp directory with restrictive permissions (0700)
         let temp_dir = create_secure_temp_dir()?;
@@ -88,13 +87,9 @@ impl DaemonTestHarness {
     ///
     /// The directory must already exist and have appropriate permissions.
     /// The harness will NOT delete this directory on drop.
-    pub fn with_temp_dir(
-        fixture: TestFixture,
-        temp_dir: PathBuf,
-    ) -> Result<Self, HarnessError> {
-        fixtures::validate_fixture_security(&fixture).map_err(|e| {
-            HarnessError::Other(format!("fixture security validation failed: {e}"))
-        })?;
+    pub fn with_temp_dir(fixture: TestFixture, temp_dir: PathBuf) -> Result<Self, HarnessError> {
+        fixtures::validate_fixture_security(&fixture)
+            .map_err(|e| HarnessError::Other(format!("fixture security validation failed: {e}")))?;
 
         // Verify the directory exists
         if !temp_dir.is_dir() {
@@ -152,10 +147,7 @@ impl DaemonTestHarness {
     ///
     /// Connects to the Unix socket, sends the command as newline-delimited
     /// JSON, and reads back the response. Uses a 5-second timeout.
-    pub fn send_command(
-        &self,
-        command: &DaemonCommand,
-    ) -> Result<DaemonResponse, HarnessError> {
+    pub fn send_command(&self, command: &DaemonCommand) -> Result<DaemonResponse, HarnessError> {
         let socket_path = self.socket_path();
 
         let stream = UnixStream::connect(&socket_path).map_err(|e| {
@@ -166,39 +158,37 @@ impl DaemonTestHarness {
         })?;
 
         let timeout = Some(Duration::from_secs(5));
-        stream.set_read_timeout(timeout).map_err(|e| {
-            HarnessError::Other(format!("failed to set read timeout: {e}"))
-        })?;
-        stream.set_write_timeout(timeout).map_err(|e| {
-            HarnessError::Other(format!("failed to set write timeout: {e}"))
-        })?;
+        stream
+            .set_read_timeout(timeout)
+            .map_err(|e| HarnessError::Other(format!("failed to set read timeout: {e}")))?;
+        stream
+            .set_write_timeout(timeout)
+            .map_err(|e| HarnessError::Other(format!("failed to set write timeout: {e}")))?;
 
-        let mut writer = stream.try_clone().map_err(|e| {
-            HarnessError::Other(format!("failed to clone stream: {e}"))
-        })?;
+        let mut writer = stream
+            .try_clone()
+            .map_err(|e| HarnessError::Other(format!("failed to clone stream: {e}")))?;
 
-        let mut json = serde_json::to_string(command).map_err(|e| {
-            HarnessError::Other(format!("failed to serialize command: {e}"))
-        })?;
+        let mut json = serde_json::to_string(command)
+            .map_err(|e| HarnessError::Other(format!("failed to serialize command: {e}")))?;
         json.push('\n');
-        writer.write_all(json.as_bytes()).map_err(|e| {
-            HarnessError::Other(format!("failed to send command: {e}"))
-        })?;
-        writer.flush().map_err(|e| {
-            HarnessError::Other(format!("failed to flush: {e}"))
-        })?;
+        writer
+            .write_all(json.as_bytes())
+            .map_err(|e| HarnessError::Other(format!("failed to send command: {e}")))?;
+        writer
+            .flush()
+            .map_err(|e| HarnessError::Other(format!("failed to flush: {e}")))?;
 
         // Cap read at 10 MB
         let reader = BufReader::new(std::io::Read::take(&stream, 10 * 1024 * 1024));
         let mut line = String::new();
         let mut buf_reader = BufReader::new(reader);
-        buf_reader.read_line(&mut line).map_err(|e| {
-            HarnessError::Other(format!("failed to read response: {e}"))
-        })?;
+        buf_reader
+            .read_line(&mut line)
+            .map_err(|e| HarnessError::Other(format!("failed to read response: {e}")))?;
 
-        serde_json::from_str(&line).map_err(|e| {
-            HarnessError::Other(format!("failed to parse response: {e}"))
-        })
+        serde_json::from_str(&line)
+            .map_err(|e| HarnessError::Other(format!("failed to parse response: {e}")))
     }
 
     /// Poll the Unix socket until the daemon is ready or timeout.
@@ -241,18 +231,16 @@ impl DaemonTestHarness {
     fn write_config_files(&mut self) -> Result<(), HarnessError> {
         // Write daemon.toml with adjusted socket path
         let config = self.effective_config();
-        let toml_str = config.to_toml().map_err(|e| {
-            HarnessError::Other(format!("failed to serialize config: {e}"))
-        })?;
-        fs::write(self.config_path(), &toml_str).map_err(|e| {
-            HarnessError::Other(format!("failed to write daemon.toml: {e}"))
-        })?;
+        let toml_str = config
+            .to_toml()
+            .map_err(|e| HarnessError::Other(format!("failed to serialize config: {e}")))?;
+        fs::write(self.config_path(), &toml_str)
+            .map_err(|e| HarnessError::Other(format!("failed to write daemon.toml: {e}")))?;
 
         // Create policy directory and write policy file
         let policy_dir = self.policy_dir();
-        fs::create_dir_all(&policy_dir).map_err(|e| {
-            HarnessError::Other(format!("failed to create policy dir: {e}"))
-        })?;
+        fs::create_dir_all(&policy_dir)
+            .map_err(|e| HarnessError::Other(format!("failed to create policy dir: {e}")))?;
 
         // Set restrictive permissions on policy directory
         fs::set_permissions(&policy_dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
@@ -260,9 +248,8 @@ impl DaemonTestHarness {
         })?;
 
         let policy_path = policy_dir.join("test.cedar");
-        fs::write(&policy_path, &self.fixture.policy_content).map_err(|e| {
-            HarnessError::Other(format!("failed to write policy file: {e}"))
-        })?;
+        fs::write(&policy_path, &self.fixture.policy_content)
+            .map_err(|e| HarnessError::Other(format!("failed to write policy file: {e}")))?;
 
         Ok(())
     }
@@ -293,18 +280,20 @@ fn create_secure_temp_dir() -> Result<PathBuf, HarnessError> {
     let base = std::env::temp_dir();
     let name = format!(
         "aegis-test-{}",
-        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+        uuid::Uuid::new_v4()
+            .to_string()
+            .split('-')
+            .next()
+            .unwrap_or("0")
     );
     let dir = base.join(name);
 
-    fs::create_dir_all(&dir).map_err(|e| {
-        HarnessError::Other(format!("failed to create temp dir: {e}"))
-    })?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| HarnessError::Other(format!("failed to create temp dir: {e}")))?;
 
     // Set restrictive permissions (0700 = rwx------)
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
-        HarnessError::Other(format!("failed to set temp dir permissions: {e}"))
-    })?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+        .map_err(|e| HarnessError::Other(format!("failed to set temp dir permissions: {e}")))?;
 
     Ok(dir)
 }
@@ -330,9 +319,8 @@ impl PolicyTestHelper {
     pub fn new(policy_content: &str) -> Result<Self, HarnessError> {
         let dir = create_secure_temp_dir()?;
         let policy_path = dir.join("test.cedar");
-        fs::write(&policy_path, policy_content).map_err(|e| {
-            HarnessError::Other(format!("failed to write policy file: {e}"))
-        })?;
+        fs::write(&policy_path, policy_content)
+            .map_err(|e| HarnessError::Other(format!("failed to write policy file: {e}")))?;
 
         Ok(Self {
             temp_dir: dir,
@@ -347,15 +335,17 @@ impl PolicyTestHelper {
 
     /// Create a `PolicyEngine` from the test policies.
     pub fn engine(&self) -> Result<aegis_policy::engine::PolicyEngine, HarnessError> {
-        aegis_policy::engine::PolicyEngine::new(self.policy_dir(), None).map_err(|e| {
-            HarnessError::Other(format!("failed to create policy engine: {e}"))
-        })
+        aegis_policy::engine::PolicyEngine::new(self.policy_dir(), None)
+            .map_err(|e| HarnessError::Other(format!("failed to create policy engine: {e}")))
     }
 
     /// Evaluate an action against the test policies.
     ///
     /// Convenience method that creates a fresh engine and evaluates.
-    pub fn evaluate(&self, action: &aegis_types::Action) -> Result<aegis_types::Verdict, HarnessError> {
+    pub fn evaluate(
+        &self,
+        action: &aegis_types::Action,
+    ) -> Result<aegis_types::Verdict, HarnessError> {
         let engine = self.engine()?;
         Ok(engine.evaluate(action))
     }
@@ -383,12 +373,10 @@ pub struct AuditTestHelper {
 impl AuditTestHelper {
     /// Create a new audit test helper with a fresh database.
     pub fn new() -> Result<Self, HarnessError> {
-        let temp_file = tempfile::NamedTempFile::new().map_err(|e| {
-            HarnessError::Other(format!("failed to create temp file: {e}"))
-        })?;
-        let store = aegis_ledger::AuditStore::open(temp_file.path()).map_err(|e| {
-            HarnessError::Other(format!("failed to open audit store: {e}"))
-        })?;
+        let temp_file = tempfile::NamedTempFile::new()
+            .map_err(|e| HarnessError::Other(format!("failed to create temp file: {e}")))?;
+        let store = aegis_ledger::AuditStore::open(temp_file.path())
+            .map_err(|e| HarnessError::Other(format!("failed to open audit store: {e}")))?;
 
         Ok(Self {
             _temp_file: temp_file,
@@ -412,23 +400,23 @@ impl AuditTestHelper {
         action: &aegis_types::Action,
         verdict: &aegis_types::Verdict,
     ) -> Result<aegis_ledger::AuditEntry, HarnessError> {
-        self.store.append(action, verdict).map_err(|e| {
-            HarnessError::Other(format!("failed to append audit entry: {e}"))
-        })
+        self.store
+            .append(action, verdict)
+            .map_err(|e| HarnessError::Other(format!("failed to append audit entry: {e}")))
     }
 
     /// Query the last N entries.
     pub fn query_last(&self, n: usize) -> Result<Vec<aegis_ledger::AuditEntry>, HarnessError> {
-        self.store.query_last(n).map_err(|e| {
-            HarnessError::Other(format!("failed to query audit entries: {e}"))
-        })
+        self.store
+            .query_last(n)
+            .map_err(|e| HarnessError::Other(format!("failed to query audit entries: {e}")))
     }
 
     /// Count total entries in the ledger.
     pub fn count(&self) -> Result<usize, HarnessError> {
-        self.store.count().map_err(|e| {
-            HarnessError::Other(format!("failed to count audit entries: {e}"))
-        })
+        self.store
+            .count()
+            .map_err(|e| HarnessError::Other(format!("failed to count audit entries: {e}")))
     }
 
     /// Check if an entry with the given action kind substring exists.
@@ -453,10 +441,7 @@ pub fn assert_daemon_command_ok(
     let resp = harness.send_command(command)?;
     if !resp.ok {
         return Err(HarnessError::AssertionFailed {
-            message: format!(
-                "expected command to succeed, got error: {}",
-                resp.message
-            ),
+            message: format!("expected command to succeed, got error: {}", resp.message),
             screen: String::new(),
         });
     }
@@ -532,8 +517,7 @@ mod tests {
             .echo_agent("test-agent", PathBuf::from("/tmp"))
             .build();
 
-        let harness =
-            DaemonTestHarness::from_fixture(fixture).expect("should create harness");
+        let harness = DaemonTestHarness::from_fixture(fixture).expect("should create harness");
 
         // Config file should exist
         assert!(
@@ -564,23 +548,18 @@ mod tests {
         let temp_path;
         {
             let fixture = FixtureBuilder::new("cleanup-test").build();
-            let harness =
-                DaemonTestHarness::from_fixture(fixture).expect("should create harness");
+            let harness = DaemonTestHarness::from_fixture(fixture).expect("should create harness");
             temp_path = harness.temp_dir().to_path_buf();
             assert!(temp_path.exists(), "temp dir should exist during test");
         }
         // After drop, temp dir should be gone
-        assert!(
-            !temp_path.exists(),
-            "temp dir should be removed after drop"
-        );
+        assert!(!temp_path.exists(), "temp dir should be removed after drop");
     }
 
     #[test]
     fn daemon_harness_temp_dir_has_restricted_permissions() {
         let fixture = FixtureBuilder::new("permissions-test").build();
-        let harness =
-            DaemonTestHarness::from_fixture(fixture).expect("should create harness");
+        let harness = DaemonTestHarness::from_fixture(fixture).expect("should create harness");
 
         let metadata = fs::metadata(harness.temp_dir()).expect("should read metadata");
         let mode = metadata.permissions().mode() & 0o777;
@@ -596,8 +575,7 @@ mod tests {
     #[test]
     fn daemon_harness_policy_dir_has_restricted_permissions() {
         let fixture = FixtureBuilder::new("policy-permissions-test").build();
-        let harness =
-            DaemonTestHarness::from_fixture(fixture).expect("should create harness");
+        let harness = DaemonTestHarness::from_fixture(fixture).expect("should create harness");
 
         let metadata = fs::metadata(harness.policy_dir()).expect("should read metadata");
         let mode = metadata.permissions().mode() & 0o777;
@@ -708,16 +686,14 @@ mod tests {
         let verdict = Verdict::deny(action.id, "blocked", None);
         helper.insert(&action, &verdict).unwrap();
 
-        assert_audit_entry_exists(&helper, "NetConnect")
-            .expect("should find NetConnect entry");
+        assert_audit_entry_exists(&helper, "NetConnect").expect("should find NetConnect entry");
     }
 
     #[test]
     fn assert_audit_entry_absent_passes() {
         let helper = AuditTestHelper::new().expect("should create helper");
 
-        assert_audit_entry_absent(&helper, "FileRead")
-            .expect("should confirm no FileRead entries");
+        assert_audit_entry_absent(&helper, "FileRead").expect("should confirm no FileRead entries");
     }
 
     #[test]
@@ -766,8 +742,7 @@ mod tests {
             .socket_path(PathBuf::from("/should/be/overridden"))
             .build();
 
-        let harness =
-            DaemonTestHarness::from_fixture(fixture).expect("should create harness");
+        let harness = DaemonTestHarness::from_fixture(fixture).expect("should create harness");
 
         let config = harness.effective_config();
         assert_eq!(
@@ -783,9 +758,6 @@ mod tests {
         fixture.daemon_config.control.api_key = "real-api-key-123".into();
 
         let result = DaemonTestHarness::from_fixture(fixture);
-        assert!(
-            result.is_err(),
-            "should reject fixture with real API key"
-        );
+        assert!(result.is_err(), "should reject fixture with real API key");
     }
 }

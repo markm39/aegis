@@ -156,7 +156,9 @@ impl AuditStore {
 
         let entry_id = Uuid::new_v4();
         let timestamp = Utc::now();
-        let prev_hash = self.latest_fs_hash().unwrap_or_else(|| "genesis".to_string());
+        let prev_hash = self
+            .latest_fs_hash()
+            .unwrap_or_else(|| "genesis".to_string());
 
         let entry_hash = compute_fs_entry_hash(
             &entry_id,
@@ -222,7 +224,10 @@ impl AuditStore {
                     rusqlite::Error::FromSqlConversionFailure(
                         5,
                         rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            e.to_string(),
+                        )),
                     )
                 })?;
 
@@ -307,7 +312,13 @@ mod tests {
         // Delete: no after_hash
         let before = hash_file_content(b"doomed file");
         let delete_entry = store
-            .insert_fs_audit("/tmp/doomed.txt", Some(&before), None, -11, FsOperation::Delete)
+            .insert_fs_audit(
+                "/tmp/doomed.txt",
+                Some(&before),
+                None,
+                -11,
+                FsOperation::Delete,
+            )
             .unwrap();
         assert_eq!(delete_entry.before_hash.as_deref(), Some(before.as_str()));
         assert!(delete_entry.after_hash.is_none());
@@ -316,7 +327,13 @@ mod tests {
         let before2 = hash_file_content(b"before");
         let after2 = hash_file_content(b"after");
         let modify_entry = store
-            .insert_fs_audit("/tmp/mod.txt", Some(&before2), Some(&after2), -1, FsOperation::Modify)
+            .insert_fs_audit(
+                "/tmp/mod.txt",
+                Some(&before2),
+                Some(&after2),
+                -1,
+                FsOperation::Modify,
+            )
             .unwrap();
         assert!(modify_entry.before_hash.is_some());
         assert!(modify_entry.after_hash.is_some());
@@ -407,9 +424,18 @@ mod tests {
         assert_eq!(FsOperation::Modify.to_string(), "Modify");
         assert_eq!(FsOperation::Delete.to_string(), "Delete");
 
-        assert_eq!("Create".parse::<FsOperation>().unwrap(), FsOperation::Create);
-        assert_eq!("Modify".parse::<FsOperation>().unwrap(), FsOperation::Modify);
-        assert_eq!("Delete".parse::<FsOperation>().unwrap(), FsOperation::Delete);
+        assert_eq!(
+            "Create".parse::<FsOperation>().unwrap(),
+            FsOperation::Create
+        );
+        assert_eq!(
+            "Modify".parse::<FsOperation>().unwrap(),
+            FsOperation::Modify
+        );
+        assert_eq!(
+            "Delete".parse::<FsOperation>().unwrap(),
+            FsOperation::Delete
+        );
         assert!("Invalid".parse::<FsOperation>().is_err());
     }
 

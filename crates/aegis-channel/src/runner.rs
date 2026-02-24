@@ -82,35 +82,31 @@ pub fn run_fleet(
                 run_slack(slack_config, input_rx, feedback_tx).await;
             }
             ChannelConfig::Webhook(cfg) => {
-                let channel = crate::webhook::WebhookChannel::new(
-                    crate::webhook::WebhookConfig {
-                        name: cfg.name,
-                        outbound_url: cfg.outbound_url,
-                        inbound_url: cfg.inbound_url,
-                        auth_header: cfg.auth_header,
-                        payload_template: cfg.payload_template,
-                    },
-                );
+                let channel = crate::webhook::WebhookChannel::new(crate::webhook::WebhookConfig {
+                    name: cfg.name,
+                    outbound_url: cfg.outbound_url,
+                    inbound_url: cfg.inbound_url,
+                    auth_header: cfg.auth_header,
+                    payload_template: cfg.payload_template,
+                });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Discord(cfg) => {
-                let channel = crate::discord::DiscordChannel::new(
-                    crate::discord::DiscordConfig {
-                        webhook_url: cfg.webhook_url,
-                        bot_token: cfg.bot_token,
-                        channel_id: cfg.channel_id,
-                        guild_id: cfg.guild_id,
-                        application_id: cfg.application_id,
-                        public_key: cfg.public_key,
-                        authorized_user_ids: cfg.authorized_user_ids,
-                        command_channel_id: cfg.command_channel_id,
-                    },
-                );
+                let channel = crate::discord::DiscordChannel::new(crate::discord::DiscordConfig {
+                    webhook_url: cfg.webhook_url,
+                    bot_token: cfg.bot_token,
+                    channel_id: cfg.channel_id,
+                    guild_id: cfg.guild_id,
+                    application_id: cfg.application_id,
+                    public_key: cfg.public_key,
+                    authorized_user_ids: cfg.authorized_user_ids,
+                    command_channel_id: cfg.command_channel_id,
+                });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Whatsapp(cfg) => {
-                let channel = crate::whatsapp::WhatsappChannel::new(
-                    crate::whatsapp::WhatsappConfig {
+                let channel =
+                    crate::whatsapp::WhatsappChannel::new(crate::whatsapp::WhatsappConfig {
                         api_url: cfg.api_url,
                         access_token: cfg.access_token,
                         phone_number_id: cfg.phone_number_id,
@@ -118,21 +114,18 @@ pub fn run_fleet(
                         verify_token: None,
                         webhook_port: None,
                         template_namespace: None,
-                    },
-                );
+                    });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Signal(cfg) => {
-                let channel = match crate::signal::SignalChannel::new(
-                    crate::signal::SignalConfig {
-                        api_url: cfg.api_url,
-                        phone_number: cfg.phone_number,
-                        recipients: cfg.recipients,
-                        poll_interval_secs: 5,
-                        group_ids: Vec::new(),
-                        trust_mode: "trust_all".to_string(),
-                    },
-                ) {
+                let channel = match crate::signal::SignalChannel::new(crate::signal::SignalConfig {
+                    api_url: cfg.api_url,
+                    phone_number: cfg.phone_number,
+                    recipients: cfg.recipients,
+                    poll_interval_secs: 5,
+                    group_ids: Vec::new(),
+                    trust_mode: "trust_all".to_string(),
+                }) {
                     Ok(ch) => ch,
                     Err(e) => {
                         tracing::error!("failed to create Signal channel: {e}");
@@ -142,32 +135,29 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Matrix(cfg) => {
-                let channel = crate::matrix::MatrixChannel::new(
-                    crate::matrix::MatrixConfig {
-                        homeserver_url: cfg.homeserver_url,
-                        access_token: cfg.access_token,
-                        room_id: cfg.room_id,
-                    },
-                );
+                let channel = crate::matrix::MatrixChannel::new(crate::matrix::MatrixConfig {
+                    homeserver_url: cfg.homeserver_url,
+                    access_token: cfg.access_token,
+                    room_id: cfg.room_id,
+                });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Imessage(cfg) => {
-                let channel = match crate::imessage::ImessageChannel::new(
-                    crate::imessage::ImessageConfig {
+                let channel =
+                    match crate::imessage::ImessageChannel::new(crate::imessage::ImessageConfig {
                         recipient: cfg.recipient,
                         mode: Default::default(),
                         bluebubbles_url: None,
                         bluebubbles_password: None,
                         poll_interval_secs: 10,
                         chat_db_path: None,
-                    },
-                ) {
-                    Ok(ch) => ch,
-                    Err(e) => {
-                        tracing::error!("failed to create iMessage channel: {e}");
-                        return;
-                    }
-                };
+                    }) {
+                        Ok(ch) => ch,
+                        Err(e) => {
+                            tracing::error!("failed to create iMessage channel: {e}");
+                            return;
+                        }
+                    };
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Irc(cfg) => {
@@ -179,11 +169,9 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Msteams(cfg) => {
-                let channel = crate::msteams::MsteamsChannel::new(
-                    crate::msteams::MsteamsConfig {
-                        webhook_url: cfg.webhook_url,
-                    },
-                );
+                let channel = crate::msteams::MsteamsChannel::new(crate::msteams::MsteamsConfig {
+                    webhook_url: cfg.webhook_url,
+                });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Googlechat(cfg) => {
@@ -195,12 +183,10 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Feishu(cfg) => {
-                let channel = crate::feishu::FeishuChannel::new(
-                    crate::feishu::FeishuConfig {
-                        webhook_url: cfg.webhook_url,
-                        secret: cfg.secret,
-                    },
-                );
+                let channel = crate::feishu::FeishuChannel::new(crate::feishu::FeishuConfig {
+                    webhook_url: cfg.webhook_url,
+                    secret: cfg.secret,
+                });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Line(cfg) => {
@@ -231,23 +217,20 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::VoiceCall(cfg) => {
-                let channel = crate::voice_call::VoiceCallChannel::new(
-                    crate::voice_call::VoiceCallConfig {
+                let channel =
+                    crate::voice_call::VoiceCallChannel::new(crate::voice_call::VoiceCallConfig {
                         api_url: cfg.api_url,
                         from_number: cfg.from_number,
                         to_number: cfg.to_number,
-                    },
-                );
+                    });
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Twitch(cfg) => {
-                let channel = match crate::twitch::TwitchChannel::new(
-                    crate::twitch::TwitchConfig {
-                        oauth_token: cfg.oauth_token,
-                        channel_name: cfg.channel_name,
-                        bot_username: cfg.bot_username,
-                    },
-                ) {
+                let channel = match crate::twitch::TwitchChannel::new(crate::twitch::TwitchConfig {
+                    oauth_token: cfg.oauth_token,
+                    channel_name: cfg.channel_name,
+                    bot_username: cfg.bot_username,
+                }) {
                     Ok(ch) => ch,
                     Err(e) => {
                         tracing::error!("failed to create Twitch channel: {e}");
@@ -301,18 +284,17 @@ pub fn run_fleet(
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Lobster(cfg) => {
-                let channel = match crate::lobster::LobsterChannel::new(
-                    crate::lobster::LobsterConfig {
+                let channel =
+                    match crate::lobster::LobsterChannel::new(crate::lobster::LobsterConfig {
                         api_url: cfg.api_url,
                         api_key: cfg.api_key,
-                    },
-                ) {
-                    Ok(ch) => ch,
-                    Err(e) => {
-                        tracing::error!("failed to create Lobster channel: {e}");
-                        return;
-                    }
-                };
+                    }) {
+                        Ok(ch) => ch,
+                        Err(e) => {
+                            tracing::error!("failed to create Lobster channel: {e}");
+                            return;
+                        }
+                    };
                 run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx).await;
             }
             ChannelConfig::Gmail(_cfg) => {

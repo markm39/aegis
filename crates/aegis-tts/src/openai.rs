@@ -67,7 +67,11 @@ impl OpenAiTtsProvider {
     ///
     /// The `api_key` is passed directly -- callers are responsible for
     /// sourcing it from an environment variable.
-    pub fn new(api_key: String, endpoint: Option<String>, default_voice: Option<String>) -> TtsResult<Self> {
+    pub fn new(
+        api_key: String,
+        endpoint: Option<String>,
+        default_voice: Option<String>,
+    ) -> TtsResult<Self> {
         let endpoint = match endpoint {
             Some(url) => {
                 let validated = validate_endpoint_url(&url)?;
@@ -142,10 +146,7 @@ impl TtsProvider for OpenAiTtsProvider {
 
         let audio_bytes = response.bytes().await?.to_vec();
 
-        tracing::debug!(
-            bytes = audio_bytes.len(),
-            "received TTS audio response"
-        );
+        tracing::debug!(bytes = audio_bytes.len(), "received TTS audio response");
 
         Ok(audio_bytes)
     }
@@ -393,9 +394,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = provider
-            .synthesize("Hello", None, AudioFormat::Mp3)
-            .await;
+        let result = provider.synthesize("Hello", None, AudioFormat::Mp3).await;
 
         assert!(matches!(result, Err(TtsError::ProviderError(_))));
         if let Err(TtsError::ProviderError(msg)) = result {
@@ -411,9 +410,7 @@ mod tests {
         // We verify the request contains the right voice by checking the body.
         Mock::given(method("POST"))
             .and(path("/v1/audio/speech"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_bytes(vec![0x00]),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x00]))
             .expect(1)
             .mount(&mock_server)
             .await;

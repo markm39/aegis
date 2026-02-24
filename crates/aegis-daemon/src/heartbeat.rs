@@ -124,12 +124,14 @@ impl HeartbeatRunner {
     /// If the agent is already registered, this is a no-op.
     pub fn register_agent(&mut self, name: &str) {
         let now = Instant::now();
-        self.agents.entry(name.to_string()).or_insert(AgentHeartbeatState {
-            registered_at: now,
-            last_activity: now,
-            last_heartbeat_sent: None,
-            heartbeat_count: 0,
-        });
+        self.agents
+            .entry(name.to_string())
+            .or_insert(AgentHeartbeatState {
+                registered_at: now,
+                last_activity: now,
+                last_heartbeat_sent: None,
+                heartbeat_count: 0,
+            });
     }
 
     /// Remove an agent from heartbeat tracking.
@@ -155,9 +157,7 @@ impl HeartbeatRunner {
     ///
     /// Returns `None` if the agent is not registered.
     pub fn idle_duration(&self, name: &str) -> Option<Duration> {
-        self.agents
-            .get(name)
-            .map(|s| s.last_activity.elapsed())
+        self.agents.get(name).map(|s| s.last_activity.elapsed())
     }
 
     /// Check if it is time for a heartbeat tick.

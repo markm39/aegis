@@ -82,7 +82,7 @@ pub fn needs_kernel_enforcement(entries: &[ActionEntry]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wizard::model::{apply_preset, default_action_entries, ActionMeta, SecurityPreset};
+    use crate::wizard::model::{ActionMeta, SecurityPreset, apply_preset, default_action_entries};
 
     #[test]
     fn observe_only_generates_permit_all_equivalent() {

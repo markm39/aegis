@@ -67,10 +67,7 @@ impl TlonChannel {
     pub fn new(config: TlonConfig) -> Result<Self, ChannelError> {
         validate_config(&config)?;
 
-        let url = format!(
-            "{}/~/channel",
-            config.ship_url.trim_end_matches('/')
-        );
+        let url = format!("{}/~/channel", config.ship_url.trim_end_matches('/'));
         let webhook = WebhookConfig {
             name: "tlon".to_string(),
             outbound_url: url,

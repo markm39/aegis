@@ -81,11 +81,7 @@ impl CredentialStore {
     pub fn save(&self, path: &Path) -> Result<(), AegisError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                AegisError::ConfigError(format!(
-                    "failed to create {}: {}",
-                    parent.display(),
-                    e
-                ))
+                AegisError::ConfigError(format!("failed to create {}: {}", parent.display(), e))
             })?;
         }
 
@@ -132,7 +128,13 @@ impl CredentialStore {
         model: Option<String>,
         base_url: Option<String>,
     ) {
-        self.set_with_type(provider_id, api_key, model, base_url, CredentialType::ApiKey);
+        self.set_with_type(
+            provider_id,
+            api_key,
+            model,
+            base_url,
+            CredentialType::ApiKey,
+        );
     }
 
     /// Set a provider's credential with an explicit credential type.
@@ -190,8 +192,8 @@ impl CredentialStore {
         }
 
         // Check OAuth token store as a last resort.
-        if let Ok(Some(token)) = crate::oauth::FileTokenStore::new(provider.id)
-            .and_then(|store| store.load())
+        if let Ok(Some(token)) =
+            crate::oauth::FileTokenStore::new(provider.id).and_then(|store| store.load())
         {
             if !token.is_expired() {
                 return Some(token.access_token);
@@ -263,10 +265,7 @@ mod tests {
         let parsed: CredentialStore = toml::from_str(&toml_str).unwrap();
 
         assert_eq!(parsed.providers.len(), 2);
-        assert_eq!(
-            parsed.get("anthropic").unwrap().api_key,
-            "test-key-12345"
-        );
+        assert_eq!(parsed.get("anthropic").unwrap().api_key, "test-key-12345");
         assert_eq!(
             parsed.get("anthropic").unwrap().model.as_deref(),
             Some("claude-opus-4-6")
@@ -279,8 +278,7 @@ mod tests {
 
     #[test]
     fn load_nonexistent_returns_empty() {
-        let store =
-            CredentialStore::load(Path::new("/tmp/nonexistent-aegis-creds.toml")).unwrap();
+        let store = CredentialStore::load(Path::new("/tmp/nonexistent-aegis-creds.toml")).unwrap();
         assert!(store.providers.is_empty());
     }
 

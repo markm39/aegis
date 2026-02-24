@@ -15,9 +15,7 @@ use serde::Serialize;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatHookEvent {
     /// Fires when a new session starts (including after /new).
-    SessionStart {
-        session_id: String,
-    },
+    SessionStart { session_id: String },
     /// Fires before /new clears the conversation.
     BeforeReset {
         session_id: String,
@@ -126,7 +124,10 @@ fn manifest_matches_trigger(manifest_content: &str, trigger: &str) -> bool {
 }
 
 /// Extract the entry point path from a manifest.toml.
-fn extract_entry_point(manifest_content: &str, hook_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+fn extract_entry_point(
+    manifest_content: &str,
+    hook_dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
     let value: toml::Value = manifest_content.parse().ok()?;
     let entry = value.get("entry_point")?.as_str()?;
     let full_path = hook_dir.join(entry);

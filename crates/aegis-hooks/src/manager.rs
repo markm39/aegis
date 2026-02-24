@@ -90,7 +90,9 @@ impl HookManager {
         let matching = discovery::hooks_for_event(&self.hooks, event_name);
 
         if matching.is_empty() {
-            return HookResponse::default();
+            // No hooks registered for this event -- allow the action.
+            // Fail-closed only applies when hooks exist but fail to respond.
+            return HookResponse::allow();
         }
 
         tracing::debug!(

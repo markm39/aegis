@@ -20,7 +20,9 @@ use super::handler::{CommandContext, CommandResult};
 use super::registry::CommandRegistry;
 
 /// Characters that are forbidden in command names to prevent injection.
-const FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '`', '$', '(', ')', '{', '}', '<', '>', '\\', '\'', '"', '\n', '\r', '\t'];
+const FORBIDDEN_CHARS: &[char] = &[
+    ';', '|', '&', '`', '$', '(', ')', '{', '}', '<', '>', '\\', '\'', '"', '\n', '\r', '\t',
+];
 
 /// Maximum allowed length for a command name.
 const MAX_COMMAND_NAME_LEN: usize = 64;
@@ -42,10 +44,7 @@ impl CommandRouter {
     ///
     /// The `permission_check` closure receives `(action_name, principal)` and
     /// returns `true` if the principal is allowed to perform that action.
-    pub fn new(
-        registry: CommandRegistry,
-        permission_check: PermissionChecker,
-    ) -> Self {
+    pub fn new(registry: CommandRegistry, permission_check: PermissionChecker) -> Self {
         Self {
             registry,
             permission_check,
@@ -88,7 +87,9 @@ impl CommandRouter {
                 let suggestion = suggest_command(name, &self.registry);
                 let msg = match suggestion {
                     Some(s) => format!("unknown command '{name}'. Did you mean '{s}'?"),
-                    None => format!("unknown command '{name}'. Type 'help' for available commands."),
+                    None => {
+                        format!("unknown command '{name}'. Type 'help' for available commands.")
+                    }
                 };
                 return Ok(CommandResult::error(msg));
             }
@@ -145,9 +146,7 @@ fn validate_command_name(name: &str) -> Result<(), String> {
 
     for ch in name.chars() {
         if FORBIDDEN_CHARS.contains(&ch) {
-            return Err(format!(
-                "command name contains forbidden character '{ch}'"
-            ));
+            return Err(format!("command name contains forbidden character '{ch}'"));
         }
         if ch.is_control() {
             return Err("command name contains control characters".into());

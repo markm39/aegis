@@ -153,10 +153,7 @@ pub async fn detect_playback_backend() -> Option<PlaybackBackend> {
 }
 
 /// Play audio from a file using the detected backend.
-pub async fn play_audio_file(
-    path: &std::path::Path,
-    backend: PlaybackBackend,
-) -> VoiceResult<()> {
+pub async fn play_audio_file(path: &std::path::Path, backend: PlaybackBackend) -> VoiceResult<()> {
     let cmd_name = match backend {
         PlaybackBackend::Afplay => "afplay",
         PlaybackBackend::SoxPlay => "play",
@@ -193,14 +190,11 @@ pub async fn play_audio_bytes(
     backend: PlaybackBackend,
 ) -> VoiceResult<()> {
     let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!(
-        "aegis_talk_{}.{extension}",
-        std::process::id()
-    ));
+    let temp_path = temp_dir.join(format!("aegis_talk_{}.{extension}", std::process::id()));
 
-    tokio::fs::write(&temp_path, audio).await.map_err(|e| {
-        VoiceError::TalkError(format!("failed to write temp audio file: {e}"))
-    })?;
+    tokio::fs::write(&temp_path, audio)
+        .await
+        .map_err(|e| VoiceError::TalkError(format!("failed to write temp audio file: {e}")))?;
 
     let result = play_audio_file(&temp_path, backend).await;
 
@@ -327,7 +321,10 @@ impl TalkMode {
         );
 
         tokio::spawn(async move {
-            talk_loop(config, capture, stt, tts, agent, playback, running, event_tx).await;
+            talk_loop(
+                config, capture, stt, tts, agent, playback, running, event_tx,
+            )
+            .await;
         })
     }
 
@@ -366,7 +363,17 @@ async fn talk_loop(
     event_tx: tokio::sync::mpsc::Sender<TalkEvent>,
 ) {
     while running.load(Ordering::Relaxed) {
-        match conversation_turn(&config, &capture, stt.as_ref(), &tts, agent.as_ref(), playback, &event_tx).await {
+        match conversation_turn(
+            &config,
+            &capture,
+            stt.as_ref(),
+            &tts,
+            agent.as_ref(),
+            playback,
+            &event_tx,
+        )
+        .await
+        {
             Ok((user_text, _agent_text)) => {
                 tracing::debug!(user = %user_text, "conversation turn completed");
             }
@@ -406,8 +413,7 @@ async fn conversation_turn(
 
     // Check for voice activity.
     let samples = crate::capture::wav_to_samples(&audio);
-    let vad_ratio =
-        crate::capture::voice_activity_ratio(&samples, config.vad_threshold, 480);
+    let vad_ratio = crate::capture::voice_activity_ratio(&samples, config.vad_threshold, 480);
     if vad_ratio < 0.05 {
         return Err(VoiceError::TalkError("no speech detected".to_string()));
     }
@@ -447,11 +453,7 @@ async fn conversation_turn(
 
     // Step 5: Play.
     let _ = event_tx.send(TalkEvent::Playing).await;
-    let extension = tts
-        .list_voices()
-        .ok()
-        .map(|_| "mp3")
-        .unwrap_or("mp3");
+    let extension = tts.list_voices().ok().map(|_| "mp3").unwrap_or("mp3");
     play_audio_bytes(&audio_bytes, extension, playback).await?;
 
     Ok((user_text, agent_response))

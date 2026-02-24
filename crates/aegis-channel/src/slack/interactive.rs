@@ -162,10 +162,7 @@ pub fn parse_interaction(payload_json: &str) -> Result<SlackInteraction, Channel
         .first()
         .ok_or_else(|| ChannelError::Api("empty actions array in interaction payload".into()))?;
 
-    let action_type = action
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let action_type = action.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
     let action_id = action
         .get("action_id")
@@ -256,7 +253,9 @@ mod tests {
         let signature = format!("v0={hex_sig}");
 
         // Valid signature should pass
-        assert!(verify_request_signature(secret, &timestamp, body, &signature));
+        assert!(verify_request_signature(
+            secret, &timestamp, body, &signature
+        ));
 
         // Wrong signature should fail
         assert!(!verify_request_signature(
@@ -326,7 +325,9 @@ mod tests {
         let valid_sig = format!("v0={hex_sig}");
 
         // Valid signature passes
-        assert!(verify_request_signature(secret, &timestamp, body, &valid_sig));
+        assert!(verify_request_signature(
+            secret, &timestamp, body, &valid_sig
+        ));
 
         // Signature with one bit flipped fails
         let mut bad_bytes: Vec<u8> = valid_sig.bytes().collect();
@@ -334,7 +335,9 @@ mod tests {
             *last ^= 1;
         }
         let bad_sig = String::from_utf8(bad_bytes).unwrap();
-        assert!(!verify_request_signature(secret, &timestamp, body, &bad_sig));
+        assert!(!verify_request_signature(
+            secret, &timestamp, body, &bad_sig
+        ));
 
         // Completely different signature fails
         assert!(!verify_request_signature(

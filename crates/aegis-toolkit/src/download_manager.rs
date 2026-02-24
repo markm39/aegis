@@ -231,10 +231,7 @@ impl DownloadManager {
             DownloadState::Pending | DownloadState::InProgress => {}
             other => {
                 return Err(DownloadError::InvalidState {
-                    reason: format!(
-                        "cannot update progress for download in state {:?}",
-                        other
-                    ),
+                    reason: format!("cannot update progress for download in state {:?}", other),
                 });
             }
         }
@@ -325,17 +322,14 @@ impl DownloadManager {
 
     /// Remove completed, failed, and cancelled entries older than `max_age_secs`.
     pub fn cleanup_completed(&mut self, max_age_secs: u64) {
-        let cutoff = Utc::now()
-            - chrono::Duration::seconds(
-                i64::try_from(max_age_secs).unwrap_or(i64::MAX),
-            );
+        let cutoff =
+            Utc::now() - chrono::Duration::seconds(i64::try_from(max_age_secs).unwrap_or(i64::MAX));
         self.downloads.retain(|_, info| {
             match &info.state {
                 DownloadState::Pending | DownloadState::InProgress => true,
                 _ => {
                     // Keep entries that completed after the cutoff.
-                    info.completed_at
-                        .is_none_or(|completed| completed > cutoff)
+                    info.completed_at.is_none_or(|completed| completed > cutoff)
                 }
             }
         });
@@ -501,10 +495,7 @@ fn sanitize_filename(filename: &str) -> String {
     }
 
     // Remove control characters (bytes < 0x20).
-    name = name
-        .chars()
-        .filter(|c| *c as u32 >= 0x20)
-        .collect();
+    name = name.chars().filter(|c| *c as u32 >= 0x20).collect();
 
     // Trim leading/trailing whitespace and dots.
     name = name.trim().trim_matches('.').to_string();
@@ -562,7 +553,9 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let mut mgr = DownloadManager::new(test_config(&dir)).unwrap();
 
-        let blocked = ["exe", "bat", "cmd", "sh", "ps1", "vbs", "msi", "dll", "so", "dylib"];
+        let blocked = [
+            "exe", "bat", "cmd", "sh", "ps1", "vbs", "msi", "dll", "so", "dylib",
+        ];
         for ext in &blocked {
             let filename = format!("malware.{ext}");
             let result = mgr.register_download(
@@ -755,7 +748,10 @@ mod tests {
 
         // Path separators removed.
         let path = safe_download_path(&dir, "sub/dir/file.txt", false).unwrap();
-        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "subdirfile.txt");
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "subdirfile.txt"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -960,7 +956,10 @@ mod tests {
         // Cleanup with 0-second max age removes all completed.
         mgr.cleanup_completed(0);
 
-        assert!(mgr.get_download("dl-1").is_none(), "completed should be removed");
+        assert!(
+            mgr.get_download("dl-1").is_none(),
+            "completed should be removed"
+        );
         assert!(mgr.get_download("dl-2").is_some(), "pending should remain");
 
         let _ = fs::remove_dir_all(&dir);
@@ -982,7 +981,10 @@ mod tests {
         let mut mgr = DownloadManager::new(test_config(&dir)).unwrap();
         let result = mgr.update_progress("nope", 100, None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DownloadError::NotFound { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            DownloadError::NotFound { .. }
+        ));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -993,7 +995,10 @@ mod tests {
         let mut mgr = DownloadManager::new(test_config(&dir)).unwrap();
         let result = mgr.complete_download("nope");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DownloadError::NotFound { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            DownloadError::NotFound { .. }
+        ));
         let _ = fs::remove_dir_all(&dir);
     }
 

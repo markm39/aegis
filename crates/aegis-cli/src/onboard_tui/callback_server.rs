@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Parameters received from the OAuth callback.
 #[derive(Debug, Clone)]
@@ -81,9 +81,7 @@ pub fn wait_for_callback(
             Err(e) => bail!("failed to accept connection: {e}"),
         };
 
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .ok();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
 
         // Read the HTTP request.
         let mut buf = [0u8; 4096];
@@ -180,10 +178,7 @@ fn parse_query_string(query: &str) -> Vec<(String, String)> {
         .filter(|s| !s.is_empty())
         .filter_map(|pair| {
             let (key, value) = pair.split_once('=')?;
-            Some((
-                percent_decode(key),
-                percent_decode(value),
-            ))
+            Some((percent_decode(key), percent_decode(value)))
         })
         .collect()
 }

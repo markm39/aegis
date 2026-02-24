@@ -129,12 +129,12 @@ pub fn build_system_prompt(
     let ws = aegis_types::daemon::workspace_dir();
     let workspace_files: &[(&str, &str, bool)] = &[
         // (filename, label, full_only)
-        ("SOUL.md", "SOUL.md", true),             // full only -- personality
-        ("IDENTITY.md", "IDENTITY.md", false),     // always -- agent name
-        ("USER.md", "USER.md", true),              // full only -- personal
-        ("TOOLS.md", "TOOLS.md", false),           // always -- environment
-        ("MEMORY.md", "MEMORY.md", true),          // full only -- persistent memory
-        ("HEARTBEAT.md", "HEARTBEAT.md", true),    // full only -- session checklist
+        ("SOUL.md", "SOUL.md", true), // full only -- personality
+        ("IDENTITY.md", "IDENTITY.md", false), // always -- agent name
+        ("USER.md", "USER.md", true), // full only -- personal
+        ("TOOLS.md", "TOOLS.md", false), // always -- environment
+        ("MEMORY.md", "MEMORY.md", true), // full only -- persistent memory
+        ("HEARTBEAT.md", "HEARTBEAT.md", true), // full only -- session checklist
     ];
 
     let mut has_ws_context = false;
@@ -210,9 +210,7 @@ pub fn build_system_prompt(
         if let Some(contents) = read_file_capped(path, MAX_FILE_CHARS) {
             if !has_project_context {
                 prompt.push_str("\n# Project Context\n\n");
-                prompt.push_str(
-                    "The following project context files have been loaded.\n\n",
-                );
+                prompt.push_str("The following project context files have been loaded.\n\n");
                 has_project_context = true;
             }
             let _ = writeln!(prompt, "## {label}\n");

@@ -70,10 +70,7 @@ pub fn should_compact(messages: &[LlmMessage], model: &str) -> (usize, usize) {
 /// within 80% of the context window.
 ///
 /// Returns `None` if no compaction was needed.
-pub fn compact_conversation(
-    messages: &[LlmMessage],
-    model: &str,
-) -> Option<Vec<LlmMessage>> {
+pub fn compact_conversation(messages: &[LlmMessage], model: &str) -> Option<Vec<LlmMessage>> {
     let (estimated, threshold) = should_compact(messages, model);
 
     if estimated <= threshold {
@@ -160,10 +157,7 @@ mod tests {
 
     #[test]
     fn should_compact_small_conversation() {
-        let msgs = vec![
-            LlmMessage::user("Hello"),
-            LlmMessage::assistant("Hi there"),
-        ];
+        let msgs = vec![LlmMessage::user("Hello"), LlmMessage::assistant("Hi there")];
         let (estimated, threshold) = should_compact(&msgs, "claude-sonnet-4-20250514");
         assert!(
             estimated < threshold,
@@ -173,10 +167,7 @@ mod tests {
 
     #[test]
     fn compact_returns_none_when_small() {
-        let msgs = vec![
-            LlmMessage::user("Hello"),
-            LlmMessage::assistant("Hi there"),
-        ];
+        let msgs = vec![LlmMessage::user("Hello"), LlmMessage::assistant("Hi there")];
         assert!(compact_conversation(&msgs, "claude-sonnet-4-20250514").is_none());
     }
 

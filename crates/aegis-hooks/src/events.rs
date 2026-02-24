@@ -38,10 +38,7 @@ pub enum HookEvent {
     },
 
     /// Fired when a pending approval request is acted on.
-    OnApproval {
-        request_id: String,
-        action: String,
-    },
+    OnApproval { request_id: String, action: String },
 
     /// Fired when an agent process starts.
     OnAgentStart { agent_name: String },
@@ -53,10 +50,7 @@ pub enum HookEvent {
     },
 
     /// Fired when an error occurs in the system.
-    OnError {
-        error: String,
-        context: String,
-    },
+    OnError { error: String, context: String },
 
     /// User-defined custom event with an arbitrary name and payload.
     Custom {
@@ -111,6 +105,13 @@ pub struct HookResponse {
     /// For `OnMessage`, this replaces the message content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
+
+    /// Machine-readable reason for the response, set automatically on error paths.
+    ///
+    /// Examples: "hook_timeout", "hook_not_found", "parse_failure", "exit_code_2".
+    /// Hook scripts do not need to set this -- it is populated by the runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// The action a hook script wants to take on the triggering operation.
@@ -126,11 +127,40 @@ pub enum HookResponseAction {
 }
 
 impl Default for HookResponse {
+    /// Default is **Block** (fail-closed).
+    ///
+    /// This is a deliberate security decision: when a hook fails to produce a
+    /// valid response (timeout, crash, parse error), the safe default is to
+    /// block the action rather than silently permit it. Callers that want
+    /// fail-open behavior should use `HookResponse::allow()` explicitly.
     fn default() -> Self {
+        Self {
+            action: HookResponseAction::Block,
+            message: "hook did not produce a response (fail-closed default)".to_string(),
+            payload: None,
+            reason: Some("fail_closed_default".to_string()),
+        }
+    }
+}
+
+impl HookResponse {
+    /// Construct an explicit allow response.
+    pub fn allow() -> Self {
         Self {
             action: HookResponseAction::Allow,
             message: String::new(),
             payload: None,
+            reason: None,
+        }
+    }
+
+    /// Construct an explicit block response with a reason.
+    pub fn block(reason: &str, message: impl Into<String>) -> Self {
+        Self {
+            action: HookResponseAction::Block,
+            message: message.into(),
+            payload: None,
+            reason: Some(reason.to_string()),
         }
     }
 }
@@ -179,9 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn default_response_is_allow() {
+    fn default_response_is_block() {
         let resp = HookResponse::default();
+        assert_eq!(resp.action, HookResponseAction::Block);
+        assert!(resp.reason.is_some());
+    }
+
+    #[test]
+    fn explicit_allow_response() {
+        let resp = HookResponse::allow();
         assert_eq!(resp.action, HookResponseAction::Allow);
+        assert!(resp.reason.is_none());
     }
 
     #[test]

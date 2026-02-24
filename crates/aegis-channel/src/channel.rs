@@ -197,10 +197,7 @@ pub trait Channel: Send + 'static {
     /// Like [`Channel::send`], but returns the message ID assigned by the
     /// platform so callers can later edit, delete, or react to it.
     /// Returns `None` when the backend does not track message IDs.
-    async fn send_with_id(
-        &self,
-        message: OutboundMessage,
-    ) -> Result<Option<String>, ChannelError> {
+    async fn send_with_id(&self, message: OutboundMessage) -> Result<Option<String>, ChannelError> {
         self.send(message).await?;
         Ok(None)
     }

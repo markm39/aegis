@@ -10,16 +10,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use aegis_policy::builtin::get_builtin_policy;
 #[cfg(target_os = "macos")]
 use aegis_policy::PolicyEngine;
+use aegis_policy::builtin::get_builtin_policy;
 use aegis_sandbox::SandboxBackend;
 use aegis_types::{
-    AegisConfig, IsolationConfig, ObserverConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME,
-    LEDGER_FILENAME,
+    AegisConfig, CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, IsolationConfig, LEDGER_FILENAME,
+    ObserverConfig,
 };
 
 use crate::commands::init::dirs_from_env;
@@ -109,9 +109,7 @@ fn create_backend(config: &AegisConfig) -> Result<(Box<dyn SandboxBackend>, bool
             );
             Ok((Box::new(aegis_sandbox::ProcessBackend), false))
         }
-        IsolationConfig::Docker(_) => {
-            Ok((Box::new(aegis_sandbox::DockerBackend::new()), true))
-        }
+        IsolationConfig::Docker(_) => Ok((Box::new(aegis_sandbox::DockerBackend::new()), true)),
         IsolationConfig::Process | IsolationConfig::None => {
             Ok((Box::new(aegis_sandbox::ProcessBackend), false))
         }
@@ -251,10 +249,12 @@ mod tests {
         assert_eq!(config.sandbox_dir, project_dir);
         assert_eq!(config.isolation, IsolationConfig::Process);
         assert!(wrap_dir.join(CONFIG_FILENAME).exists());
-        assert!(wrap_dir
-            .join("policies")
-            .join(DEFAULT_POLICY_FILENAME)
-            .exists());
+        assert!(
+            wrap_dir
+                .join("policies")
+                .join(DEFAULT_POLICY_FILENAME)
+                .exists()
+        );
     }
 
     #[test]
@@ -287,9 +287,11 @@ mod tests {
 
         let result = ensure_wrap_config(&wrap_dir, "bad", "nonexistent-policy", &project_dir);
         assert!(result.is_err(), "unknown policy should fail");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unknown policy template"),);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unknown policy template"),
+        );
     }
 }

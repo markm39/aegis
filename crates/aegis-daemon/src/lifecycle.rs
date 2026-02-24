@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use aegis_control::hooks;
-use aegis_ledger::AuditStore;
+use aegis_ledger::{AuditStore, AuditWriter};
 use aegis_pilot::driver::ProcessKind;
 use aegis_pilot::driver::{SpawnStrategy, TaskInjection};
 use aegis_pilot::drivers::create_driver;
@@ -32,6 +32,7 @@ use aegis_pilot::supervisor::{self, PilotStats, PilotUpdate, SupervisorCommand, 
 use aegis_pilot::tmux::TmuxSession;
 use aegis_policy::PolicyEngine;
 use aegis_types::daemon::{AgentSlotConfig, AgentToolConfig, OrchestratorConfig, ToolkitConfig};
+use aegis_types::ids::AgentName;
 use aegis_types::AegisConfig;
 
 use crate::tool_contract::render_orchestrator_tool_contract;
@@ -39,7 +40,7 @@ use crate::tool_contract::render_orchestrator_tool_contract;
 /// Result returned by a completed agent lifecycle thread.
 pub struct SlotResult {
     /// Agent name.
-    pub name: String,
+    pub name: AgentName,
     /// Exit code of the agent process (None if never spawned).
     pub exit_code: Option<i32>,
     /// Supervisor statistics.
@@ -54,6 +55,7 @@ pub struct SlotResult {
 /// # Arguments
 /// - `slot_config`: configuration for this agent slot
 /// - `aegis_config`: base Aegis configuration (for policy paths, ledger, etc.)
+/// - `audit_writer`: handle to the fleet-wide audit writer thread
 /// - `fleet_goal`: optional fleet-wide goal to compose into the agent's prompt
 /// - `output_tx`: channel for sending output lines to the fleet manager
 /// - `update_tx`: optional channel for sending rich updates (pending prompts, stats)
@@ -65,6 +67,7 @@ pub fn run_agent_slot(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
     toolkit_config: &ToolkitConfig,
+    audit_writer: AuditWriter,
     fleet_goal: Option<&str>,
     orchestrator_name: Option<&str>,
     output_tx: mpsc::SyncSender<String>,
@@ -79,6 +82,7 @@ pub fn run_agent_slot(
         slot_config,
         aegis_config,
         toolkit_config,
+        &audit_writer,
         fleet_goal,
         orchestrator_name,
         &output_tx,
@@ -89,7 +93,7 @@ pub fn run_agent_slot(
     ) {
         Ok(result) => result,
         Err(e) => {
-            error!(agent = name, error = %e, "agent lifecycle failed");
+            error!(agent = %name, error = %e, "agent lifecycle failed");
             SlotResult {
                 name,
                 exit_code: None,
@@ -106,6 +110,7 @@ fn run_agent_slot_inner(
     slot_config: &AgentSlotConfig,
     aegis_config: &AegisConfig,
     toolkit_config: &ToolkitConfig,
+    audit_writer: &AuditWriter,
     fleet_goal: Option<&str>,
     orchestrator_name: Option<&str>,
     output_tx: &mpsc::SyncSender<String>,
@@ -115,7 +120,9 @@ fn run_agent_slot_inner(
     shared_session_id: &Mutex<Option<uuid::Uuid>>,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
-    info!(agent = name, "agent lifecycle starting");
+    // `name_str` is used for APIs that expect `&str` and for tracing fields.
+    let name_str = name.as_str();
+    info!(agent = name_str, "agent lifecycle starting");
 
     // 0. Validate and canonicalize working directory
     let working_dir = slot_config.working_dir.canonicalize().map_err(|e| {
@@ -141,27 +148,26 @@ fn run_agent_slot_inner(
     let engine = PolicyEngine::new(&policy_dir, None)
         .map_err(|e| format!("failed to create policy engine for {name}: {e}"))?;
 
-    // 2. Open audit store and begin session
-    let store = AuditStore::open(&aegis_config.ledger_path)
-        .map_err(|e| format!("failed to open audit store for {name}: {e}"))?;
+    // 2. Begin audit session via the fleet-wide writer thread (no mutex needed).
+    let session_id = audit_writer
+        .begin_session(
+            &aegis_config.name,
+            &format!("daemon:{name}"),
+            &[],
+            Some(&format!("daemon-agent-{name}")),
+        )
+        .map_err(|e| format!("failed to begin session for {name}: {e}"))?;
 
-    let store = Arc::new(std::sync::Mutex::new(store));
+    info!(agent = name_str, session_id = %session_id, "audit session started");
+
+    // Open a separate AuditStore for the observer and proxy subsystems.
+    // These components are read-heavy and retain their own Arc<Mutex<AuditStore>>.
+    // The write path (begin/end session) goes through the audit_writer above.
+    let obs_store = AuditStore::open(&aegis_config.ledger_path)
+        .map_err(|e| format!("failed to open observer audit store for {name}: {e}"))?;
+    let store = Arc::new(std::sync::Mutex::new(obs_store));
+
     let engine_arc = Arc::new(std::sync::Mutex::new(engine));
-
-    // Begin audit session
-    let session_id = {
-        let mut store_guard = store.lock().expect("audit store mutex poisoned");
-        store_guard
-            .begin_session(
-                &aegis_config.name,
-                &format!("daemon:{name}"),
-                &[],
-                Some(&format!("daemon-agent-{name}")),
-            )
-            .map_err(|e| format!("failed to begin session for {name}: {e}"))?
-    };
-
-    info!(agent = name, session_id = %session_id, "audit session started");
 
     // Share session_id back to the main thread for state persistence
     *shared_session_id.lock() = Some(session_id);
@@ -171,7 +177,7 @@ fn run_agent_slot_inner(
         &working_dir,
         Arc::clone(&store),
         Arc::clone(&engine_arc),
-        name,
+        name.as_str(),
         Some(session_id),
         matches!(
             aegis_config.observer,
@@ -187,7 +193,7 @@ fn run_agent_slot_inner(
         if let Some(proxy_config) = aegis_config.usage_proxy.as_ref().filter(|p| p.enabled) {
             let proxy = aegis_proxy::UsageProxy::new(
                 Arc::clone(&store),
-                name.clone(),
+                name.to_string(),
                 Some(session_id),
                 proxy_config.port,
             );
@@ -200,7 +206,7 @@ fn run_agent_slot_inner(
                 .map_err(|e| format!("failed to start usage proxy for {name}: {e}"))?;
 
             let port = handle.port;
-            info!(agent = name, port, "usage proxy started");
+            info!(agent = name_str, port, "usage proxy started");
 
             // Subscribe to the proxy's shutdown signal so the runtime thread
             // exits cleanly when the agent stops (instead of blocking on ctrl_c
@@ -226,9 +232,9 @@ fn run_agent_slot_inner(
     match &slot_config.tool {
         AgentToolConfig::ClaudeCode { .. } => {
             if let Err(e) = hooks::install_daemon_hooks(&working_dir) {
-                warn!(agent = name, error = %e, "failed to install Claude Code hook settings, policy enforcement may not work");
+                warn!(agent = name_str, error = %e, "failed to install Claude Code hook settings, policy enforcement may not work");
             } else {
-                info!(agent = name, dir = %working_dir.display(), "installed Claude Code PreToolUse hook");
+                info!(agent = name_str, dir = %working_dir.display(), "installed Claude Code PreToolUse hook");
             }
         }
         AgentToolConfig::Codex { .. } => {
@@ -236,16 +242,16 @@ fn run_agent_slot_inner(
             // AEGIS_AGENT_NAME and AEGIS_SOCKET_PATH env vars are set by the
             // driver for forward-compatibility when hooks ship.
             info!(
-                agent = name,
+                agent = name_str,
                 "Codex hooks not yet available, env vars set for future use"
             );
         }
         AgentToolConfig::OpenClaw { .. } => {
-            hooks::install_openclaw_daemon_bridge(&working_dir, name).map_err(|e| {
+            hooks::install_openclaw_daemon_bridge(&working_dir, name_str).map_err(|e| {
                 format!("failed to install OpenClaw secure runtime bridge for {name}: {e}")
             })?;
             info!(
-                agent = name,
+                agent = name_str,
                 config = %hooks::openclaw_bridge_config_path(&working_dir).display(),
                 "installed OpenClaw secure runtime bridge"
             );
@@ -273,7 +279,7 @@ fn run_agent_slot_inner(
             AgentToolConfig::Custom { .. } => "policy mediation is custom and may be incomplete",
             _ => "policy mediation is not fully enforced",
         };
-        warn!(agent = name, "{note}");
+        warn!(agent = name_str, "{note}");
         let _ = output_tx.send(format!("[Aegis] Warning: {note}"));
         if let Some(tx) = update_tx {
             let _ = tx.send(PilotUpdate::AttentionNeeded { nudge_count: 0 });
@@ -344,7 +350,7 @@ fn run_agent_slot_inner(
                     ..
                 } => {
                     info!(
-                        agent = name,
+                        agent = name_str,
                         command = command,
                         "spawning agent via JsonStreamSession"
                     );
@@ -360,7 +366,7 @@ fn run_agent_slot_inner(
                     global_args,
                 } => {
                     info!(
-                        agent = name,
+                        agent = name_str,
                         command = command,
                         "spawning agent via Codex JSON session"
                     );
@@ -381,7 +387,7 @@ fn run_agent_slot_inner(
                     )
                 }
                 ProcessKind::Detached => {
-                    info!(agent = name, command = command, "spawning detached process");
+                    info!(agent = name_str, command = command, "spawning detached process");
                     let mut cmd = std::process::Command::new(&command);
                     cmd.args(&args).current_dir(&working_dir).envs(env);
                     cmd.stdin(std::process::Stdio::null())
@@ -396,9 +402,9 @@ fn run_agent_slot_inner(
                         let _ = handle.shutdown_tx.send(true);
                     }
                     if let Err(e) = aegis_observer::stop_observer(observer_session) {
-                        warn!(agent = name, error = %e, "failed to stop observer");
+                        warn!(agent = name_str, error = %e, "failed to stop observer");
                     }
-                    end_session(&store, &session_id, 0);
+                    audit_writer.end_session(&session_id, 0);
 
                     return Ok(SlotResult {
                         name: name.clone(),
@@ -437,7 +443,7 @@ fn run_agent_slot_inner(
 
             if aegis_pilot::tmux::tmux_available() {
                 info!(
-                    agent = name,
+                    agent = name_str,
                     command = command,
                     "spawning agent in tmux session"
                 );
@@ -446,7 +452,7 @@ fn run_agent_slot_inner(
                         .map_err(|e| format!("failed to spawn tmux session for {name}: {e}"))?,
                 )
             } else {
-                info!(agent = name, command = command, "spawning agent in PTY");
+                info!(agent = name_str, command = command, "spawning agent in PTY");
                 Box::new(
                     PtySession::spawn(&command, &args, &working_dir, &env)
                         .map_err(|e| format!("failed to spawn PTY for {name}: {e}"))?,
@@ -455,16 +461,16 @@ fn run_agent_slot_inner(
         }
         SpawnStrategy::External => {
             // External process already running -- nothing to spawn
-            info!(agent = name, "external agent, skipping spawn");
+            info!(agent = name_str, "external agent, skipping spawn");
 
             // Stop usage proxy, observer, end session
             if let Some(handle) = usage_proxy_handle {
                 let _ = handle.shutdown_tx.send(true);
             }
             if let Err(e) = aegis_observer::stop_observer(observer_session) {
-                warn!(agent = name, error = %e, "failed to stop observer");
+                warn!(agent = name_str, error = %e, "failed to stop observer");
             }
-            end_session(&store, &session_id, 0);
+            audit_writer.end_session(&session_id, 0);
 
             return Ok(SlotResult {
                 name: name.clone(),
@@ -486,18 +492,18 @@ fn run_agent_slot_inner(
             }
             Ok(false) => {
                 warn!(
-                    agent = name,
+                    agent = name_str,
                     "agent produced no output after 15s, injecting prompt anyway"
                 );
             }
             Err(e) => {
-                warn!(agent = name, error = %e, "error waiting for agent output");
+                warn!(agent = name_str, error = %e, "error waiting for agent output");
             }
         }
         if let Err(e) = session.send_paste(text) {
-            warn!(agent = name, error = %e, "failed to inject prompt via stdin");
+            warn!(agent = name_str, error = %e, "failed to inject prompt via stdin");
         } else {
-            info!(agent = name, "composed prompt injected via bracketed paste");
+            info!(agent = name_str, "composed prompt injected via bracketed paste");
         }
     }
 
@@ -517,7 +523,7 @@ fn run_agent_slot_inner(
 
     let sup_config = SupervisorConfig {
         pilot_config,
-        principal: name.clone(),
+        principal: name_str.to_string(),
         interactive: false, // daemon agents are non-interactive
     };
 
@@ -526,7 +532,7 @@ fn run_agent_slot_inner(
 
     // Attach/session info is published by the supervisor as it becomes available.
 
-    info!(agent = name, pid = session.pid(), "running supervisor loop");
+    info!(agent = name_str, pid = session.pid(), "running supervisor loop");
 
     let result = supervisor::run(
         session.as_ref(),
@@ -542,13 +548,13 @@ fn run_agent_slot_inner(
     let (exit_code, stats) = match result {
         Ok((code, stats)) => (code, stats),
         Err(e) => {
-            error!(agent = name, error = %e, "supervisor failed");
+            error!(agent = name_str, error = %e, "supervisor failed");
             (-1, PilotStats::default())
         }
     };
 
     info!(
-        agent = name,
+        agent = name_str,
         exit_code,
         approved = stats.approved,
         denied = stats.denied,
@@ -563,10 +569,10 @@ fn run_agent_slot_inner(
 
     // 8. Stop observer and end session
     if let Err(e) = aegis_observer::stop_observer(observer_session) {
-        warn!(agent = name, error = %e, "failed to stop observer");
+        warn!(agent = name_str, error = %e, "failed to stop observer");
     }
 
-    end_session(&store, &session_id, exit_code);
+    audit_writer.end_session(&session_id, exit_code);
 
     Ok(SlotResult {
         name: name.clone(),
@@ -815,14 +821,6 @@ fn compose_orchestrator_prompt(
     );
 
     sections.join("\n\n")
-}
-
-/// End an audit session in the store.
-fn end_session(store: &Arc<std::sync::Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_code: i32) {
-    let mut guard = store.lock().expect("audit store mutex poisoned");
-    if let Err(e) = guard.end_session(session_id, exit_code) {
-        warn!(session_id = %session_id, error = %e, "failed to end audit session");
-    }
 }
 
 #[cfg(test)]

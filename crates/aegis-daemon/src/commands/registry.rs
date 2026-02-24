@@ -42,8 +42,7 @@ impl CommandRegistry {
         self.primary_names.push(primary);
 
         for alias in arc.aliases() {
-            self.commands
-                .insert(alias.to_lowercase(), Arc::clone(&arc));
+            self.commands.insert(alias.to_lowercase(), Arc::clone(&arc));
         }
     }
 

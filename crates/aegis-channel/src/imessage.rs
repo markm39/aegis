@@ -178,11 +178,7 @@ pub fn build_send_command(recipient: &str, text: &str) -> Result<Vec<String>, Ch
         "tell application \"Messages\" to send \"{}\" to buddy \"{}\"",
         escaped_text, escaped_recipient
     );
-    Ok(vec![
-        "osascript".to_string(),
-        "-e".to_string(),
-        script,
-    ])
+    Ok(vec!["osascript".to_string(), "-e".to_string(), script])
 }
 
 /// Check whether macOS Automation permission is granted for osascript.
@@ -288,9 +284,8 @@ pub fn default_chat_db_path() -> String {
 /// Only localhost URLs (127.0.0.1, [::1], localhost) over HTTP are accepted.
 /// All other URLs must use HTTPS.
 pub fn validate_bluebubbles_url(url_str: &str) -> Result<(), ChannelError> {
-    let parsed = url::Url::parse(url_str).map_err(|e| {
-        ChannelError::Other(format!("invalid BlueBubbles URL: {e}"))
-    })?;
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| ChannelError::Other(format!("invalid BlueBubbles URL: {e}")))?;
 
     let scheme = parsed.scheme();
     let host = parsed.host_str().unwrap_or("");
@@ -300,10 +295,8 @@ pub fn validate_bluebubbles_url(url_str: &str) -> Result<(), ChannelError> {
     }
 
     if scheme == "http" {
-        let is_localhost = host == "localhost"
-            || host == "127.0.0.1"
-            || host == "[::1]"
-            || host == "::1";
+        let is_localhost =
+            host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1";
         if is_localhost {
             return Ok(());
         }
@@ -423,11 +416,7 @@ impl BlueBubblesApi {
     /// Send a text message to a chat.
     ///
     /// POST /api/v1/message/text
-    pub async fn send_text(
-        &self,
-        chat_guid: &str,
-        text: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn send_text(&self, chat_guid: &str, text: &str) -> Result<(), ChannelError> {
         debug!("BlueBubbles: sending text to chat {}", chat_guid);
 
         let body = serde_json::json!({
@@ -453,9 +442,10 @@ impl BlueBubblesApi {
             )));
         }
 
-        let send_resp: BlueBubblesSendResponse = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse BlueBubbles send response: {e}"))
-        })?;
+        let send_resp: BlueBubblesSendResponse = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse BlueBubbles send response: {e}")))?;
 
         if send_resp.status != 200 {
             return Err(ChannelError::Api(format!(
@@ -494,10 +484,9 @@ impl BlueBubblesApi {
             )));
         }
 
-        let messages_resp: BlueBubblesMessagesResponse =
-            resp.json().await.map_err(|e| {
-                ChannelError::Other(format!("parse BlueBubbles messages response: {e}"))
-            })?;
+        let messages_resp: BlueBubblesMessagesResponse = resp.json().await.map_err(|e| {
+            ChannelError::Other(format!("parse BlueBubbles messages response: {e}"))
+        })?;
 
         Ok(messages_resp.data)
     }
@@ -522,9 +511,10 @@ impl BlueBubblesApi {
             )));
         }
 
-        let chats_resp: BlueBubblesChatsResponse = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse BlueBubbles chats response: {e}"))
-        })?;
+        let chats_resp: BlueBubblesChatsResponse = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse BlueBubbles chats response: {e}")))?;
 
         Ok(chats_resp.data)
     }
@@ -539,10 +529,13 @@ impl BlueBubblesApi {
         data: &[u8],
         caption: Option<&str>,
     ) -> Result<(), ChannelError> {
-        debug!("BlueBubbles: sending attachment '{}' to chat {}", filename, chat_guid);
+        debug!(
+            "BlueBubbles: sending attachment '{}' to chat {}",
+            filename, chat_guid
+        );
 
-        let file_part = reqwest::multipart::Part::bytes(data.to_vec())
-            .file_name(filename.to_string());
+        let file_part =
+            reqwest::multipart::Part::bytes(data.to_vec()).file_name(filename.to_string());
 
         let mut form = reqwest::multipart::Form::new()
             .text("chatGuid", chat_guid.to_string())
@@ -620,10 +613,7 @@ pub struct ImessageChannel {
 }
 
 impl std::fmt::Debug for ImessageChannel {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ImessageChannel")
             .field("config", &self.config)
             .field("bb_api", &self.bb_api.is_some())
@@ -642,17 +632,13 @@ impl ImessageChannel {
         let bb_api = match config.mode {
             ImessageMode::Bluebubbles => {
                 let url = config.bluebubbles_url.as_deref().ok_or_else(|| {
+                    ChannelError::Other("bluebubbles_url is required for BlueBubbles mode".into())
+                })?;
+                let password = config.bluebubbles_password.as_deref().ok_or_else(|| {
                     ChannelError::Other(
-                        "bluebubbles_url is required for BlueBubbles mode".into(),
+                        "bluebubbles_password is required for BlueBubbles mode".into(),
                     )
                 })?;
-                let password =
-                    config.bluebubbles_password.as_deref().ok_or_else(|| {
-                        ChannelError::Other(
-                            "bluebubbles_password is required for BlueBubbles mode"
-                                .into(),
-                        )
-                    })?;
                 Some(BlueBubblesApi::new(url, password)?)
             }
             ImessageMode::Applescript => {
@@ -679,19 +665,14 @@ impl ImessageChannel {
     /// and is_from_me = 0.
     fn poll_chat_db(&mut self) -> Result<(), ChannelError> {
         let default_path = default_chat_db_path();
-        let db_path = self
-            .config
-            .chat_db_path
-            .as_deref()
-            .unwrap_or(&default_path);
+        let db_path = self.config.chat_db_path.as_deref().unwrap_or(&default_path);
 
         // Validate path every time (defense in depth).
         validate_chat_db_path(db_path)?;
 
         let conn = match rusqlite::Connection::open_with_flags(
             db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -716,17 +697,14 @@ impl ImessageChannel {
             }
         };
 
-        let rows = match stmt.query_map(
-            rusqlite::params![self.last_rowid],
-            |row| {
-                let rowid: i64 = row.get(0)?;
-                let text: Option<String> = row.get(1)?;
-                let _handle_id: i64 = row.get(2)?;
-                let _is_from_me: i64 = row.get(3)?;
-                let _date: i64 = row.get(4)?;
-                Ok((rowid, text))
-            },
-        ) {
+        let rows = match stmt.query_map(rusqlite::params![self.last_rowid], |row| {
+            let rowid: i64 = row.get(0)?;
+            let text: Option<String> = row.get(1)?;
+            let _handle_id: i64 = row.get(2)?;
+            let _is_from_me: i64 = row.get(3)?;
+            let _date: i64 = row.get(4)?;
+            Ok((rowid, text))
+        }) {
             Ok(r) => r,
             Err(e) => {
                 debug!("chat.db query failed: {e}");
@@ -740,8 +718,7 @@ impl ImessageChannel {
                     self.last_rowid = rowid;
                     let text = text.trim();
                     if !text.is_empty() {
-                        self.inbound_buffer
-                            .push(format::parse_text_command(text));
+                        self.inbound_buffer.push(format::parse_text_command(text));
                     }
                 }
                 Ok((rowid, None)) => {
@@ -758,9 +735,10 @@ impl ImessageChannel {
 
     /// Poll for inbound messages from BlueBubbles.
     async fn poll_bluebubbles(&mut self) -> Result<(), ChannelError> {
-        let api = self.bb_api.as_ref().ok_or_else(|| {
-            ChannelError::Other("BlueBubbles API not initialized".into())
-        })?;
+        let api = self
+            .bb_api
+            .as_ref()
+            .ok_or_else(|| ChannelError::Other("BlueBubbles API not initialized".into()))?;
 
         let messages = api.get_messages(self.last_date_received).await?;
 
@@ -787,8 +765,7 @@ impl Channel for ImessageChannel {
     async fn send(&self, message: OutboundMessage) -> Result<(), ChannelError> {
         match self.config.mode {
             ImessageMode::Applescript => {
-                let cmd =
-                    build_send_command(&self.config.recipient, &message.text)?;
+                let cmd = build_send_command(&self.config.recipient, &message.text)?;
                 debug!("iMessage AppleScript send command: {:?}", cmd);
 
                 #[cfg(target_os = "macos")]
@@ -798,14 +775,11 @@ impl Channel for ImessageChannel {
                         .output()
                         .await
                         .map_err(|e| {
-                            ChannelError::Other(format!(
-                                "osascript execution failed: {e}"
-                            ))
+                            ChannelError::Other(format!("osascript execution failed: {e}"))
                         })?;
 
                     if !output.status.success() {
-                        let stderr =
-                            String::from_utf8_lossy(&output.stderr);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
                         return Err(ChannelError::Other(format!(
                             "osascript returned {}: {}",
                             output.status, stderr
@@ -822,22 +796,18 @@ impl Channel for ImessageChannel {
                 Ok(())
             }
             ImessageMode::Bluebubbles => {
-                let api = self.bb_api.as_ref().ok_or_else(|| {
-                    ChannelError::Other(
-                        "BlueBubbles API not initialized".into(),
-                    )
-                })?;
+                let api = self
+                    .bb_api
+                    .as_ref()
+                    .ok_or_else(|| ChannelError::Other("BlueBubbles API not initialized".into()))?;
 
-                let chat_guid =
-                    format!("iMessage;-;{}", self.config.recipient);
+                let chat_guid = format!("iMessage;-;{}", self.config.recipient);
                 api.send_text(&chat_guid, &message.text).await
             }
         }
     }
 
-    async fn recv(
-        &mut self,
-    ) -> Result<Option<InboundAction>, ChannelError> {
+    async fn recv(&mut self) -> Result<Option<InboundAction>, ChannelError> {
         // Return buffered actions first.
         if !self.inbound_buffer.is_empty() {
             return Ok(Some(self.inbound_buffer.remove(0)));
@@ -864,10 +834,7 @@ impl Channel for ImessageChannel {
         "imessage"
     }
 
-    async fn send_photo(
-        &self,
-        photo: OutboundPhoto,
-    ) -> Result<(), ChannelError> {
+    async fn send_photo(&self, photo: OutboundPhoto) -> Result<(), ChannelError> {
         match self.config.mode {
             ImessageMode::Applescript => {
                 // AppleScript does not have a clean API for sending images
@@ -877,14 +844,12 @@ impl Channel for ImessageChannel {
                 self.send(OutboundMessage::text(text)).await
             }
             ImessageMode::Bluebubbles => {
-                let api = self.bb_api.as_ref().ok_or_else(|| {
-                    ChannelError::Other(
-                        "BlueBubbles API not initialized".into(),
-                    )
-                })?;
+                let api = self
+                    .bb_api
+                    .as_ref()
+                    .ok_or_else(|| ChannelError::Other("BlueBubbles API not initialized".into()))?;
 
-                let chat_guid =
-                    format!("iMessage;-;{}", self.config.recipient);
+                let chat_guid = format!("iMessage;-;{}", self.config.recipient);
                 api.send_attachment(
                     &chat_guid,
                     &photo.filename,
@@ -921,10 +886,7 @@ mod tests {
     #[test]
     fn test_applescript_text_escaping() {
         // Double quotes escaped.
-        assert_eq!(
-            escape_applescript(r#"say "hello""#),
-            r#"say \"hello\""#
-        );
+        assert_eq!(escape_applescript(r#"say "hello""#), r#"say \"hello\""#);
 
         // Backslashes escaped.
         assert_eq!(escape_applescript(r"path\to\file"), r"path\\to\\file");
@@ -968,10 +930,7 @@ mod tests {
         // The critical one: double quotes are escaped to prevent breaking out.
         let text = r#"" & do shell script "whoami" & ""#;
         let escaped = escape_applescript(text);
-        assert_eq!(
-            escaped,
-            r#"\" & do shell script \"whoami\" & \""#
-        );
+        assert_eq!(escaped, r#"\" & do shell script \"whoami\" & \""#);
 
         // Backslash before quote -- both escaped.
         let text = r"\";
@@ -984,11 +943,8 @@ mod tests {
     #[test]
     fn test_applescript_injection_escaping() {
         // Attempt to inject via text with quotes and shell commands.
-        let cmd = build_send_command(
-            "+1234567890",
-            "\" & do shell script \"whoami\" & \"",
-        )
-        .unwrap();
+        let cmd =
+            build_send_command("+1234567890", "\" & do shell script \"whoami\" & \"").unwrap();
         assert_eq!(cmd.len(), 3);
         assert_eq!(cmd[0], "osascript");
         assert_eq!(cmd[1], "-e");
@@ -1003,10 +959,7 @@ mod tests {
 
     #[test]
     fn test_bluebubbles_api_send() {
-        let body = BlueBubblesApi::build_send_body(
-            "iMessage;-;+1234567890",
-            "Hello, World!",
-        );
+        let body = BlueBubblesApi::build_send_body("iMessage;-;+1234567890", "Hello, World!");
         assert_eq!(body["chatGuid"], "iMessage;-;+1234567890");
         assert_eq!(body["message"], "Hello, World!");
         assert_eq!(body["method"], "apple-script");
@@ -1047,8 +1000,7 @@ mod tests {
             ]
         }"#;
 
-        let resp: BlueBubblesMessagesResponse =
-            serde_json::from_str(json).unwrap();
+        let resp: BlueBubblesMessagesResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.data.len(), 3);
         assert_eq!(resp.data[0].guid, "msg-001");
         assert_eq!(resp.data[0].text.as_deref(), Some("/status"));
@@ -1075,9 +1027,7 @@ mod tests {
         assert!(action.is_some());
         assert!(matches!(
             action.unwrap(),
-            InboundAction::Command(
-                aegis_control::command::Command::Status
-            )
+            InboundAction::Command(aegis_control::command::Command::Status)
         ));
 
         // From me -- should be filtered out.
@@ -1119,26 +1069,21 @@ mod tests {
             handle: None,
         };
         let action = map_inbound_message(&msg_unknown).unwrap();
-        assert!(
-            matches!(action, InboundAction::Unknown(ref s) if s == "hello there")
-        );
+        assert!(matches!(action, InboundAction::Unknown(ref s) if s == "hello there"));
     }
 
     // -- SECURITY: chat.db path validation --
 
     #[test]
     fn test_chat_db_path_validation() {
-        let home = std::env::var("HOME")
-            .unwrap_or_else(|_| "/Users/test".to_string());
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/test".to_string());
 
         // Valid path.
         let valid = format!("{}/Library/Messages/chat.db", home);
         assert!(validate_chat_db_path(&valid).is_ok());
 
         // Valid path with tilde.
-        assert!(
-            validate_chat_db_path("~/Library/Messages/chat.db").is_ok()
-        );
+        assert!(validate_chat_db_path("~/Library/Messages/chat.db").is_ok());
 
         // Valid subdirectory.
         let sub = format!("{}/Library/Messages/archive/old.db", home);
@@ -1152,21 +1097,14 @@ mod tests {
 
     #[test]
     fn test_chat_db_path_traversal() {
-        let home = std::env::var("HOME")
-            .unwrap_or_else(|_| "/Users/test".to_string());
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/test".to_string());
 
         // Directory traversal rejected.
-        let traversal = format!(
-            "{}/Library/Messages/../../../etc/passwd",
-            home
-        );
+        let traversal = format!("{}/Library/Messages/../../../etc/passwd", home);
         assert!(validate_chat_db_path(&traversal).is_err());
 
         // Tilde with traversal rejected.
-        assert!(validate_chat_db_path(
-            "~/Library/Messages/../../etc/shadow"
-        )
-        .is_err());
+        assert!(validate_chat_db_path("~/Library/Messages/../../etc/shadow").is_err());
 
         // Just ".." rejected.
         assert!(validate_chat_db_path("..").is_err());
@@ -1176,16 +1114,10 @@ mod tests {
         assert!(validate_chat_db_path("/tmp/chat.db").is_err());
 
         // Absolute path to another user's Messages rejected.
-        assert!(validate_chat_db_path(
-            "/Users/other/Library/Messages/chat.db"
-        )
-        .is_err());
+        assert!(validate_chat_db_path("/Users/other/Library/Messages/chat.db").is_err());
 
         // Sneaky embedded ".." even in otherwise valid prefix.
-        let sneaky = format!(
-            "{}/Library/Messages/foo/../../../etc/passwd",
-            home
-        );
+        let sneaky = format!("{}/Library/Messages/foo/../../../etc/passwd", home);
         assert!(validate_chat_db_path(&sneaky).is_err());
     }
 
@@ -1225,13 +1157,11 @@ mod tests {
 
     #[test]
     fn test_config_mode_deserialization() {
-        let json =
-            r#"{"recipient": "+1234567890", "mode": "applescript"}"#;
+        let json = r#"{"recipient": "+1234567890", "mode": "applescript"}"#;
         let config: ImessageConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.mode, ImessageMode::Applescript);
 
-        let json =
-            r#"{"recipient": "+1234567890", "mode": "bluebubbles"}"#;
+        let json = r#"{"recipient": "+1234567890", "mode": "bluebubbles"}"#;
         let config: ImessageConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.mode, ImessageMode::Bluebubbles);
     }
@@ -1270,15 +1200,11 @@ mod tests {
 
         // Invalid: injection characters.
         assert!(validate_recipient("+1234567890;rm -rf /").is_err());
-        assert!(
-            validate_recipient("user`whoami`@example.com").is_err()
-        );
+        assert!(validate_recipient("user`whoami`@example.com").is_err());
         assert!(validate_recipient("user$HOME@example.com").is_err());
         assert!(validate_recipient("user|cat@example.com").is_err());
         assert!(validate_recipient("user&bg@example.com").is_err());
-        assert!(
-            validate_recipient("user<script>@example.com").is_err()
-        );
+        assert!(validate_recipient("user<script>@example.com").is_err());
         assert!(validate_recipient("user\"@example.com").is_err());
         assert!(validate_recipient("user'@example.com").is_err());
         assert!(validate_recipient("user\\@example.com").is_err());
@@ -1289,40 +1215,20 @@ mod tests {
     #[test]
     fn test_bluebubbles_url_validation() {
         // Localhost HTTP allowed.
-        assert!(
-            validate_bluebubbles_url("http://localhost:1234").is_ok()
-        );
-        assert!(
-            validate_bluebubbles_url("http://127.0.0.1:1234").is_ok()
-        );
-        assert!(
-            validate_bluebubbles_url("http://[::1]:1234").is_ok()
-        );
+        assert!(validate_bluebubbles_url("http://localhost:1234").is_ok());
+        assert!(validate_bluebubbles_url("http://127.0.0.1:1234").is_ok());
+        assert!(validate_bluebubbles_url("http://[::1]:1234").is_ok());
 
         // HTTPS allowed for any host.
-        assert!(validate_bluebubbles_url(
-            "https://my-server.example.com:443"
-        )
-        .is_ok());
-        assert!(
-            validate_bluebubbles_url("https://192.168.1.100:1234")
-                .is_ok()
-        );
+        assert!(validate_bluebubbles_url("https://my-server.example.com:443").is_ok());
+        assert!(validate_bluebubbles_url("https://192.168.1.100:1234").is_ok());
 
         // HTTP to non-localhost rejected.
-        assert!(
-            validate_bluebubbles_url("http://192.168.1.100:1234")
-                .is_err()
-        );
-        assert!(
-            validate_bluebubbles_url("http://example.com:1234")
-                .is_err()
-        );
+        assert!(validate_bluebubbles_url("http://192.168.1.100:1234").is_err());
+        assert!(validate_bluebubbles_url("http://example.com:1234").is_err());
 
         // Other schemes rejected.
-        assert!(
-            validate_bluebubbles_url("ftp://localhost:1234").is_err()
-        );
+        assert!(validate_bluebubbles_url("ftp://localhost:1234").is_err());
 
         // Invalid URL rejected.
         assert!(validate_bluebubbles_url("not a url").is_err());
@@ -1366,9 +1272,7 @@ mod tests {
         let result = ImessageChannel::new(ImessageConfig {
             recipient: "+1234567890".to_string(),
             mode: ImessageMode::Bluebubbles,
-            bluebubbles_url: Some(
-                "http://localhost:1234".to_string(),
-            ),
+            bluebubbles_url: Some("http://localhost:1234".to_string()),
             bluebubbles_password: None,
             poll_interval_secs: 10,
             chat_db_path: None,
@@ -1383,9 +1287,7 @@ mod tests {
         let result = ImessageChannel::new(ImessageConfig {
             recipient: "+1234567890".to_string(),
             mode: ImessageMode::Bluebubbles,
-            bluebubbles_url: Some(
-                "http://192.168.1.100:1234".to_string(),
-            ),
+            bluebubbles_url: Some("http://192.168.1.100:1234".to_string()),
             bluebubbles_password: Some("pass".to_string()),
             poll_interval_secs: 10,
             chat_db_path: None,
@@ -1410,24 +1312,18 @@ mod tests {
                 }
             ]
         }"#;
-        let resp: BlueBubblesChatsResponse =
-            serde_json::from_str(json).unwrap();
+        let resp: BlueBubblesChatsResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.data.len(), 2);
         assert_eq!(resp.data[0].guid, "iMessage;-;+1234567890");
         assert_eq!(resp.data[0].display_name, "John Doe");
-        assert_eq!(
-            resp.data[1].guid,
-            "iMessage;-;user@example.com"
-        );
+        assert_eq!(resp.data[1].guid, "iMessage;-;user@example.com");
     }
 
     // -- Build send command --
 
     #[test]
     fn test_build_send_command_basic() {
-        let cmd =
-            build_send_command("+1234567890", "Hello, World!")
-                .unwrap();
+        let cmd = build_send_command("+1234567890", "Hello, World!").unwrap();
         assert_eq!(cmd[0], "osascript");
         assert_eq!(cmd[1], "-e");
         assert!(cmd[2].contains("tell application \"Messages\""));
@@ -1437,9 +1333,7 @@ mod tests {
 
     #[test]
     fn test_build_send_command_escapes_text() {
-        let cmd =
-            build_send_command("+1234567890", "He said \"hi\"")
-                .unwrap();
+        let cmd = build_send_command("+1234567890", "He said \"hi\"").unwrap();
         // The text should be escaped within the AppleScript string.
         assert!(cmd[2].contains("He said \\\"hi\\\""));
     }
@@ -1452,8 +1346,7 @@ mod tests {
 
     #[test]
     fn test_build_send_command_email_recipient() {
-        let cmd =
-            build_send_command("user@example.com", "Hello").unwrap();
+        let cmd = build_send_command("user@example.com", "Hello").unwrap();
         assert!(cmd[2].contains("user@example.com"));
     }
 
@@ -1516,12 +1409,10 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/api/v1/message/text"))
             .and(matchers::query_param("password", "testpass"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": 200,
-                    "message": "Message sent!"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": 200,
+                "message": "Message sent!"
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1547,9 +1438,7 @@ mod tests {
             .await;
 
         let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
-        let result = api
-            .send_text("iMessage;-;+1234567890", "Hello")
-            .await;
+        let result = api.send_text("iMessage;-;+1234567890", "Hello").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("500"));
@@ -1564,26 +1453,24 @@ mod tests {
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/api/v1/message"))
             .and(matchers::query_param("password", "testpass"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": 200,
-                    "data": [
-                        {
-                            "guid": "msg-100",
-                            "text": "/status",
-                            "isFromMe": false,
-                            "dateCreated": 1700000010000_i64,
-                            "handle": { "address": "+1234567890" }
-                        },
-                        {
-                            "guid": "msg-101",
-                            "text": "my reply",
-                            "isFromMe": true,
-                            "dateCreated": 1700000011000_i64
-                        }
-                    ]
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": 200,
+                "data": [
+                    {
+                        "guid": "msg-100",
+                        "text": "/status",
+                        "isFromMe": false,
+                        "dateCreated": 1700000010000_i64,
+                        "handle": { "address": "+1234567890" }
+                    },
+                    {
+                        "guid": "msg-101",
+                        "text": "my reply",
+                        "isFromMe": true,
+                        "dateCreated": 1700000011000_i64
+                    }
+                ]
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1624,17 +1511,15 @@ mod tests {
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/api/v1/chat"))
             .and(matchers::query_param("password", "testpass"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": 200,
-                    "data": [
-                        {
-                            "guid": "iMessage;-;+1234567890",
-                            "displayName": "Test User"
-                        }
-                    ]
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": 200,
+                "data": [
+                    {
+                        "guid": "iMessage;-;+1234567890",
+                        "displayName": "Test User"
+                    }
+                ]
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1655,12 +1540,10 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/api/v1/message/attachment"))
             .and(matchers::query_param("password", "testpass"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": 200,
-                    "message": "Attachment sent!"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": 200,
+                "message": "Attachment sent!"
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1707,20 +1590,16 @@ mod tests {
         // HTTP 200 but BlueBubbles API status != 200 in body.
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/api/v1/message/text"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": 400,
-                    "message": "Invalid chat GUID"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": 400,
+                "message": "Invalid chat GUID"
+            })))
             .expect(1)
             .mount(&server)
             .await;
 
         let api = BlueBubblesApi::_with_base_url_unchecked(&server.uri(), "testpass");
-        let result = api
-            .send_text("bad-guid", "test message")
-            .await;
+        let result = api.send_text("bad-guid", "test message").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("400") || err.contains("Invalid chat GUID"));

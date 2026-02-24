@@ -221,7 +221,9 @@ fn validate_alias_name(name: &str) -> Result<(), String> {
         ));
     }
     if RESERVED_NAMES.contains(&name) {
-        return Err(format!("'{name}' is a reserved name and cannot be used as an alias"));
+        return Err(format!(
+            "'{name}' is a reserved name and cannot be used as an alias"
+        ));
     }
     Ok(())
 }
@@ -293,35 +295,23 @@ mod tests {
         let mut reg = AliasRegistry::new();
 
         // Semicolon -- injection attempt
-        assert!(reg
-            .add(";rm".into(), "status".into(), vec![])
-            .is_err());
+        assert!(reg.add(";rm".into(), "status".into(), vec![]).is_err());
 
         // Pipe -- injection attempt
-        assert!(reg
-            .add("a|b".into(), "status".into(), vec![])
-            .is_err());
+        assert!(reg.add("a|b".into(), "status".into(), vec![]).is_err());
 
         // Space -- must not be in name
-        assert!(reg
-            .add("a b".into(), "status".into(), vec![])
-            .is_err());
+        assert!(reg.add("a b".into(), "status".into(), vec![]).is_err());
 
         // Path traversal
-        assert!(reg
-            .add("../etc".into(), "status".into(), vec![])
-            .is_err());
+        assert!(reg.add("../etc".into(), "status".into(), vec![]).is_err());
 
         // Empty name
-        assert!(reg
-            .add(String::new(), "status".into(), vec![])
-            .is_err());
+        assert!(reg.add(String::new(), "status".into(), vec![]).is_err());
 
         // Too long (33 chars)
         let long_name = "a".repeat(33);
-        assert!(reg
-            .add(long_name, "status".into(), vec![])
-            .is_err());
+        assert!(reg.add(long_name, "status".into(), vec![]).is_err());
 
         // Valid names should succeed
         assert!(reg

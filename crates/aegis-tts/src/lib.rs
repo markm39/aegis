@@ -422,9 +422,7 @@ pub fn validate_endpoint_url(url_str: &str) -> TtsResult<Url> {
 
     let host = url.host_str().unwrap_or("");
     if host.is_empty() {
-        return Err(TtsError::InvalidEndpoint(
-            "URL has no host".to_string(),
-        ));
+        return Err(TtsError::InvalidEndpoint("URL has no host".to_string()));
     }
 
     let is_localhost = host == "localhost" || host == "127.0.0.1" || host == "::1";
@@ -564,7 +562,10 @@ mod tests {
         // Even if you pass a higher limit, it caps at MAX_TEXT_LENGTH.
         let text = "a".repeat(5000);
         let result = sanitize_text(&text, 10000);
-        assert!(matches!(result, Err(TtsError::TextTooLong { max: 4096, .. })));
+        assert!(matches!(
+            result,
+            Err(TtsError::TextTooLong { max: 4096, .. })
+        ));
     }
 
     // -- Text hash tests --
@@ -837,11 +838,8 @@ mod tests {
         use aegis_types::{Action, ActionKind, Decision};
 
         // Default-deny policy: no explicit permit for TtsSynthesize.
-        let engine = PolicyEngine::from_policies(
-            r#"forbid(principal, action, resource);"#,
-            None,
-        )
-        .expect("should create engine");
+        let engine = PolicyEngine::from_policies(r#"forbid(principal, action, resource);"#, None)
+            .expect("should create engine");
 
         let action = Action::new(
             "test-agent",

@@ -103,12 +103,8 @@ impl McpServer {
         policy_gate: Arc<dyn PolicyGate>,
         audit_sink: Arc<dyn AuditSink>,
     ) -> Self {
-        let executor = ToolExecutor::new(
-            registry.clone(),
-            executor_config,
-            policy_gate,
-            audit_sink,
-        );
+        let executor =
+            ToolExecutor::new(registry.clone(), executor_config, policy_gate, audit_sink);
         Self { registry, executor }
     }
 
@@ -267,11 +263,15 @@ impl McpServer {
         // path. The executor enforces input validation, size limits, Cedar
         // policy evaluation, timeout enforcement, and audit logging.
         let principal = "mcp-agent";
-        match self.executor.execute(&tool_name, arguments, principal).await {
+        match self
+            .executor
+            .execute(&tool_name, arguments, principal)
+            .await
+        {
             Ok(output) => {
                 // Format result as MCP content array
-                let text = serde_json::to_string(&output.result)
-                    .unwrap_or_else(|_| "{}".to_string());
+                let text =
+                    serde_json::to_string(&output.result).unwrap_or_else(|_| "{}".to_string());
                 JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: Some(serde_json::json!({

@@ -16,10 +16,10 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 pub use app::OnboardResult;
 
@@ -35,11 +35,7 @@ pub fn run_onboard_wizard() -> Result<OnboardResult> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = crossterm::execute!(
-            io::stderr(),
-            LeaveAlternateScreen,
-            crossterm::cursor::Show,
-        );
+        let _ = crossterm::execute!(io::stderr(), LeaveAlternateScreen, crossterm::cursor::Show,);
         original_hook(info);
     }));
 

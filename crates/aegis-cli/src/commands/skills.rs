@@ -62,10 +62,7 @@ pub async fn search_skills(query: &str, cache_dir: Option<PathBuf>) -> Result<()
         return Ok(());
     }
 
-    println!(
-        "{:<20} {:<10} DESCRIPTION",
-        "NAME", "VERSION"
-    );
+    println!("{:<20} {:<10} DESCRIPTION", "NAME", "VERSION");
     println!("{}", "-".repeat(70));
 
     for skill in &results {
@@ -92,7 +89,10 @@ pub async fn install_skill(
     let client = build_client(cache_dir);
 
     let installed = if let Some(path) = from_path {
-        println!("Installing skill '{name}' from local path: {}", path.display());
+        println!(
+            "Installing skill '{name}' from local path: {}",
+            path.display()
+        );
         client
             .install_local(name, &path)
             .context("failed to install skill from local path")?
@@ -105,15 +105,17 @@ pub async fn install_skill(
             .context("failed to install skill from registry")?
     };
 
-    println!("Installed {} v{} to {}", installed.name, installed.version, installed.path.display());
+    println!(
+        "Installed {} v{} to {}",
+        installed.name,
+        installed.version,
+        installed.path.display()
+    );
     Ok(())
 }
 
 /// Update a skill (or all skills) to the latest version.
-pub async fn update_skills(
-    name: Option<&str>,
-    cache_dir: Option<PathBuf>,
-) -> Result<()> {
+pub async fn update_skills(name: Option<&str>, cache_dir: Option<PathBuf>) -> Result<()> {
     let client = build_client(cache_dir);
 
     if let Some(name) = name {
@@ -178,7 +180,11 @@ pub async fn skill_info(name: &str, cache_dir: Option<PathBuf>) -> Result<()> {
         if project_skills.exists() {
             return show_skill_info(&project_skills);
         }
-        anyhow::bail!("skill '{}' is not installed. Use 'aegis skills install {}' to install it.", name, name);
+        anyhow::bail!(
+            "skill '{}' is not installed. Use 'aegis skills install {}' to install it.",
+            name,
+            name
+        );
     }
 
     show_skill_info(&skill_dir)
@@ -223,9 +229,7 @@ fn show_skill_info(skill_dir: &std::path::Path) -> Result<()> {
 /// Discovers skills from the cache directory (or bundled skills directory),
 /// reloads them into a fresh registry, and reports the results.
 pub fn reload_skills(name: Option<&str>, cache_dir: Option<PathBuf>) -> Result<()> {
-    use aegis_skills::{
-        discover_skills, HotReloader, SkillRegistry,
-    };
+    use aegis_skills::{HotReloader, SkillRegistry, discover_skills};
     use std::sync::{Arc, Mutex};
 
     let client = build_client(cache_dir);
@@ -264,11 +268,7 @@ pub fn reload_skills(name: Option<&str>, cache_dir: Option<PathBuf>) -> Result<(
         println!("Reloaded skill '{name}'.");
     } else {
         // Reload all skills
-        let paths_to_scan = if cache.is_dir() {
-            vec![&cache]
-        } else {
-            vec![]
-        };
+        let paths_to_scan = if cache.is_dir() { vec![&cache] } else { vec![] };
 
         let mut total_reloaded = 0;
         for path in paths_to_scan {
@@ -301,9 +301,7 @@ pub fn reload_skills(name: Option<&str>, cache_dir: Option<PathBuf>) -> Result<(
 /// Scans installed skills for command declarations in their manifests and
 /// displays the registered slash commands.
 pub fn list_commands(cache_dir: Option<PathBuf>) -> Result<()> {
-    use aegis_skills::{
-        auto_register_commands, discover_skills, CommandRouter, SkillRegistry,
-    };
+    use aegis_skills::{CommandRouter, SkillRegistry, auto_register_commands, discover_skills};
 
     let client = build_client(cache_dir);
     let cache = client.cache_dir().to_path_buf();
@@ -338,21 +336,31 @@ pub fn list_commands(cache_dir: Option<PathBuf>) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<15} {:<20} {:<30} ALIASES", "COMMAND", "SKILL", "DESCRIPTION");
+    println!(
+        "{:<15} {:<20} {:<30} ALIASES",
+        "COMMAND", "SKILL", "DESCRIPTION"
+    );
     println!("{}", "-".repeat(75));
 
     for cmd in &commands {
         let aliases = if cmd.aliases.is_empty() {
             String::new()
         } else {
-            cmd.aliases.iter().map(|a| format!("/{a}")).collect::<Vec<_>>().join(", ")
+            cmd.aliases
+                .iter()
+                .map(|a| format!("/{a}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         let desc = if cmd.description.len() > 28 {
             format!("{}...", &cmd.description[..25])
         } else {
             cmd.description.clone()
         };
-        println!("/{:<14} {:<20} {:<30} {}", cmd.name, cmd.skill_name, desc, aliases);
+        println!(
+            "/{:<14} {:<20} {:<30} {}",
+            cmd.name, cmd.skill_name, desc, aliases
+        );
     }
 
     println!();

@@ -141,9 +141,7 @@ pub fn validate_endpoint_url(url: &str) -> Result<(), AegisError> {
     }
 
     let host = extract_host(url).ok_or_else(|| {
-        AegisError::ConfigError(format!(
-            "cannot parse host from Gemini endpoint URL: {url}"
-        ))
+        AegisError::ConfigError(format!("cannot parse host from Gemini endpoint URL: {url}"))
     })?;
 
     if is_private_or_loopback(&host) {
@@ -157,7 +155,9 @@ pub fn validate_endpoint_url(url: &str) -> Result<(), AegisError> {
 
 /// Extract the host portion from a URL string.
 fn extract_host(url: &str) -> Option<String> {
-    let after_scheme = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let after_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     let host = after_scheme.split(['/', '?', '#']).next()?;
     // Strip port if present (but not IPv6 bracket notation).
     let host = if let Some((h, port)) = host.rsplit_once(':') {
@@ -844,9 +844,7 @@ mod tests {
         assert!(validate_endpoint_url("http://generativelanguage.googleapis.com/v1").is_err());
 
         // Valid HTTPS to public hosts should pass.
-        assert!(
-            validate_endpoint_url("https://generativelanguage.googleapis.com/v1").is_ok()
-        );
+        assert!(validate_endpoint_url("https://generativelanguage.googleapis.com/v1").is_ok());
         assert!(validate_endpoint_url("https://us-central1-aiplatform.googleapis.com").is_ok());
     }
 

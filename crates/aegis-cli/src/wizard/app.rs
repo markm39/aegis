@@ -11,8 +11,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use aegis_types::IsolationConfig;
 
 use super::model::{
-    apply_preset, default_action_entries, ActionEntry, ActionPermission, ScopeRule, SecurityPreset,
-    WizardResult,
+    ActionEntry, ActionPermission, ScopeRule, SecurityPreset, WizardResult, apply_preset,
+    default_action_entries,
 };
 use super::policy_gen;
 

@@ -27,12 +27,12 @@
 //! +----------------------------------------------------+
 //! ```
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, TableState, Wrap};
-use ratatui::Frame;
 
 use aegis_types::AgentStatus;
 

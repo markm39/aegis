@@ -14,7 +14,7 @@ use crate::channel::ChannelError;
 ///
 /// All secrets must come from external configuration (environment
 /// variables, config files, or secret managers). Never hardcode secrets.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SlackOAuthConfig {
     /// OAuth client ID from the Slack app settings.
     pub client_id: String,
@@ -27,8 +27,19 @@ pub struct SlackOAuthConfig {
     pub scopes: Vec<String>,
 }
 
+impl std::fmt::Debug for SlackOAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackOAuthConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
+}
+
 /// Token response from the Slack OAuth V2 access endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct SlackTokenResponse {
     /// The bot access token (xoxb-...).
     pub access_token: String,
@@ -38,6 +49,17 @@ pub struct SlackTokenResponse {
     pub scope: String,
     /// The bot user ID.
     pub bot_user_id: String,
+}
+
+impl std::fmt::Debug for SlackTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackTokenResponse")
+            .field("access_token", &"[REDACTED]")
+            .field("team_id", &self.team_id)
+            .field("scope", &self.scope)
+            .field("bot_user_id", &self.bot_user_id)
+            .finish()
+    }
 }
 
 /// Slack OAuth V2 authorize endpoint.
@@ -90,7 +112,9 @@ pub async fn exchange_code(
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown error");
-        return Err(ChannelError::Api(format!("OAuth token exchange failed: {error}")));
+        return Err(ChannelError::Api(format!(
+            "OAuth token exchange failed: {error}"
+        )));
     }
 
     // Extract the authed_user or bot token fields
@@ -179,7 +203,10 @@ mod tests {
     fn test_oauth_url_encoding() {
         assert_eq!(url_encode("hello world"), "hello%20world");
         assert_eq!(url_encode("a:b,c"), "a%3Ab%2Cc");
-        assert_eq!(url_encode("safe-value_123.test~ok"), "safe-value_123.test~ok");
+        assert_eq!(
+            url_encode("safe-value_123.test~ok"),
+            "safe-value_123.test~ok"
+        );
     }
 
     #[test]

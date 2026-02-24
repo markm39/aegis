@@ -216,10 +216,7 @@ mod tests {
 
     #[test]
     fn memory_skips_empty() {
-        let prompt = PromptBuilder::new()
-            .role("Agent")
-            .memory(&[])
-            .build();
+        let prompt = PromptBuilder::new().role("Agent").memory(&[]).build();
 
         assert!(!prompt.contains("## Memory"));
     }

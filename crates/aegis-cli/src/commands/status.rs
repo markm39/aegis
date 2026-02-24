@@ -6,8 +6,8 @@ use aegis_ledger::{AuditFilter, AuditStore};
 
 use aegis_types::CONFIG_FILENAME;
 
-use crate::commands::init::{load_config, resolve_config_dir};
 use crate::commands::DATETIME_SHORT_FMT;
+use crate::commands::init::{load_config, resolve_config_dir};
 
 /// Run the `aegis status` command.
 ///

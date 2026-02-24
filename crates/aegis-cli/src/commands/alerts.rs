@@ -3,11 +3,11 @@
 //! These commands manage the webhook alerting subsystem configured via
 //! `[[alerts]]` sections in `aegis.toml`.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 
-use crate::commands::init::open_store;
 use crate::commands::DATETIME_FULL_FMT;
+use crate::commands::init::open_store;
 
 /// List all configured alert rules for a given config.
 pub fn list(config_name: &str) -> Result<()> {

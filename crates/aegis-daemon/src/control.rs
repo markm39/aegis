@@ -94,6 +94,22 @@ async fn serve(socket_path: &Path, cmd_tx: DaemonCmdTx, shutdown: Arc<AtomicBool
         }
     };
 
+    // Restrict socket permissions to owner-only (0o600) to prevent other
+    // local users from sending commands to the daemon.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+        {
+            warn!(
+                path = %socket_path.display(),
+                error = %e,
+                "failed to set daemon socket permissions to 0600"
+            );
+        }
+    }
+
     info!(path = %socket_path.display(), "daemon control socket listening");
 
     loop {

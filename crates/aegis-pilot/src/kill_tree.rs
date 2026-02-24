@@ -88,8 +88,7 @@ fn enumerate_processes() -> Result<Vec<ProcessInfo>, AegisError> {
     const PROC_ALL_PIDS: u32 = 1;
 
     // First call: get the number of PIDs (buffer_size=0 returns required size).
-    let num_bytes =
-        unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, std::ptr::null_mut(), 0) };
+    let num_bytes = unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, std::ptr::null_mut(), 0) };
     if num_bytes <= 0 {
         return Err(AegisError::PilotError(format!(
             "kill_tree: proc_listpids size query failed: {}",
@@ -102,14 +101,8 @@ fn enumerate_processes() -> Result<Vec<ProcessInfo>, AegisError> {
     let mut pids: Vec<libc::pid_t> = vec![0; pid_count];
     let buf_size = (pid_count * mem::size_of::<libc::pid_t>()) as libc::c_int;
 
-    let actual_bytes = unsafe {
-        libc::proc_listpids(
-            PROC_ALL_PIDS,
-            0,
-            pids.as_mut_ptr().cast(),
-            buf_size,
-        )
-    };
+    let actual_bytes =
+        unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, pids.as_mut_ptr().cast(), buf_size) };
     if actual_bytes <= 0 {
         return Err(AegisError::PilotError(format!(
             "kill_tree: proc_listpids data query failed: {}",
@@ -166,9 +159,8 @@ fn enumerate_processes() -> Result<Vec<ProcessInfo>, AegisError> {
 
     let mut processes = Vec::new();
 
-    let entries = fs::read_dir("/proc").map_err(|e| {
-        AegisError::PilotError(format!("kill_tree: cannot read /proc: {e}"))
-    })?;
+    let entries = fs::read_dir("/proc")
+        .map_err(|e| AegisError::PilotError(format!("kill_tree: cannot read /proc: {e}")))?;
 
     for entry in entries {
         let entry = match entry {
@@ -356,10 +348,7 @@ pub fn kill_tree(root_pid: i32, config: &KillTreeConfig) -> Result<(), AegisErro
             continue;
         }
         if !validate_ownership(pid, my_uid, &processes) {
-            warn!(
-                pid,
-                "kill_tree: skipping process not owned by current user"
-            );
+            warn!(pid, "kill_tree: skipping process not owned by current user");
             continue;
         }
         kill_list.push(pid);

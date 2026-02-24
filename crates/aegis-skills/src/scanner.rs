@@ -408,14 +408,10 @@ fn validate_blocklist_path(path: &Path) -> Result<()> {
     if let Some(home) = dirs_path() {
         let aegis_dir = home.join(".aegis");
         let canonical_aegis = std::fs::canonicalize(&aegis_dir).unwrap_or(aegis_dir);
-        let canonical_path = std::fs::canonicalize(path)
-            .unwrap_or_else(|_| path.to_path_buf());
+        let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
         if !canonical_path.starts_with(&canonical_aegis) {
-            bail!(
-                "blocklist path must be under ~/.aegis/: {}",
-                path.display()
-            );
+            bail!("blocklist path must be under ~/.aegis/: {}", path.display());
         }
     }
 
@@ -477,28 +473,25 @@ fn collect_files(dir: &Path, _base: &Path) -> Result<Vec<PathBuf>> {
 fn is_scannable_file(path: &Path) -> bool {
     let scannable_extensions = [
         "sh", "bash", "zsh", "fish", "ksh", // shell
-        "py", "pyw",                          // python
-        "js", "mjs", "cjs", "jsx",           // javascript
-        "ts", "tsx", "mts", "cts",           // typescript
-        "rs",                                 // rust
-        "rb",                                 // ruby
-        "pl", "pm",                           // perl
-        "php",                                // php
-        "lua",                                // lua
-        "go",                                 // go
-        "java",                               // java
-        "c", "h", "cpp", "hpp", "cc",        // c/c++
-        "toml", "yaml", "yml", "json",       // config
-        "txt", "md", "cfg", "ini", "conf",   // text
+        "py", "pyw", // python
+        "js", "mjs", "cjs", "jsx", // javascript
+        "ts", "tsx", "mts", "cts", // typescript
+        "rs",  // rust
+        "rb",  // ruby
+        "pl", "pm",   // perl
+        "php",  // php
+        "lua",  // lua
+        "go",   // go
+        "java", // java
+        "c", "h", "cpp", "hpp", "cc", // c/c++
+        "toml", "yaml", "yml", "json", // config
+        "txt", "md", "cfg", "ini", "conf", // text
     ];
 
     // Files with known names but no extension
     let scannable_names = ["Makefile", "Dockerfile", "Rakefile", "Gemfile"];
 
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     if scannable_names.contains(&filename) {
         return true;
@@ -518,45 +511,227 @@ fn is_scannable_file(path: &Path) -> bool {
 fn builtin_patterns() -> Vec<DangerousPattern> {
     let raw: Vec<(&str, &str, Option<&str>, Severity, &str)> = vec![
         // -- Shell patterns --
-        ("shell:rm_rf", r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f|rm\s+-[a-zA-Z]*f[a-zA-Z]*r", Some("shell"), Severity::Error, "Recursive force delete (rm -rf)"),
-        ("shell:curl_pipe_sh", r"curl\s+[^\|]*\|\s*(sh|bash|zsh|dash)", Some("shell"), Severity::Error, "Piping curl output to shell"),
-        ("shell:wget_pipe_sh", r"wget\s+[^\|]*\|\s*(sh|bash|zsh|dash)", Some("shell"), Severity::Error, "Piping wget output to shell"),
-        ("shell:eval", r"\beval\b", Some("shell"), Severity::Warning, "Use of eval in shell script"),
-        ("shell:exec", r"\bexec\b", Some("shell"), Severity::Warning, "Use of exec in shell script"),
-        ("shell:sudo", r"\bsudo\b", None, Severity::Error, "Use of sudo (privilege escalation)"),
-        ("shell:chmod_777", r"chmod\s+777", None, Severity::Error, "Setting world-writable permissions (chmod 777)"),
-        ("shell:mkfs", r"\bmkfs\b", Some("shell"), Severity::Error, "Filesystem format command (mkfs)"),
-        ("shell:dd_if", r"\bdd\s+if=", Some("shell"), Severity::Error, "Raw disk copy (dd if=)"),
-        ("shell:pipe_to_shell", r"\|\s*(sh|bash|zsh|dash)\b", None, Severity::Error, "Piping output to shell interpreter"),
-
+        (
+            "shell:rm_rf",
+            r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f|rm\s+-[a-zA-Z]*f[a-zA-Z]*r",
+            Some("shell"),
+            Severity::Error,
+            "Recursive force delete (rm -rf)",
+        ),
+        (
+            "shell:curl_pipe_sh",
+            r"curl\s+[^\|]*\|\s*(sh|bash|zsh|dash)",
+            Some("shell"),
+            Severity::Error,
+            "Piping curl output to shell",
+        ),
+        (
+            "shell:wget_pipe_sh",
+            r"wget\s+[^\|]*\|\s*(sh|bash|zsh|dash)",
+            Some("shell"),
+            Severity::Error,
+            "Piping wget output to shell",
+        ),
+        (
+            "shell:eval",
+            r"\beval\b",
+            Some("shell"),
+            Severity::Warning,
+            "Use of eval in shell script",
+        ),
+        (
+            "shell:exec",
+            r"\bexec\b",
+            Some("shell"),
+            Severity::Warning,
+            "Use of exec in shell script",
+        ),
+        (
+            "shell:sudo",
+            r"\bsudo\b",
+            None,
+            Severity::Error,
+            "Use of sudo (privilege escalation)",
+        ),
+        (
+            "shell:chmod_777",
+            r"chmod\s+777",
+            None,
+            Severity::Error,
+            "Setting world-writable permissions (chmod 777)",
+        ),
+        (
+            "shell:mkfs",
+            r"\bmkfs\b",
+            Some("shell"),
+            Severity::Error,
+            "Filesystem format command (mkfs)",
+        ),
+        (
+            "shell:dd_if",
+            r"\bdd\s+if=",
+            Some("shell"),
+            Severity::Error,
+            "Raw disk copy (dd if=)",
+        ),
+        (
+            "shell:pipe_to_shell",
+            r"\|\s*(sh|bash|zsh|dash)\b",
+            None,
+            Severity::Error,
+            "Piping output to shell interpreter",
+        ),
         // -- Python patterns --
-        ("python:os_system", r"\bos\.system\s*\(", Some("python"), Severity::Error, "os.system() shell execution"),
-        ("python:subprocess", r"\bsubprocess\b", Some("python"), Severity::Warning, "Use of subprocess module"),
-        ("python:dunder_import", r"__import__\s*\(", Some("python"), Severity::Error, "Dynamic import via __import__()"),
-        ("python:exec", r"\bexec\s*\(", Some("python"), Severity::Error, "Dynamic code execution via exec()"),
-        ("python:eval", r"\beval\s*\(", Some("python"), Severity::Error, "Dynamic code execution via eval()"),
-        ("python:open_write", r#"\bopen\s*\([^)]*['"][wWaA][+bBtT]*['"]"#, Some("python"), Severity::Warning, "File open with write mode"),
-        ("python:shutil_rmtree", r"\bshutil\.rmtree\s*\(", Some("python"), Severity::Error, "Recursive directory deletion (shutil.rmtree)"),
-
+        (
+            "python:os_system",
+            r"\bos\.system\s*\(",
+            Some("python"),
+            Severity::Error,
+            "os.system() shell execution",
+        ),
+        (
+            "python:subprocess",
+            r"\bsubprocess\b",
+            Some("python"),
+            Severity::Warning,
+            "Use of subprocess module",
+        ),
+        (
+            "python:dunder_import",
+            r"__import__\s*\(",
+            Some("python"),
+            Severity::Error,
+            "Dynamic import via __import__()",
+        ),
+        (
+            "python:exec",
+            r"\bexec\s*\(",
+            Some("python"),
+            Severity::Error,
+            "Dynamic code execution via exec()",
+        ),
+        (
+            "python:eval",
+            r"\beval\s*\(",
+            Some("python"),
+            Severity::Error,
+            "Dynamic code execution via eval()",
+        ),
+        (
+            "python:open_write",
+            r#"\bopen\s*\([^)]*['"][wWaA][+bBtT]*['"]"#,
+            Some("python"),
+            Severity::Warning,
+            "File open with write mode",
+        ),
+        (
+            "python:shutil_rmtree",
+            r"\bshutil\.rmtree\s*\(",
+            Some("python"),
+            Severity::Error,
+            "Recursive directory deletion (shutil.rmtree)",
+        ),
         // -- JavaScript/TypeScript patterns --
-        ("js:child_process", r"\bchild_process\b", Some("javascript"), Severity::Error, "Use of child_process module (Node.js)"),
-        ("js:child_process_ts", r"\bchild_process\b", Some("typescript"), Severity::Error, "Use of child_process module (Node.js)"),
-        ("js:eval", r"\beval\s*\(", Some("javascript"), Severity::Error, "Dynamic code execution via eval()"),
-        ("js:eval_ts", r"\beval\s*\(", Some("typescript"), Severity::Error, "Dynamic code execution via eval()"),
-        ("js:function_ctor", r"\bFunction\s*\(", Some("javascript"), Severity::Error, "Dynamic code via Function constructor"),
-        ("js:function_ctor_ts", r"\bFunction\s*\(", Some("typescript"), Severity::Error, "Dynamic code via Function constructor"),
-        ("js:fs_unlink", r#"require\s*\(\s*['"]fs['"]\s*\).*\bunlink|\.unlink\s*\(|\.rmdir\s*\(|\.rmdirSync\s*\(|\.unlinkSync\s*\("#, Some("javascript"), Severity::Warning, "Filesystem deletion via fs module"),
-        ("js:process_exit", r"\bprocess\.exit\s*\(", Some("javascript"), Severity::Warning, "Process termination via process.exit()"),
-        ("js:process_exit_ts", r"\bprocess\.exit\s*\(", Some("typescript"), Severity::Warning, "Process termination via process.exit()"),
-
+        (
+            "js:child_process",
+            r"\bchild_process\b",
+            Some("javascript"),
+            Severity::Error,
+            "Use of child_process module (Node.js)",
+        ),
+        (
+            "js:child_process_ts",
+            r"\bchild_process\b",
+            Some("typescript"),
+            Severity::Error,
+            "Use of child_process module (Node.js)",
+        ),
+        (
+            "js:eval",
+            r"\beval\s*\(",
+            Some("javascript"),
+            Severity::Error,
+            "Dynamic code execution via eval()",
+        ),
+        (
+            "js:eval_ts",
+            r"\beval\s*\(",
+            Some("typescript"),
+            Severity::Error,
+            "Dynamic code execution via eval()",
+        ),
+        (
+            "js:function_ctor",
+            r"\bFunction\s*\(",
+            Some("javascript"),
+            Severity::Error,
+            "Dynamic code via Function constructor",
+        ),
+        (
+            "js:function_ctor_ts",
+            r"\bFunction\s*\(",
+            Some("typescript"),
+            Severity::Error,
+            "Dynamic code via Function constructor",
+        ),
+        (
+            "js:fs_unlink",
+            r#"require\s*\(\s*['"]fs['"]\s*\).*\bunlink|\.unlink\s*\(|\.rmdir\s*\(|\.rmdirSync\s*\(|\.unlinkSync\s*\("#,
+            Some("javascript"),
+            Severity::Warning,
+            "Filesystem deletion via fs module",
+        ),
+        (
+            "js:process_exit",
+            r"\bprocess\.exit\s*\(",
+            Some("javascript"),
+            Severity::Warning,
+            "Process termination via process.exit()",
+        ),
+        (
+            "js:process_exit_ts",
+            r"\bprocess\.exit\s*\(",
+            Some("typescript"),
+            Severity::Warning,
+            "Process termination via process.exit()",
+        ),
         // -- Rust patterns --
-        ("rust:process_command", r"std::process::Command", Some("rust"), Severity::Warning, "Spawning external process via std::process::Command"),
-        ("rust:remove_dir_all", r"std::fs::remove_dir_all|fs::remove_dir_all|remove_dir_all\s*\(", Some("rust"), Severity::Error, "Recursive directory deletion"),
-        ("rust:unsafe_block", r"\bunsafe\s*\{", Some("rust"), Severity::Warning, "Unsafe code block"),
-
+        (
+            "rust:process_command",
+            r"std::process::Command",
+            Some("rust"),
+            Severity::Warning,
+            "Spawning external process via std::process::Command",
+        ),
+        (
+            "rust:remove_dir_all",
+            r"std::fs::remove_dir_all|fs::remove_dir_all|remove_dir_all\s*\(",
+            Some("rust"),
+            Severity::Error,
+            "Recursive directory deletion",
+        ),
+        (
+            "rust:unsafe_block",
+            r"\bunsafe\s*\{",
+            Some("rust"),
+            Severity::Warning,
+            "Unsafe code block",
+        ),
         // -- Universal patterns (any language) --
-        ("universal:base64_decode_exec", r"base64\s+(-d|--decode)\s*.*\|\s*(sh|bash|python|perl|ruby)", None, Severity::Error, "Base64-decoded payload piped to interpreter"),
-        ("universal:base64_python_exec", r"base64\.b64decode|base64\.decodebytes", Some("python"), Severity::Warning, "Base64 decoding (potential encoded payload)"),
+        (
+            "universal:base64_decode_exec",
+            r"base64\s+(-d|--decode)\s*.*\|\s*(sh|bash|python|perl|ruby)",
+            None,
+            Severity::Error,
+            "Base64-decoded payload piped to interpreter",
+        ),
+        (
+            "universal:base64_python_exec",
+            r"base64\.b64decode|base64\.decodebytes",
+            Some("python"),
+            Severity::Warning,
+            "Base64 decoding (potential encoded payload)",
+        ),
     ];
 
     raw.into_iter()
@@ -609,21 +784,17 @@ entry_point = "{filename}"
 
     #[test]
     fn test_scanner_detects_shell_injection() {
-        let tmp = create_skill_dir(
-            "bad-shell",
-            "run.sh",
-            "#!/bin/bash\nrm -rf /\necho done\n",
-        );
+        let tmp = create_skill_dir("bad-shell", "run.sh", "#!/bin/bash\nrm -rf /\necho done\n");
         let mut scanner = SkillScanner::new();
         let result = scanner.scan(&skill_path(&tmp, "bad-shell")).unwrap();
 
         assert!(!result.passed, "scan should fail for rm -rf /");
+        assert!(!result.errors.is_empty(), "should have error findings");
         assert!(
-            !result.errors.is_empty(),
-            "should have error findings"
-        );
-        assert!(
-            result.errors.iter().any(|e| e.pattern_name.contains("rm_rf")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.pattern_name.contains("rm_rf")),
             "should detect rm -rf pattern"
         );
     }
@@ -640,8 +811,11 @@ entry_point = "{filename}"
 
         assert!(!result.passed, "scan should fail for curl | bash");
         assert!(
-            result.errors.iter().any(|e| e.pattern_name.contains("curl_pipe_sh")
-                || e.pattern_name.contains("pipe_to_shell")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.pattern_name.contains("curl_pipe_sh")
+                    || e.pattern_name.contains("pipe_to_shell")),
             "should detect curl pipe to shell: {:?}",
             result.errors
         );
@@ -670,11 +844,7 @@ entry_point = "{filename}"
 
     #[test]
     fn test_scan_failure_blocks_skill_load() {
-        let tmp = create_skill_dir(
-            "blocked-skill",
-            "run.sh",
-            "#!/bin/bash\nsudo rm -rf /\n",
-        );
+        let tmp = create_skill_dir("blocked-skill", "run.sh", "#!/bin/bash\nsudo rm -rf /\n");
 
         let mut scanner = SkillScanner::new();
         let result = scanner.scan(&skill_path(&tmp, "blocked-skill")).unwrap();
@@ -767,11 +937,8 @@ description = "Sketchy but not blocking"
         assert_eq!(scanner.patterns.len(), initial_count + 2);
 
         // Create a skill with the custom dangerous function
-        let skill_tmp = create_skill_dir(
-            "custom-bad",
-            "main.py",
-            "# normal code\ndangerous_func()\n",
-        );
+        let skill_tmp =
+            create_skill_dir("custom-bad", "main.py", "# normal code\ndangerous_func()\n");
         let result = scanner.scan(&skill_path(&skill_tmp, "custom-bad")).unwrap();
 
         assert!(!result.passed, "custom error pattern should block");
@@ -783,11 +950,7 @@ description = "Sketchy but not blocking"
 
     #[test]
     fn test_rescan_on_file_change() {
-        let tmp = create_skill_dir(
-            "changing-skill",
-            "run.sh",
-            "#!/bin/bash\necho hello\n",
-        );
+        let tmp = create_skill_dir("changing-skill", "run.sh", "#!/bin/bash\necho hello\n");
         let path = skill_path(&tmp, "changing-skill");
 
         let mut scanner = SkillScanner::new();
@@ -829,7 +992,10 @@ description = "Sketchy but not blocking"
         let result = scanner.scan(&skill_path(&tmp, "good-skill")).unwrap();
 
         assert!(result.passed, "clean skill should pass scan");
-        assert!(result.errors.is_empty(), "clean skill should have no errors");
+        assert!(
+            result.errors.is_empty(),
+            "clean skill should have no errors"
+        );
     }
 
     #[test]
@@ -847,8 +1013,11 @@ description = "Sketchy but not blocking"
             "base64-decoded payload piped to shell should fail"
         );
         assert!(
-            result.errors.iter().any(|e| e.pattern_name.contains("base64")
-                || e.pattern_name.contains("pipe_to_shell")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.pattern_name.contains("base64")
+                    || e.pattern_name.contains("pipe_to_shell")),
             "should detect encoded payload execution: {:?}",
             result.errors
         );
@@ -860,10 +1029,7 @@ description = "Sketchy but not blocking"
         let result = scanner.scan(Path::new("/tmp/../etc/passwd"));
         assert!(result.is_err(), "path traversal should be rejected");
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("path traversal"),
+            result.unwrap_err().to_string().contains("path traversal"),
             "error should mention path traversal"
         );
     }
@@ -954,11 +1120,7 @@ description = "Sketchy but not blocking"
 
     #[test]
     fn test_scan_timeout_config() {
-        let tmp = create_skill_dir(
-            "timeout-skill",
-            "run.sh",
-            "#!/bin/bash\necho ok\n",
-        );
+        let tmp = create_skill_dir("timeout-skill", "run.sh", "#!/bin/bash\necho ok\n");
 
         // Use a very generous timeout -- should not trigger
         let mut scanner = SkillScanner::with_timeout(Duration::from_secs(300));

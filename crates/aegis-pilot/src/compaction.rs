@@ -226,10 +226,7 @@ mod tests {
         let result = compact(&[], &CompactionStrategy::Truncate { max_tokens: 100 });
         assert!(result.is_empty());
 
-        let result = compact(
-            &[],
-            &CompactionStrategy::HeadTail { head: 1, tail: 1 },
-        );
+        let result = compact(&[], &CompactionStrategy::HeadTail { head: 1, tail: 1 });
         assert!(result.is_empty());
     }
 
@@ -241,10 +238,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "Only message");
 
-        let result = compact(
-            &msgs,
-            &CompactionStrategy::HeadTail { head: 1, tail: 1 },
-        );
+        let result = compact(&msgs, &CompactionStrategy::HeadTail { head: 1, tail: 1 });
         assert_eq!(result.len(), 1);
     }
 

@@ -47,7 +47,7 @@ const USER_AGENT_VALUE: &str = "Aegis/1.0 (https://github.com/aegis; Bot)";
 ///
 /// All new fields use `#[serde(default)]` for backward compatibility with
 /// existing config files that only had `webhook_url`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscordConfig {
     /// Discord webhook URL (kept for backward compat, used as fallback).
     #[serde(default)]
@@ -73,6 +73,21 @@ pub struct DiscordConfig {
     /// Dedicated channel ID for command input (optional, defaults to `channel_id`).
     #[serde(default)]
     pub command_channel_id: Option<String>,
+}
+
+impl std::fmt::Debug for DiscordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordConfig")
+            .field("webhook_url", &self.webhook_url)
+            .field("bot_token", &"[REDACTED]")
+            .field("channel_id", &self.channel_id)
+            .field("guild_id", &self.guild_id)
+            .field("application_id", &self.application_id)
+            .field("public_key", &self.public_key)
+            .field("authorized_user_ids", &self.authorized_user_ids)
+            .field("command_channel_id", &self.command_channel_id)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -647,9 +662,9 @@ pub fn parse_interaction(payload_json: &str) -> Result<DiscordInteraction, Chann
         }
         // Type 3 = Message Component (button click)
         3 => {
-            let data = payload.get("data").ok_or_else(|| {
-                ChannelError::Api("missing data in component interaction".into())
-            })?;
+            let data = payload
+                .get("data")
+                .ok_or_else(|| ChannelError::Api("missing data in component interaction".into()))?;
 
             let custom_id = data
                 .get("custom_id")
@@ -657,10 +672,7 @@ pub fn parse_interaction(payload_json: &str) -> Result<DiscordInteraction, Chann
                 .unwrap_or("")
                 .to_string();
 
-            Ok(DiscordInteraction::ButtonClick {
-                custom_id,
-                user_id,
-            })
+            Ok(DiscordInteraction::ButtonClick { custom_id, user_id })
         }
         _ => Err(ChannelError::Api(format!(
             "unsupported interaction type: {interaction_type}"
@@ -1059,10 +1071,7 @@ impl DiscordApi {
     /// POST /channels/{channel_id}/typing
     ///
     /// The typing indicator automatically expires after ~10 seconds.
-    pub async fn trigger_typing(
-        &self,
-        channel_id: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn trigger_typing(&self, channel_id: &str) -> Result<(), ChannelError> {
         validate_snowflake(channel_id)?;
 
         let route = format!("POST /channels/{channel_id}/typing");
@@ -1350,10 +1359,7 @@ impl Channel for DiscordChannel {
         self.api.trigger_typing(channel_id).await
     }
 
-    async fn send_with_id(
-        &self,
-        message: OutboundMessage,
-    ) -> Result<Option<String>, ChannelError> {
+    async fn send_with_id(&self, message: OutboundMessage) -> Result<Option<String>, ChannelError> {
         let channel_id = self.send_channel_id()?;
         let components = buttons_to_components(&message.buttons);
 
@@ -1704,31 +1710,21 @@ mod tests {
     #[test]
     fn test_command_option_validation() {
         // Valid option
-        assert!(
-            CommandOption::new("agent", "Agent name", CommandOptionType::String, true).is_ok()
-        );
+        assert!(CommandOption::new("agent", "Agent name", CommandOptionType::String, true).is_ok());
 
         // Name too long (33 chars)
         let long_name = "a".repeat(33);
-        assert!(
-            CommandOption::new(&long_name, "desc", CommandOptionType::String, true).is_err()
-        );
+        assert!(CommandOption::new(&long_name, "desc", CommandOptionType::String, true).is_err());
 
         // Name not lowercase
-        assert!(
-            CommandOption::new("Agent", "desc", CommandOptionType::String, true).is_err()
-        );
+        assert!(CommandOption::new("Agent", "desc", CommandOptionType::String, true).is_err());
 
         // Name with spaces
-        assert!(
-            CommandOption::new("agent name", "desc", CommandOptionType::String, true).is_err()
-        );
+        assert!(CommandOption::new("agent name", "desc", CommandOptionType::String, true).is_err());
 
         // Description too long (101 chars)
         let long_desc = "d".repeat(101);
-        assert!(
-            CommandOption::new("agent", &long_desc, CommandOptionType::String, true).is_err()
-        );
+        assert!(CommandOption::new("agent", &long_desc, CommandOptionType::String, true).is_err());
 
         // Empty name
         assert!(CommandOption::new("", "desc", CommandOptionType::String, true).is_err());
@@ -1737,9 +1733,7 @@ mod tests {
         assert!(CommandOption::new("agent", "", CommandOptionType::String, true).is_err());
 
         // Name starting with dash
-        assert!(
-            CommandOption::new("-agent", "desc", CommandOptionType::String, true).is_err()
-        );
+        assert!(CommandOption::new("-agent", "desc", CommandOptionType::String, true).is_err());
     }
 
     // -- Slash command validation --
@@ -1957,17 +1951,26 @@ mod tests {
 
         // Valid signature should pass.
         assert!(verify_interaction_signature(
-            &public_hex, timestamp, body, &sig_hex
+            &public_hex,
+            timestamp,
+            body,
+            &sig_hex
         ));
 
         // Tampered body should fail.
         assert!(!verify_interaction_signature(
-            &public_hex, timestamp, "tampered", &sig_hex
+            &public_hex,
+            timestamp,
+            "tampered",
+            &sig_hex
         ));
 
         // Tampered timestamp should fail.
         assert!(!verify_interaction_signature(
-            &public_hex, "9999999999", body, &sig_hex
+            &public_hex,
+            "9999999999",
+            body,
+            &sig_hex
         ));
     }
 

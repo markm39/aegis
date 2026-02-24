@@ -416,8 +416,7 @@ impl AttachmentHandler for TextHandler {
         }
 
         // Validate UTF-8 encoding
-        let text = std::str::from_utf8(data)
-            .map_err(|e| format!("invalid UTF-8: {e}"))?;
+        let text = std::str::from_utf8(data).map_err(|e| format!("invalid UTF-8: {e}"))?;
 
         // Sanitize: strip control characters
         let sanitized = sanitize_text(text);
@@ -427,7 +426,10 @@ impl AttachmentHandler for TextHandler {
         let mut metadata = HashMap::new();
         metadata.insert("handler".to_string(), "text".to_string());
         metadata.insert("encoding".to_string(), "utf-8".to_string());
-        metadata.insert("char_count".to_string(), sanitized.chars().count().to_string());
+        metadata.insert(
+            "char_count".to_string(),
+            sanitized.chars().count().to_string(),
+        );
         if mime == "application/json" {
             metadata.insert("format".to_string(), "json".to_string());
         } else {
@@ -496,8 +498,7 @@ impl AttachmentHandler for CodeHandler {
             return Err("code data is empty".to_string());
         }
 
-        let text = std::str::from_utf8(data)
-            .map_err(|e| format!("invalid UTF-8 in code: {e}"))?;
+        let text = std::str::from_utf8(data).map_err(|e| format!("invalid UTF-8 in code: {e}"))?;
 
         let sanitized = sanitize_text(text);
         let content_hash = compute_sha256(data);
@@ -505,7 +506,10 @@ impl AttachmentHandler for CodeHandler {
         let mut metadata = HashMap::new();
         metadata.insert("handler".to_string(), "code".to_string());
         metadata.insert("encoding".to_string(), "utf-8".to_string());
-        metadata.insert("line_count".to_string(), sanitized.lines().count().to_string());
+        metadata.insert(
+            "line_count".to_string(),
+            sanitized.lines().count().to_string(),
+        );
 
         Ok(ProcessedAttachment {
             text_content: Some(sanitized),
@@ -685,7 +689,11 @@ impl AttachmentPipeline {
 
     /// Process with an explicit MIME type override (for testing or when
     /// the MIME type is already known from another source).
-    pub fn process_with_mime(&self, data: &[u8], mime: &str) -> Result<ProcessedAttachment, String> {
+    pub fn process_with_mime(
+        &self,
+        data: &[u8],
+        mime: &str,
+    ) -> Result<ProcessedAttachment, String> {
         if data.is_empty() {
             return Err("attachment data is empty".to_string());
         }
@@ -932,7 +940,10 @@ mod tests {
 
         let data = b"Hello, world!\nSecond line.";
         let result = handler.process(data, "text/plain").unwrap();
-        assert_eq!(result.text_content.as_deref(), Some("Hello, world!\nSecond line."));
+        assert_eq!(
+            result.text_content.as_deref(),
+            Some("Hello, world!\nSecond line.")
+        );
         assert_eq!(result.original_mime, "text/plain");
         assert_eq!(result.metadata.get("format").unwrap(), "plain");
     }
@@ -1010,7 +1021,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("exceeds maximum"), "error: {err}");
-        assert!(err.contains("image/png"), "error should mention type: {err}");
+        assert!(
+            err.contains("image/png"),
+            "error should mention type: {err}"
+        );
     }
 
     #[test]
@@ -1157,9 +1171,18 @@ mod tests {
         assert_eq!(MimeCategory::from_mime("image/png"), MimeCategory::Image);
         assert_eq!(MimeCategory::from_mime("audio/mpeg"), MimeCategory::Audio);
         assert_eq!(MimeCategory::from_mime("video/mp4"), MimeCategory::Video);
-        assert_eq!(MimeCategory::from_mime("application/pdf"), MimeCategory::Pdf);
+        assert_eq!(
+            MimeCategory::from_mime("application/pdf"),
+            MimeCategory::Pdf
+        );
         assert_eq!(MimeCategory::from_mime("text/plain"), MimeCategory::Text);
-        assert_eq!(MimeCategory::from_mime("application/json"), MimeCategory::Text);
-        assert_eq!(MimeCategory::from_mime("application/octet-stream"), MimeCategory::Unknown);
+        assert_eq!(
+            MimeCategory::from_mime("application/json"),
+            MimeCategory::Text
+        );
+        assert_eq!(
+            MimeCategory::from_mime("application/octet-stream"),
+            MimeCategory::Unknown
+        );
     }
 }

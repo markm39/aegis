@@ -14,7 +14,7 @@ pub const DATETIME_FULL_FMT: &str = "%Y-%m-%d %H:%M:%S";
 ///
 /// Centralizes construction so that new fields only need to be added here.
 pub(crate) fn build_agent_slot(
-    name: String,
+    name: impl Into<aegis_types::ids::AgentName>,
     tool: AgentToolConfig,
     working_dir: PathBuf,
     task: Option<String>,
@@ -22,7 +22,7 @@ pub(crate) fn build_agent_slot(
     max_restarts: u32,
 ) -> AgentSlotConfig {
     AgentSlotConfig {
-        name,
+        name: name.into(),
         tool,
         working_dir,
         role: None,

@@ -234,7 +234,10 @@ pub fn validate_sticker_file_id(file_id: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
-        return Err("sticker file_id must contain only alphanumeric characters, dashes, and underscores".into());
+        return Err(
+            "sticker file_id must contain only alphanumeric characters, dashes, and underscores"
+                .into(),
+        );
     }
     Ok(())
 }

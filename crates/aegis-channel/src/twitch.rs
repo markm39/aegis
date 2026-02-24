@@ -33,7 +33,7 @@ const MAX_NAME_LEN: usize = 25;
 /// Configuration for the Twitch IRC channel.
 ///
 /// All credential fields are validated on construction and never logged.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TwitchConfig {
     /// OAuth token for Twitch IRC authentication.
     /// Must start with `oauth:` followed by alphanumeric characters.
@@ -45,6 +45,16 @@ pub struct TwitchConfig {
     /// Bot username for the IRC NICK command.
     /// Alphanumeric + underscore only, max 25 characters.
     pub bot_username: String,
+}
+
+impl std::fmt::Debug for TwitchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwitchConfig")
+            .field("oauth_token", &"[REDACTED]")
+            .field("channel_name", &self.channel_name)
+            .field("bot_username", &self.bot_username)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -88,10 +98,7 @@ pub fn validate_twitch_name(name: &str, field: &str) -> Result<(), ChannelError>
             name.len()
         )));
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(ChannelError::Api(format!(
             "Twitch {field} contains invalid characters (only alphanumeric and underscore allowed): {name:?}"
         )));
@@ -410,7 +417,8 @@ mod tests {
 
     #[test]
     fn test_twitch_irc_message_receive() {
-        let raw = ":nightbot!nightbot@nightbot.tmi.twitch.tv PRIVMSG #testchannel :Hello from Twitch!";
+        let raw =
+            ":nightbot!nightbot@nightbot.tmi.twitch.tv PRIVMSG #testchannel :Hello from Twitch!";
         let parsed = TwitchApi::parse_privmsg(raw).unwrap();
         assert_eq!(parsed.sender, "nightbot");
         assert_eq!(parsed.channel, "testchannel");
@@ -419,8 +427,7 @@ mod tests {
 
     #[test]
     fn test_twitch_irc_message_receive_command() {
-        let raw =
-            ":admin_user!admin_user@admin_user.tmi.twitch.tv PRIVMSG #mychannel :/status";
+        let raw = ":admin_user!admin_user@admin_user.tmi.twitch.tv PRIVMSG #mychannel :/status";
         let parsed = TwitchApi::parse_privmsg(raw).unwrap();
         assert_eq!(parsed.sender, "admin_user");
         assert_eq!(parsed.channel, "mychannel");
@@ -436,9 +443,7 @@ mod tests {
         assert!(TwitchApi::parse_privmsg("user PRIVMSG #ch :msg").is_none());
 
         // Missing channel prefix
-        assert!(
-            TwitchApi::parse_privmsg(":user!u@u.tmi.twitch.tv PRIVMSG channel :msg").is_none()
-        );
+        assert!(TwitchApi::parse_privmsg(":user!u@u.tmi.twitch.tv PRIVMSG channel :msg").is_none());
 
         // Empty string
         assert!(TwitchApi::parse_privmsg("").is_none());

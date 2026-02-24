@@ -407,9 +407,7 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(429).set_body_string("rate limited"),
-            )
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -420,9 +418,7 @@ mod tests {
             endpoint: mock_server.uri(),
         };
 
-        let result = provider
-            .synthesize("Hello", None, AudioFormat::Mp3)
-            .await;
+        let result = provider.synthesize("Hello", None, AudioFormat::Mp3).await;
 
         assert!(matches!(result, Err(TtsError::ProviderError(_))));
         if let Err(TtsError::ProviderError(msg)) = result {

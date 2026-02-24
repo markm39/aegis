@@ -384,10 +384,7 @@ mod tests {
         let block = Block::Context {
             elements: vec![
                 ContextElement::Text(TextObject::mrkdwn("Last updated: now")),
-                ContextElement::Image(ImageElement::new(
-                    "https://example.com/icon.png",
-                    "icon",
-                )),
+                ContextElement::Image(ImageElement::new("https://example.com/icon.png", "icon")),
             ],
         };
         let json = serde_json::to_value(&block).unwrap();

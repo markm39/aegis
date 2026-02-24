@@ -157,10 +157,7 @@ mod tests {
         assert_eq!(manifest.command, "python3");
         assert_eq!(manifest.args, vec!["search.py", "--mode", "fast"]);
         assert_eq!(manifest.env, vec![("API_KEY".into(), "secret123".into())]);
-        assert_eq!(
-            manifest.actions,
-            vec!["tool.custom_search", "tool.index"]
-        );
+        assert_eq!(manifest.actions, vec!["tool.custom_search", "tool.index"]);
     }
 
     #[test]

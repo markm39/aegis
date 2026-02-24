@@ -41,13 +41,21 @@ fn default_watch_labels() -> Vec<String> {
 /// Default path for storing OAuth2 tokens (wrapped in `Option` for serde default).
 fn default_token_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    Some(PathBuf::from(home).join(".aegis").join("gmail").join("tokens.json"))
+    Some(
+        PathBuf::from(home)
+            .join(".aegis")
+            .join("gmail")
+            .join("tokens.json"),
+    )
 }
 
 /// Unwrapped default token path for internal use.
 fn default_token_path_unwrapped() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".aegis").join("gmail").join("tokens.json")
+    PathBuf::from(home)
+        .join(".aegis")
+        .join("gmail")
+        .join("tokens.json")
 }
 
 /// Configuration for the Gmail messaging channel.
@@ -72,7 +80,10 @@ pub struct GmailConfig {
     pub watch_labels: Vec<String>,
 
     /// Path to store OAuth2 tokens. Defaults to `~/.aegis/gmail/tokens.json`.
-    #[serde(default = "default_token_path", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_token_path",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub token_path: Option<PathBuf>,
 }
 
@@ -220,9 +231,8 @@ impl GmailTokenStore {
             })?;
         }
 
-        let content = serde_json::to_string_pretty(token).map_err(|e| {
-            ChannelError::Other(format!("failed to serialize token: {e}"))
-        })?;
+        let content = serde_json::to_string_pretty(token)
+            .map_err(|e| ChannelError::Other(format!("failed to serialize token: {e}")))?;
 
         std::fs::write(&self.path, &content).map_err(|e| {
             ChannelError::Other(format!(
@@ -293,7 +303,14 @@ pub async fn refresh_access_token(
     client_secret: &str,
     refresh_token: &str,
 ) -> Result<OAuthToken, ChannelError> {
-    refresh_access_token_at(client, TOKEN_ENDPOINT, client_id, client_secret, refresh_token).await
+    refresh_access_token_at(
+        client,
+        TOKEN_ENDPOINT,
+        client_id,
+        client_secret,
+        refresh_token,
+    )
+    .await
 }
 
 /// Internal: refresh with a configurable endpoint (for testing).
@@ -674,7 +691,11 @@ impl GmailClient {
     }
 
     /// Create a new Gmail client with a custom base URL (for testing).
-    pub fn with_base_url(config: GmailConfig, token_store: GmailTokenStore, base_url: &str) -> Self {
+    pub fn with_base_url(
+        config: GmailConfig,
+        token_store: GmailTokenStore,
+        base_url: &str,
+    ) -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -694,14 +715,11 @@ impl GmailClient {
     /// the OAuth2 token endpoint if expired. The refreshed token is saved
     /// back to the store.
     async fn get_access_token(&self) -> Result<String, ChannelError> {
-        let token = self
-            .token_store
-            .load()?
-            .ok_or_else(|| {
-                ChannelError::Other(
-                    "no Gmail OAuth2 token found -- run the authorization flow first".into(),
-                )
-            })?;
+        let token = self.token_store.load()?.ok_or_else(|| {
+            ChannelError::Other(
+                "no Gmail OAuth2 token found -- run the authorization flow first".into(),
+            )
+        })?;
 
         if !token.is_expired() {
             return Ok(token.access_token);
@@ -740,10 +758,7 @@ impl GmailClient {
             .client
             .get(&url)
             .bearer_auth(&token)
-            .query(&[
-                ("q", query),
-                ("maxResults", &max_results.to_string()),
-            ])
+            .query(&[("q", query), ("maxResults", &max_results.to_string())])
             .send()
             .await?;
 
@@ -826,9 +841,8 @@ impl GmailClient {
         body: &str,
     ) -> Result<String, ChannelError> {
         // Validate recipient address
-        validate_email_address(to).map_err(|e| {
-            ChannelError::Other(format!("invalid recipient address: {e}"))
-        })?;
+        validate_email_address(to)
+            .map_err(|e| ChannelError::Other(format!("invalid recipient address: {e}")))?;
 
         let token = self.get_access_token().await?;
 
@@ -843,7 +857,8 @@ impl GmailClient {
 
         // Gmail API expects base64url-encoded RFC 2822 messages
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_message.as_bytes());
+        let encoded =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw_message.as_bytes());
 
         let url = format!("{}/messages/send", self.base_url);
         let resp = self
@@ -1029,10 +1044,7 @@ mod tests {
     #[test]
     fn test_email_sanitization() {
         // HTML stripping
-        assert_eq!(
-            strip_html("<p>Hello <b>world</b></p>"),
-            "\nHello world\n"
-        );
+        assert_eq!(strip_html("<p>Hello <b>world</b></p>"), "\nHello world\n");
 
         // Entity decoding
         assert_eq!(strip_html("a &amp; b &lt; c"), "a & b < c");
@@ -1164,19 +1176,13 @@ mod tests {
         assert_eq!(strip_html("plain text"), "plain text");
 
         // Nested tags
-        assert_eq!(
-            strip_html("<div><p><b>bold</b></p></div>"),
-            "\n\nbold\n\n"
-        );
+        assert_eq!(strip_html("<div><p><b>bold</b></p></div>"), "\n\nbold\n\n");
 
         // Unclosed tags
         assert_eq!(strip_html("<b>unclosed"), "unclosed");
 
         // Script tags (content visible but tag stripped)
-        assert_eq!(
-            strip_html("<script>alert(1)</script>"),
-            "alert(1)"
-        );
+        assert_eq!(strip_html("<script>alert(1)</script>"), "alert(1)");
 
         // &nbsp; entity
         assert_eq!(strip_html("a&nbsp;b"), "a b");
@@ -1185,8 +1191,7 @@ mod tests {
     #[test]
     fn test_decode_base64url() {
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(b"Hello, world!");
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"Hello, world!");
         assert_eq!(decode_base64url(&encoded), "Hello, world!");
 
         // Invalid base64 returns empty
@@ -1197,8 +1202,7 @@ mod tests {
     fn test_parse_gmail_message_basic() {
         use base64::Engine as _;
 
-        let body_data = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(b"Hello from test");
+        let body_data = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"Hello from test");
 
         let raw = GmailMessageResponse {
             id: "msg-123".to_string(),

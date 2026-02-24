@@ -84,8 +84,9 @@ impl FixtureBuilder {
 
     /// Add a simple echo agent (useful for tests that just need a running agent).
     pub fn echo_agent(self, name: impl Into<String>, working_dir: PathBuf) -> Self {
+        let agent_name: String = name.into();
         self.agent(AgentSlotConfig {
-            name: name.into(),
+            name: agent_name.into(),
             tool: AgentToolConfig::Custom {
                 command: "/bin/echo".into(),
                 args: vec!["test-agent-running".into()],

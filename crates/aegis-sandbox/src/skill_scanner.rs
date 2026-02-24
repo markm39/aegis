@@ -627,10 +627,7 @@ mod tests {
             .iter()
             .any(|m| m.category == DangerCategory::DestructiveFilesystem));
         // The safe lines should not produce false positives for those categories
-        assert!(!result
-            .matches
-            .iter()
-            .any(|m| m.matched_text.contains("ls")));
+        assert!(!result.matches.iter().any(|m| m.matched_text.contains("ls")));
     }
 
     #[test]

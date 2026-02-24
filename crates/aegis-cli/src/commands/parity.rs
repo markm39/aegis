@@ -129,7 +129,11 @@ pub fn status(format: &str) -> anyhow::Result<()> {
     let total_missing: u32 = domains.values().map(|c| c[2]).sum();
     let total_all: u32 = features.len() as u32;
 
-    println!("Parity Status  ({} features from {})", total_all, path.display());
+    println!(
+        "Parity Status  ({} features from {})",
+        total_all,
+        path.display()
+    );
     println!();
     println!(
         "{:<16} {:>8} {:>8} {:>8} {:>8}",
@@ -152,7 +156,10 @@ pub fn status(format: &str) -> anyhow::Result<()> {
         0.0
     };
     println!();
-    println!("Parity: {:.0}% complete ({}/{})", pct, total_complete, total_all);
+    println!(
+        "Parity: {:.0}% complete ({}/{})",
+        pct, total_complete, total_all
+    );
 
     Ok(())
 }
@@ -185,10 +192,7 @@ pub fn diff(format: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!(
-        "Parity Diff  ({} features not complete)",
-        incomplete.len()
-    );
+    println!("Parity Diff  ({} features not complete)", incomplete.len());
     println!();
 
     for w in 1..=3 {
@@ -285,10 +289,7 @@ pub fn verify(format: &str) -> anyhow::Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "Parity Verify  ({} complete features checked)",
-            checked
-        );
+        println!("Parity Verify  ({} complete features checked)", checked);
         println!();
         if violations.is_empty() {
             println!("All complete features pass verification.");

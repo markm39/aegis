@@ -194,19 +194,18 @@ impl ToolExecutor {
         principal: &str,
     ) -> Result<ToolOutput, ExecutionError> {
         // 1. Look up tool
-        let tool = self
-            .registry
-            .get_tool(tool_name)
-            .ok_or_else(|| ExecutionError::ToolNotFound {
-                name: tool_name.to_string(),
-            })?;
+        let tool =
+            self.registry
+                .get_tool(tool_name)
+                .ok_or_else(|| ExecutionError::ToolNotFound {
+                    name: tool_name.to_string(),
+                })?;
 
         // 2. Serialize input and check size
-        let serialized = serde_json::to_string(&input).map_err(|e| {
-            ExecutionError::ValidationFailed {
+        let serialized =
+            serde_json::to_string(&input).map_err(|e| ExecutionError::ValidationFailed {
                 reason: format!("failed to serialize input: {e}"),
-            }
-        })?;
+            })?;
 
         if serialized.len() > self.config.max_input_size_bytes {
             let err = ExecutionError::InputTooLarge {
@@ -405,9 +404,7 @@ fn validate_input_against_schema(
     {
         for (field_name, field_schema) in properties {
             if let Some(field_value) = input_obj.get(field_name) {
-                if let Some(serde_json::Value::String(field_type)) =
-                    field_schema.get("type")
-                {
+                if let Some(serde_json::Value::String(field_type)) = field_schema.get("type") {
                     let ok = match field_type.as_str() {
                         "string" => field_value.is_string(),
                         "number" | "integer" => field_value.is_number(),
@@ -417,9 +414,7 @@ fn validate_input_against_schema(
                         _ => true, // Unknown type: pass
                     };
                     if !ok {
-                        return Err(format!(
-                            "field {field_name} must be of type {field_type}"
-                        ));
+                        return Err(format!("field {field_name} must be of type {field_type}"));
                     }
                 }
             }
@@ -723,9 +718,7 @@ mod tests {
         );
 
         let large_input = serde_json::json!({"data": "this is way too large for the limit"});
-        let result = executor
-            .execute("small_tool", large_input, "agent_1")
-            .await;
+        let result = executor.execute("small_tool", large_input, "agent_1").await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -822,7 +815,9 @@ mod tests {
         let input = serde_json::json!({"key": "value", "n": 42});
 
         // Execute twice with the same input
-        let _ = executor.execute("hash_tool", input.clone(), "agent_1").await;
+        let _ = executor
+            .execute("hash_tool", input.clone(), "agent_1")
+            .await;
         let _ = executor.execute("hash_tool", input, "agent_1").await;
 
         let records = sink.records();
@@ -851,9 +846,7 @@ mod tests {
         let secret_value = "super_secret_api_key_12345";
         let input = serde_json::json!({"api_key": secret_value});
 
-        let _ = executor
-            .execute("secret_tool", input, "agent_1")
-            .await;
+        let _ = executor.execute("secret_tool", input, "agent_1").await;
 
         let records = sink.records();
         assert_eq!(records.len(), 1);

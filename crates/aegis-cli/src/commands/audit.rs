@@ -4,13 +4,13 @@
 //! including filtered queries, integrity verification, session management,
 //! real-time streaming, and multi-format export (JSON, JSONL, CSV, CEF).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration, Utc};
 
 use aegis_ledger::{AuditEntry, AuditFilter, AuditStore};
 
-use crate::commands::init::open_store;
 use crate::commands::DATETIME_FULL_FMT;
+use crate::commands::init::open_store;
 
 /// Poll interval for `aegis audit watch` (real-time streaming).
 const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(500);

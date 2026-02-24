@@ -41,13 +41,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 /// Well-known sections in the MEMORY.md file.
-pub const KNOWN_SECTIONS: &[&str] = &[
-    "Preferences",
-    "Decisions",
-    "Facts",
-    "Instructions",
-    "Notes",
-];
+pub const KNOWN_SECTIONS: &[&str] = &["Preferences", "Decisions", "Facts", "Instructions", "Notes"];
 
 /// Configuration for the long-term memory file.
 #[derive(Debug, Clone)]
@@ -98,10 +92,7 @@ impl LongtermMemoryManager {
         }
 
         let content = fs::read_to_string(&self.config.file_path).with_context(|| {
-            format!(
-                "read long-term memory: {}",
-                self.config.file_path.display()
-            )
+            format!("read long-term memory: {}", self.config.file_path.display())
         })?;
 
         Ok(parse_memory_md(&content))
@@ -115,12 +106,8 @@ impl LongtermMemoryManager {
             return Ok(String::new());
         }
 
-        fs::read_to_string(&self.config.file_path).with_context(|| {
-            format!(
-                "read long-term memory: {}",
-                self.config.file_path.display()
-            )
-        })
+        fs::read_to_string(&self.config.file_path)
+            .with_context(|| format!("read long-term memory: {}", self.config.file_path.display()))
     }
 
     /// Append an entry to a section using merge semantics.
@@ -226,9 +213,8 @@ impl LongtermMemoryManager {
     fn write_sections(&self, sections: &[MemorySection]) -> Result<()> {
         // Ensure parent directory exists.
         if let Some(parent) = self.config.file_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("create directory for MEMORY.md: {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create directory for MEMORY.md: {}", parent.display()))?;
         }
 
         let content = format_memory_md(sections);
@@ -387,9 +373,7 @@ mod tests {
         manager
             .append_to_section("Preferences", "Prefers dark mode.")
             .unwrap();
-        manager
-            .append_to_section("Facts", "Port 8080.")
-            .unwrap();
+        manager.append_to_section("Facts", "Port 8080.").unwrap();
 
         let sections = manager.load().unwrap();
         assert_eq!(sections.len(), 2);
@@ -407,9 +391,7 @@ mod tests {
     fn test_merge_entries() {
         let (manager, _dir) = test_manager();
 
-        manager
-            .append_to_section("Notes", "First note.")
-            .unwrap();
+        manager.append_to_section("Notes", "First note.").unwrap();
 
         let new_entries = vec![
             "First note.".into(),  // duplicate
@@ -447,9 +429,7 @@ mod tests {
     #[test]
     fn test_get_nonexistent_section() {
         let (manager, _dir) = test_manager();
-        manager
-            .append_to_section("Facts", "Something.")
-            .unwrap();
+        manager.append_to_section("Facts", "Something.").unwrap();
 
         let entries = manager.get_section("Nonexistent").unwrap();
         assert!(entries.is_empty());
@@ -499,9 +479,7 @@ mod tests {
         assert!(ctx.is_empty());
 
         // With content.
-        manager
-            .append_to_section("Facts", "Port 8080.")
-            .unwrap();
+        manager.append_to_section("Facts", "Port 8080.").unwrap();
         let ctx = manager.format_for_context().unwrap();
         assert!(ctx.contains("## Long-term Memory"));
         assert!(ctx.contains("Port 8080."));

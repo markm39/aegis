@@ -272,11 +272,7 @@ impl CopilotModelCatalog {
                 name: "GPT-4o".into(),
                 version: "2024-05-13".into(),
                 max_tokens: 16384,
-                capabilities: vec![
-                    "chat".into(),
-                    "function_calling".into(),
-                    "vision".into(),
-                ],
+                capabilities: vec!["chat".into(), "function_calling".into(), "vision".into()],
             },
             CopilotModel {
                 id: "gpt-4".into(),
@@ -297,11 +293,7 @@ impl CopilotModelCatalog {
                 name: "Claude 3.5 Sonnet".into(),
                 version: "20241022".into(),
                 max_tokens: 8192,
-                capabilities: vec![
-                    "chat".into(),
-                    "function_calling".into(),
-                    "vision".into(),
-                ],
+                capabilities: vec!["chat".into(), "function_calling".into(), "vision".into()],
             },
         ];
         Self { models }
@@ -341,9 +333,7 @@ impl Default for CopilotModelCatalog {
 /// This prevents injection attacks through model identifiers.
 fn validate_model_id(model_id: &str) -> Result<(), AegisError> {
     if model_id.is_empty() {
-        return Err(AegisError::ConfigError(
-            "model ID must not be empty".into(),
-        ));
+        return Err(AegisError::ConfigError("model ID must not be empty".into()));
     }
     if model_id.len() > 128 {
         return Err(AegisError::ConfigError(format!(
@@ -642,24 +632,17 @@ impl CopilotDeviceFlow {
     ///
     /// The user must visit the returned `verification_uri` and enter the
     /// `user_code` to authorize this application.
-    pub fn request_device_code(
-        &self,
-        scope: &str,
-    ) -> Result<DeviceFlowResponse, AegisError> {
+    pub fn request_device_code(&self, scope: &str) -> Result<DeviceFlowResponse, AegisError> {
         validate_github_url(&self.device_code_url)?;
 
         if self.config.client_id.is_empty() {
-            return Err(AegisError::ConfigError(
-                "Copilot client_id is empty".into(),
-            ));
+            return Err(AegisError::ConfigError("Copilot client_id is empty".into()));
         }
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| {
-                AegisError::ConfigError(format!("failed to create HTTP client: {e}"))
-            })?;
+            .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
 
         let resp = client
             .post(&self.device_code_url)
@@ -669,9 +652,7 @@ impl CopilotDeviceFlow {
                 ("scope", scope),
             ])
             .send()
-            .map_err(|e| {
-                AegisError::ConfigError(format!("device code request failed: {e}"))
-            })?;
+            .map_err(|e| AegisError::ConfigError(format!("device code request failed: {e}")))?;
 
         let status = resp.status();
         let body: serde_json::Value = resp.json().map_err(|e| {
@@ -689,12 +670,9 @@ impl CopilotDeviceFlow {
             )));
         }
 
-        let response: DeviceFlowResponse =
-            serde_json::from_value(body).map_err(|e| {
-                AegisError::ConfigError(format!(
-                    "failed to parse device code response fields: {e}"
-                ))
-            })?;
+        let response: DeviceFlowResponse = serde_json::from_value(body).map_err(|e| {
+            AegisError::ConfigError(format!("failed to parse device code response fields: {e}"))
+        })?;
 
         Ok(response)
     }
@@ -703,18 +681,13 @@ impl CopilotDeviceFlow {
     ///
     /// Returns the polling state. The caller is responsible for waiting
     /// the appropriate interval between polls.
-    pub fn poll_for_token(
-        &self,
-        device_code: &str,
-    ) -> Result<DeviceFlowPollState, AegisError> {
+    pub fn poll_for_token(&self, device_code: &str) -> Result<DeviceFlowPollState, AegisError> {
         validate_github_url(&self.token_url)?;
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| {
-                AegisError::ConfigError(format!("failed to create HTTP client: {e}"))
-            })?;
+            .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
 
         let resp = client
             .post(&self.token_url)
@@ -725,9 +698,7 @@ impl CopilotDeviceFlow {
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ])
             .send()
-            .map_err(|e| {
-                AegisError::ConfigError(format!("token poll request failed: {e}"))
-            })?;
+            .map_err(|e| AegisError::ConfigError(format!("token poll request failed: {e}")))?;
 
         let body: serde_json::Value = resp.json().map_err(|e| {
             AegisError::ConfigError(format!("failed to parse token poll response: {e}"))
@@ -772,9 +743,7 @@ pub fn refresh_copilot_token(
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| {
-            AegisError::ConfigError(format!("failed to create HTTP client: {e}"))
-        })?;
+        .map_err(|e| AegisError::ConfigError(format!("failed to create HTTP client: {e}")))?;
 
     let resp = client
         .post(GITHUB_TOKEN_URL)
@@ -785,14 +754,12 @@ pub fn refresh_copilot_token(
             ("grant_type", "refresh_token"),
         ])
         .send()
-        .map_err(|e| {
-            AegisError::ConfigError(format!("token refresh request failed: {e}"))
-        })?;
+        .map_err(|e| AegisError::ConfigError(format!("token refresh request failed: {e}")))?;
 
     let status = resp.status();
-    let body: serde_json::Value = resp.json().map_err(|e| {
-        AegisError::ConfigError(format!("failed to parse refresh response: {e}"))
-    })?;
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| AegisError::ConfigError(format!("failed to parse refresh response: {e}")))?;
 
     if !status.is_success() {
         let error_desc = body
@@ -942,9 +909,7 @@ pub fn exchange_for_copilot_token(github_token: &str) -> Result<CopilotSessionTo
 // ---------------------------------------------------------------------------
 
 /// Parse a token endpoint JSON response into a `CopilotToken`.
-fn parse_copilot_token_response(
-    body: &serde_json::Value,
-) -> Result<CopilotToken, AegisError> {
+fn parse_copilot_token_response(body: &serde_json::Value) -> Result<CopilotToken, AegisError> {
     let access_token = body
         .get("access_token")
         .and_then(|v| v.as_str())
@@ -992,9 +957,7 @@ fn validate_github_url(url: &str) -> Result<(), AegisError> {
     }
 
     let host = extract_host(url).ok_or_else(|| {
-        AegisError::ConfigError(format!(
-            "cannot parse host from GitHub endpoint URL: {url}"
-        ))
+        AegisError::ConfigError(format!("cannot parse host from GitHub endpoint URL: {url}"))
     })?;
 
     if !ALLOWED_GITHUB_HOSTS.contains(&host.as_str()) {
@@ -1087,10 +1050,7 @@ mod tests {
         });
 
         let resp: DeviceFlowResponse = serde_json::from_value(json).unwrap();
-        assert_eq!(
-            resp.device_code,
-            "3584d83530557fdd1f46af8289938c8ef79f9dc5"
-        );
+        assert_eq!(resp.device_code, "3584d83530557fdd1f46af8289938c8ef79f9dc5");
         assert_eq!(resp.user_code, "WDJB-MJHT");
         assert_eq!(resp.verification_uri, "https://github.com/login/device");
         assert_eq!(resp.interval, 5);
@@ -1458,11 +1418,7 @@ mod tests {
             name: "GPT-4o".into(),
             version: "2024-05-13".into(),
             max_tokens: 16384,
-            capabilities: vec![
-                "chat".into(),
-                "function_calling".into(),
-                "vision".into(),
-            ],
+            capabilities: vec!["chat".into(), "function_calling".into(), "vision".into()],
         };
 
         assert!(model.has_capability("chat"));
@@ -1496,8 +1452,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&config).expect("should serialize");
-        let back: CopilotProxyConfig =
-            serde_json::from_str(&json).expect("should deserialize");
+        let back: CopilotProxyConfig = serde_json::from_str(&json).expect("should deserialize");
         assert_eq!(config, back);
 
         // Deserialize with defaults
@@ -1559,10 +1514,7 @@ mod tests {
 
         // Subdomain spoofing rejected
         assert!(
-            validate_copilot_upstream_url(
-                "https://api.githubcopilot.com.evil.com/api"
-            )
-            .is_err(),
+            validate_copilot_upstream_url("https://api.githubcopilot.com.evil.com/api").is_err(),
             "subdomain spoofing must be rejected"
         );
     }

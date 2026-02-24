@@ -311,7 +311,14 @@ async fn handle_non_streaming_response(
             let usage = extract_usage_from_json(provider, &json);
             if let Some(usage) = usage {
                 let response_preview = extract_preview(&body_bytes, 200);
-                log_usage(state, provider, endpoint, &usage, Some(request_preview), Some(&response_preview));
+                log_usage(
+                    state,
+                    provider,
+                    endpoint,
+                    &usage,
+                    Some(request_preview),
+                    Some(&response_preview),
+                );
             }
         }
     }
@@ -773,10 +780,7 @@ pub struct ApiUsageRecord {
 ///
 /// Records whose model is not found in the pricing table contribute to token
 /// totals but not to `total_cost_usd`.
-pub fn calculate_session_cost(
-    records: &[ApiUsageRecord],
-    pricing: &PricingTable,
-) -> UsageSummary {
+pub fn calculate_session_cost(records: &[ApiUsageRecord], pricing: &PricingTable) -> UsageSummary {
     let mut summary = UsageSummary::default();
 
     for record in records {
@@ -785,10 +789,7 @@ pub fn calculate_session_cost(
         summary.total_cache_read += record.cache_read_input_tokens;
         summary.total_cache_write += record.cache_creation_input_tokens;
 
-        let model_summary = summary
-            .by_model
-            .entry(record.model.clone())
-            .or_default();
+        let model_summary = summary.by_model.entry(record.model.clone()).or_default();
 
         model_summary.input_tokens += record.input_tokens;
         model_summary.output_tokens += record.output_tokens;
@@ -1154,10 +1155,7 @@ mod tests {
     fn model_tracking_deduplication() {
         let mut acc = UsageAccumulator::new(Provider::OpenAi);
         // Same model in two events
-        acc.feed_event(
-            "",
-            r#"{"model":"gpt-4-turbo","usage":null}"#,
-        );
+        acc.feed_event("", r#"{"model":"gpt-4-turbo","usage":null}"#);
         acc.feed_event(
             "",
             r#"{"model":"gpt-4-turbo","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#,
@@ -1328,9 +1326,7 @@ mod tests {
         );
 
         let by_provider = tracker.cost_by_provider();
-        assert!(
-            (by_provider["openai"] - expected_cost).abs() < 1e-9
-        );
+        assert!((by_provider["openai"] - expected_cost).abs() < 1e-9);
     }
 
     #[test]
@@ -1378,9 +1374,7 @@ mod tests {
         assert_eq!(by_model.len(), 1);
         // Each call: (500k * 3.0 + 100k * 15.0) / 1M = 3.0
         // Two calls = 6.0
-        assert!(
-            (by_model["claude-sonnet-4-5-20250929"] - 6.0).abs() < 1e-9
-        );
+        assert!((by_model["claude-sonnet-4-5-20250929"] - 6.0).abs() < 1e-9);
         assert_eq!(tracker.total_input_tokens(), 1_000_000);
         assert_eq!(tracker.total_output_tokens(), 200_000);
     }

@@ -129,10 +129,7 @@ impl Channel for TelegramChannel {
             .await
     }
 
-    async fn send_with_id(
-        &self,
-        message: OutboundMessage,
-    ) -> Result<Option<String>, ChannelError> {
+    async fn send_with_id(&self, message: OutboundMessage) -> Result<Option<String>, ChannelError> {
         let markup = if message.buttons.is_empty() {
             None
         } else {
@@ -168,9 +165,7 @@ impl Channel for TelegramChannel {
             .parse()
             .map_err(|_| ChannelError::Other(format!("invalid message_id: {message_id}")))?;
 
-        self.api
-            .delete_message(self.config.chat_id, msg_id)
-            .await
+        self.api.delete_message(self.config.chat_id, msg_id).await
     }
 
     async fn react(&self, message_id: &str, emoji: &str) -> Result<(), ChannelError> {
@@ -279,8 +274,7 @@ mod tests {
             Mock::given(matchers::method("POST"))
                 .and(matchers::path_regex(r"/bot.*/getUpdates"))
                 .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(json!({"ok": true, "result": []})),
+                    ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": []})),
                 )
                 .mount(&server)
                 .await;
@@ -305,8 +299,7 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path_regex(r"/bot.*/getUpdates"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"ok": true, "result": []})),
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": []})),
             )
             .mount(&server)
             .await;
@@ -333,8 +326,7 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path_regex(r"/bot.*/getUpdates"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"ok": true, "result": []})),
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": []})),
             )
             .mount(&server)
             .await;
@@ -357,8 +349,7 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path_regex(r"/bot.*/getUpdates"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"ok": true, "result": []})),
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": []})),
             )
             .mount(&server)
             .await;
@@ -378,8 +369,7 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path_regex(r"/bot.*/getUpdates"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"ok": true, "result": []})),
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": []})),
             )
             .mount(&server)
             .await;
@@ -399,8 +389,7 @@ mod tests {
         Mock::given(matchers::method("POST"))
             .and(matchers::path_regex(r"/bot.*/getUpdates"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"ok": true, "result": []})),
+                ResponseTemplate::new(200).set_body_json(json!({"ok": true, "result": []})),
             )
             .mount(&server)
             .await;

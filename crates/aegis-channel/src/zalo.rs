@@ -30,7 +30,7 @@ const ZALO_API_BASE: &str = "https://openapi.zalo.me/v3.0/oa/message/cs";
 ///
 /// Connects to the Zalo Official Account API. The access_token and
 /// secret_key fields are sensitive and must never be logged.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZaloConfig {
     /// Zalo Official Account ID.
     pub oa_id: String,
@@ -40,6 +40,16 @@ pub struct ZaloConfig {
     /// Secret key for webhook HMAC-SHA256 signature verification.
     /// Sensitive: never log this value.
     pub secret_key: String,
+}
+
+impl std::fmt::Debug for ZaloConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZaloConfig")
+            .field("oa_id", &self.oa_id)
+            .field("access_token", &"[REDACTED]")
+            .field("secret_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -57,9 +67,7 @@ pub fn validate_config(config: &ZaloConfig) -> Result<(), ChannelError> {
         ));
     }
     if config.secret_key.is_empty() {
-        return Err(ChannelError::Api(
-            "Zalo secret_key cannot be empty".into(),
-        ));
+        return Err(ChannelError::Api("Zalo secret_key cannot be empty".into()));
     }
     Ok(())
 }

@@ -441,9 +441,9 @@ fn search_perplexity(
     api_key: &Option<String>,
     config: &WebToolsConfig,
 ) -> Result<WebSearchResult, WebToolError> {
-    let key = api_key
-        .as_deref()
-        .ok_or(WebToolError::MissingApiKey("Perplexity requires AEGIS_SEARCH_API_KEY or search_api_key in config"))?;
+    let key = api_key.as_deref().ok_or(WebToolError::MissingApiKey(
+        "Perplexity requires AEGIS_SEARCH_API_KEY or search_api_key in config",
+    ))?;
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(config.timeout_secs))
@@ -481,9 +481,9 @@ fn search_perplexity(
         )));
     }
 
-    let json: serde_json::Value = resp
-        .json()
-        .map_err(|e| WebToolError::SearchError(format!("failed to parse Perplexity response: {e}")))?;
+    let json: serde_json::Value = resp.json().map_err(|e| {
+        WebToolError::SearchError(format!("failed to parse Perplexity response: {e}"))
+    })?;
 
     // Extract citations and content from the Perplexity response.
     // Perplexity returns citations as an array of URLs alongside the answer.
@@ -556,9 +556,9 @@ fn search_duckduckgo(
         )));
     }
 
-    let html = resp
-        .text()
-        .map_err(|e| WebToolError::SearchError(format!("failed to read DuckDuckGo response: {e}")))?;
+    let html = resp.text().map_err(|e| {
+        WebToolError::SearchError(format!("failed to read DuckDuckGo response: {e}"))
+    })?;
 
     let results = parse_duckduckgo_html(&html);
 
@@ -947,10 +947,7 @@ mod tests {
             extract_attr(tag, "href"),
             Some("https://example.com".to_string())
         );
-        assert_eq!(
-            extract_attr(tag, "class"),
-            Some("result__a".to_string())
-        );
+        assert_eq!(extract_attr(tag, "class"), Some("result__a".to_string()));
         assert_eq!(extract_attr(tag, "id"), None);
     }
 
@@ -980,14 +977,8 @@ mod tests {
 
     #[test]
     fn test_urlencoding_decode() {
-        assert_eq!(
-            urlencoding_decode("hello%20world").unwrap(),
-            "hello world"
-        );
-        assert_eq!(
-            urlencoding_decode("hello+world").unwrap(),
-            "hello world"
-        );
+        assert_eq!(urlencoding_decode("hello%20world").unwrap(), "hello world");
+        assert_eq!(urlencoding_decode("hello+world").unwrap(), "hello world");
         assert_eq!(
             urlencoding_decode("https%3A%2F%2Fexample.com").unwrap(),
             "https://example.com"

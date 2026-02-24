@@ -529,9 +529,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 if alias_name.is_empty() {
                     return Err("usage: alias remove <alias>".into());
                 }
-                Ok(Some(FleetCommand::AliasRemove {
-                    alias: alias_name,
-                }))
+                Ok(Some(FleetCommand::AliasRemove { alias: alias_name }))
             }
             other => Err(format!(
                 "unknown alias subcommand: {other}. Use: add, remove, list"
@@ -568,14 +566,19 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             "" => Ok(Some(FleetCommand::Config)),
             "get" => {
                 if arg2.is_empty() {
-                    return Err("usage: config get <key>  (e.g., config get pilot.stall.timeout_secs)".into());
+                    return Err(
+                        "usage: config get <key>  (e.g., config get pilot.stall.timeout_secs)"
+                            .into(),
+                    );
                 }
                 let key = arg2.split_whitespace().next().unwrap_or("").to_string();
                 Ok(Some(FleetCommand::ConfigGet { key }))
             }
             "set" => {
                 if arg2.is_empty() {
-                    return Err("usage: config set <key> <value>  (e.g., config set name myagent)".into());
+                    return Err(
+                        "usage: config set <key> <value>  (e.g., config set name myagent)".into(),
+                    );
                 }
                 match arg2.split_once(' ') {
                     Some((key, value)) => Ok(Some(FleetCommand::ConfigSet {
@@ -595,7 +598,9 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             "" => Ok(Some(FleetCommand::Telegram)),
             "setup" => Ok(Some(FleetCommand::TelegramSetup)),
             "disable" => Ok(Some(FleetCommand::TelegramDisable)),
-            other => Err(format!("unknown telegram subcommand: {other}. Try: setup, disable")),
+            other => Err(format!(
+                "unknown telegram subcommand: {other}. Try: setup, disable"
+            )),
         },
         "start" => {
             if arg1.is_empty() {
@@ -657,9 +662,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 }
                 let mut parts = arg2.splitn(2, ' ');
                 let session_key = parts.next().unwrap_or("").trim();
-                let lines = parts
-                    .next()
-                    .and_then(|v| v.trim().parse::<usize>().ok());
+                let lines = parts.next().and_then(|v| v.trim().parse::<usize>().ok());
                 if session_key.is_empty() {
                     Err("usage: session history <session_key> [lines]".into())
                 } else {
@@ -696,20 +699,22 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Ok(Some(FleetCommand::Approve { agent: arg1.into() }))
             }
         }
-        "daemon" => {
-            match arg1 {
-                "start" => Ok(Some(FleetCommand::DaemonStart)),
-                "stop" => Ok(Some(FleetCommand::DaemonStop)),
-                "init" => Ok(Some(FleetCommand::DaemonInit)),
-                "reload" => Ok(Some(FleetCommand::DaemonReload)),
-                "restart" => Ok(Some(FleetCommand::DaemonRestart)),
-                "status" => Ok(Some(FleetCommand::DaemonStatus)),
-                "install" => Ok(Some(FleetCommand::DaemonInstall)),
-                "uninstall" => Ok(Some(FleetCommand::DaemonUninstall)),
-                "" => Err("usage: daemon start|stop|init|reload|restart|status|install|uninstall".into()),
-                other => Err(format!("unknown daemon subcommand: {other}. Use: start, stop, init, reload, restart, status, install, uninstall")),
+        "daemon" => match arg1 {
+            "start" => Ok(Some(FleetCommand::DaemonStart)),
+            "stop" => Ok(Some(FleetCommand::DaemonStop)),
+            "init" => Ok(Some(FleetCommand::DaemonInit)),
+            "reload" => Ok(Some(FleetCommand::DaemonReload)),
+            "restart" => Ok(Some(FleetCommand::DaemonRestart)),
+            "status" => Ok(Some(FleetCommand::DaemonStatus)),
+            "install" => Ok(Some(FleetCommand::DaemonInstall)),
+            "uninstall" => Ok(Some(FleetCommand::DaemonUninstall)),
+            "" => {
+                Err("usage: daemon start|stop|init|reload|restart|status|install|uninstall".into())
             }
-        }
+            other => Err(format!(
+                "unknown daemon subcommand: {other}. Use: start, stop, init, reload, restart, status, install, uninstall"
+            )),
+        },
         "deny" => {
             if arg1.is_empty() {
                 Err("usage: deny <agent>".into())
@@ -721,7 +726,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             if arg1.is_empty() {
                 Err("usage: nudge <agent> [message]".into())
             } else {
-                let msg = if arg2.is_empty() { None } else { Some(arg2.into()) };
+                let msg = if arg2.is_empty() {
+                    None
+                } else {
+                    Some(arg2.into())
+                };
                 Ok(Some(FleetCommand::Nudge {
                     agent: arg1.into(),
                     message: msg,
@@ -760,16 +769,12 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
             "login" => {
                 if arg2.is_empty() {
-                    return Err(
-                        "usage: auth login <provider> [oauth|api-key|setup-token]".into(),
-                    );
+                    return Err("usage: auth login <provider> [oauth|api-key|setup-token]".into());
                 }
                 let mut parts = arg2.splitn(2, ' ');
                 let provider = parts.next().unwrap_or("").trim().to_string();
                 if provider.is_empty() {
-                    return Err(
-                        "usage: auth login <provider> [oauth|api-key|setup-token]".into(),
-                    );
+                    return Err("usage: auth login <provider> [oauth|api-key|setup-token]".into());
                 }
                 let method = parts.next().map(|s| s.trim().to_string());
                 Ok(Some(FleetCommand::AuthLogin { provider, method }))
@@ -933,7 +938,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             if arg1.is_empty() {
                 Err("usage: wrap <command> [args...]".into())
             } else {
-                let full_cmd = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                let full_cmd = if arg2.is_empty() {
+                    arg1.into()
+                } else {
+                    format!("{arg1} {arg2}")
+                };
                 Ok(Some(FleetCommand::Wrap { cmd: full_cmd }))
             }
         }
@@ -941,7 +950,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             if arg1.is_empty() {
                 Err("usage: run <command> [args...]".into())
             } else {
-                let full_cmd = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                let full_cmd = if arg2.is_empty() {
+                    arg1.into()
+                } else {
+                    format!("{arg1} {arg2}")
+                };
                 Ok(Some(FleetCommand::Run { cmd: full_cmd }))
             }
         }
@@ -949,7 +962,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             if arg1.is_empty() {
                 Err("usage: pilot <command> [args...]".into())
             } else {
-                let full_cmd = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                let full_cmd = if arg2.is_empty() {
+                    arg1.into()
+                } else {
+                    format!("{arg1} {arg2}")
+                };
                 Ok(Some(FleetCommand::Pilot { cmd: full_cmd }))
             }
         }
@@ -958,11 +975,19 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         "list" => Ok(Some(FleetCommand::List)),
         "hook" => Ok(Some(FleetCommand::Hook)),
         "use" => {
-            let name = if arg1.is_empty() { None } else { Some(arg1.into()) };
+            let name = if arg1.is_empty() {
+                None
+            } else {
+                Some(arg1.into())
+            };
             Ok(Some(FleetCommand::Use { name }))
         }
         "watch" => {
-            let dir = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
+            let dir = if arg1.is_empty() {
+                None
+            } else {
+                Some(arg1.to_string())
+            };
             Ok(Some(FleetCommand::Watch { dir }))
         }
         "diff" => {
@@ -979,7 +1004,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             if arg1.is_empty() {
                 Err("usage: fetch <url>".into())
             } else {
-                let full_url = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+                let full_url = if arg2.is_empty() {
+                    arg1.into()
+                } else {
+                    format!("{arg1} {arg2}")
+                };
                 Ok(Some(FleetCommand::Fetch { url: full_url }))
             }
         }
@@ -1081,7 +1110,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
         }
         "verify" => Ok(Some(FleetCommand::Verify)),
         "export" => {
-            let format = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
+            let format = if arg1.is_empty() {
+                None
+            } else {
+                Some(arg1.to_string())
+            };
             Ok(Some(FleetCommand::Export { format }))
         }
         "orch" | "orchestrator" => Ok(Some(FleetCommand::OrchestratorStatus)),
@@ -1106,8 +1139,14 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "goal" => {
-            let text = if arg1.is_empty() { None } else {
-                let full = if arg2.is_empty() { arg1.into() } else { format!("{arg1} {arg2}") };
+            let text = if arg1.is_empty() {
+                None
+            } else {
+                let full = if arg2.is_empty() {
+                    arg1.into()
+                } else {
+                    format!("{arg1} {arg2}")
+                };
                 Some(full)
             };
             Ok(Some(FleetCommand::Goal { text }))
@@ -1117,7 +1156,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 Err("usage: context <agent> [role|goal|context|task [value]]".into())
             } else if arg2.is_empty() {
                 // View mode: :context <agent>
-                Ok(Some(FleetCommand::Context { agent: arg1.into(), field: None, value: None }))
+                Ok(Some(FleetCommand::Context {
+                    agent: arg1.into(),
+                    field: None,
+                    value: None,
+                }))
             } else {
                 // arg2 contains "field [value...]" since we did splitn(3, ' ')
                 match arg2.split_once(' ') {
@@ -1141,7 +1184,11 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             }
         }
         "jobs" => {
-            let agent = if arg1.is_empty() { None } else { Some(arg1.to_string()) };
+            let agent = if arg1.is_empty() {
+                None
+            } else {
+                Some(arg1.to_string())
+            };
             Ok(Some(FleetCommand::Jobs { agent }))
         }
         "lanes" => Ok(Some(FleetCommand::Lanes)),
@@ -1224,9 +1271,7 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
             "" => Err("usage: poll create|close|results".into()),
             "create" => {
                 if arg2.is_empty() {
-                    return Err(
-                        "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
-                    );
+                    return Err("usage: poll create \"Question?\" opt1,opt2,opt3".into());
                 }
                 // arg2 = "\"Question?\" opt1,opt2,opt3" or "Question? opt1,opt2,opt3"
                 // Try to extract a quoted question first, then fall back to splitting on last space-before-comma-list
@@ -1239,29 +1284,21 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                             (q, rest.to_string())
                         }
                         None => {
-                            return Err(
-                                "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
-                            );
+                            return Err("usage: poll create \"Question?\" opt1,opt2,opt3".into());
                         }
                     }
                 } else {
                     // No quotes: split on last space before a comma-separated list
                     // Heuristic: everything before last whitespace-delimited token containing a comma
                     match arg2.rsplit_once(' ') {
-                        Some((q, opts)) if opts.contains(',') => {
-                            (q.to_string(), opts.to_string())
-                        }
+                        Some((q, opts)) if opts.contains(',') => (q.to_string(), opts.to_string()),
                         _ => {
-                            return Err(
-                                "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
-                            );
+                            return Err("usage: poll create \"Question?\" opt1,opt2,opt3".into());
                         }
                     }
                 };
                 if question.is_empty() || opts_str.is_empty() {
-                    return Err(
-                        "usage: poll create \"Question?\" opt1,opt2,opt3".into(),
-                    );
+                    return Err("usage: poll create \"Question?\" opt1,opt2,opt3".into());
                 }
                 let options: Vec<String> = opts_str
                     .split(',')
@@ -1414,7 +1451,9 @@ pub fn parse(input: &str) -> Result<Option<FleetCommand>, String> {
                 "unknown skills subcommand: {other}. Use: list, search, install, update, uninstall, info, reload, commands"
             )),
         },
-        _ => Err(format!("unknown command: {cmd}. Type :help for available commands.")),
+        _ => Err(format!(
+            "unknown command: {cmd}. Type :help for available commands."
+        )),
     }
 }
 
@@ -1433,7 +1472,9 @@ const DAEMON_SUBCOMMANDS: &[&str] = &[
 /// Subcommands for `:telegram`.
 const TELEGRAM_SUBCOMMANDS: &[&str] = &["disable", "setup"];
 /// Subcommands for `:auth`.
-const AUTH_SUBCOMMANDS: &[&str] = &["add", "list", "login", "logout", "refresh", "status", "test"];
+const AUTH_SUBCOMMANDS: &[&str] = &[
+    "add", "list", "login", "logout", "refresh", "status", "test",
+];
 const SESSION_SUBCOMMANDS: &[&str] = &["list", "history", "send"];
 const COMPAT_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
 const MATRIX_SUBCOMMANDS: &[&str] = &["diff", "status", "verify"];
@@ -1450,7 +1491,16 @@ const POLL_SUBCOMMANDS: &[&str] = &["close", "create", "results"];
 /// Subcommands for `:schedule`.
 const SCHEDULE_SUBCOMMANDS: &[&str] = &["add", "list", "remove", "trigger"];
 /// Subcommands for `:skills`.
-const SKILLS_SUBCOMMANDS: &[&str] = &["commands", "info", "install", "list", "reload", "search", "uninstall", "update"];
+const SKILLS_SUBCOMMANDS: &[&str] = &[
+    "commands",
+    "info",
+    "install",
+    "list",
+    "reload",
+    "search",
+    "uninstall",
+    "update",
+];
 
 /// Field names for `:context <agent> <field>`.
 const CONTEXT_FIELDS: &[&str] = &["context", "goal", "role", "task"];
@@ -3154,10 +3204,7 @@ mod tests {
 
     #[test]
     fn parse_skills_list() {
-        assert_eq!(
-            parse("skills").unwrap(),
-            Some(FleetCommand::SkillsList)
-        );
+        assert_eq!(parse("skills").unwrap(), Some(FleetCommand::SkillsList));
         assert_eq!(
             parse("skills list").unwrap(),
             Some(FleetCommand::SkillsList)

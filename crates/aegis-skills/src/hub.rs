@@ -122,13 +122,7 @@ impl RegistryClient {
         let url = format!("{}/api/v1/skills/search", self.config.registry_url);
         debug!(url = %url, query = query, "searching registry");
 
-        match self
-            .http
-            .get(&url)
-            .query(&[("q", query)])
-            .send()
-            .await
-        {
+        match self.http.get(&url).query(&[("q", query)]).send().await {
             Ok(resp) => {
                 if resp.status().is_success() {
                     let results: Vec<SkillSummary> = resp
@@ -156,11 +150,7 @@ impl RegistryClient {
     /// If `version` is `None`, installs the latest version. Downloads the
     /// skill tarball, extracts it, validates the manifest, and writes
     /// install metadata.
-    pub async fn install(
-        &self,
-        name: &str,
-        version: Option<&str>,
-    ) -> Result<InstalledSkill> {
+    pub async fn install(&self, name: &str, version: Option<&str>) -> Result<InstalledSkill> {
         // Validate skill name for path safety
         validate_skill_name(name)?;
 
@@ -172,10 +162,7 @@ impl RegistryClient {
                 "{}/api/v1/skills/{}/versions/{}",
                 self.config.registry_url, name, v
             ),
-            None => format!(
-                "{}/api/v1/skills/{}/latest",
-                self.config.registry_url, name
-            ),
+            None => format!("{}/api/v1/skills/{}/latest", self.config.registry_url, name),
         };
 
         debug!(url = %url, name = name, "downloading skill from registry");
@@ -223,11 +210,7 @@ entry_point = "{}"
                     std::fs::write(dest_dir.join("manifest.toml"), manifest_toml)
                         .context("failed to write manifest")?;
 
-                    write_install_metadata(
-                        &dest_dir,
-                        &installed.source,
-                        installed.installed_at,
-                    )?;
+                    write_install_metadata(&dest_dir, &installed.source, installed.installed_at)?;
 
                     return Ok(installed);
                 }
@@ -243,11 +226,7 @@ entry_point = "{}"
                 );
             }
             Err(e) => {
-                bail!(
-                    "failed to download skill '{}' from registry: {}",
-                    name,
-                    e
-                );
+                bail!("failed to download skill '{}' from registry: {}", name, e);
             }
         }
     }
@@ -291,12 +270,14 @@ entry_point = "{}"
         }
 
         // Verify the path is under the cache directory to prevent traversal
-        let canonical_cache = self.config.cache_dir.canonicalize().unwrap_or_else(|_| {
-            self.config.cache_dir.clone()
-        });
-        let canonical_skill = skill_dir.canonicalize().unwrap_or_else(|_| {
-            skill_dir.clone()
-        });
+        let canonical_cache = self
+            .config
+            .cache_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.config.cache_dir.clone());
+        let canonical_skill = skill_dir
+            .canonicalize()
+            .unwrap_or_else(|_| skill_dir.clone());
         if !canonical_skill.starts_with(&canonical_cache) {
             bail!("skill directory escapes cache directory");
         }
@@ -381,7 +362,9 @@ entry_point = "{}"
 
                 let mut updates = Vec::new();
                 for version_info in &versions {
-                    if let Some(installed_skill) = installed.iter().find(|s| s.name == version_info.name) {
+                    if let Some(installed_skill) =
+                        installed.iter().find(|s| s.name == version_info.name)
+                    {
                         if version_info.latest_version != installed_skill.version {
                             updates.push(UpdateAvailable {
                                 name: version_info.name.clone(),
@@ -443,10 +426,7 @@ fn validate_skill_name(name: &str) -> Result<()> {
     if name.len() > 64 {
         bail!("skill name too long (max 64 characters)");
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("skill name must contain only alphanumeric characters and hyphens");
     }
     if name.contains("..") {
@@ -610,9 +590,7 @@ entry_point = "run.sh"
         let cache = TempDir::new().unwrap();
         let client = RegistryClient::with_config(test_config(cache.path()));
 
-        let installed = client
-            .install_local("local-skill", source.path())
-            .unwrap();
+        let installed = client.install_local("local-skill", source.path()).unwrap();
         assert_eq!(installed.name, "local-skill");
         assert!(cache.path().join("local-skill/manifest.toml").exists());
         assert!(cache

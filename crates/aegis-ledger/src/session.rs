@@ -260,11 +260,9 @@ impl AuditStore {
         command: &str,
         args: &[String],
     ) -> Result<Session, AegisError> {
-        let parent = self
-            .get_session(&parent_id)?
-            .ok_or_else(|| {
-                AegisError::LedgerError(format!("parent session {parent_id} not found"))
-            })?;
+        let parent = self.get_session(&parent_id)?.ok_or_else(|| {
+            AegisError::LedgerError(format!("parent session {parent_id} not found"))
+        })?;
 
         if !parent.resumable {
             return Err(AegisError::LedgerError(format!(
@@ -323,9 +321,7 @@ impl AuditStore {
                  WHERE sender_id = ?1 AND channel_type = ?2 AND resumable = 1
                  ORDER BY id DESC LIMIT 1"
             ))
-            .map_err(|e| {
-                AegisError::LedgerError(format!("find_resumable_session prepare: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("find_resumable_session prepare: {e}")))?;
 
         let result = stmt
             .query_row(params![sender_id, channel_type], row_to_session)
@@ -461,9 +457,7 @@ impl AuditStore {
         let mut stmt = self
             .connection()
             .prepare(&sql)
-            .map_err(|e| {
-                AegisError::LedgerError(format!("list_sessions_filtered prepare: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("list_sessions_filtered prepare: {e}")))?;
 
         let rows = stmt
             .query_map(params_refs.as_slice(), row_to_session)
@@ -521,11 +515,7 @@ impl AuditStore {
     }
 
     /// Set the group_id for a session.
-    pub fn set_session_group(
-        &self,
-        session_id: Uuid,
-        group_id: Uuid,
-    ) -> Result<(), AegisError> {
+    pub fn set_session_group(&self, session_id: Uuid, group_id: Uuid) -> Result<(), AegisError> {
         let rows_affected = self
             .connection()
             .execute(
@@ -555,11 +545,9 @@ impl AuditStore {
         command: &str,
         args: &[String],
     ) -> Result<Session, AegisError> {
-        let parent = self
-            .get_session(&parent_id)?
-            .ok_or_else(|| {
-                AegisError::LedgerError(format!("parent session {parent_id} not found"))
-            })?;
+        let parent = self.get_session(&parent_id)?.ok_or_else(|| {
+            AegisError::LedgerError(format!("parent session {parent_id} not found"))
+        })?;
 
         let session_id = Uuid::new_v4();
         let start_time = Utc::now();
@@ -605,10 +593,7 @@ impl AuditStore {
     /// Uses a recursive CTE to walk the parent-child tree starting from
     /// the given root session_id. Returns `SessionTreeNode` entries with
     /// depth indicators for display.
-    pub fn list_session_tree(
-        &self,
-        root_id: &Uuid,
-    ) -> Result<Vec<SessionTreeNode>, AegisError> {
+    pub fn list_session_tree(&self, root_id: &Uuid) -> Result<Vec<SessionTreeNode>, AegisError> {
         // Prefix each column with the table alias for the recursive part.
         let s_cols: String = SESSION_COLUMNS
             .split(", ")
@@ -655,10 +640,7 @@ impl AuditStore {
 
         // Delete audit entries first
         self.connection()
-            .execute(
-                "DELETE FROM audit_log WHERE session_id = ?1",
-                params![sid],
-            )
+            .execute("DELETE FROM audit_log WHERE session_id = ?1", params![sid])
             .map_err(|e| {
                 AegisError::LedgerError(format!("failed to delete session audit entries: {e}"))
             })?;
@@ -666,10 +648,7 @@ impl AuditStore {
         // Delete the session row
         let rows_affected = self
             .connection()
-            .execute(
-                "DELETE FROM sessions WHERE session_id = ?1",
-                params![sid],
-            )
+            .execute("DELETE FROM sessions WHERE session_id = ?1", params![sid])
             .map_err(|e| AegisError::LedgerError(format!("failed to delete session: {e}")))?;
 
         if rows_affected == 0 {
@@ -711,9 +690,7 @@ impl AuditStore {
                 |row| row.get::<_, i64>(0),
             )
             .map(|c| c as usize)
-            .map_err(|e| {
-                AegisError::LedgerError(format!("count_session_entries failed: {e}"))
-            })
+            .map_err(|e| AegisError::LedgerError(format!("count_session_entries failed: {e}")))
     }
 
     /// List direct children of a session (sessions whose parent_id matches).
@@ -723,15 +700,11 @@ impl AuditStore {
             .prepare(&format!(
                 "SELECT {SESSION_COLUMNS} FROM sessions WHERE parent_id = ?1 ORDER BY id ASC"
             ))
-            .map_err(|e| {
-                AegisError::LedgerError(format!("list_session_children prepare: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("list_session_children prepare: {e}")))?;
 
         let rows = stmt
             .query_map(params![session_id.to_string()], row_to_session)
-            .map_err(|e| {
-                AegisError::LedgerError(format!("list_session_children query: {e}"))
-            })?;
+            .map_err(|e| AegisError::LedgerError(format!("list_session_children query: {e}")))?;
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| AegisError::LedgerError(format!("list_session_children read: {e}")))
@@ -785,10 +758,7 @@ pub fn build_session_tree(flat: &[SessionTreeNode]) -> Vec<SessionTreeNode> {
         let node = node_map.get(id).unwrap();
         if let Some(parent_id) = node.session.parent_id {
             if node_map.contains_key(&parent_id) {
-                child_map
-                    .entry(parent_id)
-                    .or_default()
-                    .push(node.clone());
+                child_map.entry(parent_id).or_default().push(node.clone());
             } else {
                 roots.push(*id);
             }
@@ -1131,9 +1101,7 @@ mod tests {
     #[test]
     fn mark_resumable_and_query() {
         let (_tmp, mut store) = test_db();
-        let session_id = store
-            .begin_session("test", "echo", &[], None)
-            .unwrap();
+        let session_id = store.begin_session("test", "echo", &[], None).unwrap();
 
         let session = store.get_session(&session_id).unwrap().unwrap();
         assert!(!session.resumable);
@@ -1177,9 +1145,7 @@ mod tests {
     #[test]
     fn resume_non_resumable_session_fails() {
         let (_tmp, mut store) = test_db();
-        let parent_id = store
-            .begin_session("test", "cmd", &[], None)
-            .unwrap();
+        let parent_id = store.begin_session("test", "cmd", &[], None).unwrap();
 
         let result = store.resume_session(parent_id, "test", "cmd", &[]);
         assert!(result.is_err());
@@ -1196,9 +1162,7 @@ mod tests {
     #[test]
     fn session_group_chain() {
         let (_tmp, mut store) = test_db();
-        let parent_id = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let parent_id = store.begin_session("test", "claude", &[], None).unwrap();
         store.mark_resumable(parent_id, true).unwrap();
 
         let child1 = store
@@ -1228,9 +1192,7 @@ mod tests {
     #[test]
     fn context_snapshot_save_and_load() {
         let (_tmp, mut store) = test_db();
-        let session_id = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let session_id = store.begin_session("test", "claude", &[], None).unwrap();
 
         let snapshot = store.load_context_snapshot(session_id).unwrap();
         assert!(snapshot.is_none());
@@ -1253,9 +1215,7 @@ mod tests {
     fn find_resumable_session_by_sender() {
         let (_tmp, mut store) = test_db();
 
-        let s1 = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let s1 = store.begin_session("test", "claude", &[], None).unwrap();
         store
             .connection()
             .execute(
@@ -1264,9 +1224,7 @@ mod tests {
             )
             .unwrap();
 
-        let s2 = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let s2 = store.begin_session("test", "claude", &[], None).unwrap();
         store
             .connection()
             .execute(
@@ -1275,15 +1233,11 @@ mod tests {
             )
             .unwrap();
 
-        let found = store
-            .find_resumable_session("user-42", "telegram")
-            .unwrap();
+        let found = store.find_resumable_session("user-42", "telegram").unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().session_id, s2);
 
-        let not_found = store
-            .find_resumable_session("user-99", "telegram")
-            .unwrap();
+        let not_found = store.find_resumable_session("user-99", "telegram").unwrap();
         assert!(not_found.is_none());
     }
 
@@ -1291,9 +1245,7 @@ mod tests {
     fn find_thread_session() {
         let (_tmp, mut store) = test_db();
 
-        let s1 = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let s1 = store.begin_session("test", "claude", &[], None).unwrap();
         store
             .connection()
             .execute(
@@ -1456,9 +1408,7 @@ mod tests {
     #[test]
     fn fork_inherits_sender_context() {
         let (_tmp, mut store) = test_db();
-        let parent_id = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let parent_id = store.begin_session("test", "claude", &[], None).unwrap();
         store
             .connection()
             .execute(
@@ -1479,9 +1429,7 @@ mod tests {
     #[test]
     fn list_session_tree_single_root() {
         let (_tmp, mut store) = test_db();
-        let root_id = store
-            .begin_session("test", "root-cmd", &[], None)
-            .unwrap();
+        let root_id = store.begin_session("test", "root-cmd", &[], None).unwrap();
 
         let tree = store.list_session_tree(&root_id).unwrap();
         assert_eq!(tree.len(), 1);
@@ -1492,9 +1440,7 @@ mod tests {
     #[test]
     fn list_session_tree_with_children() {
         let (_tmp, mut store) = test_db();
-        let root_id = store
-            .begin_session("test", "root", &[], None)
-            .unwrap();
+        let root_id = store.begin_session("test", "root", &[], None).unwrap();
         store.mark_resumable(root_id, true).unwrap();
 
         let child1 = store
@@ -1535,14 +1481,10 @@ mod tests {
     #[test]
     fn build_session_tree_creates_hierarchy() {
         let (_tmp, mut store) = test_db();
-        let root_id = store
-            .begin_session("test", "root", &[], None)
-            .unwrap();
+        let root_id = store.begin_session("test", "root", &[], None).unwrap();
         store.mark_resumable(root_id, true).unwrap();
 
-        let child = store
-            .resume_session(root_id, "test", "child", &[])
-            .unwrap();
+        let child = store.resume_session(root_id, "test", "child", &[]).unwrap();
 
         let flat = store.list_session_tree(&root_id).unwrap();
         let tree = build_session_tree(&flat);
@@ -1562,9 +1504,7 @@ mod tests {
     #[test]
     fn delete_session_removes_session_and_entries() {
         let (_tmp, mut store) = test_db();
-        let session_id = store
-            .begin_session("test", "cmd", &[], None)
-            .unwrap();
+        let session_id = store.begin_session("test", "cmd", &[], None).unwrap();
 
         // Add an audit entry
         let action = Action::new(
@@ -1603,9 +1543,7 @@ mod tests {
     #[test]
     fn reset_session_clears_context_and_resumable() {
         let (_tmp, mut store) = test_db();
-        let session_id = store
-            .begin_session("test", "claude", &[], None)
-            .unwrap();
+        let session_id = store.begin_session("test", "claude", &[], None).unwrap();
         store.mark_resumable(session_id, true).unwrap();
         store
             .save_context_snapshot(session_id, r#"{"data":"test"}"#)
@@ -1634,9 +1572,7 @@ mod tests {
     #[test]
     fn count_session_entries() {
         let (_tmp, mut store) = test_db();
-        let session_id = store
-            .begin_session("test", "cmd", &[], None)
-            .unwrap();
+        let session_id = store.begin_session("test", "cmd", &[], None).unwrap();
 
         assert_eq!(store.count_session_entries(&session_id).unwrap(), 0);
 
@@ -1657,9 +1593,7 @@ mod tests {
     #[test]
     fn list_session_children() {
         let (_tmp, mut store) = test_db();
-        let parent_id = store
-            .begin_session("test", "parent", &[], None)
-            .unwrap();
+        let parent_id = store.begin_session("test", "parent", &[], None).unwrap();
         store.mark_resumable(parent_id, true).unwrap();
 
         let c1 = store
@@ -1678,15 +1612,11 @@ mod tests {
     #[test]
     fn fork_then_resume_separate_trees() {
         let (_tmp, mut store) = test_db();
-        let root_id = store
-            .begin_session("test", "root", &[], None)
-            .unwrap();
+        let root_id = store.begin_session("test", "root", &[], None).unwrap();
         store.mark_resumable(root_id, true).unwrap();
 
         // Fork creates a new tree
-        let forked = store
-            .fork_session(root_id, "test", "forked", &[])
-            .unwrap();
+        let forked = store.fork_session(root_id, "test", "forked", &[]).unwrap();
         store.mark_resumable(forked.session_id, true).unwrap();
 
         // Resume continues existing tree

@@ -232,9 +232,10 @@ impl SttProvider for WhisperStt {
             )));
         }
 
-        let text = response.text().await.map_err(|e| {
-            VoiceError::SttError(format!("failed to read response: {e}"))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| VoiceError::SttError(format!("failed to read response: {e}")))?;
 
         Ok(text.trim().to_string())
     }
@@ -349,9 +350,10 @@ impl SttProvider for DeepgramStt {
             )));
         }
 
-        let body: DeepgramResponse = response.json().await.map_err(|e| {
-            VoiceError::SttError(format!("failed to parse Deepgram response: {e}"))
-        })?;
+        let body: DeepgramResponse = response
+            .json()
+            .await
+            .map_err(|e| VoiceError::SttError(format!("failed to parse Deepgram response: {e}")))?;
 
         let transcript = body
             .results
@@ -389,9 +391,10 @@ pub struct LocalStt {
 impl LocalStt {
     /// Create a new local STT provider from configuration.
     pub fn from_config(config: &SttConfig) -> VoiceResult<Self> {
-        let whisper_bin = config.whisper_bin.clone().unwrap_or_else(|| {
-            "whisper-cpp".to_string()
-        });
+        let whisper_bin = config
+            .whisper_bin
+            .clone()
+            .unwrap_or_else(|| "whisper-cpp".to_string());
         let model_path = config.whisper_model.clone().ok_or_else(|| {
             VoiceError::ConfigError(
                 "whisper_model path is required for local STT provider".to_string(),
@@ -422,9 +425,9 @@ impl SttProvider for LocalStt {
         let temp_dir = std::env::temp_dir();
         let temp_path = temp_dir.join(format!("aegis_stt_{}.wav", std::process::id()));
 
-        tokio::fs::write(&temp_path, audio).await.map_err(|e| {
-            VoiceError::SttError(format!("failed to write temp audio file: {e}"))
-        })?;
+        tokio::fs::write(&temp_path, audio)
+            .await
+            .map_err(|e| VoiceError::SttError(format!("failed to write temp audio file: {e}")))?;
 
         tracing::debug!(
             bin = %self.whisper_bin,

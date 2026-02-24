@@ -8,7 +8,7 @@
 
 use std::fs;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use dialoguer::Select;
 
 use crate::commands::init::dirs_from_env;

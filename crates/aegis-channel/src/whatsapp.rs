@@ -34,7 +34,7 @@ use crate::format;
 // ---------------------------------------------------------------------------
 
 /// Configuration for the WhatsApp channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WhatsappConfig {
     /// WhatsApp Cloud API base URL.
     pub api_url: String,
@@ -54,6 +54,20 @@ pub struct WhatsappConfig {
     /// Template namespace for message templates.
     #[serde(default)]
     pub template_namespace: Option<String>,
+}
+
+impl std::fmt::Debug for WhatsappConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WhatsappConfig")
+            .field("api_url", &self.api_url)
+            .field("access_token", &"[REDACTED]")
+            .field("phone_number_id", &self.phone_number_id)
+            .field("app_secret", &"[REDACTED]")
+            .field("verify_token", &"[REDACTED]")
+            .field("webhook_port", &self.webhook_port)
+            .field("template_namespace", &self.template_namespace)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -200,9 +214,7 @@ pub fn validate_mime_type(mime: &str) -> Result<(), ChannelError> {
     if ALLOWED_MIME_TYPES.contains(&mime) {
         Ok(())
     } else {
-        Err(ChannelError::Other(format!(
-            "disallowed mime type: {mime}"
-        )))
+        Err(ChannelError::Other(format!("disallowed mime type: {mime}")))
     }
 }
 
@@ -285,17 +297,13 @@ impl WhatsappWebhook {
         challenge: &str,
     ) -> Result<String, ChannelError> {
         if mode != "subscribe" {
-            return Err(ChannelError::Other(format!(
-                "unexpected hub.mode: {mode}"
-            )));
+            return Err(ChannelError::Other(format!("unexpected hub.mode: {mode}")));
         }
 
         let expected = match &self.verify_token {
             Some(t) => t.as_str(),
             None => {
-                return Err(ChannelError::Other(
-                    "no verify_token configured".into(),
-                ));
+                return Err(ChannelError::Other("no verify_token configured".into()));
             }
         };
 
@@ -306,15 +314,11 @@ impl WhatsappWebhook {
         if expected_bytes.len() != provided_bytes.len() {
             // Dummy comparison to maintain constant-time behavior.
             let _ = expected_bytes.ct_eq(expected_bytes);
-            return Err(ChannelError::Other(
-                "invalid verify_token".into(),
-            ));
+            return Err(ChannelError::Other("invalid verify_token".into()));
         }
 
         if !bool::from(expected_bytes.ct_eq(provided_bytes)) {
-            return Err(ChannelError::Other(
-                "invalid verify_token".into(),
-            ));
+            return Err(ChannelError::Other("invalid verify_token".into()));
         }
 
         Ok(challenge.to_string())
@@ -341,33 +345,24 @@ impl WhatsappWebhook {
 
         let hex_sig = signature_header
             .strip_prefix("sha256=")
-            .ok_or_else(|| {
-                ChannelError::Other("signature header missing sha256= prefix".into())
-            })?;
+            .ok_or_else(|| ChannelError::Other("signature header missing sha256= prefix".into()))?;
 
-        let provided_sig = hex::decode(hex_sig).map_err(|e| {
-            ChannelError::Other(format!("invalid hex in signature: {e}"))
-        })?;
+        let provided_sig = hex::decode(hex_sig)
+            .map_err(|e| ChannelError::Other(format!("invalid hex in signature: {e}")))?;
 
-        let mut mac =
-            Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|e| {
-                ChannelError::Other(format!("HMAC key error: {e}"))
-            })?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+            .map_err(|e| ChannelError::Other(format!("HMAC key error: {e}")))?;
         mac.update(raw_body);
         let computed = mac.finalize().into_bytes();
 
         // Constant-time comparison of computed vs provided signature.
         if computed.len() != provided_sig.len() {
             let _ = computed.ct_eq(&computed);
-            return Err(ChannelError::Other(
-                "webhook signature mismatch".into(),
-            ));
+            return Err(ChannelError::Other("webhook signature mismatch".into()));
         }
 
         if !bool::from(computed.ct_eq(&provided_sig)) {
-            return Err(ChannelError::Other(
-                "webhook signature mismatch".into(),
-            ));
+            return Err(ChannelError::Other("webhook signature mismatch".into()));
         }
 
         Ok(())
@@ -377,13 +372,9 @@ impl WhatsappWebhook {
     ///
     /// Extracts text messages and interactive replies (button, list)
     /// and maps them to `InboundAction` using `format::parse_text_command`.
-    pub fn process_event(
-        &self,
-        body: &str,
-    ) -> Result<Vec<InboundAction>, ChannelError> {
-        let payload: serde_json::Value = serde_json::from_str(body).map_err(|e| {
-            ChannelError::Other(format!("invalid webhook JSON: {e}"))
-        })?;
+    pub fn process_event(&self, body: &str) -> Result<Vec<InboundAction>, ChannelError> {
+        let payload: serde_json::Value = serde_json::from_str(body)
+            .map_err(|e| ChannelError::Other(format!("invalid webhook JSON: {e}")))?;
 
         let mut actions = Vec::new();
 
@@ -420,21 +411,13 @@ impl WhatsappWebhook {
                                 msg["interactive"]["type"].as_str().unwrap_or("");
                             let reply_text = match interactive_type {
                                 "button_reply" => {
-                                    msg["interactive"]["button_reply"]["id"]
-                                        .as_str()
-                                        .or_else(|| {
-                                            msg["interactive"]["button_reply"]["title"]
-                                                .as_str()
-                                        })
+                                    msg["interactive"]["button_reply"]["id"].as_str().or_else(
+                                        || msg["interactive"]["button_reply"]["title"].as_str(),
+                                    )
                                 }
-                                "list_reply" => {
-                                    msg["interactive"]["list_reply"]["id"]
-                                        .as_str()
-                                        .or_else(|| {
-                                            msg["interactive"]["list_reply"]["title"]
-                                                .as_str()
-                                        })
-                                }
+                                "list_reply" => msg["interactive"]["list_reply"]["id"]
+                                    .as_str()
+                                    .or_else(|| msg["interactive"]["list_reply"]["title"].as_str()),
                                 _ => None,
                             };
                             if let Some(text) = reply_text {
@@ -473,11 +456,7 @@ impl WhatsappApi {
     /// `base_url` should be the full URL including the phone number ID,
     /// e.g., `https://graph.facebook.com/v17.0/123456789`.
     pub fn new(api_url: &str, phone_number_id: &str, access_token: &str) -> Self {
-        let base_url = format!(
-            "{}/{}",
-            api_url.trim_end_matches('/'),
-            phone_number_id,
-        );
+        let base_url = format!("{}/{}", api_url.trim_end_matches('/'), phone_number_id,);
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -683,18 +662,17 @@ impl WhatsappApi {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             warn!("media upload failed: {status} {body}");
-            return Err(ChannelError::Api(format!(
-                "media upload returned {status}"
-            )));
+            return Err(ChannelError::Api(format!("media upload returned {status}")));
         }
 
-        let upload_resp: MediaUploadResponse = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse media upload response: {e}"))
-        })?;
+        let upload_resp: MediaUploadResponse = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse media upload response: {e}")))?;
 
-        upload_resp.id.ok_or_else(|| {
-            ChannelError::Api("media upload returned no id".into())
-        })
+        upload_resp
+            .id
+            .ok_or_else(|| ChannelError::Api("media upload returned no id".into()))
     }
 
     /// POST to the /messages endpoint with the given body.
@@ -730,9 +708,10 @@ impl WhatsappApi {
             )));
         }
 
-        let messages_resp: MessagesResponse = resp.json().await.map_err(|e| {
-            ChannelError::Other(format!("parse messages response: {e}"))
-        })?;
+        let messages_resp: MessagesResponse = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::Other(format!("parse messages response: {e}")))?;
 
         // Extract the message ID from the response.
         let msg_id = messages_resp
@@ -747,10 +726,7 @@ impl WhatsappApi {
     /// Mark a message as read.
     ///
     /// POST /messages with status "read" and the message_id.
-    pub async fn mark_as_read(
-        &self,
-        message_id: &str,
-    ) -> Result<(), ChannelError> {
+    pub async fn mark_as_read(&self, message_id: &str) -> Result<(), ChannelError> {
         let body = json!({
             "messaging_product": "whatsapp",
             "status": "read",
@@ -784,10 +760,7 @@ impl WhatsappChannel {
             &config.phone_number_id,
             &config.access_token,
         );
-        let webhook = WhatsappWebhook::new(
-            config.app_secret.clone(),
-            config.verify_token.clone(),
-        );
+        let webhook = WhatsappWebhook::new(config.app_secret.clone(), config.verify_token.clone());
         Self {
             api,
             webhook,
@@ -808,10 +781,7 @@ impl WhatsappChannel {
     /// Process a raw webhook payload and buffer any resulting actions.
     ///
     /// Call this from your HTTP handler after verifying the signature.
-    pub fn handle_webhook_payload(
-        &mut self,
-        body: &str,
-    ) -> Result<(), ChannelError> {
+    pub fn handle_webhook_payload(&mut self, body: &str) -> Result<(), ChannelError> {
         let actions = self.webhook.process_event(body)?;
         self.inbound_buffer.extend(actions);
         Ok(())
@@ -893,10 +863,7 @@ impl Channel for WhatsappChannel {
         Ok(())
     }
 
-    async fn send_with_id(
-        &self,
-        message: OutboundMessage,
-    ) -> Result<Option<String>, ChannelError> {
+    async fn send_with_id(&self, message: OutboundMessage) -> Result<Option<String>, ChannelError> {
         if !message.buttons.is_empty() {
             let buttons: Vec<(String, String)> = message
                 .buttons
@@ -1118,23 +1085,21 @@ mod tests {
         let template = WhatsappTemplate {
             name: "order_update".to_string(),
             language: "en_US".to_string(),
-            components: vec![
-                TemplateComponent {
-                    component_type: "body".to_string(),
-                    parameters: vec![
-                        TemplateParameter {
-                            param_type: "text".to_string(),
-                            text: Some("John".to_string()),
-                        },
-                        TemplateParameter {
-                            param_type: "text".to_string(),
-                            text: Some("Order #1234".to_string()),
-                        },
-                    ],
-                    sub_type: None,
-                    index: None,
-                },
-            ],
+            components: vec![TemplateComponent {
+                component_type: "body".to_string(),
+                parameters: vec![
+                    TemplateParameter {
+                        param_type: "text".to_string(),
+                        text: Some("John".to_string()),
+                    },
+                    TemplateParameter {
+                        param_type: "text".to_string(),
+                        text: Some("Order #1234".to_string()),
+                    },
+                ],
+                sub_type: None,
+                index: None,
+            }],
         };
 
         let json = serde_json::to_value(&template).unwrap();

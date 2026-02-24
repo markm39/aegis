@@ -221,10 +221,7 @@ fn percent_decode_host(host: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (
-                hex_digit(bytes[i + 1]),
-                hex_digit(bytes[i + 2]),
-            ) {
+            if let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
                 decoded.push((hi << 4 | lo) as char);
                 i += 3;
                 continue;
@@ -348,7 +345,9 @@ mod tests {
         let guard = default_guard();
         let result = guard.validate_url("file:///etc/passwd");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), NavigationError::BlockedScheme { scheme } if scheme == "file"));
+        assert!(
+            matches!(result.unwrap_err(), NavigationError::BlockedScheme { scheme } if scheme == "file")
+        );
     }
 
     #[test]
@@ -486,7 +485,9 @@ mod tests {
             block_internal_networks: false,
             ..NavigationConfig::default()
         });
-        assert!(guard.validate_url("https://www.example.com/path?q=test#frag").is_ok());
+        assert!(guard
+            .validate_url("https://www.example.com/path?q=test#frag")
+            .is_ok());
     }
 
     #[test]

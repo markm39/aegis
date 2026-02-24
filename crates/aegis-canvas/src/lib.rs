@@ -240,10 +240,7 @@ pub fn compute_diff(old: &CanvasState, new: &CanvasState) -> Vec<CanvasPatch> {
 /// - `Delete`: removes the key. No error if the key does not exist.
 /// - `Append`: if the key holds an array, pushes the value; otherwise creates
 ///   a new single-element array.
-pub fn apply_patches(
-    state: &mut CanvasState,
-    patches: &[CanvasPatch],
-) -> Result<(), CanvasError> {
+pub fn apply_patches(state: &mut CanvasState, patches: &[CanvasPatch]) -> Result<(), CanvasError> {
     for patch in patches {
         match patch.op {
             PatchOp::Set => {
@@ -330,9 +327,7 @@ impl CanvasStore {
         patches: &[CanvasPatch],
     ) -> Result<CanvasSession, CanvasError> {
         let mut store = self.inner.write().await;
-        let session = store
-            .get_mut(&id)
-            .ok_or(CanvasError::NotFound(id))?;
+        let session = store.get_mut(&id).ok_or(CanvasError::NotFound(id))?;
 
         if session.version != expected_version {
             return Err(CanvasError::VersionConflict {
@@ -436,10 +431,7 @@ pub fn canvas_router(store: CanvasStore) -> axum::Router {
         Path(id): Path<String>,
     ) -> Result<Json<CanvasResponse>, StatusCode> {
         let canvas_id = CanvasId::parse(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let session = store
-            .get(canvas_id)
-            .await
-            .ok_or(StatusCode::NOT_FOUND)?;
+        let session = store.get(canvas_id).await.ok_or(StatusCode::NOT_FOUND)?;
         Ok(Json(CanvasResponse { session }))
     }
 
@@ -474,10 +466,7 @@ pub fn canvas_router(store: CanvasStore) -> axum::Router {
         Ok(Json(CanvasResponse { session }))
     }
 
-    async fn delete_canvas(
-        State(store): State<CanvasStore>,
-        Path(id): Path<String>,
-    ) -> StatusCode {
+    async fn delete_canvas(State(store): State<CanvasStore>, Path(id): Path<String>) -> StatusCode {
         let canvas_id = match CanvasId::parse(&id) {
             Ok(id) => id,
             Err(_) => return StatusCode::BAD_REQUEST,
@@ -699,10 +688,7 @@ mod tests {
         sanitize_patch(&mut patch);
         // Tags are stripped: <b>, </b>, <img src=x onerror=alert(1)> all removed.
         assert_eq!(patch.path, "key");
-        assert_eq!(
-            patch.value,
-            Some(json!("Hello  World"))
-        );
+        assert_eq!(patch.value, Some(json!("Hello  World")));
     }
 
     #[test]

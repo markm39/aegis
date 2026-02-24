@@ -7,11 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
+use aegis_policy::PolicyEngine;
 use aegis_policy::builtin::get_builtin_policy;
 use aegis_policy::default_schema;
-use aegis_policy::PolicyEngine;
 use aegis_types::{Action, ActionKind};
 
 use crate::commands::init::load_config;
