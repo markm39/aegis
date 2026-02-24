@@ -154,7 +154,7 @@ pub fn run(
     engine: &PolicyEngine,
     config: &SupervisorConfig,
     event_tx: Option<&mpsc::Sender<PilotEvent>>,
-    output_tx: Option<&mpsc::Sender<String>>,
+    output_tx: Option<&mpsc::SyncSender<String>>,
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
 ) -> Result<(i32, PilotStats), AegisError> {

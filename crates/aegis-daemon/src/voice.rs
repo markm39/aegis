@@ -81,7 +81,10 @@ pub enum CallState {
 impl CallState {
     /// Whether this state is terminal (no further transitions).
     pub fn is_terminal(self) -> bool {
-        matches!(self, CallState::Completed | CallState::Failed | CallState::Cancelled)
+        matches!(
+            self,
+            CallState::Completed | CallState::Failed | CallState::Cancelled
+        )
     }
 }
 
@@ -297,7 +300,7 @@ impl VoiceManager {
             CallState::Completed | CallState::Failed | CallState::Cancelled => {
                 record.ended_at = Some(Utc::now());
             }
-            _ => {}
+            CallState::Initiating | CallState::Ringing => {}
         }
 
         tracing::info!(
@@ -337,7 +340,8 @@ impl VoiceManager {
 
     /// Record a call's cost and add it to the daily total.
     pub fn record_cost(&self, cost_cents: u32) {
-        self.daily_cost_cents.fetch_add(cost_cents, Ordering::AcqRel);
+        self.daily_cost_cents
+            .fetch_add(cost_cents, Ordering::AcqRel);
     }
 
     /// Reset daily cost accumulator (called at midnight or by scheduler).
@@ -391,9 +395,7 @@ pub fn validate_phone_number(number: &str) -> Result<(), anyhow::Error> {
 
     let digits = &number[1..];
     if digits.is_empty() {
-        return Err(anyhow::anyhow!(
-            "invalid phone number: no digits after '+'"
-        ));
+        return Err(anyhow::anyhow!("invalid phone number: no digits after '+'"));
     }
 
     if !digits.chars().all(|c| c.is_ascii_digit()) {
@@ -675,7 +677,9 @@ mod tests {
         // Verify the raw dangerous characters are NOT present in text content.
         // Note: < and > appear in XML tags themselves, so we check within Say tags.
         let say_content_start = xml.find(">Hello").expect("should find Say content");
-        let say_content_end = xml[say_content_start..].find("</Say>").expect("should find end");
+        let say_content_end = xml[say_content_start..]
+            .find("</Say>")
+            .expect("should find end");
         let say_content = &xml[say_content_start..say_content_start + say_content_end];
         assert!(
             !say_content.contains("<world>"),
@@ -745,10 +749,7 @@ mod tests {
             .expect("should create call");
 
         // Default: consent not given.
-        assert!(
-            !record.consent_given,
-            "consent_given must default to false"
-        );
+        assert!(!record.consent_given, "consent_given must default to false");
 
         // Verify the Record TwiML verb exists for use only when consent is given.
         // This is a structural test -- the application layer must check consent_given
@@ -777,10 +778,7 @@ mod tests {
 
         // The 6th call should be denied.
         let result = mgr.make_call("+15559999999", "agent-1");
-        assert!(
-            result.is_err(),
-            "6th concurrent call should be denied"
-        );
+        assert!(result.is_err(), "6th concurrent call should be denied");
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("concurrent call limit"),
@@ -812,31 +810,31 @@ mod tests {
         // Transition: Initiating -> Ringing.
         mgr.update_call_status(&call_id, CallState::Ringing)
             .expect("should transition to ringing");
-        assert_eq!(
-            mgr.call_status(&call_id).unwrap().state,
-            CallState::Ringing
-        );
+        assert_eq!(mgr.call_status(&call_id).unwrap().state, CallState::Ringing);
 
         // Transition: Ringing -> InProgress.
         mgr.update_call_status(&call_id, CallState::InProgress)
             .expect("should transition to in-progress");
         let status = mgr.call_status(&call_id).unwrap();
         assert_eq!(status.state, CallState::InProgress);
-        assert!(status.started_at.is_some(), "started_at should be set on InProgress");
+        assert!(
+            status.started_at.is_some(),
+            "started_at should be set on InProgress"
+        );
 
         // Transition: InProgress -> Completed.
         mgr.update_call_status(&call_id, CallState::Completed)
             .expect("should transition to completed");
         let status = mgr.call_status(&call_id).unwrap();
         assert_eq!(status.state, CallState::Completed);
-        assert!(status.ended_at.is_some(), "ended_at should be set on Completed");
+        assert!(
+            status.ended_at.is_some(),
+            "ended_at should be set on Completed"
+        );
 
         // Cannot transition from terminal state.
         let result = mgr.update_call_status(&call_id, CallState::InProgress);
-        assert!(
-            result.is_err(),
-            "should not transition from terminal state"
-        );
+        assert!(result.is_err(), "should not transition from terminal state");
     }
 
     // -- Unauthorized hangup tests --
@@ -899,13 +897,25 @@ mod tests {
         );
 
         // Valid signature should pass.
-        assert!(validate_twilio_signature(auth_token, &expected, url, &params));
+        assert!(validate_twilio_signature(
+            auth_token, &expected, url, &params
+        ));
 
         // Invalid signature should fail.
-        assert!(!validate_twilio_signature(auth_token, "invalid_sig", url, &params));
+        assert!(!validate_twilio_signature(
+            auth_token,
+            "invalid_sig",
+            url,
+            &params
+        ));
 
         // Wrong token should fail.
-        assert!(!validate_twilio_signature("wrong_token", &expected, url, &params));
+        assert!(!validate_twilio_signature(
+            "wrong_token",
+            &expected,
+            url,
+            &params
+        ));
     }
 
     // -- TwiML additional rendering tests --

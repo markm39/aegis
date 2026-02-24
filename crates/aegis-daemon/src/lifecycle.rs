@@ -11,9 +11,10 @@
 //! 6. Stop the observer, end the audit session
 //! 7. Return the result to the fleet manager
 
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
@@ -66,11 +67,11 @@ pub fn run_agent_slot(
     toolkit_config: &ToolkitConfig,
     fleet_goal: Option<&str>,
     orchestrator_name: Option<&str>,
-    output_tx: mpsc::Sender<String>,
+    output_tx: mpsc::SyncSender<String>,
     update_tx: Option<mpsc::Sender<PilotUpdate>>,
     command_rx: Option<mpsc::Receiver<SupervisorCommand>>,
     child_pid: Arc<AtomicU32>,
-    shared_session_id: Arc<std::sync::Mutex<Option<uuid::Uuid>>>,
+    shared_session_id: Arc<Mutex<Option<uuid::Uuid>>>,
 ) -> SlotResult {
     let name = slot_config.name.clone();
 
@@ -107,11 +108,11 @@ fn run_agent_slot_inner(
     toolkit_config: &ToolkitConfig,
     fleet_goal: Option<&str>,
     orchestrator_name: Option<&str>,
-    output_tx: &mpsc::Sender<String>,
+    output_tx: &mpsc::SyncSender<String>,
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
     child_pid: &AtomicU32,
-    shared_session_id: &std::sync::Mutex<Option<uuid::Uuid>>,
+    shared_session_id: &Mutex<Option<uuid::Uuid>>,
 ) -> Result<SlotResult, String> {
     let name = &slot_config.name;
     info!(agent = name, "agent lifecycle starting");
@@ -144,14 +145,12 @@ fn run_agent_slot_inner(
     let store = AuditStore::open(&aegis_config.ledger_path)
         .map_err(|e| format!("failed to open audit store for {name}: {e}"))?;
 
-    let store = Arc::new(Mutex::new(store));
-    let engine_arc = Arc::new(Mutex::new(engine));
+    let store = Arc::new(std::sync::Mutex::new(store));
+    let engine_arc = Arc::new(std::sync::Mutex::new(engine));
 
     // Begin audit session
     let session_id = {
-        let mut store_guard = store
-            .lock()
-            .map_err(|e| format!("store lock poisoned: {e}"))?;
+        let mut store_guard = store.lock().expect("audit store mutex poisoned");
         store_guard
             .begin_session(
                 &aegis_config.name,
@@ -165,9 +164,7 @@ fn run_agent_slot_inner(
     info!(agent = name, session_id = %session_id, "audit session started");
 
     // Share session_id back to the main thread for state persistence
-    if let Ok(mut guard) = shared_session_id.lock() {
-        *guard = Some(session_id);
-    }
+    *shared_session_id.lock() = Some(session_id);
 
     // 3. Start filesystem observer
     let observer_session = aegis_observer::start_observer(
@@ -821,16 +818,10 @@ fn compose_orchestrator_prompt(
 }
 
 /// End an audit session in the store.
-fn end_session(store: &Arc<Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_code: i32) {
-    match store.lock() {
-        Ok(mut guard) => {
-            if let Err(e) = guard.end_session(session_id, exit_code) {
-                warn!(session_id = %session_id, error = %e, "failed to end audit session");
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "store lock poisoned, cannot end session");
-        }
+fn end_session(store: &Arc<std::sync::Mutex<AuditStore>>, session_id: &uuid::Uuid, exit_code: i32) {
+    let mut guard = store.lock().expect("audit store mutex poisoned");
+    if let Err(e) = guard.end_session(session_id, exit_code) {
+        warn!(session_id = %session_id, error = %e, "failed to end audit session");
     }
 }
 

@@ -258,7 +258,7 @@ impl SemanticSearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use async_trait::async_trait;
     use tempfile::TempDir;
@@ -284,7 +284,7 @@ mod tests {
 
         /// Return all texts that were passed to `embed()`, in order.
         fn recorded_inputs(&self) -> Vec<String> {
-            self.recorded_inputs.lock().unwrap().clone()
+            self.recorded_inputs.lock().clone()
         }
 
         /// Simple hash-based vector generation for deterministic results.
@@ -313,7 +313,7 @@ mod tests {
     impl EmbeddingProvider for MockEmbeddingProvider {
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             {
-                let mut inputs = self.recorded_inputs.lock().unwrap();
+                let mut inputs = self.recorded_inputs.lock();
                 for t in texts {
                     inputs.push(t.clone());
                 }
@@ -364,7 +364,10 @@ mod tests {
             "default min_similarity should be 0.5"
         );
         assert_eq!(config.max_results, 10, "default max_results should be 10");
-        assert!(config.embed_on_store, "default embed_on_store should be true");
+        assert!(
+            config.embed_on_store,
+            "default embed_on_store should be true"
+        );
         assert_eq!(
             config.namespace, "default",
             "default namespace should be 'default'"
@@ -378,9 +381,18 @@ mod tests {
             ..Default::default()
         });
 
-        engine.store("doc1", "rust programming language").await.unwrap();
-        engine.store("doc2", "python programming language").await.unwrap();
-        engine.store("doc3", "cooking recipes for dinner").await.unwrap();
+        engine
+            .store("doc1", "rust programming language")
+            .await
+            .unwrap();
+        engine
+            .store("doc2", "python programming language")
+            .await
+            .unwrap();
+        engine
+            .store("doc3", "cooking recipes for dinner")
+            .await
+            .unwrap();
 
         // Search for something close to the first two entries.
         let results = engine.search("rust programming").await.unwrap();
@@ -402,10 +414,16 @@ mod tests {
         });
 
         engine.store("doc1", "the quick brown fox").await.unwrap();
-        engine.store("doc2", "jumps over the lazy dog").await.unwrap();
+        engine
+            .store("doc2", "jumps over the lazy dog")
+            .await
+            .unwrap();
 
         // A vague query unlikely to have 0.99+ similarity with either.
-        let results = engine.search("unrelated quantum physics topic").await.unwrap();
+        let results = engine
+            .search("unrelated quantum physics topic")
+            .await
+            .unwrap();
         assert!(
             results.is_empty(),
             "no results should pass min_similarity=0.99 for unrelated query, got {} results",
@@ -423,7 +441,10 @@ mod tests {
 
         for i in 0..10 {
             engine
-                .store(&format!("item{i}"), &format!("document number {i} about testing"))
+                .store(
+                    &format!("item{i}"),
+                    &format!("document number {i} about testing"),
+                )
                 .await
                 .unwrap();
         }
@@ -473,7 +494,12 @@ mod tests {
         });
 
         let entries: Vec<(String, String)> = (0..5)
-            .map(|i| (format!("batch{i}"), format!("batch item number {i} content")))
+            .map(|i| {
+                (
+                    format!("batch{i}"),
+                    format!("batch item number {i} content"),
+                )
+            })
             .collect();
 
         engine.store_batch(&entries).await.unwrap();
@@ -489,7 +515,10 @@ mod tests {
 
         // Search should find batch items.
         let results = engine.search("batch item content").await.unwrap();
-        assert!(!results.is_empty(), "should find batch-stored items via search");
+        assert!(
+            !results.is_empty(),
+            "should find batch-stored items via search"
+        );
     }
 
     #[tokio::test]
@@ -499,11 +528,17 @@ mod tests {
             ..Default::default()
         });
 
-        engine.store("target", "unique searchable text xyz").await.unwrap();
+        engine
+            .store("target", "unique searchable text xyz")
+            .await
+            .unwrap();
 
         // Confirm it's findable.
         let results = engine.search("unique searchable text xyz").await.unwrap();
-        assert!(!results.is_empty(), "should find the stored item before delete");
+        assert!(
+            !results.is_empty(),
+            "should find the stored item before delete"
+        );
 
         // Delete and re-search.
         engine.delete("target").unwrap();
@@ -559,8 +594,14 @@ mod tests {
             },
         );
 
-        engine1.store("shared_key", "namespace one value").await.unwrap();
-        engine2.store("shared_key", "namespace two value").await.unwrap();
+        engine1
+            .store("shared_key", "namespace one value")
+            .await
+            .unwrap();
+        engine2
+            .store("shared_key", "namespace two value")
+            .await
+            .unwrap();
 
         // ns1 should only see its own entries.
         let keys1 = engine1.list_keys().unwrap();
@@ -608,7 +649,10 @@ mod tests {
             "using bearer token: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0",
         );
 
-        engine.store("secrets_doc", text_with_secrets).await.unwrap();
+        engine
+            .store("secrets_doc", text_with_secrets)
+            .await
+            .unwrap();
 
         // Check what the provider actually received for embedding.
         let inputs = provider.recorded_inputs();

@@ -16,8 +16,9 @@
 //! Use [`register_memory_tools`] to register both tools with a
 //! [`ToolRegistry`].
 
+use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -147,11 +148,7 @@ impl ToolDefinition for MemorySearchTool {
 
         let limit = params.limit.min(100); // Cap at 100 to prevent abuse.
 
-        let store = self
-            .ctx
-            .store
-            .lock()
-            .map_err(|e| anyhow::anyhow!("memory store lock poisoned: {e}"))?;
+        let store = self.ctx.store.lock();
         let results = store
             .search_safe(namespace, &params.query, limit, None)
             .context("execute memory search")?;
@@ -316,20 +313,13 @@ impl ToolDefinition for MemoryGetTool {
         }
 
         // Otherwise, look up by key.
-        let key = params
-            .key
-            .as_deref()
-            .unwrap_or("");
+        let key = params.key.as_deref().unwrap_or("");
 
         if key.is_empty() {
             anyhow::bail!("either 'key' or 'date' must be provided");
         }
 
-        let store = self
-            .ctx
-            .store
-            .lock()
-            .map_err(|e| anyhow::anyhow!("memory store lock poisoned: {e}"))?;
+        let store = self.ctx.store.lock();
         let value = store
             .get_safe(namespace, key)
             .context("get memory by key")?;
@@ -432,10 +422,16 @@ mod tests {
     async fn test_memory_search_finds_results() {
         let (ctx, _dir) = test_context();
 
-        ctx.store.lock().unwrap()
-            .set("agent1", "rust_tips", "Rust ownership and borrowing patterns")
+        ctx.store
+            .lock()
+            .set(
+                "agent1",
+                "rust_tips",
+                "Rust ownership and borrowing patterns",
+            )
             .unwrap();
-        ctx.store.lock().unwrap()
+        ctx.store
+            .lock()
             .set("agent1", "go_tips", "Go goroutines and channels")
             .unwrap();
 
@@ -444,15 +440,11 @@ mod tests {
         let input = serde_json::json!({"query": "Rust ownership"});
         let output = tool.execute(input).await.unwrap();
 
-        let results: Vec<SearchResultEntry> =
-            serde_json::from_value(output.result).unwrap();
+        let results: Vec<SearchResultEntry> = serde_json::from_value(output.result).unwrap();
         assert!(!results.is_empty(), "should find at least one result");
 
         let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
-        assert!(
-            keys.contains(&"rust_tips"),
-            "should find 'rust_tips' entry"
-        );
+        assert!(keys.contains(&"rust_tips"), "should find 'rust_tips' entry");
     }
 
     #[tokio::test]
@@ -464,8 +456,7 @@ mod tests {
         let input = serde_json::json!({"query": "nonexistent"});
         let output = tool.execute(input).await.unwrap();
 
-        let results: Vec<SearchResultEntry> =
-            serde_json::from_value(output.result).unwrap();
+        let results: Vec<SearchResultEntry> = serde_json::from_value(output.result).unwrap();
         assert!(results.is_empty());
     }
 
@@ -473,16 +464,15 @@ mod tests {
     async fn test_memory_search_with_namespace() {
         let (ctx, _dir) = test_context();
 
-        ctx.store.lock().unwrap().set("ns1", "key1", "value in ns1").unwrap();
-        ctx.store.lock().unwrap().set("ns2", "key1", "value in ns2").unwrap();
+        ctx.store.lock().set("ns1", "key1", "value in ns1").unwrap();
+        ctx.store.lock().set("ns2", "key1", "value in ns2").unwrap();
 
         let tool = MemorySearchTool::new(ctx, "ns1".into());
 
         let input = serde_json::json!({"query": "value", "namespace": "ns2"});
         let output = tool.execute(input).await.unwrap();
 
-        let results: Vec<SearchResultEntry> =
-            serde_json::from_value(output.result).unwrap();
+        let results: Vec<SearchResultEntry> = serde_json::from_value(output.result).unwrap();
         for r in &results {
             assert_eq!(r.namespace, "ns2");
         }
@@ -521,7 +511,8 @@ mod tests {
     async fn test_memory_get_by_key() {
         let (ctx, _dir) = test_context();
 
-        ctx.store.lock().unwrap()
+        ctx.store
+            .lock()
             .set("agent1", "db_config", "PostgreSQL on port 5432")
             .unwrap();
 
@@ -553,7 +544,8 @@ mod tests {
     async fn test_memory_get_quarantined_not_returned() {
         let (ctx, _dir) = test_context();
 
-        ctx.store.lock().unwrap()
+        ctx.store
+            .lock()
             .set_quarantined(
                 "agent1",
                 "bad_key",
@@ -622,7 +614,10 @@ mod tests {
 
         let input = serde_json::json!({});
         let result = tool.execute(input).await;
-        assert!(result.is_err(), "should error when neither key nor date is provided");
+        assert!(
+            result.is_err(),
+            "should error when neither key nor date is provided"
+        );
     }
 
     #[tokio::test]

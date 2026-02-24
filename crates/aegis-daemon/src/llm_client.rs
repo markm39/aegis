@@ -15,20 +15,20 @@
 //! - Rate limited to 100 calls per minute (token-bucket).
 //! - All completions logged to audit trail (model, token counts, NOT content).
 
+use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use aegis_types::llm::{
-    to_anthropic_message, to_gemini_content, to_openai_message, from_gemini_response,
-    AnthropicConfig, GeminiProviderConfig, LlmRequest, LlmResponse,
-    LlmToolCall, LlmUsage, MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig,
-    ProviderConfig, ProviderRegistry, StopReason,
-};
 use aegis_types::credentials::CredentialStore;
+use aegis_types::llm::{
+    from_gemini_response, to_anthropic_message, to_gemini_content, to_openai_message,
+    AnthropicConfig, GeminiProviderConfig, LlmRequest, LlmResponse, LlmToolCall, LlmUsage,
+    MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig, ProviderConfig, ProviderRegistry,
+    StopReason,
+};
 use aegis_types::oauth::{FileTokenStore, OAuthTokenStore};
 use aegis_types::providers::provider_by_id;
 
@@ -268,6 +268,29 @@ impl LlmClient {
                 );
                 return Ok(key);
             }
+
+            // Backward-compat shim: older builds stored Codex OAuth credentials
+            // under `openai`. Prefer the dedicated `openai-codex` provider now.
+            if provider_name == "openai-codex" {
+                use aegis_types::provider_auth::CredentialType;
+                if let Some(legacy) = store.get("openai") {
+                    let is_legacy_codex_oauth = legacy.credential_type
+                        == CredentialType::OAuthToken
+                        && legacy
+                            .base_url
+                            .as_deref()
+                            .map(|u| u.contains("chatgpt.com"))
+                            .unwrap_or(false)
+                        && !legacy.api_key.is_empty();
+                    if is_legacy_codex_oauth {
+                        info!(
+                            provider = provider_name,
+                            "resolved legacy Codex OAuth credential from openai entry"
+                        );
+                        return Ok(legacy.api_key.clone());
+                    }
+                }
+            }
         }
 
         // 3. Fall back to provider-config env var read.
@@ -321,9 +344,7 @@ impl LlmClient {
                 return Err("max_tokens must be greater than 0".into());
             }
             if max_tokens > 1_000_000 {
-                return Err(format!(
-                    "max_tokens must be <= 1,000,000, got {max_tokens}"
-                ));
+                return Err(format!("max_tokens must be <= 1,000,000, got {max_tokens}"));
             }
         }
 
@@ -354,9 +375,7 @@ impl LlmClient {
 
         // Rate limit check.
         {
-            let mut limiter = self.rate_limiter.lock().map_err(|e| {
-                format!("rate limiter lock poisoned: {e}")
-            })?;
+            let mut limiter = self.rate_limiter.lock();
             if !limiter.try_consume() {
                 return Err("LLM rate limit exceeded (max 100 calls/minute)".into());
             }
@@ -364,11 +383,20 @@ impl LlmClient {
 
         let mut last_error = String::new();
         for model in &failover_chain {
-            let provider_config = match self.registry.get_provider_for_model(model) {
-                Some(config) => config,
+            let provider_name = match self.registry.resolve_provider(model) {
+                Some(name) => name,
                 None => {
                     last_error = format!(
                         "no provider configured for model '{model}' (check provider registry)"
+                    );
+                    continue;
+                }
+            };
+            let provider_config = match self.registry.get_provider(provider_name) {
+                Some(config) => config,
+                None => {
+                    last_error = format!(
+                        "provider '{provider_name}' resolved for model '{model}' but is not registered"
                     );
                     continue;
                 }
@@ -385,7 +413,9 @@ impl LlmClient {
 
             let result = match provider_config.clone() {
                 ProviderConfig::Anthropic(config) => self.complete_anthropic(&req, &config),
-                ProviderConfig::OpenAi(config) => self.complete_openai(&req, &config),
+                ProviderConfig::OpenAi(config) => {
+                    self.complete_openai(&req, provider_name, &config)
+                }
                 ProviderConfig::Gemini(config) => self.complete_gemini(&req, &config),
                 ProviderConfig::Ollama(config) => self.complete_ollama(&req, &config),
                 ProviderConfig::OpenRouter(config) => self.complete_openrouter(&req, &config),
@@ -481,9 +511,8 @@ impl LlmClient {
         }
 
         // Validate request body size.
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-            format!("failed to serialize Anthropic request body: {e}")
-        })?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| format!("failed to serialize Anthropic request body: {e}"))?;
         if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
                 "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
@@ -532,15 +561,12 @@ impl LlmClient {
         }
 
         if !status.is_success() {
-            return Err(format!(
-                "Anthropic API returned {status}: {resp_text}"
-            ));
+            return Err(format!("Anthropic API returned {status}: {resp_text}"));
         }
 
         // Parse Anthropic response.
-        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            format!("failed to parse Anthropic response JSON: {e}")
-        })?;
+        let resp_json: Value = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("failed to parse Anthropic response JSON: {e}"))?;
 
         Self::parse_anthropic_response(&resp_json, &request.model)
     }
@@ -588,14 +614,8 @@ impl LlmClient {
         let usage = json
             .get("usage")
             .map(|u| LlmUsage {
-                input_tokens: u
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
-                output_tokens: u
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
+                input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
             })
             .unwrap_or(LlmUsage {
                 input_tokens: 0,
@@ -643,26 +663,28 @@ impl LlmClient {
     fn complete_openai(
         &self,
         request: &LlmRequest,
+        provider_name: &str,
         config: &OpenAiConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let api_key = self.resolve_api_key_with_oauth("openai", || {
+        let api_key = self.resolve_api_key_with_oauth(provider_name, || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
         let masked = MaskedApiKey(api_key.clone());
-        debug!(provider = "openai", key = %masked, "resolved API key");
+        debug!(provider = provider_name, key = %masked, "resolved API key");
 
         // Check if the credential is an OAuth token -- route to Responses API.
+        // OpenAI Codex always uses the Responses API.
         let is_oauth = {
             use aegis_types::provider_auth::CredentialType;
             let store = CredentialStore::load_default().unwrap_or_default();
             store
-                .get("openai")
+                .get(provider_name)
                 .map(|c| c.credential_type == CredentialType::OAuthToken)
                 .unwrap_or(false)
         };
-        if is_oauth {
-            return self.complete_openai_responses(request, &api_key);
+        if provider_name == "openai-codex" || is_oauth {
+            return self.complete_openai_responses(request, provider_name, &api_key);
         }
 
         // Validate endpoint for SSRF.
@@ -688,9 +710,8 @@ impl LlmClient {
         for msg in &request.messages {
             let converted = to_openai_message(msg);
             openai_messages.push(
-                serde_json::to_value(&converted).map_err(|e| {
-                    format!("failed to serialize OpenAI message: {e}")
-                })?,
+                serde_json::to_value(&converted)
+                    .map_err(|e| format!("failed to serialize OpenAI message: {e}"))?,
             );
         }
 
@@ -727,9 +748,8 @@ impl LlmClient {
         }
 
         // Validate request body size.
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-            format!("failed to serialize OpenAI request body: {e}")
-        })?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| format!("failed to serialize OpenAI request body: {e}"))?;
         if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
                 "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
@@ -738,7 +758,7 @@ impl LlmClient {
         }
 
         info!(
-            provider = "openai",
+            provider = provider_name,
             model = %request.model,
             message_count = request.messages.len(),
             "sending LLM completion request"
@@ -781,9 +801,8 @@ impl LlmClient {
         }
 
         // Parse OpenAI response.
-        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            format!("failed to parse OpenAI response JSON: {e}")
-        })?;
+        let resp_json: Value = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("failed to parse OpenAI response JSON: {e}"))?;
 
         Self::parse_openai_response(&resp_json, &request.model)
     }
@@ -865,9 +884,8 @@ impl LlmClient {
         }
 
         // Validate request body size.
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-            format!("failed to serialize Gemini request body: {e}")
-        })?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| format!("failed to serialize Gemini request body: {e}"))?;
         if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
                 "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
@@ -916,9 +934,8 @@ impl LlmClient {
             return Err(format!("Gemini API returned {status}: {resp_text}"));
         }
 
-        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            format!("failed to parse Gemini response JSON: {e}")
-        })?;
+        let resp_json: Value = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("failed to parse Gemini response JSON: {e}"))?;
 
         let response = from_gemini_response(&resp_json, &request.model)
             .map_err(|e| format!("failed to parse Gemini response: {e}"))?;
@@ -948,10 +965,7 @@ impl LlmClient {
         config.validate_endpoint().map_err(|e| e.to_string())?;
 
         // Build the URL.
-        let url = format!(
-            "{}/api/chat",
-            config.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/api/chat", config.base_url.trim_end_matches('/'));
 
         // Convert messages to OpenAI format (which Ollama understands).
         let mut messages: Vec<Value> = Vec::new();
@@ -966,9 +980,8 @@ impl LlmClient {
         for msg in &request.messages {
             let converted = to_openai_message(msg);
             messages.push(
-                serde_json::to_value(&converted).map_err(|e| {
-                    format!("failed to serialize Ollama message: {e}")
-                })?,
+                serde_json::to_value(&converted)
+                    .map_err(|e| format!("failed to serialize Ollama message: {e}"))?,
             );
         }
 
@@ -989,9 +1002,8 @@ impl LlmClient {
         }
 
         // Validate request body size.
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-            format!("failed to serialize Ollama request body: {e}")
-        })?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| format!("failed to serialize Ollama request body: {e}"))?;
         if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
                 "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
@@ -1040,9 +1052,8 @@ impl LlmClient {
             return Err(format!("Ollama API returned {status}: {resp_text}"));
         }
 
-        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            format!("failed to parse Ollama response JSON: {e}")
-        })?;
+        let resp_json: Value = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("failed to parse Ollama response JSON: {e}"))?;
 
         Self::parse_ollama_response(&resp_json, &request.model)
     }
@@ -1080,8 +1091,7 @@ impl LlmClient {
                     .unwrap_or(Value::Object(serde_json::Map::new()));
                 // Arguments may be a string (JSON-encoded) or already an object.
                 let input = if let Some(s) = args_val.as_str() {
-                    serde_json::from_str(s)
-                        .unwrap_or(Value::Object(serde_json::Map::new()))
+                    serde_json::from_str(s).unwrap_or(Value::Object(serde_json::Map::new()))
                 } else {
                     args_val
                 };
@@ -1090,10 +1100,7 @@ impl LlmClient {
         }
 
         // Extract token counts from Ollama's response fields.
-        let eval_count = json
-            .get("eval_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let eval_count = json.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
         let prompt_eval_count = json
             .get("prompt_eval_count")
             .and_then(|v| v.as_u64())
@@ -1171,9 +1178,8 @@ impl LlmClient {
         for msg in &request.messages {
             let converted = to_openai_message(msg);
             openai_messages.push(
-                serde_json::to_value(&converted).map_err(|e| {
-                    format!("failed to serialize OpenRouter message: {e}")
-                })?,
+                serde_json::to_value(&converted)
+                    .map_err(|e| format!("failed to serialize OpenRouter message: {e}"))?,
             );
         }
 
@@ -1209,9 +1215,8 @@ impl LlmClient {
         }
 
         // Validate request body size.
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-            format!("failed to serialize OpenRouter request body: {e}")
-        })?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| format!("failed to serialize OpenRouter request body: {e}"))?;
         if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
                 "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
@@ -1259,15 +1264,12 @@ impl LlmClient {
         }
 
         if !status.is_success() {
-            return Err(format!(
-                "OpenRouter API returned {status}: {resp_text}"
-            ));
+            return Err(format!("OpenRouter API returned {status}: {resp_text}"));
         }
 
         // Parse using OpenAI format (OpenRouter is API-compatible).
-        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            format!("failed to parse OpenRouter response JSON: {e}")
-        })?;
+        let resp_json: Value = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("failed to parse OpenRouter response JSON: {e}"))?;
 
         let mut response = Self::parse_openai_response(&resp_json, &request.model)?;
 
@@ -1298,18 +1300,26 @@ impl LlmClient {
     fn complete_openai_responses(
         &self,
         request: &LlmRequest,
+        provider_name: &str,
         api_key: &str,
     ) -> Result<LlmResponse, String> {
         // Resolve base URL from credential store.
         let base_url = {
             let store = CredentialStore::load_default().unwrap_or_default();
-            provider_by_id("openai")
+            provider_by_id(provider_name)
                 .map(|p| store.resolve_base_url(p))
-                .unwrap_or_else(|| "https://api.openai.com".to_string())
+                .unwrap_or_else(|| {
+                    if provider_name == "openai-codex" {
+                        "https://chatgpt.com/backend-api".to_string()
+                    } else {
+                        "https://api.openai.com".to_string()
+                    }
+                })
         };
 
         // ChatGPT backend uses /codex/responses, public API uses /v1/responses.
-        let url = if base_url.contains("chatgpt.com") {
+        let is_codex_backend = provider_name == "openai-codex" || base_url.contains("chatgpt.com");
+        let url = if is_codex_backend {
             format!("{}/codex/responses", base_url.trim_end_matches('/'))
         } else {
             format!("{}/v1/responses", base_url.trim_end_matches('/'))
@@ -1369,7 +1379,10 @@ impl LlmClient {
         let mut body = serde_json::json!({
             "model": request.model,
             "input": input,
-            "store": false,
+            "stream": true,
+            // Direct OpenAI Responses expects store=true by default; Codex
+            // backend requires store=false.
+            "store": !is_codex_backend,
         });
 
         if let Some(ref system_prompt) = request.system_prompt {
@@ -1402,9 +1415,8 @@ impl LlmClient {
         }
 
         // Validate request body size.
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
-            format!("failed to serialize Responses API request body: {e}")
-        })?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| format!("failed to serialize Responses API request body: {e}"))?;
         if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
             return Err(format!(
                 "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
@@ -1449,14 +1461,21 @@ impl LlmClient {
         }
 
         if !status.is_success() {
-            return Err(format!("OpenAI Responses API returned {status}: {resp_text}"));
+            return Err(format!(
+                "OpenAI Responses API returned {status}: {resp_text}"
+            ));
         }
 
-        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            format!("failed to parse Responses API response JSON: {e}")
-        })?;
-
-        Self::parse_responses_api_response(&resp_json, &request.model)
+        match serde_json::from_str::<Value>(&resp_text) {
+            Ok(resp_json) => Self::parse_responses_api_response(&resp_json, &request.model),
+            Err(json_err) => Self::parse_responses_api_sse(&resp_text, &request.model).map_err(
+                |sse_err| {
+                    format!(
+                        "failed to parse Responses API response as JSON ({json_err}) or SSE ({sse_err})"
+                    )
+                },
+            ),
+        }
     }
 
     /// Parse an OpenAI Responses API response into an `LlmResponse`.
@@ -1487,8 +1506,7 @@ impl LlmClient {
                                 let block_type =
                                     block.get("type").and_then(|v| v.as_str()).unwrap_or("");
                                 if block_type == "output_text" {
-                                    if let Some(text) = block.get("text").and_then(|v| v.as_str())
-                                    {
+                                    if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
                                         content.push_str(text);
                                     }
                                 }
@@ -1534,14 +1552,8 @@ impl LlmClient {
         let usage = json
             .get("usage")
             .map(|u| LlmUsage {
-                input_tokens: u
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
-                output_tokens: u
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
+                input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
             })
             .unwrap_or(LlmUsage {
                 input_tokens: 0,
@@ -1578,6 +1590,182 @@ impl LlmClient {
             tool_calls = tool_calls.len(),
             "Responses API completion received"
         );
+
+        Ok(LlmResponse {
+            content,
+            model: response_model,
+            usage,
+            tool_calls,
+            stop_reason,
+        })
+    }
+
+    /// Parse an OpenAI Responses API SSE payload into an `LlmResponse`.
+    ///
+    /// Expected stream event types include:
+    /// - `response.output_text.delta`
+    /// - `response.output_item.added`
+    /// - `response.function_call_arguments.delta`
+    /// - `response.function_call_arguments.done`
+    /// - `response.completed`
+    fn parse_responses_api_sse(sse: &str, model: &str) -> Result<LlmResponse, String> {
+        let mut content = String::new();
+        let mut tool_calls = Vec::new();
+        let mut current_tool_name = String::new();
+        let mut current_tool_call_id = String::new();
+        let mut current_tool_args = String::new();
+        let mut usage = LlmUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let mut stop_reason = None;
+        let mut response_model = model.to_string();
+        let mut current_event_type = String::new();
+        let mut saw_stream_event = false;
+
+        for line in sse.lines() {
+            if let Some(event_name) = line.strip_prefix("event: ") {
+                current_event_type = event_name.trim().to_string();
+                saw_stream_event = true;
+                continue;
+            }
+
+            let data = match line.strip_prefix("data: ") {
+                Some(d) => d,
+                None => continue,
+            };
+            if data == "[DONE]" {
+                saw_stream_event = true;
+                break;
+            }
+
+            let event: Value = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let event_type = if current_event_type.is_empty() {
+                event.get("type").and_then(|v| v.as_str()).unwrap_or("")
+            } else {
+                current_event_type.as_str()
+            };
+
+            match event_type {
+                "response.output_text.delta" => {
+                    if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                        saw_stream_event = true;
+                        content.push_str(delta);
+                    }
+                }
+                "response.output_item.added" => {
+                    if let Some(item) = event.get("item") {
+                        let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        if item_type == "function_call" {
+                            saw_stream_event = true;
+                            current_tool_name = item
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            current_tool_call_id = item
+                                .get("call_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            current_tool_args.clear();
+                        }
+                    }
+                }
+                "response.function_call_arguments.delta" => {
+                    if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                        saw_stream_event = true;
+                        current_tool_args.push_str(delta);
+                    }
+                }
+                "response.function_call_arguments.done" | "response.output_item.done" => {
+                    let item = event.get("item");
+                    let name = item
+                        .and_then(|i| i.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&current_tool_name);
+                    let call_id = item
+                        .and_then(|i| i.get("call_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&current_tool_call_id);
+                    let args_str = event
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            item.and_then(|i| i.get("arguments"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .unwrap_or(&current_tool_args);
+                    let input = serde_json::from_str(args_str)
+                        .unwrap_or(Value::Object(serde_json::Map::new()));
+
+                    if !name.is_empty() {
+                        saw_stream_event = true;
+                        tool_calls.push(LlmToolCall {
+                            id: call_id.to_string(),
+                            name: name.to_string(),
+                            input,
+                        });
+                    }
+
+                    current_tool_name.clear();
+                    current_tool_call_id.clear();
+                    current_tool_args.clear();
+                }
+                "response.completed" => {
+                    saw_stream_event = true;
+                    if let Some(response) = event.get("response") {
+                        if let Ok(parsed) = Self::parse_responses_api_response(response, model) {
+                            if content.is_empty() {
+                                content = parsed.content;
+                            }
+                            if tool_calls.is_empty() {
+                                tool_calls = parsed.tool_calls;
+                            }
+                            usage = parsed.usage;
+                            stop_reason = parsed.stop_reason;
+                            response_model = parsed.model;
+                        } else {
+                            if let Some(m) = response.get("model").and_then(|v| v.as_str()) {
+                                response_model = m.to_string();
+                            }
+                            if let Some(u) = response.get("usage") {
+                                if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
+                                    usage.input_tokens = inp;
+                                }
+                                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
+                                    usage.output_tokens = out;
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+                _ => {}
+            }
+
+            current_event_type.clear();
+        }
+
+        if !saw_stream_event {
+            return Err("no SSE events found".to_string());
+        }
+
+        if !tool_calls.is_empty() && stop_reason == Some(StopReason::EndTurn) {
+            stop_reason = Some(StopReason::ToolUse);
+        }
+
+        if stop_reason.is_none() {
+            stop_reason = Some(if tool_calls.is_empty() {
+                StopReason::EndTurn
+            } else {
+                StopReason::ToolUse
+            });
+        }
 
         Ok(LlmResponse {
             content,
@@ -1627,8 +1815,8 @@ impl LlmClient {
                     .get("arguments")
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
-                let input: Value = serde_json::from_str(args_str)
-                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                let input: Value =
+                    serde_json::from_str(args_str).unwrap_or(Value::Object(serde_json::Map::new()));
                 tool_calls.push(LlmToolCall { id, name, input });
             }
         }
@@ -1637,10 +1825,7 @@ impl LlmClient {
         let usage = json
             .get("usage")
             .map(|u| LlmUsage {
-                input_tokens: u
-                    .get("prompt_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
+                input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                 output_tokens: u
                     .get("completion_tokens")
                     .and_then(|v| v.as_u64())
@@ -1694,7 +1879,7 @@ impl LlmClient {
 /// key availability is checked at request time.
 ///
 /// Provider detection:
-/// - Anthropic and OpenAI are always registered (standard providers).
+/// - Anthropic, OpenAI, and OpenAI Codex are always registered.
 /// - Gemini is registered if `GOOGLE_API_KEY` or `GEMINI_API_KEY` is set.
 /// - Ollama is always registered (local, no key needed). The base URL can
 ///   be overridden with `OLLAMA_BASE_URL`.
@@ -1729,6 +1914,22 @@ pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
     registry
         .register_provider("openai", ProviderConfig::OpenAi(openai_config))
         .map_err(|e| format!("failed to register OpenAI provider: {e}"))?;
+
+    // Register OpenAI Codex (ChatGPT backend) with credential-store base URL
+    // override support.
+    let openai_codex_base_url = {
+        let store = CredentialStore::load_default().unwrap_or_default();
+        provider_by_id("openai-codex").map(|p| store.resolve_base_url(p))
+    };
+    let openai_codex_config = OpenAiConfig {
+        base_url: openai_codex_base_url
+            .unwrap_or_else(|| "https://chatgpt.com/backend-api".to_string()),
+        default_model: "gpt-5.3-codex".to_string(),
+        ..Default::default()
+    };
+    registry
+        .register_provider("openai-codex", ProviderConfig::OpenAi(openai_codex_config))
+        .map_err(|e| format!("failed to register OpenAI Codex provider: {e}"))?;
 
     // Load credential store once for provider registration checks.
     let cred_store = CredentialStore::load_default().unwrap_or_default();
@@ -1789,7 +1990,7 @@ mod tests {
     /// Mutex to serialize tests that modify the HOME env var.
     /// `set_var` is process-global and not thread-safe, so tests that depend
     /// on HOME must hold this lock to avoid racing with each other.
-    static HOME_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static HOME_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     fn sample_request() -> LlmRequest {
         LlmRequest {
@@ -2006,10 +2207,7 @@ mod tests {
     fn test_openai_request_format() {
         let request = LlmRequest {
             model: "gpt-4o".into(),
-            messages: vec![
-                LlmMessage::user("Hello"),
-                LlmMessage::assistant("Hi!"),
-            ],
+            messages: vec![LlmMessage::user("Hello"), LlmMessage::assistant("Hi!")],
             temperature: Some(0.5),
             max_tokens: Some(2048),
             system_prompt: Some("Be concise.".into()),
@@ -2181,17 +2379,11 @@ mod tests {
 
         // Should allow first 100 calls.
         for i in 0..100 {
-            assert!(
-                bucket.try_consume(),
-                "call {i} should be allowed"
-            );
+            assert!(bucket.try_consume(), "call {i} should be allowed");
         }
 
         // 101st call should be denied.
-        assert!(
-            !bucket.try_consume(),
-            "101st call should be rate-limited"
-        );
+        assert!(!bucket.try_consume(), "101st call should be rate-limited");
     }
 
     // -- test_response_size_limit --
@@ -2231,6 +2423,14 @@ mod tests {
         assert_eq!(registry.resolve_provider("gpt-4-turbo"), Some("openai"));
         assert_eq!(registry.resolve_provider("o1-preview"), Some("openai"));
         assert_eq!(registry.resolve_provider("o3-mini"), Some("openai"));
+        assert_eq!(
+            registry.resolve_provider("gpt-5.3-codex"),
+            Some("openai-codex")
+        );
+        assert_eq!(
+            registry.resolve_provider("gpt-5.3-codex-spark"),
+            Some("openai-codex")
+        );
 
         // Ollama models (now route via default prefixes).
         assert_eq!(registry.resolve_provider("llama3.2"), Some("ollama"));
@@ -2242,6 +2442,7 @@ mod tests {
         // Provider configs are registered.
         assert!(registry.get_provider("anthropic").is_some());
         assert!(registry.get_provider("openai").is_some());
+        assert!(registry.get_provider("openai-codex").is_some());
         assert!(registry.get_provider("ollama").is_some());
 
         // Model resolution returns the correct provider config.
@@ -2262,7 +2463,8 @@ mod tests {
 
     #[test]
     fn test_anthropic_response_parsing() {
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "id": "msg_123",
             "type": "message",
             "role": "assistant",
@@ -2275,7 +2477,9 @@ mod tests {
                 "input_tokens": 25,
                 "output_tokens": 10
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = LlmClient::parse_anthropic_response(&json, "claude-sonnet-4-20250514").unwrap();
         assert_eq!(resp.content, "Hello! How can I help?");
@@ -2319,7 +2523,8 @@ mod tests {
 
     #[test]
     fn test_openai_response_parsing() {
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "id": "chatcmpl-123",
             "object": "chat.completion",
             "model": "gpt-4o-2024-05-13",
@@ -2336,7 +2541,9 @@ mod tests {
                 "completion_tokens": 8,
                 "total_tokens": 23
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = LlmClient::parse_openai_response(&json, "gpt-4o").unwrap();
         assert_eq!(resp.content, "Rust is a systems programming language.");
@@ -2351,7 +2558,8 @@ mod tests {
 
     #[test]
     fn test_openai_tool_call_response() {
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "id": "chatcmpl-789",
             "object": "chat.completion",
             "model": "gpt-4o",
@@ -2376,12 +2584,67 @@ mod tests {
                 "completion_tokens": 15,
                 "total_tokens": 35
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = LlmClient::parse_openai_response(&json, "gpt-4o").unwrap();
         assert!(resp.content.is_empty());
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].id, "call_abc");
+        assert_eq!(resp.tool_calls[0].name, "get_weather");
+        assert_eq!(resp.tool_calls[0].input["city"], "NYC");
+        assert_eq!(resp.stop_reason, Some(StopReason::ToolUse));
+    }
+
+    // -- test_responses_api_sse_text_parsing --
+
+    #[test]
+    fn test_responses_api_sse_text_parsing() {
+        let sse = "\
+event: response.output_text.delta\n\
+data: {\"delta\":\"Hello \"}\n\
+\n\
+event: response.output_text.delta\n\
+data: {\"delta\":\"world\"}\n\
+\n\
+event: response.completed\n\
+data: {\"response\":{\"model\":\"gpt-5.3-codex\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5}}}\n\
+";
+
+        let resp = LlmClient::parse_responses_api_sse(sse, "gpt-5.3-codex").unwrap();
+        assert_eq!(resp.content, "Hello world");
+        assert_eq!(resp.model, "gpt-5.3-codex");
+        assert_eq!(resp.usage.input_tokens, 12);
+        assert_eq!(resp.usage.output_tokens, 5);
+        assert_eq!(resp.stop_reason, Some(StopReason::EndTurn));
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    // -- test_responses_api_sse_tool_call_parsing --
+
+    #[test]
+    fn test_responses_api_sse_tool_call_parsing() {
+        let sse = "\
+event: response.output_item.added\n\
+data: {\"item\":{\"type\":\"function_call\",\"name\":\"get_weather\",\"call_id\":\"call_1\"}}\n\
+\n\
+event: response.function_call_arguments.delta\n\
+data: {\"delta\":\"{\\\"city\\\":\\\"NY\"}\n\
+\n\
+event: response.function_call_arguments.delta\n\
+data: {\"delta\":\"C\\\"}\"}\n\
+\n\
+event: response.function_call_arguments.done\n\
+data: {\"arguments\":\"{\\\"city\\\":\\\"NYC\\\"}\"}\n\
+\n\
+event: response.completed\n\
+data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"output_tokens\":7}}}\n\
+";
+
+        let resp = LlmClient::parse_responses_api_sse(sse, "gpt-5.3-codex").unwrap();
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "call_1");
         assert_eq!(resp.tool_calls[0].name, "get_weather");
         assert_eq!(resp.tool_calls[0].input["city"], "NYC");
         assert_eq!(resp.stop_reason, Some(StopReason::ToolUse));
@@ -2394,6 +2657,7 @@ mod tests {
         let registry = build_registry_from_env().unwrap();
         assert!(registry.get_provider("anthropic").is_some());
         assert!(registry.get_provider("openai").is_some());
+        assert!(registry.get_provider("openai-codex").is_some());
         // Ollama is always registered.
         assert!(registry.get_provider("ollama").is_some());
     }
@@ -2402,7 +2666,8 @@ mod tests {
 
     #[test]
     fn test_ollama_response_parsing() {
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "model": "llama3.2",
             "message": {
                 "role": "assistant",
@@ -2411,7 +2676,9 @@ mod tests {
             "done": true,
             "eval_count": 12,
             "prompt_eval_count": 8
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = LlmClient::parse_ollama_response(&json, "llama3.2").unwrap();
         assert_eq!(resp.content, "Hello! I am Llama.");
@@ -2426,7 +2693,8 @@ mod tests {
 
     #[test]
     fn test_ollama_response_with_tool_calls() {
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "model": "llama3.2",
             "message": {
                 "role": "assistant",
@@ -2442,7 +2710,9 @@ mod tests {
             "done": true,
             "eval_count": 20,
             "prompt_eval_count": 15
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = LlmClient::parse_ollama_response(&json, "llama3.2").unwrap();
         assert!(resp.content.is_empty());
@@ -2457,7 +2727,8 @@ mod tests {
 
     #[test]
     fn test_gemini_response_parsing_via_from_gemini_response() {
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "candidates": [{
                 "content": {
                     "parts": [{"text": "Hello from Gemini!"}],
@@ -2469,7 +2740,9 @@ mod tests {
                 "promptTokenCount": 10,
                 "candidatesTokenCount": 6
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let resp = from_gemini_response(&json, "gemini-2.0-flash").unwrap();
         assert_eq!(resp.content, "Hello from Gemini!");
@@ -2484,7 +2757,8 @@ mod tests {
     #[test]
     fn test_openrouter_uses_openai_format() {
         // OpenRouter responses are parsed with the OpenAI parser.
-        let json: Value = serde_json::from_str(r#"{
+        let json: Value = serde_json::from_str(
+            r#"{
             "id": "gen-123",
             "model": "anthropic/claude-sonnet-4-20250514",
             "choices": [{
@@ -2500,9 +2774,12 @@ mod tests {
                 "completion_tokens": 5,
                 "total_tokens": 15
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
-        let resp = LlmClient::parse_openai_response(&json, "anthropic/claude-sonnet-4-20250514").unwrap();
+        let resp =
+            LlmClient::parse_openai_response(&json, "anthropic/claude-sonnet-4-20250514").unwrap();
         assert_eq!(resp.content, "Via OpenRouter.");
         assert_eq!(resp.model, "anthropic/claude-sonnet-4-20250514");
         assert_eq!(resp.usage.input_tokens, 10);
@@ -2553,10 +2830,13 @@ mod tests {
         let mut registry = ProviderRegistry::new();
 
         // Set up failover: gpt-4o -> claude-sonnet -> gemini-flash
-        registry.set_failover("gpt-4o", vec![
-            "claude-sonnet-4-20250514".to_string(),
-            "gemini-2.0-flash".to_string(),
-        ]);
+        registry.set_failover(
+            "gpt-4o",
+            vec![
+                "claude-sonnet-4-20250514".to_string(),
+                "gemini-2.0-flash".to_string(),
+            ],
+        );
 
         let chain = registry.get_failover_chain("gpt-4o");
         assert_eq!(chain.len(), 3);
@@ -2665,7 +2945,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_no_token() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock();
         // Point HOME to a temp dir so FileTokenStore::new finds no tokens.
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
@@ -2687,7 +2967,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_valid_token() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2715,7 +2995,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_expired_token_no_refresh() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2741,7 +3021,7 @@ mod tests {
 
     #[test]
     fn test_oauth_resolver_expired_with_refresh_falls_back() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2768,7 +3048,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_prefers_oauth() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2786,9 +3066,8 @@ mod tests {
         let mut client = LlmClient::new(registry).unwrap();
         client.oauth_resolver = OAuthTokenResolver::new();
 
-        let key = client.resolve_api_key_with_oauth("anthropic", || {
-            Ok("env-key-fallback".to_string())
-        });
+        let key =
+            client.resolve_api_key_with_oauth("anthropic", || Ok("env-key-fallback".to_string()));
         assert_eq!(key.unwrap(), "oauth-preferred");
 
         if let Some(h) = old_home {
@@ -2800,7 +3079,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_falls_back_to_env() {
-        let _guard = HOME_MUTEX.lock().unwrap();
+        let _guard = HOME_MUTEX.lock();
         let tmp = tempfile::tempdir().unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", tmp.path());
@@ -2810,9 +3089,8 @@ mod tests {
         let mut client = LlmClient::new(registry).unwrap();
         client.oauth_resolver = OAuthTokenResolver::new();
 
-        let key = client.resolve_api_key_with_oauth("anthropic", || {
-            Ok("env-key-value".to_string())
-        });
+        let key =
+            client.resolve_api_key_with_oauth("anthropic", || Ok("env-key-value".to_string()));
         assert_eq!(key.unwrap(), "env-key-value");
 
         if let Some(h) = old_home {
@@ -2824,13 +3102,25 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_no_resolver() {
+        let _guard = HOME_MUTEX.lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        let old_anthropic = std::env::var("ANTHROPIC_API_KEY").ok();
+        std::env::set_var("HOME", tmp.path());
+        std::env::remove_var("ANTHROPIC_API_KEY");
+
         let registry = build_registry_from_env().unwrap();
         let mut client = LlmClient::new(registry).unwrap();
         client.oauth_resolver = None;
 
-        let key = client.resolve_api_key_with_oauth("anthropic", || {
-            Ok("only-env".to_string())
-        });
+        let key = client.resolve_api_key_with_oauth("anthropic", || Ok("only-env".to_string()));
         assert_eq!(key.unwrap(), "only-env");
+
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        if let Some(k) = old_anthropic {
+            std::env::set_var("ANTHROPIC_API_KEY", k);
+        }
     }
 }

@@ -4,7 +4,7 @@
 //! implementation that calls the embeddings API. API keys are read
 //! exclusively from environment variables -- never from config files.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Instant;
 
 use anyhow::{bail, ensure, Context, Result};
@@ -188,7 +188,7 @@ impl OpenAiEmbeddingProvider {
     async fn wait_for_rate_limit(&self) {
         loop {
             {
-                let mut limiter = self.rate_limiter.lock().expect("rate limiter poisoned");
+                let mut limiter = self.rate_limiter.lock();
                 if limiter.try_consume() {
                     return;
                 }
@@ -204,10 +204,7 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
         ensure!(!texts.is_empty(), "embed called with empty text list");
 
         for (i, text) in texts.iter().enumerate() {
-            ensure!(
-                !text.is_empty(),
-                "embed input at index {i} is empty"
-            );
+            ensure!(!text.is_empty(), "embed input at index {i} is empty");
             ensure!(
                 text.len() <= MAX_INPUT_CHARS,
                 "embed input at index {i} exceeds maximum length ({} > {MAX_INPUT_CHARS})",
@@ -233,10 +230,7 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let err_body = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable>".into());
+            let err_body = resp.text().await.unwrap_or_else(|_| "<unreadable>".into());
             bail!("OpenAI embeddings API returned {status}: {err_body}");
         }
 
@@ -457,7 +451,10 @@ mod tests {
     fn test_cosine_similarity_identical() {
         let v = vec![1.0, 2.0, 3.0];
         let sim = cosine_similarity(&v, &v);
-        assert!((sim - 1.0).abs() < 1e-6, "identical vectors should yield 1.0, got {sim}");
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "identical vectors should yield 1.0, got {sim}"
+        );
     }
 
     #[test]
@@ -465,7 +462,10 @@ mod tests {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![0.0, 1.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-6, "orthogonal vectors should yield 0.0, got {sim}");
+        assert!(
+            sim.abs() < 1e-6,
+            "orthogonal vectors should yield 0.0, got {sim}"
+        );
     }
 
     #[test]
@@ -473,7 +473,10 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![-1.0, -2.0, -3.0];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim + 1.0).abs() < 1e-6, "opposite vectors should yield -1.0, got {sim}");
+        assert!(
+            (sim + 1.0).abs() < 1e-6,
+            "opposite vectors should yield -1.0, got {sim}"
+        );
     }
 
     // -- Blob roundtrip test -------------------------------------------------
@@ -514,7 +517,10 @@ mod tests {
         };
 
         let result = OpenAiEmbeddingProvider::new(&config);
-        assert!(result.is_err(), "should fail when API key env var is missing");
+        assert!(
+            result.is_err(),
+            "should fail when API key env var is missing"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains(unique_var),

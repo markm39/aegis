@@ -169,6 +169,20 @@ pub fn classify_action(action: &ActionKind) -> ActionRisk {
         // bridges STT/TTS providers. Classified as Medium because it manages
         // sessions with external API implications but is recoverable.
         ActionKind::VoiceSession { .. } => ActionRisk::Medium,
+        // Administrative agent lifecycle changes are High because they alter
+        // fleet composition and can disrupt running workflows.
+        ActionKind::AdminAgentAdd { .. } => ActionRisk::High,
+        ActionKind::AdminAgentRemove { .. } => ActionRisk::High,
+        // Hook installation writes executable scripts and changes daemon behavior.
+        // Classified as High because a malicious hook runs arbitrary code.
+        ActionKind::AdminHookInstall { .. } => ActionRisk::High,
+        ActionKind::AdminHookRemove { .. } => ActionRisk::High,
+        // Config changes alter daemon behavior. Classified as Medium because they
+        // are recoverable but can weaken security controls.
+        ActionKind::AdminConfigChange { .. } => ActionRisk::Medium,
+        // Audit purge is irreversible and destroys compliance records.
+        // Classified as Critical because it permanently removes the audit trail.
+        ActionKind::AdminAuditPurge { .. } => ActionRisk::Critical,
     }
 }
 
@@ -374,8 +388,7 @@ mod tests {
 
     #[test]
     fn test_custom_override_applied() {
-        let overrides = ClassificationOverrides::new()
-            .with_override("bash", ActionRisk::Critical);
+        let overrides = ClassificationOverrides::new().with_override("bash", ActionRisk::Critical);
 
         let action = ActionKind::ToolCall {
             tool: "bash".into(),
@@ -386,8 +399,7 @@ mod tests {
 
     #[test]
     fn test_override_does_not_affect_others() {
-        let overrides = ClassificationOverrides::new()
-            .with_override("bash", ActionRisk::Critical);
+        let overrides = ClassificationOverrides::new().with_override("bash", ActionRisk::Critical);
 
         let action = ActionKind::ToolCall {
             tool: "read_file".into(),

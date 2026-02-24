@@ -32,6 +32,7 @@ pub enum SecurityPresetKind {
 
 /// Top-level daemon configuration, loaded from `~/.aegis/daemon/daemon.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DaemonConfig {
     /// Optional fleet-wide goal/mission shared by all agents.
     #[serde(default)]
@@ -519,6 +520,7 @@ pub struct PluginConfig {
 
 /// Configuration for a single agent slot in the fleet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSlotConfig {
     /// Unique name for this slot (used in CLI commands and logs).
     pub name: String,

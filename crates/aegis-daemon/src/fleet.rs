@@ -157,7 +157,8 @@ impl Fleet {
         }
 
         let slot_config = slot.config.clone();
-        let (output_tx, output_rx) = mpsc::channel::<String>();
+        // Bounded channel provides backpressure: chatty agents block rather than OOM the daemon.
+        let (output_tx, output_rx) = mpsc::sync_channel::<String>(1000);
 
         // Create command channel: fleet sends commands, supervisor receives
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -177,13 +178,8 @@ impl Fleet {
         let fleet_goal = self.fleet_goal.clone();
         let child_pid = slot.child_pid.clone();
 
-        // Clear and share session_id for state persistence.
-        // Use unwrap_or_else to handle a poisoned mutex (agent thread panicked
-        // while holding the lock) -- recover rather than crashing the daemon.
-        match slot.session_id.lock() {
-            Ok(mut guard) => *guard = None,
-            Err(poisoned) => *poisoned.into_inner() = None,
-        }
+        // Clear session_id before spawning the next run.
+        *slot.session_id.lock() = None;
         let shared_session_id = slot.session_id.clone();
 
         let handle = thread::Builder::new()

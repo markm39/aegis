@@ -405,16 +405,24 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::MemoryCapture { agent_id, .. } => Ok(("MemoryCapture", agent_id.as_str())),
         ActionKind::AcpConnect { endpoint, .. } => Ok(("AcpConnect", endpoint.as_str())),
         ActionKind::AcpSend { endpoint, .. } => Ok(("AcpSend", endpoint.as_str())),
-        ActionKind::ImageProcess { content_hash, .. } => Ok(("ImageProcess", content_hash.as_str())),
+        ActionKind::ImageProcess { content_hash, .. } => {
+            Ok(("ImageProcess", content_hash.as_str()))
+        }
         ActionKind::OAuthExchange { provider, .. } => Ok(("OAuthExchange", provider.as_str())),
         ActionKind::AcpServerReceive { source, .. } => Ok(("AcpServerReceive", source.as_str())),
         ActionKind::TtsSynthesize { provider, .. } => Ok(("TtsSynthesize", provider.as_str())),
-        ActionKind::TranscribeAudio { content_hash, .. } => Ok(("TranscribeAudio", content_hash.as_str())),
-        ActionKind::VideoProcess { content_hash, .. } => Ok(("VideoProcess", content_hash.as_str())),
+        ActionKind::TranscribeAudio { content_hash, .. } => {
+            Ok(("TranscribeAudio", content_hash.as_str()))
+        }
+        ActionKind::VideoProcess { content_hash, .. } => {
+            Ok(("VideoProcess", content_hash.as_str()))
+        }
         ActionKind::AcpTranslate { session_id, .. } => Ok(("AcpTranslate", session_id.as_str())),
         ActionKind::CopilotAuth { grant_type, .. } => Ok(("CopilotAuth", grant_type.as_str())),
         ActionKind::GeminiApiCall { endpoint, .. } => Ok(("GeminiApiCall", endpoint.as_str())),
-        ActionKind::ProcessAttachment { content_hash, .. } => Ok(("ProcessAttachment", content_hash.as_str())),
+        ActionKind::ProcessAttachment { content_hash, .. } => {
+            Ok(("ProcessAttachment", content_hash.as_str()))
+        }
         ActionKind::CanvasCreate { canvas_id, .. } => Ok(("CanvasCreate", canvas_id.as_str())),
         ActionKind::CanvasUpdate { canvas_id, .. } => Ok(("CanvasUpdate", canvas_id.as_str())),
         ActionKind::DevicePair { device_id, .. } => Ok(("DevicePair", device_id.as_str())),
@@ -422,12 +430,24 @@ fn extract_action_info(kind: &ActionKind) -> Result<(&str, &str), AegisError> {
         ActionKind::DeviceAuth { device_id, .. } => Ok(("DeviceAuth", device_id.as_str())),
         ActionKind::LlmComplete { endpoint, .. } => Ok(("LlmComplete", endpoint.as_str())),
         ActionKind::RenderA2UI { spec_id, .. } => Ok(("RenderA2UI", spec_id.as_str())),
-        ActionKind::GenerateSetupCode { endpoint, .. } => Ok(("GenerateSetupCode", endpoint.as_str())),
+        ActionKind::GenerateSetupCode { endpoint, .. } => {
+            Ok(("GenerateSetupCode", endpoint.as_str()))
+        }
         ActionKind::DeviceCommand { device_id, .. } => Ok(("DeviceCommand", device_id.as_str())),
         ActionKind::ManageDevice { device_id, .. } => Ok(("ManageDevice", device_id.as_str())),
         ActionKind::MakeVoiceCall { to_number, .. } => Ok(("MakeVoiceCall", to_number.as_str())),
-        ActionKind::SpeechRecognition { provider, .. } => Ok(("SpeechRecognition", provider.as_str())),
+        ActionKind::SpeechRecognition { provider, .. } => {
+            Ok(("SpeechRecognition", provider.as_str()))
+        }
         ActionKind::VoiceSession { agent_id, .. } => Ok(("VoiceSession", agent_id.as_str())),
+        ActionKind::AdminAgentAdd { agent_name } => Ok(("AdminAgentAdd", agent_name.as_str())),
+        ActionKind::AdminAgentRemove { agent_name } => {
+            Ok(("AdminAgentRemove", agent_name.as_str()))
+        }
+        ActionKind::AdminHookInstall { event, .. } => Ok(("AdminHookInstall", event.as_str())),
+        ActionKind::AdminHookRemove { event } => Ok(("AdminHookRemove", event.as_str())),
+        ActionKind::AdminConfigChange { key } => Ok(("AdminConfigChange", key.as_str())),
+        ActionKind::AdminAuditPurge { .. } => Ok(("AdminAuditPurge", "audit")),
     }
 }
 

@@ -30,7 +30,7 @@ const DASHBOARD_HTML: &str = include_str!("../assets/dashboard/index.html");
 /// request is rejected with 429 Too Many Requests.
 #[derive(Clone)]
 struct RateLimiter {
-    buckets: Arc<std::sync::Mutex<HashMap<IpAddr, (f64, Instant)>>>,
+    buckets: Arc<parking_lot::Mutex<HashMap<IpAddr, (f64, Instant)>>>,
     burst: f64,
     per_sec: f64,
 }
@@ -38,7 +38,7 @@ struct RateLimiter {
 impl RateLimiter {
     fn new(burst: u32, per_sec: f64) -> Self {
         Self {
-            buckets: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            buckets: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             burst: burst as f64,
             per_sec,
         }
@@ -48,11 +48,9 @@ impl RateLimiter {
     ///
     /// Returns `true` if the request is permitted, `false` if rate-limited.
     fn check(&self, ip: IpAddr) -> bool {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buckets = self.buckets.lock();
         let now = Instant::now();
-        let (tokens, last) = buckets
-            .entry(ip)
-            .or_insert((self.burst, now));
+        let (tokens, last) = buckets.entry(ip).or_insert((self.burst, now));
         let elapsed = now.duration_since(*last).as_secs_f64();
         *tokens = (*tokens + elapsed * self.per_sec).min(self.burst);
         *last = now;
@@ -727,28 +725,26 @@ async fn handle_gateway_request(
                 error: None,
             }
         }
-        "fleet.status" => {
-            match send_cmd(&state.cmd_tx, DaemonCommand::ListAgents).await {
-                Ok(resp) if resp.ok => GatewayResponse {
-                    id,
-                    ok: true,
-                    result: resp.data,
-                    error: None,
-                },
-                Ok(resp) => GatewayResponse {
-                    id,
-                    ok: false,
-                    result: None,
-                    error: Some(resp.message),
-                },
-                Err(e) => GatewayResponse {
-                    id,
-                    ok: false,
-                    result: None,
-                    error: Some(e),
-                },
-            }
-        }
+        "fleet.status" => match send_cmd(&state.cmd_tx, DaemonCommand::ListAgents).await {
+            Ok(resp) if resp.ok => GatewayResponse {
+                id,
+                ok: true,
+                result: resp.data,
+                error: None,
+            },
+            Ok(resp) => GatewayResponse {
+                id,
+                ok: false,
+                result: None,
+                error: Some(resp.message),
+            },
+            Err(e) => GatewayResponse {
+                id,
+                ok: false,
+                result: None,
+                error: Some(e),
+            },
+        },
         "agent.approve" => {
             let params: Result<NameRequestParams, _> = serde_json::from_value(req.params);
             let params = match params {
@@ -911,28 +907,26 @@ async fn handle_gateway_request(
                 },
             }
         }
-        "config.reload" => {
-            match send_cmd(&state.cmd_tx, DaemonCommand::ReloadConfig).await {
-                Ok(resp) if resp.ok => GatewayResponse {
-                    id,
-                    ok: true,
-                    result: resp.data,
-                    error: None,
-                },
-                Ok(resp) => GatewayResponse {
-                    id,
-                    ok: false,
-                    result: None,
-                    error: Some(resp.message),
-                },
-                Err(e) => GatewayResponse {
-                    id,
-                    ok: false,
-                    result: None,
-                    error: Some(e),
-                },
-            }
-        }
+        "config.reload" => match send_cmd(&state.cmd_tx, DaemonCommand::ReloadConfig).await {
+            Ok(resp) if resp.ok => GatewayResponse {
+                id,
+                ok: true,
+                result: resp.data,
+                error: None,
+            },
+            Ok(resp) => GatewayResponse {
+                id,
+                ok: false,
+                result: None,
+                error: Some(resp.message),
+            },
+            Err(e) => GatewayResponse {
+                id,
+                ok: false,
+                result: None,
+                error: Some(e),
+            },
+        },
         "tool.execute" => {
             let params: Result<ToolExecuteParams, _> = serde_json::from_value(req.params);
             let params = match params {

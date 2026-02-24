@@ -4,10 +4,11 @@
 //! status, restart count, thread handle, and recent output. The fleet manager
 //! uses slots to monitor agent health and apply restart policies.
 
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -198,10 +199,7 @@ impl AgentSlot {
             None => return 0,
         };
 
-        let mut buf = match self.recent_output.lock() {
-            Ok(buf) => buf,
-            Err(_) => return 0,
-        };
+        let mut buf = self.recent_output.lock();
 
         let stream_kind = self.stream_kind;
         let mut count = 0;
@@ -234,10 +232,7 @@ impl AgentSlot {
 
     /// Append a synthetic output line (e.g., user chat input) to the buffer.
     pub fn push_output_line(&self, line: String) {
-        let mut buf = match self.recent_output.lock() {
-            Ok(buf) => buf,
-            Err(_) => return,
-        };
+        let mut buf = self.recent_output.lock();
         if buf.len() >= self.output_capacity {
             buf.pop_front();
         }
@@ -252,9 +247,7 @@ impl AgentSlot {
         let Some(next) = parse_fallback_line(line) else {
             return;
         };
-        if let Ok(mut guard) = self.fallback_state.lock() {
-            *guard = Some(next);
-        }
+        *self.fallback_state.lock() = Some(next);
     }
 
     /// Drain rich updates from the supervisor's update channel.
@@ -328,8 +321,9 @@ impl AgentSlot {
                         self.tool_session_id = Some(id);
                     }
                 }
-                // OutputLine, PromptDecided are handled elsewhere
-                _ => {}
+                // OutputLine is mirrored through the output channel, not update channel.
+                // PromptDecided is logged by the supervisor directly.
+                PilotUpdate::OutputLine(_) | PilotUpdate::PromptDecided { .. } => {}
             }
         }
         notable
@@ -337,10 +331,7 @@ impl AgentSlot {
 
     /// Get the most recent N output lines.
     pub fn get_recent_output(&self, n: usize) -> Vec<String> {
-        let buf = match self.recent_output.lock() {
-            Ok(buf) => buf,
-            Err(_) => return vec![],
-        };
+        let buf = self.recent_output.lock();
 
         buf.iter().rev().take(n).rev().cloned().collect()
     }

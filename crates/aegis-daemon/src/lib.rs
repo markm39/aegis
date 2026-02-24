@@ -66,9 +66,10 @@ pub mod voice;
 pub mod voice_gateway;
 pub mod web_tools;
 
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
@@ -1468,13 +1469,13 @@ impl DaemonRuntime {
         if stream.region != *region {
             return None;
         }
-        let ring = stream.frames.lock().ok()?;
+        let ring = stream.frames.lock();
         ring.latest().cloned()
     }
 
     fn latest_cached_frame_any(&self, name: &str) -> Option<CachedFrame> {
         let stream = self.capture_streams.get(name)?;
-        let ring = stream.frames.lock().ok()?;
+        let ring = stream.frames.lock();
         ring.latest().cloned()
     }
 
@@ -1525,13 +1526,11 @@ impl DaemonRuntime {
                             if let (Some(frame), Some(frame_id)) =
                                 (output.frame, output.execution.result.frame_id)
                             {
-                                if let Ok(mut ring) = frames_clone.lock() {
-                                    ring.push(CachedFrame {
-                                        payload: frame,
-                                        frame_id,
-                                        captured_at: Instant::now(),
-                                    });
-                                }
+                                frames_clone.lock().push(CachedFrame {
+                                    payload: frame,
+                                    frame_id,
+                                    captured_at: Instant::now(),
+                                });
                             }
                         }
                         Err(e) => {
@@ -2184,11 +2183,7 @@ impl DaemonRuntime {
                         };
                         let tool = self.fleet.agent_tool_name(name).unwrap_or_default();
                         let config = self.fleet.agent_config(name)?;
-                        let fallback = slot
-                            .fallback_state
-                            .lock()
-                            .ok()
-                            .and_then(|state| state.clone());
+                        let fallback = slot.fallback_state.lock().clone();
                         Some(AgentSummary {
                             name: name.clone(),
                             status,
@@ -2228,11 +2223,7 @@ impl DaemonRuntime {
                     }
                     other => other.clone(),
                 };
-                let fallback = slot
-                    .fallback_state
-                    .lock()
-                    .ok()
-                    .and_then(|state| state.clone());
+                let fallback = slot.fallback_state.lock().clone();
                 let detail = AgentDetail {
                     name: name.clone(),
                     status,
@@ -2244,11 +2235,7 @@ impl DaemonRuntime {
                         _ => None,
                     },
                     uptime_secs: slot.started_at.map(|t| t.elapsed().as_secs()),
-                    session_id: slot
-                        .session_id
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .map(|u| u.to_string()),
+                    session_id: slot.session_id.lock().map(|u| u.to_string()),
                     role: slot.config.role.clone(),
                     agent_goal: slot.config.agent_goal.clone(),
                     context: slot.config.context.clone(),
@@ -3511,7 +3498,7 @@ impl DaemonRuntime {
                     let fallback = self
                         .fleet
                         .slot(&name)
-                        .and_then(|slot| slot.fallback_state.lock().ok().and_then(|s| s.clone()));
+                        .and_then(|slot| slot.fallback_state.lock().clone());
 
                     agents.push(DashboardAgent {
                         name,
@@ -6186,10 +6173,7 @@ impl DaemonRuntime {
 
         for name in self.fleet.agent_names() {
             if let Some(slot) = self.fleet.slot(&name) {
-                let sid = *slot
-                    .session_id
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let sid = *slot.session_id.lock();
                 daemon_state.agents.push(state::AgentState {
                     name: name.clone(),
                     was_running: slot.is_thread_alive(),
@@ -7477,9 +7461,9 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         runtime.fleet.slot_mut("orchestrator").unwrap().command_tx = Some(cmd_tx);
         if let Some(slot) = runtime.fleet.slot("worker-sub-1") {
-            if let Ok(mut output) = slot.recent_output.lock() {
-                output.push_back("subagent completed task".to_string());
-            }
+            slot.recent_output
+                .lock()
+                .push_back("subagent completed task".to_string());
         }
 
         runtime.relay_subagent_results(&[(
