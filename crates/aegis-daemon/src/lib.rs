@@ -933,6 +933,11 @@ pub struct DaemonRuntime {
     push_rate_limiter: aegis_alert::push::PushRateLimiter,
     /// When the last audit retention check ran.
     last_retention_check: Instant,
+    /// Sender end of the alert channel. Cloned into each transient AuditStore
+    /// so insert_entry() can forward events to the dispatcher thread.
+    alert_tx: Option<std::sync::mpsc::SyncSender<aegis_alert::AlertEvent>>,
+    /// Join handle for the alert dispatcher background thread.
+    alert_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl DaemonRuntime {
@@ -1147,6 +1152,39 @@ impl DaemonRuntime {
             }
         };
 
+        // Spawn alert dispatcher thread if alert rules are configured.
+        let (alert_tx, alert_thread) = if !config.alerts.is_empty() {
+            let (tx, rx) = std::sync::mpsc::sync_channel(256);
+            let push_db = aegis_config
+                .ledger_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("push_subscriptions.db");
+            let dispatcher_config = aegis_alert::dispatcher::DispatcherConfig {
+                rules: config.alerts.clone(),
+                config_name: aegis_config.name.clone(),
+                db_path: aegis_config.ledger_path.to_string_lossy().into_owned(),
+                push_db_path: Some(push_db.to_string_lossy().into_owned()),
+                vapid_config: None,
+            };
+            match std::thread::Builder::new()
+                .name("aegis-alert-dispatcher".into())
+                .spawn(move || {
+                    aegis_alert::dispatcher::run(dispatcher_config, rx);
+                }) {
+                Ok(handle) => {
+                    info!(rules = config.alerts.len(), "alert dispatcher started");
+                    (Some(tx), Some(handle))
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to spawn alert dispatcher thread");
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
+
         Self {
             tokio_rt,
             fleet,
@@ -1221,6 +1259,8 @@ impl DaemonRuntime {
             push_store,
             push_rate_limiter: aegis_alert::push::PushRateLimiter::new(60),
             last_retention_check: Instant::now(),
+            alert_tx,
+            alert_thread,
         }
     }
 
@@ -1279,6 +1319,9 @@ impl DaemonRuntime {
             Err(e) => {
                 warn!(error = %e, "invalid redaction config; proceeding without redaction");
             }
+        }
+        if let Some(ref tx) = self.alert_tx {
+            store.set_alert_sender(tx.clone());
         }
         Ok(store)
     }
@@ -1945,6 +1988,14 @@ impl DaemonRuntime {
 
         // Save final state
         self.save_state();
+
+        // Shut down the alert dispatcher (drop sender to close channel, then join).
+        drop(self.alert_tx.take());
+        if let Some(handle) = self.alert_thread.take() {
+            if let Err(e) = handle.join() {
+                warn!("alert dispatcher thread panicked: {e:?}");
+            }
+        }
 
         // Clean up
         persistence::remove_pid_file();
