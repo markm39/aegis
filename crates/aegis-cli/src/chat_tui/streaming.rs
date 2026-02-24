@@ -716,8 +716,11 @@ fn stream_openai_responses(
         }
     }
 
-    if let Some(temp) = params.temperature {
-        body["temperature"] = serde_json::json!(temp);
+    // ChatGPT Codex backend does not accept `temperature`.
+    if !is_codex_backend {
+        if let Some(temp) = params.temperature {
+            body["temperature"] = serde_json::json!(temp);
+        }
     }
     // ChatGPT Codex backend does not accept `max_output_tokens`.
     if !is_codex_backend {

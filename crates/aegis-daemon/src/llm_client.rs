@@ -1410,8 +1410,11 @@ impl LlmClient {
             body["max_output_tokens"] = serde_json::json!(max_tokens);
         }
 
-        if let Some(temp) = request.temperature {
-            body["temperature"] = serde_json::json!(temp);
+        // ChatGPT Codex backend does not accept `temperature`.
+        if !is_codex_backend {
+            if let Some(temp) = request.temperature {
+                body["temperature"] = serde_json::json!(temp);
+            }
         }
 
         if !request.tools.is_empty() {
