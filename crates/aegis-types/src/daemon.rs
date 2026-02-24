@@ -854,6 +854,11 @@ pub enum AgentStatus {
     Stopping,
     /// Slot is disabled in configuration.
     Disabled,
+    /// Waiting for an execution lane slot.
+    Queued {
+        /// The lane the agent is waiting for.
+        lane: String,
+    },
 }
 
 impl std::fmt::Display for AgentStatus {
@@ -879,6 +884,7 @@ impl std::fmt::Display for AgentStatus {
             }
             AgentStatus::Stopping => write!(f, "Stopping"),
             AgentStatus::Disabled => write!(f, "Disabled"),
+            AgentStatus::Queued { lane } => write!(f, "Queued (lane {lane})"),
         }
     }
 }
@@ -1124,6 +1130,13 @@ mod tests {
             "Failed (exit 1, 5 restarts)"
         );
         assert_eq!(AgentStatus::Disabled.to_string(), "Disabled");
+        assert_eq!(
+            AgentStatus::Queued {
+                lane: "gpu".into()
+            }
+            .to_string(),
+            "Queued (lane gpu)"
+        );
     }
 
     #[test]

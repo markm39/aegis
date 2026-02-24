@@ -22,6 +22,7 @@ use aegis_types::daemon::{
 };
 use aegis_types::AegisConfig;
 
+use crate::execution_lanes::{LaneManager, DEFAULT_LANE};
 use crate::lifecycle;
 use crate::slot::{AgentSlot, NotableEvent, PendingPromptInfo};
 
@@ -44,6 +45,8 @@ pub struct Fleet {
     rt_handle: Option<tokio::runtime::Handle>,
     /// PII redaction config applied to per-agent observer/proxy audit stores.
     redaction: RedactionConfig,
+    /// Execution lane manager for concurrency control across agent groups.
+    lane_manager: LaneManager,
 }
 
 impl Fleet {
@@ -70,6 +73,22 @@ impl Fleet {
         }
         let (audit_writer, audit_writer_thread) = AuditWriter::spawn(store);
 
+        let lane_manager = match LaneManager::new(config.lanes.clone()) {
+            Ok(mgr) => {
+                if !config.lanes.is_empty() {
+                    info!(
+                        lanes = config.lanes.len(),
+                        "execution lanes initialized"
+                    );
+                }
+                mgr
+            }
+            Err(e) => {
+                warn!(error = %e, "invalid lane config, using default lane only");
+                LaneManager::new(vec![]).expect("default lane manager")
+            }
+        };
+
         Self {
             slots,
             default_aegis_config: aegis_config,
@@ -79,6 +98,7 @@ impl Fleet {
             audit_writer_thread: Some(audit_writer_thread),
             rt_handle: None,
             redaction: config.redaction.clone(),
+            lane_manager,
         }
     }
 
@@ -166,7 +186,8 @@ impl Fleet {
 
     /// Start a specific agent by name.
     pub fn start_agent(&mut self, name: &str) {
-        // Pre-compute values before mutable borrow to avoid borrow conflict.
+        // All read-only checks use immutable borrows so lane_manager can be
+        // borrowed mutably before the first mutable slot access.
         let is_orchestrator = self
             .slots
             .get(name)
@@ -179,9 +200,27 @@ impl Fleet {
         } else {
             None
         };
-        // Build per-agent AegisConfig before the mutable borrow on slots.
-        let aegis_config = match self.slots.get(name) {
-            Some(s) => self.build_agent_aegis_config(&s.config),
+
+        // Early-exit checks with immutable borrows.
+        let (lane_name, aegis_config) = match self.slots.get(name) {
+            Some(s) => {
+                if !s.config.enabled {
+                    warn!(agent = name, "start_agent: agent is disabled, use enable first");
+                    return;
+                }
+                if s.is_thread_alive() {
+                    info!(agent = name, "agent already running, skipping start");
+                    return;
+                }
+                let lane = s
+                    .config
+                    .lane
+                    .as_deref()
+                    .unwrap_or(DEFAULT_LANE)
+                    .to_string();
+                let cfg = self.build_agent_aegis_config(&s.config);
+                (lane, cfg)
+            }
             None => {
                 warn!(agent = name, "start_agent: unknown agent");
                 return;
@@ -189,26 +228,31 @@ impl Fleet {
         };
         let toolkit_config = self.toolkit_config.clone();
 
-        let slot = match self.slots.get_mut(name) {
-            Some(s) => s,
-            None => {
-                warn!(agent = name, "start_agent: unknown agent");
+        // Check execution lane capacity before spawning.
+        match self.lane_manager.acquire(&lane_name, name) {
+            Ok(true) => { /* slot acquired, proceed with spawn */ }
+            Ok(false) => {
+                // Lane is full; agent has been queued inside LaneManager.
+                if let Some(s) = self.slots.get_mut(name) {
+                    s.status = AgentStatus::Queued {
+                        lane: lane_name.clone(),
+                    };
+                }
+                info!(agent = name, lane = %lane_name, "queued for lane capacity");
                 return;
             }
+            Err(e) => {
+                // Lane doesn't exist or invalid name -- log and proceed in default.
+                warn!(agent = name, lane = %lane_name, error = %e, "lane acquire failed, using default");
+                let _ = self.lane_manager.acquire(DEFAULT_LANE, name);
+            }
+        }
+
+        // Now safe to borrow slot mutably for spawn setup.
+        let slot = match self.slots.get_mut(name) {
+            Some(s) => s,
+            None => return,
         };
-
-        if !slot.config.enabled {
-            warn!(
-                agent = name,
-                "start_agent: agent is disabled, use enable first"
-            );
-            return;
-        }
-
-        if slot.is_thread_alive() {
-            info!(agent = name, "agent already running, skipping start");
-            return;
-        }
 
         let slot_config = slot.config.clone();
         // Bounded channel provides backpressure: chatty agents block rather than OOM the daemon.
@@ -352,6 +396,18 @@ impl Fleet {
         }
 
         let is_alive = slot.is_thread_alive();
+        let is_queued = matches!(slot.status, AgentStatus::Queued { .. });
+        let lane_name = slot
+            .config
+            .lane
+            .as_deref()
+            .unwrap_or(DEFAULT_LANE)
+            .to_string();
+
+        // Remove from lane queue if the agent was waiting for a slot.
+        if is_queued {
+            self.lane_manager.remove_from_queue(&lane_name, name);
+        }
 
         // Mark disabled first (second lookup needed: stop_agent borrows &mut self)
         if let Some(slot) = self.slots.get_mut(name) {
@@ -564,7 +620,9 @@ impl Fleet {
         all_events
     }
 
-    /// Handle a finished agent thread: join it and apply restart policy.
+    /// Handle a finished agent thread: join it, release its lane slot, and
+    /// apply restart policy. If a queued agent is waiting for the freed lane
+    /// slot, it will be started after restart processing completes.
     fn tick_slot(&mut self, name: &str) {
         let slot = match self.slots.get_mut(name) {
             Some(s) => s,
@@ -576,27 +634,48 @@ impl Fleet {
             None => return,
         };
 
-        let result = match handle.join() {
-            Ok(r) => r,
+        // Capture lane name before any borrows change.
+        let lane_name = slot
+            .config
+            .lane
+            .as_deref()
+            .unwrap_or(DEFAULT_LANE)
+            .to_string();
+
+        // Release the lane slot BEFORE restart processing so the restarting
+        // agent competes fairly for capacity through the normal acquire path.
+        let dequeued = self
+            .lane_manager
+            .release(&lane_name, name)
+            .ok()
+            .flatten();
+
+        // Re-borrow for the panic branch (slot was invalidated by lane_manager borrow).
+        match handle.join() {
+            Ok(result) => {
+                let exit_code = result.exit_code.unwrap_or(-1);
+                info!(
+                    agent = name,
+                    exit_code, "agent exited, evaluating restart policy"
+                );
+                self.handle_agent_exit(name, exit_code);
+            }
             Err(_) => {
                 error!(agent = name, "agent thread panicked");
-                // Clear disconnected channels so callers don't send into void.
-                slot.output_rx = None;
-                slot.command_tx = None;
-                slot.update_rx = None;
-                // Treat as a crash: apply restart policy with backoff.
+                if let Some(s) = self.slots.get_mut(name) {
+                    s.output_rx = None;
+                    s.command_tx = None;
+                    s.update_rx = None;
+                }
                 self.handle_agent_exit(name, -1);
-                return;
             }
-        };
+        }
 
-        let exit_code = result.exit_code.unwrap_or(-1);
-        info!(
-            agent = name,
-            exit_code, "agent exited, evaluating restart policy"
-        );
-
-        self.handle_agent_exit(name, exit_code);
+        // Start the dequeued agent (if any) after restart processing.
+        if let Some(next) = dequeued {
+            info!(agent = %next, lane = %lane_name, "lane slot freed, starting queued agent");
+            self.start_agent(&next);
+        }
     }
 
     /// Apply restart policy after an agent exits.
@@ -737,6 +816,19 @@ impl Fleet {
         self.slots.get_mut(name)
     }
 
+    /// Get the status of all execution lanes.
+    pub fn lane_status(&self) -> Vec<crate::execution_lanes::LaneStatus> {
+        self.lane_manager.lane_status()
+    }
+
+    /// Get the status of a specific execution lane.
+    pub fn lane_status_by_name(&self, name: &str) -> Option<crate::execution_lanes::LaneStatus> {
+        self.lane_manager
+            .lane_status()
+            .into_iter()
+            .find(|s| s.name == name)
+    }
+
     /// Get all agent names.
     pub fn agent_names(&self) -> Vec<String> {
         self.slots.keys().cloned().collect()
@@ -784,8 +876,19 @@ impl Fleet {
         self.slots.insert(config.name.to_string(), slot);
     }
 
-    /// Remove an agent slot. Stops it first if running.
+    /// Remove an agent slot. Stops it first if running and releases any
+    /// lane slot or queue entry.
     pub fn remove_agent(&mut self, name: &str) {
+        if let Some(slot) = self.slots.get(name) {
+            let lane = slot.config.lane.as_deref().unwrap_or(DEFAULT_LANE);
+            if slot.is_thread_alive() {
+                // Agent is running and holds a lane slot -- release it.
+                let _ = self.lane_manager.release(lane, name);
+            } else if matches!(slot.status, AgentStatus::Queued { .. }) {
+                // Agent is queued -- remove from queue without releasing a slot.
+                self.lane_manager.remove_from_queue(lane, name);
+            }
+        }
         self.stop_agent(name);
         self.slots.remove(name);
     }

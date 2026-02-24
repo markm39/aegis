@@ -236,6 +236,7 @@ fn status_label(status: &AgentStatus) -> String {
         } => format!("failed (exit {exit_code}, restarts {restart_count})"),
         AgentStatus::Stopping => "stopping".to_string(),
         AgentStatus::Disabled => "disabled".to_string(),
+        AgentStatus::Queued { lane } => format!("queued (lane {lane})"),
     }
 }
 
@@ -4656,31 +4657,53 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::ListLanes => {
-                // Return agent counts per priority bucket.
-                let running = self.fleet.running_count();
-                let total = self.fleet.agent_count();
-                let data = serde_json::json!({
-                    "lanes": {
-                        "default": { "running": running, "total": total },
-                    },
-                });
-                DaemonResponse::ok_with_data(
-                    format!("{running} running / {total} total agents"),
-                    data,
-                )
+                let statuses = self.fleet.lane_status();
+                let summary: Vec<String> = statuses
+                    .iter()
+                    .map(|s| {
+                        let cap = if s.max_concurrent == 0 {
+                            "unlimited".to_string()
+                        } else {
+                            format!("{}/{}", s.current, s.max_concurrent)
+                        };
+                        let queued_suffix = if s.queued > 0 {
+                            format!(" ({} queued)", s.queued)
+                        } else {
+                            String::new()
+                        };
+                        format!("{}: {cap}{queued_suffix}", s.name)
+                    })
+                    .collect();
+                let msg = if summary.is_empty() {
+                    "no lanes configured".to_string()
+                } else {
+                    summary.join(", ")
+                };
+                match serde_json::to_value(&statuses) {
+                    Ok(data) => DaemonResponse::ok_with_data(msg, data),
+                    Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                }
             }
 
             DaemonCommand::LaneUtilization { lane } => {
-                // All agents run in the default lane for now.
-                if lane == "default" {
-                    let running = self.fleet.running_count();
-                    let total = self.fleet.agent_count();
-                    DaemonResponse::ok_with_data(
-                        format!("lane 'default': {running}/{total} slots used"),
-                        serde_json::json!({ "lane": "default", "running": running, "total": total }),
-                    )
-                } else {
-                    DaemonResponse::error(format!("unknown lane '{lane}' (only 'default' exists)"))
+                match self.fleet.lane_status_by_name(&lane) {
+                    Some(status) => {
+                        let cap = if status.max_concurrent == 0 {
+                            "unlimited".to_string()
+                        } else {
+                            format!("{}/{}", status.current, status.max_concurrent)
+                        };
+                        match serde_json::to_value(&status) {
+                            Ok(data) => DaemonResponse::ok_with_data(
+                                format!("lane '{}': {cap} ({} queued)", status.name, status.queued),
+                                data,
+                            ),
+                            Err(e) => {
+                                DaemonResponse::error(format!("serialization failed: {e}"))
+                            }
+                        }
+                    }
+                    None => DaemonResponse::error(format!("unknown lane '{lane}'")),
                 }
             }
 

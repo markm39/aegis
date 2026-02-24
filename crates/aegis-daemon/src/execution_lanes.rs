@@ -217,6 +217,15 @@ impl LaneManager {
             .is_some_and(|lane| lane.has_capacity())
     }
 
+    /// Remove an agent from a lane's queue without releasing a slot.
+    ///
+    /// Used when a queued agent is disabled or removed before it starts.
+    pub fn remove_from_queue(&mut self, lane_name: &str, agent_name: &str) {
+        if let Some(lane) = self.lanes.get_mut(lane_name) {
+            lane.queued_agents.retain(|a| a != agent_name);
+        }
+    }
+
     /// List agents queued for a specific lane.
     pub fn list_queued(&self, lane_name: &str) -> Vec<String> {
         self.lanes

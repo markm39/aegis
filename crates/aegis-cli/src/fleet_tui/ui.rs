@@ -1639,6 +1639,7 @@ fn status_display(status: &AgentStatus) -> (String, Color) {
         AgentStatus::Failed { .. } => ("Failed".into(), Color::Red),
         AgentStatus::Stopping => ("Stopping".into(), Color::Yellow),
         AgentStatus::Disabled => ("Disabled".into(), Color::DarkGray),
+        AgentStatus::Queued { ref lane } => (format!("Queued ({lane})"), Color::Cyan),
     }
 }
 
