@@ -673,6 +673,7 @@ fn stream_openai_responses(
         "model": params.model,
         "input": input,
         "stream": true,
+        "store": false,
     });
 
     // System prompt goes in `instructions`.

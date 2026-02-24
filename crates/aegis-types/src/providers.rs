@@ -389,7 +389,7 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         probe_addr: "",
     },
     // ── OpenAI Codex (ChatGPT Plus OAuth) ───────────────────────
-    // Models from OpenClaw registry (openai-codex-responses API).
+    // Subscription-exclusive models from OpenClaw (openai-codex provider).
     // Uses OAuth tokens, routes to chatgpt.com/backend-api.
     ProviderInfo {
         id: "openai-codex",
@@ -400,19 +400,35 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         base_url: "https://chatgpt.com/backend-api",
         api_type: ApiType::OpenaiResponses,
         auth_method: AuthMethod::OAuth,
-        default_model: "gpt-5.2",
+        default_model: "gpt-5.3-codex",
         models: &[
             ModelInfo {
-                id: "gpt-5.2",
-                display_name: "GPT-5.2",
+                id: "gpt-5.3-codex",
+                display_name: "GPT-5.3 Codex",
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,
                 supports_thinking: true,
             },
             ModelInfo {
-                id: "gpt-5.1",
-                display_name: "GPT-5.1",
+                id: "gpt-5.3-codex-spark",
+                display_name: "GPT-5.3 Codex Spark",
+                context_window: 128_000,
+                max_output_tokens: 32_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.2-codex",
+                display_name: "GPT-5.2 Codex",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.2",
+                display_name: "GPT-5.2",
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,

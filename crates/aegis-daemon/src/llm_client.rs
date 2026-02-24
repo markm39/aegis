@@ -1369,6 +1369,7 @@ impl LlmClient {
         let mut body = serde_json::json!({
             "model": request.model,
             "input": input,
+            "store": false,
         });
 
         if let Some(ref system_prompt) = request.system_prompt {
