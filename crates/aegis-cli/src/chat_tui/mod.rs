@@ -32,6 +32,46 @@ use self::message::{ChatMessage, MessageRole};
 use self::system_prompt::{PromptMode, ToolDescription};
 use crate::tui_utils::delete_word_backward_pos;
 
+/// Skill command prompts, embedded at compile time from prompts/skills/.
+mod skill_prompts {
+    pub const DEBUG: &str = include_str!("prompts/skills/debug.md");
+    pub const DOC: &str = include_str!("prompts/skills/doc.md");
+    pub const EXPLAIN: &str = include_str!("prompts/skills/explain.md");
+    pub const REFACTOR: &str = include_str!("prompts/skills/refactor.md");
+    pub const TEST: &str = include_str!("prompts/skills/test.md");
+    pub const REVIEW: &str = include_str!("prompts/skills/review.md");
+    pub const SECURITY: &str = include_str!("prompts/skills/security.md");
+    pub const PERF: &str = include_str!("prompts/skills/perf.md");
+    pub const PANEL_REVIEW: &str = include_str!("prompts/skills/panel_review.md");
+    pub const LINK_WORKTREE: &str = include_str!("prompts/skills/link_worktree.md");
+}
+
+/// A slash command backed by a prompt template.
+struct SkillCommand {
+    /// Command name (what the user types after `/`).
+    name: &'static str,
+    /// Prompt template with `$ARGUMENTS` placeholder.
+    prompt: &'static str,
+    /// Whether the command requires an argument.
+    needs_arg: bool,
+    /// Usage hint shown when a required arg is missing.
+    arg_hint: &'static str,
+}
+
+/// All available skill commands. Looked up in `execute_command()`.
+const SKILL_COMMANDS: &[SkillCommand] = &[
+    SkillCommand { name: "debug", prompt: skill_prompts::DEBUG, needs_arg: true, arg_hint: "Usage: /debug <error message or description>" },
+    SkillCommand { name: "doc", prompt: skill_prompts::DOC, needs_arg: true, arg_hint: "Usage: /doc <file or area>" },
+    SkillCommand { name: "explain", prompt: skill_prompts::EXPLAIN, needs_arg: true, arg_hint: "Usage: /explain <file, function, or concept>" },
+    SkillCommand { name: "refactor", prompt: skill_prompts::REFACTOR, needs_arg: true, arg_hint: "Usage: /refactor <file or area>" },
+    SkillCommand { name: "test", prompt: skill_prompts::TEST, needs_arg: true, arg_hint: "Usage: /test <file or function>" },
+    SkillCommand { name: "review", prompt: skill_prompts::REVIEW, needs_arg: false, arg_hint: "Usage: /review [file or description]" },
+    SkillCommand { name: "security", prompt: skill_prompts::SECURITY, needs_arg: true, arg_hint: "Usage: /security <file or area>" },
+    SkillCommand { name: "perf", prompt: skill_prompts::PERF, needs_arg: true, arg_hint: "Usage: /perf <file or area>" },
+    SkillCommand { name: "panel-review", prompt: skill_prompts::PANEL_REVIEW, needs_arg: true, arg_hint: "Usage: /panel-review <topic or question>" },
+    SkillCommand { name: "link-worktree", prompt: skill_prompts::LINK_WORKTREE, needs_arg: true, arg_hint: "Usage: /link-worktree <worktree-path>" },
+];
+
 /// How often to poll crossterm for events (milliseconds).
 const TICK_RATE_MS: u64 = 200;
 
@@ -407,6 +447,9 @@ const COMMANDS: &[&str] = &[
     "save", "resume", "sessions", "settings",
     "daemon start", "daemon stop", "daemon status",
     "daemon restart", "daemon reload", "daemon init",
+    // Skill commands
+    "debug", "doc", "explain", "refactor", "test",
+    "review", "security", "perf", "panel-review", "link-worktree",
 ];
 
 impl ChatApp {
@@ -1686,7 +1729,7 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /usage  /think off|low|medium|high|<n>  /auto off|edits|high|full  /save  /resume <id>  /sessions  /settings  /daemon ...  !<cmd>",
+                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /usage  /think  /auto  /save  /resume <id>  /sessions  /settings  /daemon ...  !<cmd>  |  Skills: /debug /doc /explain /refactor /test /review /security /perf /panel-review /link-worktree",
                 );
             }
             "usage" => {
@@ -1964,9 +2007,47 @@ impl ChatApp {
                 ));
             }
             other => {
+                // Check skill commands before falling through to "unknown".
+                if let Some(skill_cmd) = SKILL_COMMANDS.iter().find(|sc| {
+                    other == sc.name || other.starts_with(&format!("{} ", sc.name))
+                }) {
+                    let arg = other
+                        .strip_prefix(skill_cmd.name)
+                        .unwrap_or("")
+                        .trim();
+                    if arg.is_empty() && skill_cmd.needs_arg {
+                        self.set_result(skill_cmd.arg_hint);
+                    } else {
+                        self.run_skill_command(skill_cmd, arg);
+                    }
+                    return;
+                }
                 self.set_result(format!("Unknown command: '{other}'. Type /help for commands."));
             }
         }
+    }
+
+    /// Execute a skill command by injecting its prompt into the conversation.
+    ///
+    /// Replaces `$ARGUMENTS` in the prompt template with the user's argument,
+    /// adds it as a user message, and triggers an LLM request. The user sees
+    /// a compact `/command arg` display message while the LLM sees the full
+    /// expanded prompt.
+    fn run_skill_command(&mut self, cmd: &SkillCommand, arg: &str) {
+        let prompt = cmd.prompt.replace("$ARGUMENTS", arg);
+
+        self.conversation.push(LlmMessage::user(prompt));
+
+        let display = if arg.is_empty() {
+            format!("/{}", cmd.name)
+        } else {
+            format!("/{} {}", cmd.name, arg)
+        };
+        self.messages
+            .push(ChatMessage::new(MessageRole::User, display));
+        self.scroll_offset = 0;
+        self.awaiting_response = true;
+        self.send_llm_request();
     }
 
     /// Show current model and available providers.
