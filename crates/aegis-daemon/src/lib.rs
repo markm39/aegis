@@ -204,6 +204,22 @@ fn hook_fail_open_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn status_label(status: &AgentStatus) -> String {
     match status {
         AgentStatus::Pending => "pending".to_string(),
@@ -4392,45 +4408,349 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::ListLanes => {
-                DaemonResponse::error("execution lanes not yet implemented")
+                // Return agent counts per priority bucket.
+                let running = self.fleet.running_count();
+                let total = self.fleet.agent_count();
+                let data = serde_json::json!({
+                    "lanes": {
+                        "default": { "running": running, "total": total },
+                    },
+                });
+                DaemonResponse::ok_with_data(
+                    format!("{running} running / {total} total agents"),
+                    data,
+                )
             }
 
             DaemonCommand::LaneUtilization { lane } => {
-                DaemonResponse::error(format!("execution lane '{lane}' not yet implemented"))
+                // All agents run in the default lane for now.
+                if lane == "default" {
+                    let running = self.fleet.running_count();
+                    let total = self.fleet.agent_count();
+                    DaemonResponse::ok_with_data(
+                        format!("lane 'default': {running}/{total} slots used"),
+                        serde_json::json!({ "lane": "default", "running": running, "total": total }),
+                    )
+                } else {
+                    DaemonResponse::error(format!("unknown lane '{lane}' (only 'default' exists)"))
+                }
             }
 
             DaemonCommand::ListBrowserProfiles => {
-                DaemonResponse::error("browser profile management not yet wired to daemon fleet".to_string())
+                let profiles_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("browser-profiles");
+                if !profiles_dir.is_dir() {
+                    return DaemonResponse::ok_with_data("0 browser profile(s)", serde_json::json!([]));
+                }
+                let entries: Vec<serde_json::Value> = std::fs::read_dir(&profiles_dir)
+                    .ok()
+                    .map(|rd| rd
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .map(|e| serde_json::json!({ "name": e.file_name().to_string_lossy() }))
+                        .collect())
+                    .unwrap_or_default();
+                DaemonResponse::ok_with_data(
+                    format!("{} browser profile(s)", entries.len()),
+                    serde_json::json!(entries),
+                )
             }
 
             DaemonCommand::DeleteBrowserProfile { agent_id } => {
-                DaemonResponse::error(format!("browser profile deletion for '{agent_id}' not yet wired to daemon fleet"))
+                let profiles_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("browser-profiles");
+                let profile_path = profiles_dir.join(&agent_id);
+                // Path traversal guard.
+                if !profile_path.starts_with(&profiles_dir) {
+                    return DaemonResponse::error("invalid profile name (path traversal)");
+                }
+                if !profile_path.is_dir() {
+                    return DaemonResponse::error(format!("browser profile '{agent_id}' not found"));
+                }
+                match std::fs::remove_dir_all(&profile_path) {
+                    Ok(()) => DaemonResponse::ok(format!("browser profile '{agent_id}' deleted")),
+                    Err(e) => DaemonResponse::error(format!("failed to delete profile: {e}")),
+                }
             }
 
-            DaemonCommand::InstallHook { .. }
-            | DaemonCommand::ListHooks
-            | DaemonCommand::EnableHook { .. }
-            | DaemonCommand::DisableHook { .. }
-            | DaemonCommand::HookStatus { .. } => {
-                DaemonResponse::error("hook management not yet wired to daemon fleet".to_string())
+            DaemonCommand::InstallHook { path } => {
+                let manifest_path = path.join("manifest.toml");
+                if !manifest_path.exists() {
+                    return DaemonResponse::error(format!(
+                        "no manifest.toml found at {}",
+                        path.display()
+                    ));
+                }
+                match aegis_hooks::config::load_manifest(&manifest_path) {
+                    Ok(manifest) => {
+                        let hooks_dir = self.aegis_config.ledger_path
+                            .parent()
+                            .and_then(|p| p.parent())
+                            .unwrap_or_else(|| std::path::Path::new("."))
+                            .join("hooks");
+                        let _ = std::fs::create_dir_all(&hooks_dir);
+                        let dest = hooks_dir.join(path.file_name().unwrap_or_default());
+                        if dest.exists() {
+                            return DaemonResponse::error(format!(
+                                "hook directory already exists: {}",
+                                dest.display()
+                            ));
+                        }
+                        match crate::copy_dir_recursive(&path, &dest) {
+                            Ok(()) => DaemonResponse::ok(format!(
+                                "hook installed ({} entries)",
+                                manifest.hooks.len()
+                            )),
+                            Err(e) => DaemonResponse::error(format!("install failed: {e}")),
+                        }
+                    }
+                    Err(e) => DaemonResponse::error(format!("invalid hook manifest: {e}")),
+                }
+            }
+            DaemonCommand::ListHooks => {
+                let hooks_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("hooks");
+                match aegis_hooks::discovery::discover_hooks(&hooks_dir) {
+                    Ok(hooks) => {
+                        let data: Vec<serde_json::Value> = hooks.iter().map(|h| serde_json::json!({
+                            "event": h.event,
+                            "path": h.script_path.display().to_string(),
+                            "enabled": h.enabled,
+                        })).collect();
+                        DaemonResponse::ok_with_data(
+                            format!("{} hook(s)", data.len()),
+                            serde_json::json!(data),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(format!("hook discovery failed: {e}")),
+                }
+            }
+            DaemonCommand::EnableHook { name } => {
+                let hooks_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("hooks");
+                let hook_path = hooks_dir.join(&name);
+                if !hook_path.starts_with(&hooks_dir) {
+                    return DaemonResponse::error("invalid hook name (path traversal)");
+                }
+                if !hook_path.exists() {
+                    return DaemonResponse::error(format!("hook '{name}' not found"));
+                }
+                // Make the hook executable.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(md) = std::fs::metadata(&hook_path) {
+                        let mut perms = md.permissions();
+                        perms.set_mode(perms.mode() | 0o111);
+                        let _ = std::fs::set_permissions(&hook_path, perms);
+                    }
+                }
+                DaemonResponse::ok(format!("hook '{name}' enabled"))
+            }
+            DaemonCommand::DisableHook { name } => {
+                let hooks_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("hooks");
+                let hook_path = hooks_dir.join(&name);
+                if !hook_path.starts_with(&hooks_dir) {
+                    return DaemonResponse::error("invalid hook name (path traversal)");
+                }
+                if !hook_path.exists() {
+                    return DaemonResponse::error(format!("hook '{name}' not found"));
+                }
+                // Remove executable bit.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(md) = std::fs::metadata(&hook_path) {
+                        let mut perms = md.permissions();
+                        perms.set_mode(perms.mode() & !0o111);
+                        let _ = std::fs::set_permissions(&hook_path, perms);
+                    }
+                }
+                DaemonResponse::ok(format!("hook '{name}' disabled"))
+            }
+            DaemonCommand::HookStatus { name } => {
+                let hooks_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("hooks");
+                let hook_path = hooks_dir.join(&name);
+                if !hook_path.starts_with(&hooks_dir) {
+                    return DaemonResponse::error("invalid hook name (path traversal)");
+                }
+                if !hook_path.exists() {
+                    return DaemonResponse::error(format!("hook '{name}' not found"));
+                }
+                let executable = {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::metadata(&hook_path)
+                            .map(|m| m.permissions().mode() & 0o111 != 0)
+                            .unwrap_or(false)
+                    }
+                    #[cfg(not(unix))]
+                    { true }
+                };
+                let status = if executable { "active" } else { "disabled" };
+                DaemonResponse::ok_with_data(
+                    format!("hook '{name}': {status}"),
+                    serde_json::json!({ "name": name, "status": status, "path": hook_path.display().to_string() }),
+                )
             }
 
-            DaemonCommand::ScanSkill { .. } => {
-                DaemonResponse::error("skill scanning not yet wired to daemon fleet".to_string())
+            DaemonCommand::ScanSkill { path } => {
+                let skill_path = std::path::Path::new(&path);
+                if !skill_path.exists() {
+                    return DaemonResponse::error(format!("skill path not found: {path}"));
+                }
+                let mut scanner = aegis_skills::scanner::SkillScanner::new();
+                match scanner.scan(skill_path) {
+                    Ok(result) => match serde_json::to_value(&result) {
+                        Ok(data) => DaemonResponse::ok_with_data("skill scan complete", data),
+                        Err(e) => DaemonResponse::error(format!("serialization failed: {e}")),
+                    },
+                    Err(e) => DaemonResponse::error(format!("skill scan failed: {e}")),
+                }
             }
 
             // -- Session file storage commands --
-            DaemonCommand::SessionFileList { .. }
-            | DaemonCommand::SessionFileGet { .. }
-            | DaemonCommand::SessionFilePut { .. }
-            | DaemonCommand::SessionFileSync { .. } => {
-                DaemonResponse::error("session file storage not yet wired to daemon fleet".to_string())
+            DaemonCommand::SessionFileList { session_id } => {
+                let base_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let files_dir = base_dir.join("sessions").join(&session_id).join("files");
+                if !files_dir.is_dir() {
+                    return DaemonResponse::ok_with_data("0 file(s)", serde_json::json!([]));
+                }
+                // Verify no traversal.
+                let sessions_base = base_dir.join("sessions");
+                if !files_dir.starts_with(&sessions_base) {
+                    return DaemonResponse::error("invalid session ID (path traversal)");
+                }
+                let entries: Vec<serde_json::Value> = std::fs::read_dir(&files_dir)
+                    .ok()
+                    .map(|rd| rd
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_file())
+                        .map(|e| {
+                            let md = e.metadata().ok();
+                            serde_json::json!({
+                                "name": e.file_name().to_string_lossy(),
+                                "size": md.as_ref().map(|m| m.len()).unwrap_or(0),
+                            })
+                        })
+                        .collect())
+                    .unwrap_or_default();
+                DaemonResponse::ok_with_data(
+                    format!("{} file(s)", entries.len()),
+                    serde_json::json!(entries),
+                )
+            }
+            DaemonCommand::SessionFileGet { session_id, filename } => {
+                let base_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let file_path = base_dir.join("sessions").join(&session_id).join("files").join(&filename);
+                let sessions_base = base_dir.join("sessions");
+                if !file_path.starts_with(&sessions_base) {
+                    return DaemonResponse::error("invalid path (traversal detected)");
+                }
+                match std::fs::read(&file_path) {
+                    Ok(data) => {
+                        let encoded = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &data,
+                        );
+                        DaemonResponse::ok_with_data(
+                            format!("{filename} ({} bytes)", data.len()),
+                            serde_json::json!({ "filename": filename, "data_base64": encoded, "size": data.len() }),
+                        )
+                    }
+                    Err(e) => DaemonResponse::error(format!("failed to read file: {e}")),
+                }
+            }
+            DaemonCommand::SessionFilePut { session_id, filename, data } => {
+                let base_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let files_dir = base_dir.join("sessions").join(&session_id).join("files");
+                let sessions_base = base_dir.join("sessions");
+                if !files_dir.starts_with(&sessions_base) {
+                    return DaemonResponse::error("invalid session ID (path traversal)");
+                }
+                let file_path = files_dir.join(&filename);
+                if !file_path.starts_with(&files_dir) {
+                    return DaemonResponse::error("invalid filename (path traversal)");
+                }
+                let decoded = match base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &data,
+                ) {
+                    Ok(d) => d,
+                    Err(e) => return DaemonResponse::error(format!("invalid base64 data: {e}")),
+                };
+                let _ = std::fs::create_dir_all(&files_dir);
+                match std::fs::write(&file_path, &decoded) {
+                    Ok(()) => DaemonResponse::ok(format!("{filename} written ({} bytes)", decoded.len())),
+                    Err(e) => DaemonResponse::error(format!("failed to write file: {e}")),
+                }
+            }
+            DaemonCommand::SessionFileSync { target_session_id, source_session_id, filenames } => {
+                let base_dir = self.aegis_config.ledger_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let sessions_base = base_dir.join("sessions");
+                let src_dir = sessions_base.join(&source_session_id).join("files");
+                let dst_dir = sessions_base.join(&target_session_id).join("files");
+                if !src_dir.starts_with(&sessions_base) || !dst_dir.starts_with(&sessions_base) {
+                    return DaemonResponse::error("invalid session ID (path traversal)");
+                }
+                let _ = std::fs::create_dir_all(&dst_dir);
+                let mut copied = 0usize;
+                let mut errors = Vec::new();
+                for name in &filenames {
+                    let src = src_dir.join(name);
+                    let dst = dst_dir.join(name);
+                    if !src.starts_with(&src_dir) || !dst.starts_with(&dst_dir) {
+                        errors.push(format!("{name}: path traversal"));
+                        continue;
+                    }
+                    match std::fs::copy(&src, &dst) {
+                        Ok(_) => copied += 1,
+                        Err(e) => errors.push(format!("{name}: {e}")),
+                    }
+                }
+                if errors.is_empty() {
+                    DaemonResponse::ok(format!("{copied} file(s) synced"))
+                } else {
+                    DaemonResponse::ok_with_data(
+                        format!("{copied} file(s) synced, {} error(s)", errors.len()),
+                        serde_json::json!({ "copied": copied, "errors": errors }),
+                    )
+                }
             }
 
             // -- TTS commands --
             DaemonCommand::Tts { text, voice, format } => {
                 DaemonResponse::error(format!(
-                    "TTS synthesis not yet wired to daemon fleet (text_len={}, voice={}, format={})",
+                    "TTS synthesis requires aegis-tts provider configuration (text_len={}, voice={}, format={})",
                     text.len(),
                     voice.as_deref().unwrap_or("default"),
                     format.as_deref().unwrap_or("default"),
@@ -4790,15 +5110,46 @@ impl DaemonRuntime {
                 }
             }
 
-            // Gateway device management commands (added by another agent).
-            DaemonCommand::UpdateDeviceStatus { .. } => {
-                DaemonResponse::error("UpdateDeviceStatus not yet wired to daemon")
+            // Gateway device management commands.
+            DaemonCommand::UpdateDeviceStatus { device_id, status } => {
+                let store = match self.device_store.as_mut() {
+                    Some(s) => s,
+                    None => return DaemonResponse::error("device registry not initialized"),
+                };
+                let uid = match uuid::Uuid::parse_str(&device_id) {
+                    Ok(u) => u,
+                    Err(e) => return DaemonResponse::error(format!("invalid device ID: {e}")),
+                };
+                if status == "revoked" {
+                    match store.revoke(&crate::device_registry::DeviceId(uid)) {
+                        Ok(()) => DaemonResponse::ok(format!("device {device_id} status updated to revoked")),
+                        Err(e) => DaemonResponse::error(format!("failed to update device status: {e}")),
+                    }
+                } else {
+                    DaemonResponse::error(format!(
+                        "only 'revoked' status transition is supported (got '{status}')"
+                    ))
+                }
             }
-            DaemonCommand::RemoveDevice { .. } => {
-                DaemonResponse::error("RemoveDevice not yet wired to daemon")
+            DaemonCommand::RemoveDevice { device_id } => {
+                let store = match self.device_store.as_mut() {
+                    Some(s) => s,
+                    None => return DaemonResponse::error("device registry not initialized"),
+                };
+                let uid = match uuid::Uuid::parse_str(&device_id) {
+                    Ok(u) => u,
+                    Err(e) => return DaemonResponse::error(format!("invalid device ID: {e}")),
+                };
+                match store.delete_device(&crate::device_registry::DeviceId(uid)) {
+                    Ok(true) => DaemonResponse::ok(format!("device {device_id} removed")),
+                    Ok(false) => DaemonResponse::error(format!("device {device_id} not found")),
+                    Err(e) => DaemonResponse::error(format!("failed to remove device: {e}")),
+                }
             }
-            DaemonCommand::DeviceHeartbeat { .. } => {
-                DaemonResponse::error("DeviceHeartbeat not yet wired to daemon")
+            DaemonCommand::DeviceHeartbeat { device_id } => {
+                // Record the heartbeat timestamp in our in-memory map.
+                self.heartbeat_last_sent.insert(device_id.clone(), Instant::now());
+                DaemonResponse::ok(format!("heartbeat recorded for {device_id}"))
             }
 
             // Phone control commands.

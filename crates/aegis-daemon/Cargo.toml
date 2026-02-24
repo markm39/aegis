@@ -18,6 +18,8 @@ aegis-channel = { path = "../aegis-channel" }
 aegis-proxy = { workspace = true }
 aegis-sandbox = { workspace = true }
 aegis-tools = { workspace = true }
+aegis-hooks = { workspace = true }
+aegis-skills = { workspace = true }
 aegis-apply-patch = { path = "../../vendor/codex/apply-patch" }
 aegis-file-search = { path = "../../vendor/codex/file-search" }
 aegis-execpolicy = { path = "../../vendor/codex/execpolicy" }
