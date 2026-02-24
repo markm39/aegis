@@ -2165,7 +2165,7 @@ impl ChatApp {
 
     /// Cycle a setting value (used by the Settings overlay).
     ///
-    /// `index`: 0 = show_usage, 1 = thinking, 2 = approval, 3 = mode, 4 = engine.
+    /// `index`: 0 = show_usage, 1 = thinking, 2 = approval.
     /// `reverse`: cycle backward instead of forward.
     fn cycle_setting(&mut self, index: usize, reverse: bool) {
         match index {
