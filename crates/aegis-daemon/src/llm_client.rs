@@ -25,12 +25,12 @@ use tracing::{debug, info, warn};
 use aegis_types::credentials::{CredentialStore, ResolvedKey};
 use aegis_types::llm::{
     from_gemini_response, to_anthropic_message, to_gemini_content, to_openai_message,
-    AnthropicConfig, GeminiProviderConfig, LlmRequest, LlmResponse, LlmToolCall, LlmUsage,
-    MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig, ProviderConfig, ProviderRegistry,
-    StopReason,
+    AnthropicConfig, GeminiProviderConfig, GenericProviderConfig, LlmRequest, LlmResponse,
+    LlmToolCall, LlmUsage, MaskedApiKey, OllamaConfig, OpenAiConfig, OpenRouterConfig,
+    ProviderConfig, ProviderRegistry, StopReason,
 };
 use aegis_types::oauth::{FileTokenStore, OAuthTokenStore};
-use aegis_types::providers::{provider_by_id, read_codex_cli_token};
+use aegis_types::providers::{provider_by_id, read_codex_cli_token, ApiType};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -443,6 +443,9 @@ impl LlmClient {
                 ProviderConfig::Gemini(config) => self.complete_gemini(&req, &config),
                 ProviderConfig::Ollama(config) => self.complete_ollama(&req, &config),
                 ProviderConfig::OpenRouter(config) => self.complete_openrouter(&req, &config),
+                ProviderConfig::Generic(config) => {
+                    self.complete_generic(&req, provider_name, &config)
+                }
             };
 
             match result {
@@ -1322,6 +1325,61 @@ impl LlmClient {
         Ok(response)
     }
 
+    /// Route a completion request for a generic (dynamically registered) provider.
+    ///
+    /// Dispatches to the appropriate completion function based on the provider's
+    /// `api_type`, constructing a temporary config with the correct base URL and
+    /// environment variable for API key resolution.
+    fn complete_generic(
+        &self,
+        request: &LlmRequest,
+        provider_name: &str,
+        config: &GenericProviderConfig,
+    ) -> Result<LlmResponse, String> {
+        let env_var = provider_by_id(&config.provider_id)
+            .map(|p| p.env_var.to_string())
+            .unwrap_or_default();
+
+        match config.api_type {
+            ApiType::AnthropicMessages => {
+                let ac = AnthropicConfig {
+                    api_key_env: env_var,
+                    base_url: config.base_url.clone(),
+                    default_model: config.default_model.clone(),
+                };
+                self.complete_anthropic(request, &ac)
+            }
+            ApiType::OpenaiCompletions => {
+                let oc = OpenAiConfig {
+                    api_key_env: env_var,
+                    base_url: config.base_url.clone(),
+                    default_model: config.default_model.clone(),
+                };
+                self.complete_openai(request, provider_name, &oc)
+            }
+            ApiType::OpenaiResponses | ApiType::GithubCopilot => {
+                let resolved = self.resolve_api_key_with_oauth(provider_name, || {
+                    Err(format!("no env var fallback for {provider_name}"))
+                })?;
+                self.complete_openai_responses(request, provider_name, &resolved.key)
+            }
+            ApiType::GoogleGenerativeAi => {
+                let gc = GeminiProviderConfig::default();
+                self.complete_gemini(request, &gc)
+            }
+            ApiType::Ollama => {
+                let oc = OllamaConfig {
+                    base_url: config.base_url.clone(),
+                    ..Default::default()
+                };
+                self.complete_ollama(request, &oc)
+            }
+            ApiType::BedrockConverseStream => Err(format!(
+                "Bedrock provider not yet supported for '{provider_name}'"
+            )),
+        }
+    }
+
     /// Send a completion request via the OpenAI Responses API.
     ///
     /// Used when the credential is an OAuth token (ChatGPT backend). The
@@ -2012,6 +2070,50 @@ pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
                 ProviderConfig::OpenRouter(OpenRouterConfig::default()),
             )
             .map_err(|e| format!("failed to register OpenRouter provider: {e}"))?;
+    }
+
+    // Auto-register any remaining providers from ALL_PROVIDERS that have
+    // stored credentials. This enables /login for any provider without
+    // needing to hardcode each one.
+    let already_registered = [
+        "anthropic",
+        "openai",
+        "openai-codex",
+        "google",
+        "ollama",
+        "openrouter",
+    ];
+    for provider in aegis_types::providers::ALL_PROVIDERS.iter() {
+        if already_registered.contains(&provider.id) {
+            continue;
+        }
+        // Skip Bedrock (requires AWS SDK auth, not simple API key).
+        if provider.api_type == ApiType::BedrockConverseStream {
+            continue;
+        }
+        // Only register if credentials are available.
+        if cred_store.resolve_api_key(provider).is_none() {
+            continue;
+        }
+        // Resolve base URL: env override > credential store > provider default.
+        let base_url = {
+            let env_key = format!(
+                "{}_BASE_URL",
+                provider.id.to_uppercase().replace('-', "_")
+            );
+            std::env::var(&env_key)
+                .ok()
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| cred_store.resolve_base_url(provider))
+        };
+        let config = GenericProviderConfig {
+            provider_id: provider.id.to_string(),
+            api_type: provider.api_type,
+            base_url,
+            default_model: provider.default_model.to_string(),
+        };
+        // Best-effort: don't fail the whole registry if one provider has a bad URL.
+        let _ = registry.register_provider(provider.id, ProviderConfig::Generic(config));
     }
 
     Ok(registry)

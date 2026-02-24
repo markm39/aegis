@@ -637,6 +637,20 @@ impl OpenRouterConfig {
     }
 }
 
+/// Generic provider config for any provider whose API format matches a known
+/// `ApiType`. Used for dynamic registration of providers from `ALL_PROVIDERS`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenericProviderConfig {
+    /// Provider ID from ALL_PROVIDERS (e.g., "minimax", "xai").
+    pub provider_id: String,
+    /// Which API format this provider uses.
+    pub api_type: crate::providers::ApiType,
+    /// Base URL for API requests.
+    pub base_url: String,
+    /// Default model ID.
+    pub default_model: String,
+}
+
 /// Provider configuration enum wrapping all supported providers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -651,6 +665,8 @@ pub enum ProviderConfig {
     Ollama(OllamaConfig),
     /// OpenRouter (multi-model gateway) provider.
     OpenRouter(OpenRouterConfig),
+    /// Any provider from ALL_PROVIDERS that uses a known ApiType.
+    Generic(GenericProviderConfig),
 }
 
 impl ProviderConfig {
@@ -662,12 +678,15 @@ impl ProviderConfig {
             ProviderConfig::Gemini(c) => c.validate_endpoint(),
             ProviderConfig::Ollama(c) => c.validate_endpoint(),
             ProviderConfig::OpenRouter(c) => c.validate_endpoint(),
+            ProviderConfig::Generic(c) => validate_endpoint_url(&c.base_url)
+                .map_err(|e| AegisError::ConfigError(e.to_string())),
         }
     }
 
     /// Read the API key from the environment.
     ///
     /// Returns `Ok` for Ollama (which requires no key).
+    /// Generic providers use the credential store instead.
     pub fn read_api_key(&self) -> Result<String, AegisError> {
         match self {
             ProviderConfig::Anthropic(c) => c.read_api_key(),
@@ -675,6 +694,10 @@ impl ProviderConfig {
             ProviderConfig::Gemini(c) => c.read_api_key(),
             ProviderConfig::Ollama(_) => Ok(String::new()),
             ProviderConfig::OpenRouter(c) => c.read_api_key(),
+            ProviderConfig::Generic(c) => Err(AegisError::ConfigError(format!(
+                "generic provider '{}' uses credential store, not direct env var",
+                c.provider_id
+            ))),
         }
     }
 
@@ -686,6 +709,7 @@ impl ProviderConfig {
             ProviderConfig::Gemini(_) => "google",
             ProviderConfig::Ollama(_) => "ollama",
             ProviderConfig::OpenRouter(_) => "openrouter",
+            ProviderConfig::Generic(c) => &c.provider_id,
         }
     }
 }
@@ -722,7 +746,7 @@ pub struct ProviderRegistry {
 impl ProviderRegistry {
     /// Create a new registry with default prefix routes.
     pub fn new() -> Self {
-        let prefix_routes = vec![
+        let mut prefix_routes = vec![
             ("claude-".to_string(), "anthropic".to_string()),
             ("gpt-5.3-codex".to_string(), "openai-codex".to_string()),
             ("gpt-".to_string(), "openai".to_string()),
@@ -736,6 +760,26 @@ impl ProviderRegistry {
             ("phi".to_string(), "ollama".to_string()),
             ("qwen".to_string(), "ollama".to_string()),
         ];
+
+        // Dynamic routes from ALL_PROVIDERS model catalogs.
+        for provider in crate::providers::ALL_PROVIDERS.iter() {
+            // Skip providers that already have hardcoded routes above.
+            let already_routed = prefix_routes.iter().any(|(_, p)| p == provider.id);
+            if already_routed {
+                continue;
+            }
+            for model in provider.models {
+                prefix_routes
+                    .push((model.id.to_lowercase(), provider.id.to_string()));
+            }
+            if !provider.default_model.is_empty() {
+                prefix_routes.push((
+                    provider.default_model.to_lowercase(),
+                    provider.id.to_string(),
+                ));
+            }
+        }
+
         Self {
             providers: HashMap::new(),
             prefix_routes,
@@ -888,6 +932,33 @@ impl ProviderRegistry {
                             "streaming".to_string(),
                         ],
                     });
+                }
+                ProviderConfig::Generic(c) => {
+                    // Pull model catalog from ALL_PROVIDERS if available.
+                    if let Some(info) = crate::providers::provider_by_id(&c.provider_id) {
+                        for m in info.models {
+                            let mut caps = vec!["tool_use".to_string()];
+                            if m.supports_vision {
+                                caps.push("vision".to_string());
+                            }
+                            caps.push("streaming".to_string());
+                            models.push(ModelInfo {
+                                id: m.id.to_string(),
+                                name: m.display_name.to_string(),
+                                provider: name.clone(),
+                                max_tokens: m.context_window,
+                                capabilities: caps,
+                            });
+                        }
+                    } else {
+                        models.push(ModelInfo {
+                            id: c.default_model.clone(),
+                            name: c.default_model.clone(),
+                            provider: name.clone(),
+                            max_tokens: 0,
+                            capabilities: vec!["tool_use".to_string()],
+                        });
+                    }
                 }
             }
         }

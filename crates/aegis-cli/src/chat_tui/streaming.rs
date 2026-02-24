@@ -17,7 +17,7 @@ use aegis_types::llm::{
     LlmMessage, LlmResponse, LlmRole, LlmToolCall, LlmUsage, StopReason, to_anthropic_message,
 };
 use aegis_types::provider_auth::CredentialType;
-use aegis_types::providers::{provider_by_id, read_codex_cli_token};
+use aegis_types::providers::{provider_by_id, read_codex_cli_token, ApiType, ALL_PROVIDERS};
 
 use super::AgentLoopEvent;
 
@@ -116,63 +116,91 @@ pub struct StreamingCallResult {
 
 /// Perform a streaming LLM call, sending deltas to the UI via `event_tx`.
 ///
-/// Returns the accumulated `LlmResponse` on success, or an error string.
-/// Currently supports Anthropic models. Other providers fall back to the
-/// daemon's blocking `LlmComplete` path (no streaming).
+/// Routes to the appropriate streaming function based on the provider's
+/// `api_type` from ALL_PROVIDERS. Supports any provider that uses
+/// Anthropic Messages or OpenAI Completions/Responses wire formats.
 pub(super) fn stream_llm_call(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
 ) -> Result<StreamingCallResult, String> {
-    if is_anthropic_model(&params.model) {
-        stream_anthropic(params, event_tx)
-    } else if is_openai_model(&params.model) {
-        let provider_id = openai_provider_for_model(&params.model);
-        let cred = resolve_provider_key(provider_id)?;
-        // Route to Responses API for OAuth users (ChatGPT backend) or always
-        // for models that only exist on the Responses API.
-        if provider_id == "openai-codex" || cred.is_bearer() {
-            stream_openai_responses(params, event_tx, provider_id, &cred.key)
-        } else {
-            stream_openai(params, event_tx, &cred.key)
+    let (provider_id, api_type) = resolve_model_provider(&params.model);
+
+    match api_type {
+        Some(ApiType::AnthropicMessages) => {
+            stream_anthropic_for(params, event_tx, provider_id)
         }
-    } else {
-        Err(format!(
+        Some(ApiType::OpenaiCompletions) => {
+            let cred = resolve_provider_key(provider_id)?;
+            stream_openai_for(params, event_tx, provider_id, &cred.key)
+        }
+        Some(ApiType::OpenaiResponses) | Some(ApiType::GithubCopilot) => {
+            let cred = resolve_provider_key(provider_id)?;
+            // Route to Responses API for OAuth users or Codex backend.
+            if provider_id == "openai-codex" || cred.is_bearer() {
+                stream_openai_responses(params, event_tx, provider_id, &cred.key)
+            } else {
+                stream_openai_for(params, event_tx, provider_id, &cred.key)
+            }
+        }
+        _ => Err(format!(
             "streaming not supported for model '{}'; use daemon fallback",
             params.model
-        ))
+        )),
     }
 }
 
-/// Check if this is an Anthropic model name.
-fn is_anthropic_model(model: &str) -> bool {
-    model.starts_with("claude-")
-}
+/// Resolve a model name to its provider ID and API type from ALL_PROVIDERS.
+///
+/// Checks model IDs first (exact and prefix match), then default_model.
+/// Falls back to legacy prefix checks for core providers.
+fn resolve_model_provider(model: &str) -> (&'static str, Option<ApiType>) {
+    let lower = model.to_lowercase();
 
-/// Check if this is an OpenAI model name.
-fn is_openai_model(model: &str) -> bool {
-    model.starts_with("gpt-") || model.starts_with("codex-")
-}
+    // Check ALL_PROVIDERS model catalogs for exact/prefix matches.
+    for provider in ALL_PROVIDERS.iter() {
+        for m in provider.models {
+            if lower == m.id.to_lowercase()
+                || lower.starts_with(&format!("{}-", m.id.to_lowercase()))
+            {
+                return (provider.id, Some(provider.api_type));
+            }
+        }
+        if !provider.default_model.is_empty()
+            && lower == provider.default_model.to_lowercase()
+        {
+            return (provider.id, Some(provider.api_type));
+        }
+    }
 
-/// Route OpenAI-family models between direct OpenAI and Codex OAuth providers.
-fn openai_provider_for_model(model: &str) -> &'static str {
-    let lower = model.trim().to_lowercase();
+    // Legacy fallbacks for prefix-based matching (claude-, gpt-, etc.).
+    if lower.starts_with("claude-") {
+        return ("anthropic", Some(ApiType::AnthropicMessages));
+    }
     if lower == "gpt-5.3-codex" || lower.starts_with("gpt-5.3-codex-") {
-        "openai-codex"
-    } else {
-        "openai"
+        return ("openai-codex", Some(ApiType::OpenaiResponses));
     }
+    if lower.starts_with("gpt-")
+        || lower.starts_with("o1-")
+        || lower.starts_with("o3-")
+        || lower.starts_with("o4-")
+    {
+        return ("openai", Some(ApiType::OpenaiCompletions));
+    }
+
+    ("", None)
 }
 
 // ---------------------------------------------------------------------------
 // Anthropic streaming
 // ---------------------------------------------------------------------------
 
-fn stream_anthropic(
+fn stream_anthropic_for(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
+    provider_id: &str,
 ) -> Result<StreamingCallResult, String> {
-    let cred = resolve_provider_key("anthropic")?;
-    let base_url = resolve_provider_base_url("anthropic");
+    let cred = resolve_provider_key(provider_id)?;
+    let base_url = resolve_provider_base_url(provider_id);
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
     // Build messages, separating system.
@@ -237,12 +265,12 @@ fn stream_anthropic(
         .header("content-type", "application/json")
         .json(&body)
         .send()
-        .map_err(|e| format!("Anthropic streaming request failed: {e}"))?;
+        .map_err(|e| format!("{provider_id} streaming request failed: {e}"))?;
 
     let status = resp.status();
     if !status.is_success() {
         let err_text = resp.text().unwrap_or_default();
-        return Err(format!("Anthropic API returned {status}: {err_text}"));
+        return Err(format!("{provider_id} API returned {status}: {err_text}"));
     }
 
     // Read SSE events from the streaming response.
@@ -407,12 +435,13 @@ struct PartialToolCall {
 // OpenAI streaming
 // ---------------------------------------------------------------------------
 
-fn stream_openai(
+fn stream_openai_for(
     params: &StreamingCallParams,
     event_tx: &mpsc::Sender<AgentLoopEvent>,
+    provider_id: &str,
     api_key: &str,
 ) -> Result<StreamingCallResult, String> {
-    let base_url = resolve_provider_base_url("openai");
+    let base_url = resolve_provider_base_url(provider_id);
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
     // Build messages in OpenAI format.
@@ -479,12 +508,12 @@ fn stream_openai(
         .header("content-type", "application/json")
         .json(&body)
         .send()
-        .map_err(|e| format!("OpenAI streaming request failed: {e}"))?;
+        .map_err(|e| format!("{provider_id} streaming request failed: {e}"))?;
 
     let status = resp.status();
     if !status.is_success() {
         let err_text = resp.text().unwrap_or_default();
-        return Err(format!("OpenAI API returned {status}: {err_text}"));
+        return Err(format!("{provider_id} API returned {status}: {err_text}"));
     }
 
     parse_openai_sse(resp, event_tx, &params.model)
@@ -928,30 +957,52 @@ mod tests {
     static HOME_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn is_anthropic_model_detects_claude() {
-        assert!(is_anthropic_model("claude-sonnet-4-20250514"));
-        assert!(is_anthropic_model("claude-3-haiku-20240307"));
-        assert!(!is_anthropic_model("gpt-4o"));
-        assert!(!is_anthropic_model("gemini-2.0-flash"));
+    fn resolve_model_provider_detects_anthropic() {
+        let (id, api) = resolve_model_provider("claude-sonnet-4-20250514");
+        assert_eq!(id, "anthropic");
+        assert_eq!(api, Some(ApiType::AnthropicMessages));
+
+        let (id, api) = resolve_model_provider("claude-3-haiku-20240307");
+        assert_eq!(id, "anthropic");
+        assert_eq!(api, Some(ApiType::AnthropicMessages));
     }
 
     #[test]
-    fn is_openai_model_detects_gpt() {
-        assert!(is_openai_model("gpt-5.2"));
-        assert!(is_openai_model("gpt-5.1-codex"));
-        assert!(is_openai_model("codex-mini-latest"));
-        assert!(!is_openai_model("claude-sonnet-4-6"));
-        assert!(!is_openai_model("gemini-2.0-flash"));
+    fn resolve_model_provider_detects_openai() {
+        let (id, api) = resolve_model_provider("gpt-5.2");
+        assert_eq!(id, "openai");
+        // OpenAI uses Responses API format (api_type in ALL_PROVIDERS).
+        assert_eq!(api, Some(ApiType::OpenaiResponses));
     }
 
     #[test]
-    fn routes_gpt_53_codex_to_openai_codex_provider() {
-        assert_eq!(openai_provider_for_model("gpt-5.3-codex"), "openai-codex");
-        assert_eq!(
-            openai_provider_for_model("gpt-5.3-codex-spark"),
-            "openai-codex"
-        );
-        assert_eq!(openai_provider_for_model("gpt-5.2"), "openai");
+    fn resolve_model_provider_routes_codex_to_openai_codex() {
+        let (id, _) = resolve_model_provider("gpt-5.3-codex");
+        assert_eq!(id, "openai-codex");
+
+        let (id, _) = resolve_model_provider("gpt-5.3-codex-spark");
+        assert_eq!(id, "openai-codex");
+    }
+
+    #[test]
+    fn resolve_model_provider_detects_minimax() {
+        let (id, api) = resolve_model_provider("MiniMax-M2.5");
+        assert_eq!(id, "minimax");
+        assert_eq!(api, Some(ApiType::AnthropicMessages));
+    }
+
+    #[test]
+    fn resolve_model_provider_detects_xai() {
+        let (id, api) = resolve_model_provider("grok-4");
+        assert_eq!(id, "xai");
+        assert_eq!(api, Some(ApiType::OpenaiCompletions));
+    }
+
+    #[test]
+    fn resolve_model_provider_unknown_returns_none() {
+        let (id, api) = resolve_model_provider("totally-unknown-model");
+        assert_eq!(id, "");
+        assert_eq!(api, None);
     }
 
     #[test]
