@@ -1735,6 +1735,7 @@ impl OnboardApp {
                 .filter(|s| s.selected)
                 .map(|s| s.name.clone())
                 .collect(),
+            retention: Default::default(),
         }
     }
 

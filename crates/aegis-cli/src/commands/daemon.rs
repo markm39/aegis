@@ -90,6 +90,7 @@ pub fn init() -> anyhow::Result<()> {
         acp_server: None,
         default_model: None,
         skills: vec![],
+        retention: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -163,6 +164,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         acp_server: None,
         default_model: None,
         skills: vec![],
+        retention: Default::default(),
     };
 
     let toml_str = example.to_toml()?;

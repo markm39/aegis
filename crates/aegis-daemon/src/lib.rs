@@ -931,6 +931,8 @@ pub struct DaemonRuntime {
     /// Used by the alert dispatcher; stored here for future TestPush with VAPID.
     #[allow(dead_code)]
     push_rate_limiter: aegis_alert::push::PushRateLimiter,
+    /// When the last audit retention check ran.
+    last_retention_check: Instant,
 }
 
 impl DaemonRuntime {
@@ -1218,6 +1220,7 @@ impl DaemonRuntime {
             model_allowlist: Vec::new(),
             push_store,
             push_rate_limiter: aegis_alert::push::PushRateLimiter::new(60),
+            last_retention_check: Instant::now(),
         }
     }
 
@@ -1745,6 +1748,9 @@ impl DaemonRuntime {
             }
         }
 
+        // Enforce audit retention on startup to catch accumulation during downtime
+        self.enforce_retention();
+
         // Optionally start caffeinate (keep handle alive until function returns;
         // caffeinate self-terminates via -w when daemon PID exits)
         let _caffeinate_child = if self.config.persistence.prevent_sleep {
@@ -1825,6 +1831,7 @@ impl DaemonRuntime {
         // work (fleet tick, channel drain, state save) is rate-limited to ~1s.
         let tick_interval = Duration::from_secs(1);
         let state_save_interval = Duration::from_secs(30);
+        let retention_interval = Duration::from_secs(3600);
         let mut last_state_save = Instant::now();
         let mut last_tick = Instant::now();
 
@@ -1889,6 +1896,12 @@ impl DaemonRuntime {
                 if last_state_save.elapsed() >= state_save_interval {
                     self.save_state();
                     last_state_save = Instant::now();
+                }
+
+                // Periodically enforce audit retention
+                if self.last_retention_check.elapsed() >= retention_interval {
+                    self.enforce_retention();
+                    self.last_retention_check = Instant::now();
                 }
 
                 last_tick = Instant::now();
@@ -5644,6 +5657,65 @@ impl DaemonRuntime {
         }
     }
 
+    /// Enforce audit log retention by purging entries that exceed age or count
+    /// limits from [`RetentionConfig`].  Called on startup and periodically.
+    fn enforce_retention(&self) {
+        let retention = &self.config.retention;
+        if retention.max_age_days.is_none() && retention.max_entries.is_none() {
+            return;
+        }
+
+        let mut store = match AuditStore::open(&self.aegis_config.ledger_path) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "retention: failed to open audit store");
+                return;
+            }
+        };
+
+        let mut total_purged: usize = 0;
+
+        if let Some(days) = retention.max_age_days {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
+            match store.purge_before(cutoff) {
+                Ok(n) => {
+                    if n > 0 {
+                        info!(entries = n, max_age_days = days, "retention: purged old entries");
+                    }
+                    total_purged += n;
+                }
+                Err(e) => warn!(error = %e, "retention: purge by age failed"),
+            }
+        }
+
+        if let Some(max) = retention.max_entries {
+            match store.purge_oldest(max as usize) {
+                Ok(n) => {
+                    if n > 0 {
+                        info!(entries = n, max_entries = max, "retention: purged excess entries");
+                    }
+                    total_purged += n;
+                }
+                Err(e) => warn!(error = %e, "retention: purge by count failed"),
+            }
+        }
+
+        if total_purged > 0 {
+            let purge_action = Action::new(
+                "daemon",
+                ActionKind::AdminAuditPurge {
+                    entries_purged: total_purged,
+                },
+            );
+            let verdict = Verdict::allow(
+                purge_action.id,
+                "automatic retention enforcement",
+                None,
+            );
+            let _ = store.append(&purge_action, &verdict);
+        }
+    }
+
     /// Signal the daemon to shut down.
     pub fn request_shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
@@ -6540,6 +6612,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -6885,6 +6958,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -7569,6 +7643,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -7664,6 +7739,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

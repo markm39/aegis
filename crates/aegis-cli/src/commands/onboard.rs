@@ -218,6 +218,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -281,6 +282,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();

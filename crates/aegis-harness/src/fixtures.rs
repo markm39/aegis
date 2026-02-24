@@ -152,6 +152,7 @@ impl FixtureBuilder {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: Default::default(),
         };
 
         TestFixture {
@@ -198,6 +199,7 @@ pub fn build_test_daemon_config(temp_dir: &Path) -> DaemonConfig {
         acp_server: None,
         default_model: None,
         skills: vec![],
+        retention: Default::default(),
     }
 }
 

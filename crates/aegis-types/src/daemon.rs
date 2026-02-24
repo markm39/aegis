@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     AdapterConfig, AlertRule, ChannelConfig, ChannelRoutingConfig, IsolationConfig, PilotConfig,
+    RetentionConfig,
 };
 use crate::ids::AgentName;
 
@@ -92,6 +93,12 @@ pub struct DaemonConfig {
     /// Names of skills enabled by the user (from wizard or manual config).
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Audit log retention policy (GDPR/CCPA compliance).
+    ///
+    /// When set, the daemon purges old audit entries on startup and
+    /// periodically (every hour) during runtime.
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -1000,6 +1007,7 @@ mod tests {
             acp_server: None,
             default_model: None,
             skills: vec![],
+            retention: RetentionConfig::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

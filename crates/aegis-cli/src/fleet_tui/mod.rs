@@ -680,6 +680,7 @@ impl FleetApp {
                 acp_server: None,
                 default_model: None,
                 skills: vec![],
+                retention: Default::default(),
             }
         };
 
