@@ -35,7 +35,7 @@ pub struct ModelInfo {
 ///
 /// Use [`ModelCatalog::with_defaults()`] to get a catalog pre-populated with
 /// known Anthropic and OpenAI models. The catalog supports prefix-based lookup
-/// so that dated model identifiers (e.g. `"claude-sonnet-4-5-20250929"`) resolve
+/// so that dated model identifiers (e.g. `"claude-sonnet-4-6-20260101"`) resolve
 /// to their base model entry.
 pub struct ModelCatalog {
     models: Vec<ModelInfo>,
@@ -59,10 +59,10 @@ impl ModelCatalog {
         let models = vec![
             ModelInfo {
                 provider: "anthropic".into(),
-                model_id: "claude-opus-4".into(),
-                display_name: "Claude Opus 4".into(),
-                context_window: 200_000,
-                max_output_tokens: 32_000,
+                model_id: "claude-opus-4-6".into(),
+                display_name: "Claude Opus 4.6".into(),
+                context_window: 1_000_000,
+                max_output_tokens: 128_000,
                 supports_vision: true,
                 supports_tools: true,
                 supports_streaming: true,
@@ -70,8 +70,19 @@ impl ModelCatalog {
             },
             ModelInfo {
                 provider: "anthropic".into(),
-                model_id: "claude-sonnet-4-5".into(),
-                display_name: "Claude Sonnet 4.5".into(),
+                model_id: "claude-sonnet-4-6".into(),
+                display_name: "Claude Sonnet 4.6".into(),
+                context_window: 1_000_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_tools: true,
+                supports_streaming: true,
+                supports_extended_thinking: true,
+            },
+            ModelInfo {
+                provider: "anthropic".into(),
+                model_id: "claude-opus-4-5".into(),
+                display_name: "Claude Opus 4.5".into(),
                 context_window: 200_000,
                 max_output_tokens: 64_000,
                 supports_vision: true,
@@ -80,37 +91,26 @@ impl ModelCatalog {
                 supports_extended_thinking: true,
             },
             ModelInfo {
-                provider: "anthropic".into(),
-                model_id: "claude-haiku-4-5".into(),
-                display_name: "Claude Haiku 4.5".into(),
-                context_window: 200_000,
-                max_output_tokens: 8_000,
+                provider: "openai".into(),
+                model_id: "gpt-5.2".into(),
+                display_name: "GPT-5.2".into(),
+                context_window: 400_000,
+                max_output_tokens: 128_000,
                 supports_vision: true,
                 supports_tools: true,
                 supports_streaming: true,
-                supports_extended_thinking: false,
+                supports_extended_thinking: true,
             },
             ModelInfo {
                 provider: "openai".into(),
-                model_id: "gpt-4o".into(),
-                display_name: "GPT-4o".into(),
-                context_window: 128_000,
-                max_output_tokens: 16_000,
+                model_id: "gpt-5.1-codex".into(),
+                display_name: "GPT-5.1 Codex".into(),
+                context_window: 400_000,
+                max_output_tokens: 128_000,
                 supports_vision: true,
                 supports_tools: true,
                 supports_streaming: true,
-                supports_extended_thinking: false,
-            },
-            ModelInfo {
-                provider: "openai".into(),
-                model_id: "gpt-4o-mini".into(),
-                display_name: "GPT-4o Mini".into(),
-                context_window: 128_000,
-                max_output_tokens: 16_000,
-                supports_vision: true,
-                supports_tools: true,
-                supports_streaming: true,
-                supports_extended_thinking: false,
+                supports_extended_thinking: true,
             },
         ];
 
@@ -125,7 +125,7 @@ impl ModelCatalog {
     ///
     /// First tries an exact match on `model_id`. If none is found, checks
     /// whether the queried id starts with any catalog entry's `model_id`
-    /// (prefix matching for versioned models like `"claude-sonnet-4-5-20250929"`).
+    /// (prefix matching for versioned models like `"claude-sonnet-4-6-20260101"`).
     pub fn lookup(&self, model_id: &str) -> Option<&ModelInfo> {
         // Exact match first.
         if let Some(info) = self.models.iter().find(|m| m.model_id == model_id) {
@@ -244,31 +244,31 @@ mod tests {
         let catalog = ModelCatalog::with_defaults();
         let models = catalog.list();
 
-        let has_sonnet = models.iter().any(|m| m.model_id == "claude-sonnet-4-5");
-        assert!(has_sonnet, "defaults should include claude-sonnet-4-5");
+        let has_sonnet = models.iter().any(|m| m.model_id == "claude-sonnet-4-6");
+        assert!(has_sonnet, "defaults should include claude-sonnet-4-6");
 
-        let has_gpt4o = models.iter().any(|m| m.model_id == "gpt-4o");
-        assert!(has_gpt4o, "defaults should include gpt-4o");
+        let has_gpt = models.iter().any(|m| m.model_id == "gpt-5.2");
+        assert!(has_gpt, "defaults should include gpt-5.2");
     }
 
     #[test]
     fn test_model_catalog_lookup() {
         let catalog = ModelCatalog::with_defaults();
         let info = catalog
-            .lookup("claude-sonnet-4-5")
-            .expect("should find claude-sonnet-4-5 by exact id");
+            .lookup("claude-sonnet-4-6")
+            .expect("should find claude-sonnet-4-6 by exact id");
         assert_eq!(info.provider, "anthropic");
-        assert_eq!(info.context_window, 200_000);
-        assert_eq!(info.max_output_tokens, 64_000);
+        assert_eq!(info.context_window, 1_000_000);
+        assert_eq!(info.max_output_tokens, 128_000);
     }
 
     #[test]
     fn test_model_catalog_lookup_prefix() {
         let catalog = ModelCatalog::with_defaults();
         let info = catalog
-            .lookup("claude-sonnet-4-5-20250929")
+            .lookup("claude-opus-4-6-20260101")
             .expect("dated variant should match via prefix");
-        assert_eq!(info.model_id, "claude-sonnet-4-5");
+        assert_eq!(info.model_id, "claude-opus-4-6");
         assert!(info.supports_extended_thinking);
     }
 
@@ -362,10 +362,10 @@ mod tests {
     fn test_model_info_serialization() {
         let info = ModelInfo {
             provider: "anthropic".into(),
-            model_id: "claude-sonnet-4-5".into(),
-            display_name: "Claude Sonnet 4.5".into(),
-            context_window: 200_000,
-            max_output_tokens: 64_000,
+            model_id: "claude-sonnet-4-6".into(),
+            display_name: "Claude Sonnet 4.6".into(),
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
             supports_vision: true,
             supports_tools: true,
             supports_streaming: true,
@@ -379,18 +379,18 @@ mod tests {
 
     #[test]
     fn test_model_allowlist_multiple_patterns() {
-        let allowlist = ModelAllowlist::new(vec!["claude-*".into(), "gpt-4o*".into()]);
+        let allowlist = ModelAllowlist::new(vec!["claude-*".into(), "gpt-5*".into()]);
         assert!(
-            allowlist.is_allowed("claude-opus-4"),
+            allowlist.is_allowed("claude-opus-4-6"),
             "should allow claude family"
         );
         assert!(
-            allowlist.is_allowed("gpt-4o"),
-            "should allow gpt-4o"
+            allowlist.is_allowed("gpt-5.2"),
+            "should allow gpt-5.2"
         );
         assert!(
-            allowlist.is_allowed("gpt-4o-mini"),
-            "should allow gpt-4o-mini"
+            allowlist.is_allowed("gpt-5.1-codex"),
+            "should allow gpt-5.1-codex"
         );
         assert!(
             !allowlist.is_allowed("llama-3"),

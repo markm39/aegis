@@ -3268,7 +3268,7 @@ fn detect_model() -> String {
     }
 
     // 4. Fallback.
-    "claude-sonnet-4-5-20250929".to_string()
+    "claude-sonnet-4-6".to_string()
 }
 
 /// Run the chat TUI, connecting to the daemon at the default socket path.

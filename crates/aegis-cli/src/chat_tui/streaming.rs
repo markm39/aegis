@@ -130,11 +130,7 @@ fn is_anthropic_model(model: &str) -> bool {
 
 /// Check if this is an OpenAI model name.
 fn is_openai_model(model: &str) -> bool {
-    model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("codex-")
+    model.starts_with("gpt-") || model.starts_with("codex-")
 }
 
 // ---------------------------------------------------------------------------
@@ -896,11 +892,10 @@ mod tests {
 
     #[test]
     fn is_openai_model_detects_gpt() {
-        assert!(is_openai_model("gpt-4o"));
-        assert!(is_openai_model("gpt-4-turbo"));
-        assert!(is_openai_model("o1-preview"));
-        assert!(is_openai_model("o3-mini"));
-        assert!(!is_openai_model("claude-sonnet-4-20250514"));
+        assert!(is_openai_model("gpt-5.2"));
+        assert!(is_openai_model("gpt-5.1-codex"));
+        assert!(is_openai_model("codex-mini-latest"));
+        assert!(!is_openai_model("claude-sonnet-4-6"));
         assert!(!is_openai_model("gemini-2.0-flash"));
     }
 
