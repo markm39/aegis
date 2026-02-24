@@ -1272,6 +1272,12 @@ impl OnboardApp {
                     token
                 };
 
+                // OpenAI OAuth tokens target the ChatGPT backend.
+                let mut final_token = final_token;
+                if provider_id == "openai" && final_token.base_url_override.is_none() {
+                    final_token.base_url_override =
+                        Some("https://chatgpt.com/backend-api".to_string());
+                }
                 self.auth_token = Some(final_token);
                 self.device_flow = None;
                 self.providers[self.provider_selected].available = true;
@@ -1300,7 +1306,13 @@ impl OnboardApp {
         };
 
         match rx.try_recv() {
-            Ok(Ok(token)) => {
+            Ok(Ok(mut token)) => {
+                // OpenAI OAuth tokens are for the ChatGPT backend, not the public API.
+                let provider_id = self.providers[self.provider_selected].info.id;
+                if provider_id == "openai" && token.base_url_override.is_none() {
+                    token.base_url_override =
+                        Some("https://chatgpt.com/backend-api".to_string());
+                }
                 self.auth_token = Some(token);
                 self.pkce_receiver = None;
                 self.pkce_auth_url = None;

@@ -638,7 +638,8 @@ impl LlmClient {
         })
     }
 
-    /// Send a completion request to the OpenAI Chat Completions API.
+    /// Send a completion request to the OpenAI Chat Completions API,
+    /// or delegate to the Responses API for OAuth credentials.
     fn complete_openai(
         &self,
         request: &LlmRequest,
@@ -650,6 +651,19 @@ impl LlmClient {
         })?;
         let masked = MaskedApiKey(api_key.clone());
         debug!(provider = "openai", key = %masked, "resolved API key");
+
+        // Check if the credential is an OAuth token -- route to Responses API.
+        let is_oauth = {
+            use aegis_types::provider_auth::CredentialType;
+            let store = CredentialStore::load_default().unwrap_or_default();
+            store
+                .get("openai")
+                .map(|c| c.credential_type == CredentialType::OAuthToken)
+                .unwrap_or(false)
+        };
+        if is_oauth {
+            return self.complete_openai_responses(request, &api_key);
+        }
 
         // Validate endpoint for SSRF.
         config.validate_endpoint().map_err(|e| e.to_string())?;
@@ -1275,6 +1289,304 @@ impl LlmClient {
         Ok(response)
     }
 
+    /// Send a completion request via the OpenAI Responses API.
+    ///
+    /// Used when the credential is an OAuth token (ChatGPT backend). The
+    /// Responses API uses `input` instead of `messages`, `instructions`
+    /// instead of system messages, and `max_output_tokens` instead of
+    /// `max_tokens`.
+    fn complete_openai_responses(
+        &self,
+        request: &LlmRequest,
+        api_key: &str,
+    ) -> Result<LlmResponse, String> {
+        // Resolve base URL from credential store.
+        let base_url = {
+            let store = CredentialStore::load_default().unwrap_or_default();
+            provider_by_id("openai")
+                .map(|p| store.resolve_base_url(p))
+                .unwrap_or_else(|| "https://api.openai.com".to_string())
+        };
+
+        // ChatGPT backend uses /codex/responses, public API uses /v1/responses.
+        let url = if base_url.contains("chatgpt.com") {
+            format!("{}/codex/responses", base_url.trim_end_matches('/'))
+        } else {
+            format!("{}/v1/responses", base_url.trim_end_matches('/'))
+        };
+
+        // Build input in Responses API format.
+        let mut input: Vec<Value> = Vec::new();
+        for msg in &request.messages {
+            match msg.role {
+                aegis_types::llm::LlmRole::User => {
+                    input.push(serde_json::json!({
+                        "role": "user",
+                        "content": msg.content,
+                    }));
+                }
+                aegis_types::llm::LlmRole::Assistant => {
+                    if !msg.tool_calls.is_empty() {
+                        let mut items: Vec<Value> = Vec::new();
+                        if !msg.content.is_empty() {
+                            items.push(serde_json::json!({
+                                "type": "output_text",
+                                "text": msg.content,
+                            }));
+                        }
+                        for tc in &msg.tool_calls {
+                            items.push(serde_json::json!({
+                                "type": "function_call",
+                                "name": tc.name,
+                                "call_id": tc.id,
+                                "arguments": tc.input.to_string(),
+                            }));
+                        }
+                        input.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": items,
+                        }));
+                    } else {
+                        input.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": msg.content}],
+                        }));
+                    }
+                }
+                aegis_types::llm::LlmRole::Tool => {
+                    input.push(serde_json::json!({
+                        "type": "function_call_output",
+                        "call_id": msg.tool_use_id.as_deref().unwrap_or(""),
+                        "output": msg.content,
+                    }));
+                }
+                aegis_types::llm::LlmRole::System => {
+                    // Handled via `instructions` field below.
+                }
+            }
+        }
+
+        let mut body = serde_json::json!({
+            "model": request.model,
+            "input": input,
+        });
+
+        if let Some(ref system_prompt) = request.system_prompt {
+            if !system_prompt.is_empty() {
+                body["instructions"] = Value::String(system_prompt.clone());
+            }
+        }
+
+        let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+        body["max_output_tokens"] = serde_json::json!(max_tokens);
+
+        if let Some(temp) = request.temperature {
+            body["temperature"] = serde_json::json!(temp);
+        }
+
+        if !request.tools.is_empty() {
+            let tools: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    })
+                })
+                .collect();
+            body["tools"] = Value::Array(tools);
+        }
+
+        // Validate request body size.
+        let body_bytes = serde_json::to_vec(&body).map_err(|e| {
+            format!("failed to serialize Responses API request body: {e}")
+        })?;
+        if body_bytes.len() > MAX_REQUEST_BODY_BYTES {
+            return Err(format!(
+                "request body too large: {} bytes (max {MAX_REQUEST_BODY_BYTES})",
+                body_bytes.len()
+            ));
+        }
+
+        info!(
+            provider = "openai-responses",
+            model = %request.model,
+            message_count = request.messages.len(),
+            "sending Responses API completion request"
+        );
+
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("content-type", "application/json")
+            .body(body_bytes)
+            .send()
+            .map_err(|e| format!("OpenAI Responses API request failed: {e}"))?;
+
+        if let Some(content_length) = resp.content_length() {
+            if content_length > MAX_RESPONSE_BODY_BYTES {
+                return Err(format!(
+                    "Responses API response too large: {content_length} bytes (max {MAX_RESPONSE_BODY_BYTES})"
+                ));
+            }
+        }
+
+        let status = resp.status();
+        let resp_text = resp
+            .text()
+            .map_err(|e| format!("failed to read Responses API response: {e}"))?;
+
+        if resp_text.len() as u64 > MAX_RESPONSE_BODY_BYTES {
+            return Err(format!(
+                "Responses API response body too large: {} bytes (max {MAX_RESPONSE_BODY_BYTES})",
+                resp_text.len()
+            ));
+        }
+
+        if !status.is_success() {
+            return Err(format!("OpenAI Responses API returned {status}: {resp_text}"));
+        }
+
+        let resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
+            format!("failed to parse Responses API response JSON: {e}")
+        })?;
+
+        Self::parse_responses_api_response(&resp_json, &request.model)
+    }
+
+    /// Parse an OpenAI Responses API response into an `LlmResponse`.
+    ///
+    /// The Responses API returns:
+    /// ```json
+    /// {
+    ///   "output": [
+    ///     {"type": "message", "content": [{"type": "output_text", "text": "..."}]},
+    ///     {"type": "function_call", "name": "...", "call_id": "...", "arguments": "..."}
+    ///   ],
+    ///   "usage": {"input_tokens": N, "output_tokens": N}
+    /// }
+    /// ```
+    fn parse_responses_api_response(json: &Value, model: &str) -> Result<LlmResponse, String> {
+        let mut content = String::new();
+        let mut tool_calls = Vec::new();
+
+        // Parse output items.
+        if let Some(output) = json.get("output").and_then(|v| v.as_array()) {
+            for item in output {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match item_type {
+                    "message" => {
+                        // Extract text from content blocks.
+                        if let Some(blocks) = item.get("content").and_then(|v| v.as_array()) {
+                            for block in blocks {
+                                let block_type =
+                                    block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                if block_type == "output_text" {
+                                    if let Some(text) = block.get("text").and_then(|v| v.as_str())
+                                    {
+                                        content.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "function_call" => {
+                        let name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let args_str = item
+                            .get("arguments")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("{}");
+                        let input: Value = serde_json::from_str(args_str)
+                            .unwrap_or(Value::Object(serde_json::Map::new()));
+                        tool_calls.push(LlmToolCall {
+                            id: call_id,
+                            name,
+                            input,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Also check output_text shorthand.
+        if content.is_empty() {
+            if let Some(text) = json.get("output_text").and_then(|v| v.as_str()) {
+                content = text.to_string();
+            }
+        }
+
+        // Extract usage.
+        let usage = json
+            .get("usage")
+            .map(|u| LlmUsage {
+                input_tokens: u
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                output_tokens: u
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+            })
+            .unwrap_or(LlmUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+            });
+
+        // Determine stop reason from status.
+        let stop_reason = json
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(|s| match s {
+                "completed" => {
+                    if tool_calls.is_empty() {
+                        StopReason::EndTurn
+                    } else {
+                        StopReason::ToolUse
+                    }
+                }
+                "incomplete" => StopReason::MaxTokens,
+                _ => StopReason::EndTurn,
+            });
+
+        let response_model = json
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or(model)
+            .to_string();
+
+        info!(
+            provider = "openai-responses",
+            model = %response_model,
+            input_tokens = usage.input_tokens,
+            output_tokens = usage.output_tokens,
+            tool_calls = tool_calls.len(),
+            "Responses API completion received"
+        );
+
+        Ok(LlmResponse {
+            content,
+            model: response_model,
+            usage,
+            tool_calls,
+            stop_reason,
+        })
+    }
+
     /// Parse an OpenAI Chat Completions API response into an `LlmResponse`.
     fn parse_openai_response(json: &Value, model: &str) -> Result<LlmResponse, String> {
         // Extract the first choice.
@@ -1397,12 +1709,24 @@ pub fn build_registry_from_env() -> Result<ProviderRegistry, String> {
         )
         .map_err(|e| format!("failed to register Anthropic provider: {e}"))?;
 
-    // Register OpenAI with defaults.
+    // Register OpenAI, reading base_url from credential store if available
+    // (OAuth users store the ChatGPT backend URL there).
+    let openai_base_url = {
+        let store = CredentialStore::load_default().unwrap_or_default();
+        provider_by_id("openai")
+            .and_then(|p| store.get(p.id))
+            .and_then(|c| c.base_url.clone())
+    };
+    let openai_config = if let Some(ref url) = openai_base_url {
+        OpenAiConfig {
+            base_url: url.clone(),
+            ..Default::default()
+        }
+    } else {
+        OpenAiConfig::default()
+    };
     registry
-        .register_provider(
-            "openai",
-            ProviderConfig::OpenAi(OpenAiConfig::default()),
-        )
+        .register_provider("openai", ProviderConfig::OpenAi(openai_config))
         .map_err(|e| format!("failed to register OpenAI provider: {e}"))?;
 
     // Load credential store once for provider registration checks.

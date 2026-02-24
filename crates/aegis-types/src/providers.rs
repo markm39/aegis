@@ -29,6 +29,8 @@ pub enum ApiType {
     Ollama,
     /// GitHub Copilot (uses OpenAI responses format internally).
     GithubCopilot,
+    /// OpenAI Responses API format (used by ChatGPT backend and public /v1/responses).
+    OpenaiResponses,
 }
 
 /// How a provider authenticates requests.
@@ -288,6 +290,8 @@ fn probe_tcp(addr: &str) -> bool {
 /// All supported providers.
 pub static ALL_PROVIDERS: &[ProviderInfo] = &[
     // ── Primary ──────────────────────────────────────────────────────
+    // ── Anthropic ─────────────────────────────────────────────────
+    // Models from OpenClaw registry (anthropic-messages API).
     ProviderInfo {
         id: "anthropic",
         display_name: "Anthropic (Claude)",
@@ -297,13 +301,21 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         base_url: "https://api.anthropic.com",
         api_type: ApiType::AnthropicMessages,
         auth_method: AuthMethod::ApiKey,
-        default_model: "claude-opus-4-6",
+        default_model: "claude-sonnet-4-5",
         models: &[
             ModelInfo {
                 id: "claude-opus-4-6",
                 display_name: "Claude Opus 4.6",
-                context_window: 1_000_000,
+                context_window: 200_000,
                 max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "claude-opus-4-5",
+                display_name: "Claude Opus 4.5",
+                context_window: 200_000,
+                max_output_tokens: 64_000,
                 supports_vision: true,
                 supports_thinking: true,
             },
@@ -315,10 +327,44 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
                 supports_vision: true,
                 supports_thinking: true,
             },
+            ModelInfo {
+                id: "claude-sonnet-4-0",
+                display_name: "Claude Sonnet 4",
+                context_window: 200_000,
+                max_output_tokens: 64_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "claude-opus-4-1",
+                display_name: "Claude Opus 4.1",
+                context_window: 200_000,
+                max_output_tokens: 32_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "claude-opus-4-0",
+                display_name: "Claude Opus 4",
+                context_window: 200_000,
+                max_output_tokens: 32_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "claude-haiku-4-5",
+                display_name: "Claude Haiku 4.5",
+                context_window: 200_000,
+                max_output_tokens: 64_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
         ],
         dynamic_discovery: false,
         probe_addr: "",
     },
+    // ── OpenAI (API key) ────────────────────────────────────────
+    // Models from OpenClaw registry (openai-responses API).
     ProviderInfo {
         id: "openai",
         display_name: "OpenAI",
@@ -326,9 +372,9 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         env_var: "OPENAI_API_KEY",
         alt_env_vars: &[],
         base_url: "https://api.openai.com",
-        api_type: ApiType::OpenaiCompletions,
+        api_type: ApiType::OpenaiResponses,
         auth_method: AuthMethod::ApiKey,
-        default_model: "gpt-5.3-codex",
+        default_model: "gpt-4.1",
         models: &[
             ModelInfo {
                 id: "gpt-5.3-codex",
@@ -336,15 +382,23 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,
-                supports_thinking: false,
+                supports_thinking: true,
             },
             ModelInfo {
                 id: "gpt-5.3-codex-spark",
                 display_name: "GPT-5.3 Codex Spark",
+                context_window: 128_000,
+                max_output_tokens: 32_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.2-codex",
+                display_name: "GPT-5.2 Codex",
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,
-                supports_thinking: false,
+                supports_thinking: true,
             },
             ModelInfo {
                 id: "gpt-5.2",
@@ -352,7 +406,39 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,
-                supports_thinking: false,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.2-pro",
+                display_name: "GPT-5.2 Pro",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.1-codex",
+                display_name: "GPT-5.1 Codex",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.1-codex-max",
+                display_name: "GPT-5.1 Codex Max",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.1-codex-mini",
+                display_name: "GPT-5.1 Codex Mini",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
             },
             ModelInfo {
                 id: "gpt-5.1",
@@ -360,7 +446,47 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
                 context_window: 400_000,
                 max_output_tokens: 128_000,
                 supports_vision: true,
-                supports_thinking: false,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5-codex",
+                display_name: "GPT-5 Codex",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5-pro",
+                display_name: "GPT-5 Pro",
+                context_window: 400_000,
+                max_output_tokens: 272_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5",
+                display_name: "GPT-5",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5-mini",
+                display_name: "GPT-5 Mini",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5-nano",
+                display_name: "GPT-5 Nano",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
             },
             ModelInfo {
                 id: "gpt-4.1",
@@ -387,8 +513,40 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
                 supports_thinking: false,
             },
             ModelInfo {
+                id: "o4-mini",
+                display_name: "o4 Mini",
+                context_window: 200_000,
+                max_output_tokens: 100_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "o3",
+                display_name: "o3",
+                context_window: 200_000,
+                max_output_tokens: 100_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
                 id: "o3-mini",
                 display_name: "o3 Mini",
+                context_window: 200_000,
+                max_output_tokens: 100_000,
+                supports_vision: false,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "o3-pro",
+                display_name: "o3 Pro",
+                context_window: 200_000,
+                max_output_tokens: 100_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "codex-mini-latest",
+                display_name: "Codex Mini",
                 context_window: 200_000,
                 max_output_tokens: 100_000,
                 supports_vision: false,
@@ -398,6 +556,82 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         dynamic_discovery: false,
         probe_addr: "",
     },
+    // ── OpenAI Codex (ChatGPT Plus OAuth) ───────────────────────
+    // Models from OpenClaw registry (openai-codex-responses API).
+    // Uses OAuth tokens, routes to chatgpt.com/backend-api.
+    ProviderInfo {
+        id: "openai-codex",
+        display_name: "OpenAI Codex (ChatGPT Plus)",
+        tier: ProviderTier::Primary,
+        env_var: "OPENAI_API_KEY",
+        alt_env_vars: &[],
+        base_url: "https://chatgpt.com/backend-api",
+        api_type: ApiType::OpenaiResponses,
+        auth_method: AuthMethod::OAuth,
+        default_model: "gpt-5.3-codex",
+        models: &[
+            ModelInfo {
+                id: "gpt-5.3-codex",
+                display_name: "GPT-5.3 Codex",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.3-codex-spark",
+                display_name: "GPT-5.3 Codex Spark",
+                context_window: 128_000,
+                max_output_tokens: 32_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.2-codex",
+                display_name: "GPT-5.2 Codex",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.2",
+                display_name: "GPT-5.2",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.1-codex-max",
+                display_name: "GPT-5.1 Codex Max",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.1-codex-mini",
+                display_name: "GPT-5.1 Codex Mini",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gpt-5.1",
+                display_name: "GPT-5.1",
+                context_window: 400_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+        ],
+        dynamic_discovery: false,
+        probe_addr: "",
+    },
+    // ── Google Gemini ────────────────────────────────────────────
+    // Models from OpenClaw registry (google-generative-ai API).
     ProviderInfo {
         id: "google",
         display_name: "Google (Gemini)",
@@ -407,28 +641,46 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         base_url: "https://generativelanguage.googleapis.com",
         api_type: ApiType::GoogleGenerativeAi,
         auth_method: AuthMethod::ApiKey,
-        default_model: "gemini-3-pro",
+        default_model: "gemini-2.5-flash",
         models: &[
             ModelInfo {
-                id: "gemini-3-pro",
-                display_name: "Gemini 3 Pro",
-                context_window: 1_000_000,
+                id: "gemini-2.5-pro",
+                display_name: "Gemini 2.5 Pro",
+                context_window: 1_048_576,
                 max_output_tokens: 65_536,
                 supports_vision: true,
                 supports_thinking: true,
             },
             ModelInfo {
-                id: "gemini-3-flash",
-                display_name: "Gemini 3 Flash",
-                context_window: 1_000_000,
+                id: "gemini-2.5-flash",
+                display_name: "Gemini 2.5 Flash",
+                context_window: 1_048_576,
                 max_output_tokens: 65_536,
                 supports_vision: true,
                 supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gemini-2.5-flash-lite",
+                display_name: "Gemini 2.5 Flash Lite",
+                context_window: 1_048_576,
+                max_output_tokens: 65_536,
+                supports_vision: true,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "gemini-2.0-flash",
+                display_name: "Gemini 2.0 Flash",
+                context_window: 1_048_576,
+                max_output_tokens: 8_192,
+                supports_vision: true,
+                supports_thinking: false,
             },
         ],
         dynamic_discovery: false,
         probe_addr: "",
     },
+    // ── xAI Grok ────────────────────────────────────────────────
+    // Models from OpenClaw registry (openai-completions API).
     ProviderInfo {
         id: "xai",
         display_name: "xAI (Grok)",
@@ -438,14 +690,38 @@ pub static ALL_PROVIDERS: &[ProviderInfo] = &[
         base_url: "https://api.x.ai",
         api_type: ApiType::OpenaiCompletions,
         auth_method: AuthMethod::ApiKey,
-        default_model: "grok-4",
+        default_model: "grok-3",
         models: &[
             ModelInfo {
-                id: "grok-4",
-                display_name: "Grok 4",
-                context_window: 256_000,
-                max_output_tokens: 32_768,
-                supports_vision: true,
+                id: "grok-3",
+                display_name: "Grok 3",
+                context_window: 131_072,
+                max_output_tokens: 8_192,
+                supports_vision: false,
+                supports_thinking: false,
+            },
+            ModelInfo {
+                id: "grok-3-fast",
+                display_name: "Grok 3 Fast",
+                context_window: 131_072,
+                max_output_tokens: 8_192,
+                supports_vision: false,
+                supports_thinking: false,
+            },
+            ModelInfo {
+                id: "grok-3-mini",
+                display_name: "Grok 3 Mini",
+                context_window: 131_072,
+                max_output_tokens: 8_192,
+                supports_vision: false,
+                supports_thinking: true,
+            },
+            ModelInfo {
+                id: "grok-3-mini-fast",
+                display_name: "Grok 3 Mini Fast",
+                context_window: 131_072,
+                max_output_tokens: 8_192,
+                supports_vision: false,
                 supports_thinking: true,
             },
         ],
@@ -1501,7 +1777,7 @@ mod tests {
     #[test]
     fn tier_filtering_works() {
         let primaries = providers_by_tier(ProviderTier::Primary);
-        assert_eq!(primaries.len(), 4);
+        assert_eq!(primaries.len(), 5);
         for p in &primaries {
             assert_eq!(p.tier, ProviderTier::Primary);
         }

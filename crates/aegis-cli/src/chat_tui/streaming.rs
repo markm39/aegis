@@ -97,13 +97,30 @@ pub(super) fn stream_llm_call(
     if is_anthropic_model(&params.model) {
         stream_anthropic(params, event_tx)
     } else if is_openai_model(&params.model) {
-        stream_openai(params, event_tx)
+        // Route to Responses API for OAuth users (ChatGPT backend) or always
+        // for models that only exist on the Responses API.
+        if should_use_responses_api("openai") {
+            stream_openai_responses(params, event_tx)
+        } else {
+            stream_openai(params, event_tx)
+        }
     } else {
         Err(format!(
             "streaming not supported for model '{}'; use daemon fallback",
             params.model
         ))
     }
+}
+
+/// Check if the OpenAI credential is an OAuth token, which requires the
+/// Responses API (ChatGPT backend) instead of Chat Completions.
+fn should_use_responses_api(provider_id: &str) -> bool {
+    use aegis_types::provider_auth::CredentialType;
+    let store = CredentialStore::load_default().unwrap_or_default();
+    store
+        .get(provider_id)
+        .map(|c| c.credential_type == CredentialType::OAuthToken)
+        .unwrap_or(false)
 }
 
 /// Check if this is an Anthropic model name.
@@ -113,8 +130,11 @@ fn is_anthropic_model(model: &str) -> bool {
 
 /// Check if this is an OpenAI model name.
 fn is_openai_model(model: &str) -> bool {
-    model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3")
+    model.starts_with("gpt-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
         || model.starts_with("o4")
+        || model.starts_with("codex-")
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +584,297 @@ fn parse_openai_sse(
         model,
         usage,
         tool_calls: final_tool_calls,
+        stop_reason,
+    };
+
+    Ok(StreamingCallResult { response })
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses API streaming (for OAuth / ChatGPT backend)
+// ---------------------------------------------------------------------------
+
+/// Convert conversation messages to OpenAI Responses API `input` format.
+///
+/// Key differences from Chat Completions:
+/// - User messages: `{ "role": "user", "content": "..." }`
+/// - Assistant messages: `{ "role": "assistant", "content": [{"type": "output_text", "text": "..."}] }`
+/// - Tool results: `{ "type": "function_call_output", "call_id": "...", "output": "..." }`
+fn to_responses_input(messages: &[LlmMessage]) -> Vec<Value> {
+    let mut input = Vec::new();
+    for msg in messages {
+        match msg.role {
+            LlmRole::User => {
+                input.push(serde_json::json!({
+                    "role": "user",
+                    "content": msg.content,
+                }));
+            }
+            LlmRole::Assistant => {
+                // Check if this message has tool calls.
+                if !msg.tool_calls.is_empty() {
+                    let mut items: Vec<Value> = Vec::new();
+                    if !msg.content.is_empty() {
+                        items.push(serde_json::json!({
+                            "type": "output_text",
+                            "text": msg.content,
+                        }));
+                    }
+                    for tc in &msg.tool_calls {
+                        items.push(serde_json::json!({
+                            "type": "function_call",
+                            "name": tc.name,
+                            "call_id": tc.id,
+                            "arguments": tc.input.to_string(),
+                        }));
+                    }
+                    input.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": items,
+                    }));
+                } else {
+                    input.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": msg.content}],
+                    }));
+                }
+            }
+            LlmRole::Tool => {
+                // Tool results in Responses API are top-level input items.
+                input.push(serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": msg.tool_use_id.as_deref().unwrap_or(""),
+                    "output": msg.content,
+                }));
+            }
+            LlmRole::System => {
+                // System messages are handled via `instructions` field, not input.
+            }
+        }
+    }
+    input
+}
+
+/// Stream a request via the OpenAI Responses API (used for OAuth / ChatGPT backend).
+fn stream_openai_responses(
+    params: &StreamingCallParams,
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+) -> Result<StreamingCallResult, String> {
+    let api_key = resolve_provider_key("openai")?;
+    let base_url = resolve_provider_base_url("openai");
+
+    // ChatGPT backend uses /codex/responses, public API uses /v1/responses.
+    let url = if base_url.contains("chatgpt.com") {
+        format!("{}/codex/responses", base_url.trim_end_matches('/'))
+    } else {
+        format!("{}/v1/responses", base_url.trim_end_matches('/'))
+    };
+
+    // Build input in Responses API format.
+    let input = to_responses_input(&params.messages);
+
+    let mut body = serde_json::json!({
+        "model": params.model,
+        "input": input,
+        "stream": true,
+    });
+
+    // System prompt goes in `instructions`.
+    if let Some(ref sys) = params.system_prompt {
+        if !sys.is_empty() {
+            body["instructions"] = Value::String(sys.clone());
+        }
+    }
+
+    if let Some(temp) = params.temperature {
+        body["temperature"] = serde_json::json!(temp);
+    }
+    let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    body["max_output_tokens"] = serde_json::json!(max_tokens);
+
+    if let Some(ref tools) = params.tools {
+        if let Some(arr) = tools.as_array() {
+            if !arr.is_empty() {
+                // Responses API tool format: { type, name, description, parameters }
+                let responses_tools: Vec<Value> = arr
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "type": "function",
+                            "name": t.get("name").cloned().unwrap_or(Value::Null),
+                            "description": t.get("description").cloned().unwrap_or(Value::Null),
+                            "parameters": t.get("input_schema").cloned().unwrap_or(Value::Null),
+                        })
+                    })
+                    .collect();
+                body["tools"] = Value::Array(responses_tools);
+            }
+        }
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| format!("OpenAI Responses API request failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().unwrap_or_default();
+        return Err(format!("OpenAI Responses API returned {status}: {err_text}"));
+    }
+
+    parse_responses_sse(resp, event_tx, &params.model)
+}
+
+/// Parse OpenAI Responses API SSE events.
+///
+/// The Responses API uses different event types than Chat Completions:
+/// - `response.output_text.delta` -- text chunk with `delta` field
+/// - `response.output_item.added` -- new output item (may be function_call)
+/// - `response.function_call_arguments.delta` -- tool call arg chunk
+/// - `response.function_call_arguments.done` -- tool call complete
+/// - `response.completed` -- final event with usage stats
+fn parse_responses_sse(
+    resp: reqwest::blocking::Response,
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+    request_model: &str,
+) -> Result<StreamingCallResult, String> {
+    let reader = BufReader::new(resp.take(MAX_RESPONSE_BYTES));
+
+    let mut content = String::new();
+    let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+    let mut current_tool_name = String::new();
+    let mut current_tool_call_id = String::new();
+    let mut current_tool_args = String::new();
+    let mut usage = LlmUsage {
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    let mut stop_reason = None;
+    let mut model = request_model.to_string();
+    let mut current_event_type = String::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("failed to read SSE line: {e}"))?;
+
+        // Track the event type from "event: <type>" lines.
+        if let Some(event_name) = line.strip_prefix("event: ") {
+            current_event_type = event_name.trim().to_string();
+            continue;
+        }
+
+        let data = match line.strip_prefix("data: ") {
+            Some(d) => d,
+            None => continue,
+        };
+        if data == "[DONE]" {
+            break;
+        }
+
+        let event: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        match current_event_type.as_str() {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                    content.push_str(delta);
+                    let _ = event_tx.send(AgentLoopEvent::StreamDelta(delta.to_string()));
+                }
+            }
+            "response.output_item.added" => {
+                // Check if a function_call item is starting.
+                if let Some(item) = event.get("item") {
+                    let item_type = item.get("type").and_then(|v| v.as_str());
+                    if item_type == Some("function_call") {
+                        current_tool_name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        current_tool_call_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        current_tool_args.clear();
+                    }
+                }
+            }
+            "response.function_call_arguments.delta" => {
+                if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                    current_tool_args.push_str(delta);
+                }
+            }
+            "response.function_call_arguments.done" => {
+                // Finalize the tool call.
+                let args_str = event
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&current_tool_args);
+                let input: Value = serde_json::from_str(args_str)
+                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                tool_calls.push(LlmToolCall {
+                    id: current_tool_call_id.clone(),
+                    name: current_tool_name.clone(),
+                    input,
+                });
+                current_tool_name.clear();
+                current_tool_call_id.clear();
+                current_tool_args.clear();
+            }
+            "response.completed" => {
+                // Extract usage from the completed response object.
+                if let Some(response) = event.get("response") {
+                    if let Some(m) = response.get("model").and_then(|v| v.as_str()) {
+                        model = m.to_string();
+                    }
+                    if let Some(u) = response.get("usage") {
+                        if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
+                            usage.input_tokens = inp;
+                        }
+                        if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
+                            usage.output_tokens = out;
+                        }
+                    }
+                    // Determine stop reason from response status.
+                    let status = response.get("status").and_then(|v| v.as_str());
+                    stop_reason = Some(match status {
+                        Some("completed") => {
+                            if tool_calls.is_empty() {
+                                StopReason::EndTurn
+                            } else {
+                                StopReason::ToolUse
+                            }
+                        }
+                        Some("incomplete") => StopReason::MaxTokens,
+                        _ => StopReason::EndTurn,
+                    });
+                }
+                break;
+            }
+            _ => {}
+        }
+
+        current_event_type.clear();
+    }
+
+    let response = LlmResponse {
+        content,
+        model,
+        usage,
+        tool_calls,
         stop_reason,
     };
 

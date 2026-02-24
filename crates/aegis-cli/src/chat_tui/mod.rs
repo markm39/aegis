@@ -3248,15 +3248,27 @@ fn detect_model() -> String {
         }
     }
 
-    // 2. Scan providers and pick the first available with a default model.
+    // 2. Check credential store for the user's stored model selection.
+    let store = aegis_types::credentials::CredentialStore::load_default().unwrap_or_default();
+    for detected in aegis_types::providers::scan_providers() {
+        if detected.available {
+            if let Some(cred) = store.get(detected.info.id) {
+                if let Some(ref model) = cred.model {
+                    return model.clone();
+                }
+            }
+        }
+    }
+
+    // 3. Scan providers and pick the first available with a default model.
     for detected in aegis_types::providers::scan_providers() {
         if detected.available && !detected.info.default_model.is_empty() {
             return detected.info.default_model.to_string();
         }
     }
 
-    // 3. Fallback.
-    "claude-sonnet-4-20250514".to_string()
+    // 4. Fallback.
+    "claude-sonnet-4-5-20250929".to_string()
 }
 
 /// Run the chat TUI, connecting to the daemon at the default socket path.
