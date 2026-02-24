@@ -18,6 +18,12 @@ pub struct ConversationMeta {
     pub id: String,
     /// Model used for this conversation.
     pub model: String,
+    /// Chat mode for this conversation (auto/chat/code).
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Engine preference for this conversation (auto/provider/native).
+    #[serde(default)]
+    pub engine: Option<String>,
     /// ISO 8601 timestamp of when the conversation was saved.
     pub timestamp: String,
     /// Number of LlmMessages in the conversation.
@@ -28,9 +34,7 @@ pub struct ConversationMeta {
 /// if it does not exist.
 pub fn conversations_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let dir = PathBuf::from(home)
-        .join(".aegis")
-        .join("conversations");
+    let dir = PathBuf::from(home).join(".aegis").join("conversations");
     let _ = fs::create_dir_all(&dir);
     dir
 }
@@ -53,7 +57,13 @@ pub fn generate_conversation_id() -> String {
 ///
 /// The first line is a JSON header with metadata. Each subsequent line is
 /// a serialized `LlmMessage`.
-pub fn save_conversation(id: &str, messages: &[LlmMessage], model: &str) -> Result<()> {
+pub fn save_conversation(
+    id: &str,
+    messages: &[LlmMessage],
+    model: &str,
+    mode: &str,
+    engine: &str,
+) -> Result<()> {
     let dir = conversations_dir();
     let path = dir.join(format!("{id}.jsonl"));
 
@@ -61,12 +71,14 @@ pub fn save_conversation(id: &str, messages: &[LlmMessage], model: &str) -> Resu
     let meta = ConversationMeta {
         id: id.to_string(),
         model: model.to_string(),
+        mode: Some(mode.to_string()),
+        engine: Some(engine.to_string()),
         timestamp,
         message_count: messages.len(),
     };
 
-    let mut contents = serde_json::to_string(&meta)
-        .context("failed to serialize conversation metadata")?;
+    let mut contents =
+        serde_json::to_string(&meta).context("failed to serialize conversation metadata")?;
     contents.push('\n');
 
     for msg in messages {
@@ -94,11 +106,9 @@ pub fn load_conversation(id: &str) -> Result<(Vec<LlmMessage>, ConversationMeta)
 
     let mut lines = contents.lines();
 
-    let header_line = lines
-        .next()
-        .context("conversation file is empty")?;
-    let meta: ConversationMeta = serde_json::from_str(header_line)
-        .context("failed to parse conversation metadata")?;
+    let header_line = lines.next().context("conversation file is empty")?;
+    let meta: ConversationMeta =
+        serde_json::from_str(header_line).context("failed to parse conversation metadata")?;
 
     let mut messages = Vec::new();
     for line in lines {
@@ -186,6 +196,8 @@ mod tests {
         let meta = ConversationMeta {
             id: id.to_string(),
             model: model.to_string(),
+            mode: Some("auto".to_string()),
+            engine: Some("auto".to_string()),
             timestamp,
             message_count: messages.len(),
         };
@@ -222,6 +234,8 @@ mod tests {
         let meta = ConversationMeta {
             id: "abc123".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
+            mode: Some("code".to_string()),
+            engine: Some("native".to_string()),
             timestamp: "2026-01-15T10:30:00Z".to_string(),
             message_count: 5,
         };
@@ -230,6 +244,18 @@ mod tests {
         let back: ConversationMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "abc123");
         assert_eq!(back.model, "claude-sonnet-4-20250514");
+        assert_eq!(back.mode.as_deref(), Some("code"));
+        assert_eq!(back.engine.as_deref(), Some("native"));
         assert_eq!(back.message_count, 5);
+    }
+
+    #[test]
+    fn conversation_meta_backward_compatible_without_mode_engine() {
+        let legacy = r#"{"id":"old123","model":"gpt-5.2","timestamp":"2026-01-01T00:00:00Z","message_count":2}"#;
+        let meta: ConversationMeta = serde_json::from_str(legacy).unwrap();
+        assert_eq!(meta.id, "old123");
+        assert_eq!(meta.model, "gpt-5.2");
+        assert!(meta.mode.is_none());
+        assert!(meta.engine.is_none());
     }
 }

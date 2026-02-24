@@ -26,10 +26,10 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),       // header
-            Constraint::Min(5),          // chat area
+            Constraint::Length(1),            // header
+            Constraint::Min(5),               // chat area
             Constraint::Length(input_height), // input
-            Constraint::Length(1),       // status bar / command bar
+            Constraint::Length(1),            // status bar / command bar
         ])
         .split(area);
 
@@ -66,8 +66,7 @@ fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
         Some(approval_label),
         area.width,
     );
-    let para = Paragraph::new(vec![header])
-        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    let para = Paragraph::new(vec![header]).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
 }
 
@@ -231,9 +230,14 @@ fn draw_status_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
     } else {
         None
     };
-    let status = render::render_status_bar(&app.model, area.width, usage.as_ref());
-    let para = Paragraph::new(vec![status])
-        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    let model_status = format!(
+        "{} [{}|{}]",
+        app.model,
+        app.mode.as_str(),
+        app.engine.as_str()
+    );
+    let status = render::render_status_bar(&model_status, area.width, usage.as_ref());
+    let para = Paragraph::new(vec![status]).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
 }
 
@@ -249,8 +253,7 @@ fn draw_command_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
     let cursor_spans = build_cursor_spans(&app.command_buffer, app.command_cursor);
     spans.extend(cursor_spans);
 
-    let para = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    let para = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
 }
 
@@ -287,9 +290,7 @@ fn draw_completion_popup(f: &mut Frame, app: &ChatApp, cmd_area: Rect) {
         .enumerate()
         .map(|(i, c)| {
             let style = if app.completion_idx == Some(i) {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                Style::default().fg(Color::Black).bg(Color::Cyan)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -297,8 +298,7 @@ fn draw_completion_popup(f: &mut Frame, app: &ChatApp, cmd_area: Rect) {
         })
         .collect();
 
-    let para = Paragraph::new(lines)
-        .style(Style::default().bg(Color::Rgb(40, 40, 40)));
+    let para = Paragraph::new(lines).style(Style::default().bg(Color::Rgb(40, 40, 40)));
     f.render_widget(para, popup_area);
 }
 
@@ -314,9 +314,7 @@ fn build_cursor_spans(text: &str, cursor: usize) -> Vec<Span<'static>> {
         // Show block cursor on empty input
         spans.push(Span::styled(
             " ".to_string(),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White),
+            Style::default().fg(Color::Black).bg(Color::White),
         ));
         return spans;
     }
@@ -331,9 +329,7 @@ fn build_cursor_spans(text: &str, cursor: usize) -> Vec<Span<'static>> {
         // Cursor at end: show block
         spans.push(Span::styled(
             " ".to_string(),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White),
+            Style::default().fg(Color::Black).bg(Color::White),
         ));
     } else {
         // Cursor on a character: highlight it
@@ -341,9 +337,7 @@ fn build_cursor_spans(text: &str, cursor: usize) -> Vec<Span<'static>> {
         let cursor_char = chars.next().unwrap();
         spans.push(Span::styled(
             cursor_char.to_string(),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White),
+            Style::default().fg(Color::Black).bg(Color::White),
         ));
         let after: String = chars.collect();
         if !after.is_empty() {
@@ -422,15 +416,9 @@ fn draw_model_picker(
         height: 1,
     };
     let filter_display = if filter.is_empty() {
-        Span::styled(
-            " Filter...",
-            Style::default().fg(Color::DarkGray),
-        )
+        Span::styled(" Filter...", Style::default().fg(Color::DarkGray))
     } else {
-        Span::styled(
-            format!(" {filter}"),
-            Style::default().fg(Color::White),
-        )
+        Span::styled(format!(" {filter}"), Style::default().fg(Color::White))
     };
     f.render_widget(Paragraph::new(Line::from(filter_display)), filter_area);
 
@@ -562,10 +550,7 @@ fn draw_session_picker(
             };
             // Truncate timestamp to date portion for display.
             let ts: String = m.timestamp.chars().take(10).collect();
-            let text = format!(
-                " {:8} {:30} {:>5}  {}",
-                m.id, m.model, m.message_count, ts,
-            );
+            let text = format!(" {:8} {:30} {:>5}  {}", m.id, m.model, m.message_count, ts,);
             let truncated: String = text.chars().take(inner.width as usize).collect();
             Line::from(Span::styled(truncated, style))
         })
@@ -614,6 +599,8 @@ fn draw_settings(f: &mut Frame, app: &ChatApp, selected: usize, area: Rect) {
                 ApprovalProfile::FullAuto => "Full Auto".to_string(),
             },
         ),
+        ("Mode", app.mode.as_str().to_string()),
+        ("Engine", app.engine.as_str().to_string()),
     ];
 
     let lines: Vec<Line<'static>> = settings
@@ -626,10 +613,7 @@ fn draw_settings(f: &mut Frame, app: &ChatApp, selected: usize, area: Rect) {
                 Style::default().fg(Color::White)
             };
             let arrow = if i == selected { ">" } else { " " };
-            Line::from(Span::styled(
-                format!(" {arrow} {label:20} {value}"),
-                style,
-            ))
+            Line::from(Span::styled(format!(" {arrow} {label:20} {value}"), style))
         })
         .collect();
 
