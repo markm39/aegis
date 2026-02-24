@@ -105,6 +105,9 @@ pub struct DaemonConfig {
     /// are scrubbed from audit entries before persistence.
     #[serde(default)]
     pub redaction: RedactionConfig,
+    /// Agent heartbeat runner configuration for keepalive messages.
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -530,6 +533,33 @@ pub struct PluginConfig {
     /// Defaults to `~/.aegis/plugins/`.
     #[serde(default)]
     pub plugin_dir: Option<String>,
+}
+
+/// Agent heartbeat runner configuration.
+///
+/// When enabled, the daemon periodically sends keepalive messages to idle
+/// agents and uses heartbeat ticks to drain deferred reply queues.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HeartbeatConfig {
+    /// Whether the heartbeat runner is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Interval in seconds between heartbeat ticks (default 60, min 5, max 86400).
+    #[serde(default = "default_heartbeat_interval")]
+    pub interval_secs: u64,
+}
+
+fn default_heartbeat_interval() -> u64 {
+    60
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: 60,
+        }
+    }
 }
 
 /// Configuration for a single agent slot in the fleet.
@@ -1021,6 +1051,7 @@ mod tests {
             skills: vec![],
             retention: RetentionConfig::default(),
             redaction: RedactionConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

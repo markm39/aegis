@@ -92,6 +92,7 @@ pub fn init() -> anyhow::Result<()> {
         skills: vec![],
         retention: Default::default(),
         redaction: Default::default(),
+        heartbeat: Default::default(),
     };
 
     let toml_str = example.to_toml()?;
@@ -167,6 +168,7 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         skills: vec![],
         retention: Default::default(),
         redaction: Default::default(),
+        heartbeat: Default::default(),
     };
 
     let toml_str = example.to_toml()?;

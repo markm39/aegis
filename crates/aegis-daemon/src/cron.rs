@@ -3,7 +3,8 @@
 //! Supports simple scheduling expressions: "every Nm" (minutes),
 //! "every Nh" (hours), "daily HH:MM". Jobs execute DaemonCommands.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -133,12 +134,17 @@ pub struct CronJob {
 /// Registry of scheduled jobs.
 pub struct CronScheduler {
     jobs: Vec<CronJob>,
+    /// When each job last fired, keyed by job name.
+    last_fired: HashMap<String, Instant>,
 }
 
 impl CronScheduler {
     /// Create a new scheduler with the given initial jobs.
     pub fn new(jobs: Vec<CronJob>) -> Self {
-        Self { jobs }
+        Self {
+            jobs,
+            last_fired: HashMap::new(),
+        }
     }
 
     /// Add a job to the scheduler.
@@ -150,7 +156,11 @@ impl CronScheduler {
     pub fn remove(&mut self, name: &str) -> bool {
         let before = self.jobs.len();
         self.jobs.retain(|j| j.name != name);
-        self.jobs.len() < before
+        let removed = self.jobs.len() < before;
+        if removed {
+            self.last_fired.remove(name);
+        }
+        removed
     }
 
     /// List all registered jobs.
@@ -165,6 +175,33 @@ impl CronScheduler {
             .iter()
             .find(|j| j.name == name)
             .map(|j| &j.command)
+    }
+
+    /// Check all enabled jobs and return those that are due to fire.
+    ///
+    /// A job is due if it is enabled and either has never fired or enough
+    /// time has elapsed since its last fire (based on the schedule interval).
+    /// Updates `last_fired` for each returned job.
+    pub fn tick_due_jobs(&mut self) -> Vec<(String, serde_json::Value)> {
+        let now = Instant::now();
+        let mut due = Vec::new();
+
+        for job in &self.jobs {
+            if !job.enabled {
+                continue;
+            }
+            let interval = job.schedule.next_tick_duration();
+            let is_due = match self.last_fired.get(&job.name) {
+                None => true,
+                Some(last) => last.elapsed() >= interval,
+            };
+            if is_due {
+                due.push((job.name.clone(), job.command.clone()));
+                self.last_fired.insert(job.name.clone(), now);
+            }
+        }
+
+        due
     }
 }
 
@@ -303,5 +340,85 @@ mod tests {
             let back: Schedule = serde_json::from_str(&json).unwrap();
             assert_eq!(back, sched);
         }
+    }
+
+    #[test]
+    fn tick_due_jobs_returns_all_on_first_call() {
+        let mut scheduler = CronScheduler::new(vec![]);
+        scheduler.add(CronJob {
+            name: "j1".into(),
+            schedule: Schedule::EveryMinutes { minutes: 5 },
+            command: serde_json::json!({"type": "a"}),
+            enabled: true,
+        });
+        scheduler.add(CronJob {
+            name: "j2".into(),
+            schedule: Schedule::EveryHours { hours: 1 },
+            command: serde_json::json!({"type": "b"}),
+            enabled: true,
+        });
+
+        let due = scheduler.tick_due_jobs();
+        assert_eq!(due.len(), 2);
+        assert_eq!(due[0].0, "j1");
+        assert_eq!(due[1].0, "j2");
+    }
+
+    #[test]
+    fn tick_due_jobs_returns_empty_immediately_after() {
+        let mut scheduler = CronScheduler::new(vec![]);
+        scheduler.add(CronJob {
+            name: "j1".into(),
+            schedule: Schedule::EveryMinutes { minutes: 5 },
+            command: serde_json::json!({"type": "a"}),
+            enabled: true,
+        });
+
+        let due = scheduler.tick_due_jobs();
+        assert_eq!(due.len(), 1);
+
+        // Immediately after, nothing is due.
+        let due2 = scheduler.tick_due_jobs();
+        assert!(due2.is_empty());
+    }
+
+    #[test]
+    fn tick_due_jobs_skips_disabled() {
+        let mut scheduler = CronScheduler::new(vec![]);
+        scheduler.add(CronJob {
+            name: "disabled-job".into(),
+            schedule: Schedule::EveryMinutes { minutes: 1 },
+            command: serde_json::json!({"type": "nope"}),
+            enabled: false,
+        });
+        scheduler.add(CronJob {
+            name: "enabled-job".into(),
+            schedule: Schedule::EveryMinutes { minutes: 1 },
+            command: serde_json::json!({"type": "yes"}),
+            enabled: true,
+        });
+
+        let due = scheduler.tick_due_jobs();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].0, "enabled-job");
+    }
+
+    #[test]
+    fn remove_cleans_up_last_fired() {
+        let mut scheduler = CronScheduler::new(vec![]);
+        scheduler.add(CronJob {
+            name: "temp".into(),
+            schedule: Schedule::EveryMinutes { minutes: 1 },
+            command: serde_json::json!({"type": "x"}),
+            enabled: true,
+        });
+
+        // Fire it once so last_fired is populated.
+        scheduler.tick_due_jobs();
+        assert!(!scheduler.last_fired.is_empty());
+
+        // Remove should clean up.
+        assert!(scheduler.remove("temp"));
+        assert!(scheduler.last_fired.is_empty());
     }
 }

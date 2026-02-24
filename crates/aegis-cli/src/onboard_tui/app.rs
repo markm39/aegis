@@ -1737,6 +1737,7 @@ impl OnboardApp {
                 .collect(),
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         }
     }
 

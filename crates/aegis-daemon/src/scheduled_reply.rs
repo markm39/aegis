@@ -301,6 +301,18 @@ impl ScheduledReplyManager {
     pub fn scheduler(&self) -> &CronScheduler {
         &self.scheduler
     }
+
+    /// Check for due scheduled replies and return their names.
+    ///
+    /// Delegates to the internal [`CronScheduler`]'s `tick_due_jobs()` method
+    /// so the daemon can auto-trigger replies without manual commands.
+    pub fn tick_due_reply_names(&mut self) -> Vec<String> {
+        self.scheduler
+            .tick_due_jobs()
+            .into_iter()
+            .map(|(name, _cmd)| name)
+            .collect()
+    }
 }
 
 impl Default for ScheduledReplyManager {
@@ -609,5 +621,36 @@ mod tests {
     fn validate_template_unclosed_brace_ok() {
         // Unclosed {{ is not treated as a variable.
         assert!(validate_template("some {{ text").is_ok());
+    }
+
+    #[test]
+    fn tick_due_reply_names_returns_due_replies() {
+        let mut mgr = ScheduledReplyManager::new();
+        mgr.add_scheduled_reply(make_reply(
+            "daily-digest",
+            Schedule::Daily { hour: 9, minute: 0 },
+            TEMPLATE_DAILY_DIGEST,
+        ))
+        .unwrap();
+        mgr.add_scheduled_reply(make_reply(
+            "health-check",
+            Schedule::EveryMinutes { minutes: 5 },
+            TEMPLATE_HEALTH_CHECK,
+        ))
+        .unwrap();
+
+        // First tick: all due (never fired).
+        let names = mgr.tick_due_reply_names();
+        assert_eq!(names.len(), 2);
+
+        // Immediately after: nothing due.
+        let names2 = mgr.tick_due_reply_names();
+        assert!(names2.is_empty());
+    }
+
+    #[test]
+    fn tick_due_reply_names_empty_when_no_replies() {
+        let mut mgr = ScheduledReplyManager::new();
+        assert!(mgr.tick_due_reply_names().is_empty());
     }
 }

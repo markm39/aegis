@@ -939,6 +939,10 @@ pub struct DaemonRuntime {
     alert_tx: Option<std::sync::mpsc::SyncSender<aegis_alert::AlertEvent>>,
     /// Join handle for the alert dispatcher background thread.
     alert_thread: Option<std::thread::JoinHandle<()>>,
+    /// Heartbeat runner for periodic agent keepalive messages.
+    heartbeat_runner: crate::heartbeat::HeartbeatRunner,
+    /// Deferred reply queue for time-delayed and heartbeat-gated message delivery.
+    deferred_reply_queue: crate::deferred_reply::DeferredReplyQueue,
 }
 
 impl DaemonRuntime {
@@ -1077,6 +1081,38 @@ impl DaemonRuntime {
                 info!(count, "cron scheduler initialized with pre-configured jobs");
             }
             scheduler
+        };
+
+        // Initialize heartbeat runner from config.
+        let heartbeat_runner = {
+            let hb_config = crate::heartbeat::HeartbeatRunnerConfig {
+                interval: Duration::from_secs(config.heartbeat.interval_secs),
+                enabled: config.heartbeat.enabled,
+            };
+            if let Err(e) = crate::heartbeat::validate_interval(hb_config.interval) {
+                warn!(error = %e, "invalid heartbeat interval, using default (60s)");
+                crate::heartbeat::HeartbeatRunner::new(
+                    crate::heartbeat::HeartbeatRunnerConfig::default(),
+                )
+            } else {
+                crate::heartbeat::HeartbeatRunner::new(hb_config)
+            }
+        };
+
+        // Initialize deferred reply queue with persistence.
+        let deferred_reply_queue = {
+            let daemon_dir = aegis_config
+                .ledger_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let queue_path = daemon_dir.join("deferred_replies.json");
+            match crate::deferred_reply::DeferredReplyQueue::with_persistence(&queue_path) {
+                Ok(queue) => queue,
+                Err(e) => {
+                    warn!(error = %e, "failed to load deferred replies, starting empty");
+                    crate::deferred_reply::DeferredReplyQueue::new()
+                }
+            }
         };
 
         // Discover plugins if enabled.
@@ -1262,6 +1298,8 @@ impl DaemonRuntime {
             last_retention_check: Instant::now(),
             alert_tx,
             alert_thread,
+            heartbeat_runner,
+            deferred_reply_queue,
         }
     }
 
@@ -1408,6 +1446,7 @@ impl DaemonRuntime {
         self.stop_capture_stream(name);
         self.capture_sessions.remove(name);
         self.last_tool_actions.remove(name);
+        self.heartbeat_runner.unregister_agent(name);
     }
 
     fn remove_subagent_descendants(&mut self, root: &str) {
@@ -1515,6 +1554,7 @@ impl DaemonRuntime {
         self.fleet.add_agent(child_config);
         if request.start {
             self.fleet.start_agent(&child_name);
+            self.heartbeat_runner.register_agent(&child_name);
         }
         self.subagents.insert(
             child_name.clone(),
@@ -1909,6 +1949,17 @@ impl DaemonRuntime {
         // Start all enabled agents
         self.fleet.start_all();
 
+        // Register running agents with the heartbeat runner.
+        for name in self.fleet.agent_names_sorted() {
+            if self
+                .fleet
+                .slot(&name)
+                .is_some_and(|s| matches!(s.status, AgentStatus::Running { .. }))
+            {
+                self.heartbeat_runner.register_agent(&name);
+            }
+        }
+
         // Main loop
         //
         // Uses recv_timeout instead of sleep so the daemon wakes immediately
@@ -1964,6 +2015,17 @@ impl DaemonRuntime {
                 // Tick the fleet (check for exits, apply restart policies)
                 let notable_events = self.fleet.tick();
 
+                // Record heartbeat activity for agents with notable events
+                // (they're doing something, so reset their idle timer).
+                for (agent_name, event) in &notable_events {
+                    if matches!(
+                        event,
+                        NotableEvent::PendingPrompt { .. } | NotableEvent::StallNudge { .. }
+                    ) {
+                        self.heartbeat_runner.record_activity(agent_name);
+                    }
+                }
+
                 // Relay completed subagent results back to parent orchestrators.
                 self.relay_subagent_results(&notable_events);
 
@@ -1972,6 +2034,18 @@ impl DaemonRuntime {
 
                 // Periodic orchestrator heartbeat (review cycle)
                 self.maybe_send_heartbeat();
+
+                // Agent keepalives + heartbeat-gated deferred reply drain
+                self.tick_heartbeat();
+
+                // Drain time-based deferred replies that are now due
+                self.drain_deferred_replies();
+
+                // Auto-trigger due cron jobs
+                self.tick_cron_jobs();
+
+                // Auto-trigger due scheduled replies
+                self.tick_scheduled_replies();
 
                 if let Some(runtime) = self.toolkit_runtime.as_mut() {
                     runtime.prune_idle_sessions(BROWSER_SESSION_TTL);
@@ -2090,6 +2164,127 @@ impl DaemonRuntime {
             );
             let _ = tx.send(ChannelInput::TextMessage(msg));
             self.heartbeat_last_sent.insert(name.clone(), now);
+        }
+    }
+
+    /// Process heartbeat ticks: send keepalive messages to idle agents
+    /// and drain heartbeat-gated deferred replies.
+    fn tick_heartbeat(&mut self) {
+        if !self.heartbeat_runner.is_tick_due() {
+            return;
+        }
+
+        let messages = self.heartbeat_runner.tick();
+
+        for msg in &messages {
+            let text = format!(
+                "[heartbeat] idle for {}s (seq {})",
+                msg.idle_duration.as_secs(),
+                msg.sequence
+            );
+            if let Err(e) = self.fleet.send_to_agent(&msg.agent_name, &text) {
+                tracing::debug!(
+                    agent = %msg.agent_name,
+                    error = %e,
+                    "heartbeat keepalive not delivered"
+                );
+            }
+        }
+
+        // Drain heartbeat-gated deferred replies.
+        let heartbeat_replies = self.deferred_reply_queue.drain_heartbeat();
+        for reply in heartbeat_replies {
+            self.deliver_deferred_reply(reply);
+        }
+    }
+
+    /// Drain time-based deferred replies that are ready for delivery.
+    fn drain_deferred_replies(&mut self) {
+        let ready = self.deferred_reply_queue.drain_ready();
+        for reply in ready {
+            self.deliver_deferred_reply(reply);
+        }
+    }
+
+    /// Deliver a single deferred reply through the appropriate channel.
+    fn deliver_deferred_reply(&self, reply: crate::deferred_reply::DeferredReply) {
+        info!(
+            id = %reply.id,
+            agent = %reply.agent_name,
+            channel = %reply.channel,
+            "delivering deferred reply"
+        );
+
+        if reply.channel == "telegram" {
+            if let Some(tx) = &self.channel_tx {
+                let msg = format!("[deferred from {}] {}", reply.agent_name, reply.text);
+                let _ = tx.send(ChannelInput::TextMessage(msg));
+            }
+        } else {
+            tracing::warn!(
+                channel = %reply.channel,
+                "unknown delivery channel for deferred reply"
+            );
+        }
+    }
+
+    /// Auto-trigger due cron jobs by dispatching their commands.
+    fn tick_cron_jobs(&mut self) {
+        if !self.config.cron.enabled {
+            return;
+        }
+
+        let due_jobs = self.cron_scheduler.tick_due_jobs();
+        for (name, command_json) in due_jobs {
+            info!(job = %name, "cron job firing");
+
+            match serde_json::from_value::<DaemonCommand>(command_json.clone()) {
+                Ok(cmd) => {
+                    let response = self.handle_command(cmd);
+                    if !response.ok {
+                        warn!(
+                            job = %name,
+                            error = %response.message,
+                            "cron job command failed"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        job = %name,
+                        error = %e,
+                        "cron job has invalid command JSON, skipping"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Auto-trigger due scheduled replies, render templates, and send.
+    fn tick_scheduled_replies(&mut self) {
+        let due_names = self.scheduled_reply_mgr.tick_due_reply_names();
+        if due_names.is_empty() {
+            return;
+        }
+
+        let data = self.collect_template_data();
+        for name in due_names {
+            match self
+                .scheduled_reply_mgr
+                .trigger_scheduled_reply(&name, &data)
+            {
+                Ok((rendered, channel)) => {
+                    info!(reply_name = %name, channel = %channel, "auto-triggered scheduled reply");
+                    if channel == "telegram" {
+                        if let Some(tx) = &self.channel_tx {
+                            let _ = tx.send(ChannelInput::TextMessage(rendered));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(reply_name = %name, error = %e, "scheduled reply auto-trigger failed");
+                }
+            }
         }
     }
 
@@ -2458,6 +2653,7 @@ impl DaemonRuntime {
                     _ => {}
                 }
                 self.fleet.start_agent(name);
+                self.heartbeat_runner.register_agent(name);
                 DaemonResponse::ok(format!("agent '{name}' starting"))
             }
 
@@ -2466,6 +2662,7 @@ impl DaemonRuntime {
                     return DaemonResponse::error(format!("unknown agent: {name}"));
                 }
                 self.fleet.stop_agent(name);
+                self.heartbeat_runner.unregister_agent(name);
                 DaemonResponse::ok(format!("stopping '{name}'"))
             }
 
@@ -2476,7 +2673,10 @@ impl DaemonRuntime {
 
             DaemonCommand::SendToAgent { ref name, ref text } => {
                 match self.fleet.send_to_agent(name, text) {
-                    Ok(()) => DaemonResponse::ok(format!("sent to '{name}'")),
+                    Ok(()) => {
+                        self.heartbeat_runner.record_activity(name);
+                        DaemonResponse::ok(format!("sent to '{name}'"))
+                    }
                     Err(e) => DaemonResponse::error(e),
                 }
             }
@@ -2512,6 +2712,7 @@ impl DaemonRuntime {
                 self.fleet.add_agent(slot_config);
                 if start {
                     self.fleet.start_agent(&name);
+                    self.heartbeat_runner.register_agent(&name);
                 }
 
                 // Record admin action in audit ledger.
@@ -6738,6 +6939,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -7085,6 +7287,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -7771,6 +7974,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -7868,6 +8072,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

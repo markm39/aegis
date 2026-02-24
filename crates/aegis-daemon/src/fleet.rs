@@ -975,6 +975,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         }
     }
 

@@ -154,6 +154,7 @@ impl FixtureBuilder {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
 
         TestFixture {
@@ -202,6 +203,7 @@ pub fn build_test_daemon_config(temp_dir: &Path) -> DaemonConfig {
         skills: vec![],
         retention: Default::default(),
         redaction: Default::default(),
+        heartbeat: Default::default(),
     }
 }
 

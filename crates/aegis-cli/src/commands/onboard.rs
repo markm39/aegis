@@ -220,6 +220,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -285,6 +286,7 @@ mod tests {
             skills: vec![],
             retention: Default::default(),
             redaction: Default::default(),
+            heartbeat: Default::default(),
         };
 
         let toml_str = config.to_toml().unwrap();
