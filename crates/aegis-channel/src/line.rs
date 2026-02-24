@@ -484,17 +484,43 @@ fn urlencoding_percent(s: &str) -> String {
 
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
-/// Exchange an authorization code for tokens (stub).
+/// Exchange an authorization code for LINE Login tokens.
 ///
-/// In production this would POST to `https://api.line.me/oauth2/v2.1/token`.
-/// Currently returns an error indicating it is not yet implemented.
+/// POSTs to `https://api.line.me/oauth2/v2.1/token` with the authorization
+/// code, redirect URI, and client credentials. Returns access/ID/refresh tokens.
+///
+/// The `channel_secret` is the client secret from the LINE Developers console.
 pub async fn exchange_code(
-    _config: &LineOAuthConfig,
-    _code: &str,
+    config: &LineOAuthConfig,
+    code: &str,
+    channel_secret: &str,
 ) -> Result<LineTokenResponse, ChannelError> {
-    Err(ChannelError::Other(
-        "LINE OAuth2 token exchange not yet implemented".into(),
-    ))
+    let client = reqwest::Client::new();
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", &config.redirect_uri),
+        ("client_id", &config.channel_id),
+        ("client_secret", channel_secret),
+    ];
+    let resp = client
+        .post("https://api.line.me/oauth2/v2.1/token")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| ChannelError::Other(format!("LINE token exchange request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ChannelError::Other(format!(
+            "LINE token exchange failed (HTTP {status}): {body}"
+        )));
+    }
+
+    resp.json::<LineTokenResponse>()
+        .await
+        .map_err(|e| ChannelError::Other(format!("failed to parse LINE token response: {e}")))
 }
 
 // ---------------------------------------------------------------------------

@@ -164,7 +164,16 @@ fn run_watch(
             .context("failed to start filesystem observer")?
         }
         ObserverConfig::EndpointSecurity => {
-            bail!("EndpointSecurity observer is not yet implemented");
+            eprintln!("Warning: EndpointSecurity observer requires Apple entitlement; falling back to FSEvents");
+            aegis_observer::start_observer(
+                &config.sandbox_dir,
+                Arc::clone(&store_arc),
+                Arc::clone(&policy_arc),
+                name,
+                Some(session_id),
+                false,
+            )
+            .context("failed to start filesystem observer")?
         }
     };
 
