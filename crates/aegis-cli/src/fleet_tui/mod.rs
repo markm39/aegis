@@ -89,6 +89,12 @@ pub struct FleetApp {
     pub input_buffer: String,
     /// Cursor position in the input buffer.
     pub input_cursor: usize,
+    /// History of messages sent to the agent in input mode.
+    pub input_history: Vec<String>,
+    /// Index into input_history for Up/Down navigation (None = composing new).
+    pub input_history_index: Option<usize>,
+    /// Saved draft buffer before navigating into input history.
+    pub input_draft: String,
 
     // -- Pending prompts (detail view) --
     /// Pending permission prompts for the detail agent.
@@ -173,6 +179,9 @@ impl FleetApp {
             input_mode: false,
             input_buffer: String::new(),
             input_cursor: 0,
+            input_history: Vec::new(),
+            input_history_index: None,
+            input_draft: String::new(),
             detail_pending: Vec::new(),
             pending_selected: 0,
             focus_pending: false,
@@ -858,11 +867,16 @@ impl FleetApp {
                         text: self.input_buffer.clone(),
                     };
                     self.send_named_command(cmd);
+                    self.input_history.push(self.input_buffer.clone());
+                    self.input_history_index = None;
+                    self.input_draft.clear();
                 }
                 // Enter submits the draft and keeps chat input mode active.
                 self.input_buffer.clear();
                 self.input_cursor = 0;
             }
+            KeyCode::Up => self.input_history_prev(),
+            KeyCode::Down => self.input_history_next(),
             KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
                 'a' => self.input_cursor = 0,
                 'e' => self.input_cursor = self.input_buffer.len(),
@@ -1248,6 +1262,43 @@ impl FleetApp {
                 self.history_index = None;
                 self.command_buffer.clear();
                 self.command_cursor = 0;
+            }
+            None => {} // already at newest
+        }
+    }
+
+    /// Navigate to the previous message in input mode history.
+    fn input_history_prev(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        if self.input_history_index.is_none() {
+            self.input_draft = self.input_buffer.clone();
+        }
+        let idx = match self.input_history_index {
+            Some(0) => 0,
+            Some(i) => i - 1,
+            None => self.input_history.len() - 1,
+        };
+        self.input_history_index = Some(idx);
+        self.input_buffer = self.input_history[idx].clone();
+        self.input_cursor = self.input_buffer.len();
+    }
+
+    /// Navigate to the next message in input mode history.
+    fn input_history_next(&mut self) {
+        match self.input_history_index {
+            Some(i) if i + 1 < self.input_history.len() => {
+                self.input_history_index = Some(i + 1);
+                self.input_buffer = self.input_history[i + 1].clone();
+                self.input_cursor = self.input_buffer.len();
+            }
+            Some(_) => {
+                // Past the end of history -- restore draft.
+                self.input_history_index = None;
+                self.input_buffer = self.input_draft.clone();
+                self.input_cursor = self.input_buffer.len();
+                self.input_draft.clear();
             }
             None => {} // already at newest
         }
@@ -2739,6 +2790,7 @@ impl FleetApp {
     }
 
     /// Visible output lines for the detail view, accounting for scroll.
+    #[cfg(test)]
     pub fn visible_output(&self, height: usize) -> Vec<&str> {
         if self.detail_output.is_empty() || height == 0 {
             return Vec::new();

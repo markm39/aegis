@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use super::markdown;
 use super::message::MessageRole;
 use super::render;
-use super::{ApprovalProfile, ChatApp, InputMode, Overlay, filter_model_items};
+use super::{ApprovalProfile, ChatApp, ConversationSnapshot, InputMode, Overlay, filter_model_items};
 
 /// Draw the complete chat TUI frame.
 pub fn draw(f: &mut Frame, app: &mut ChatApp) {
@@ -102,8 +102,23 @@ fn resolve_provider_for_display(model: &str) -> Option<String> {
     None
 }
 
+/// Estimate how many visual rows a single `Line` occupies after wrapping at
+/// the given width. Returns at least 1 (empty lines still take a row).
+fn count_visual_lines(line: &Line, width: u16) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let w = width as usize;
+    let char_count: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+    if char_count == 0 {
+        1
+    } else {
+        char_count.div_ceil(w)
+    }
+}
+
 /// Draw the scrollable chat message area.
-fn draw_chat_area(f: &mut Frame, app: &ChatApp, area: Rect) {
+fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
     if app.messages.is_empty() {
         let placeholder = if app.connected {
             "Type a message to start chatting..."
@@ -131,11 +146,19 @@ fn draw_chat_area(f: &mut Frame, app: &ChatApp, area: Rect) {
         all_lines.extend(lines);
     }
 
-    // Handle scrolling: scroll_offset=0 means bottom (latest)
-    let total_lines = all_lines.len();
+    // Compute total visual lines (accounting for wrapping at terminal width).
+    let total_visual: usize = all_lines
+        .iter()
+        .map(|line| count_visual_lines(line, area.width))
+        .sum();
+    app.total_visual_lines = total_visual;
+
+    // Handle scrolling: scroll_offset=0 means bottom (latest).
+    // Both scroll_offset and scroll_from_top are in visual-line space,
+    // which matches Paragraph::scroll() behavior after .wrap() is applied.
     let visible_height = area.height as usize;
-    let scroll_from_top = if total_lines > visible_height {
-        total_lines
+    let scroll_from_top = if total_visual > visible_height {
+        total_visual
             .saturating_sub(visible_height)
             .saturating_sub(app.scroll_offset)
     } else {
@@ -435,6 +458,9 @@ fn draw_overlay(f: &mut Frame, app: &ChatApp, overlay: &Overlay, area: Rect) {
         } => {
             draw_login(f, providers, *selected, key_input.as_ref(), area);
         }
+        Overlay::RestorePicker { snapshots, selected } => {
+            draw_restore_picker(f, snapshots, *selected, area);
+        }
     }
 }
 
@@ -610,6 +636,65 @@ fn draw_session_picker(
         .collect();
 
     f.render_widget(Paragraph::new(lines), list_area);
+}
+
+/// Draw the conversation restore picker overlay.
+fn draw_restore_picker(
+    f: &mut Frame,
+    snapshots: &[ConversationSnapshot],
+    selected: usize,
+    area: Rect,
+) {
+    let popup = centered_rect(70, 60, area);
+    f.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Restore conversation (Up/Down, Enter to restore, Esc to cancel) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Rgb(25, 25, 25)));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    if inner.height < 2 || snapshots.is_empty() {
+        let msg = Paragraph::new(Line::from(Span::styled(
+            " No restore points yet",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    let visible = inner.height as usize;
+    let total = snapshots.len();
+    // Display newest (highest index) first. `selected` = 0 is the newest.
+    let scroll_offset = if selected >= visible {
+        selected - visible + 1
+    } else {
+        0
+    };
+
+    let lines: Vec<Line<'static>> = (scroll_offset..total.min(scroll_offset + visible))
+        .map(|display_i| {
+            // display_i = 0 maps to snapshots[total - 1] (newest).
+            let snap = &snapshots[total - 1 - display_i];
+            let style = if display_i == selected {
+                Style::default().fg(Color::Black).bg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let text = format!(
+                " {:>2}. {} ({} msgs)",
+                display_i + 1,
+                snap.label,
+                snap.messages.len(),
+            );
+            let truncated: String = text.chars().take(inner.width as usize).collect();
+            Line::from(Span::styled(truncated, style))
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Draw the settings overlay.

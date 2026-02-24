@@ -613,9 +613,6 @@ fn draw_detail_header(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::
 
 /// Render agent output lines.
 fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::Rect) {
-    let inner_height = area.height.saturating_sub(2) as usize; // borders
-    let lines = app.visible_output(inner_height);
-
     let title = if app.detail_scroll > 0 {
         format!(" Chat (scroll +{}) ", app.detail_scroll)
     } else {
@@ -627,7 +624,7 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
         .title(title)
         .border_style(Style::default().fg(Color::DarkGray));
 
-    if lines.is_empty() {
+    if app.detail_output.is_empty() {
         let hint = if app.connected {
             "Waiting for output..."
         } else {
@@ -640,7 +637,10 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
         return;
     }
 
-    let items: Vec<ListItem> = lines
+    // Build styled lines from all output (not just a visible_output window),
+    // then let Paragraph + Wrap + scroll handle the viewport.
+    let styled_lines: Vec<Line<'_>> = app
+        .detail_output
         .iter()
         .map(|line| {
             let style = if line.contains("[APPROVED]") {
@@ -678,12 +678,42 @@ fn draw_agent_output(frame: &mut Frame, app: &FleetApp, area: ratatui::layout::R
             } else {
                 Style::default().fg(Color::White)
             };
-            ListItem::new(Span::styled(*line, style))
+            Line::styled(line.as_str(), style)
         })
         .collect();
 
-    let list = List::new(items).block(block);
-    frame.render_widget(list, area);
+    // Compute total visual lines for scroll math (accounting for wrapping).
+    let inner_width = area.width.saturating_sub(2); // borders
+    let total_visual: usize = styled_lines
+        .iter()
+        .map(|line| {
+            if inner_width == 0 {
+                return 1;
+            }
+            let w = inner_width as usize;
+            let char_count: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+            if char_count == 0 {
+                1
+            } else {
+                char_count.div_ceil(w)
+            }
+        })
+        .sum();
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let scroll_from_top = if total_visual > inner_height {
+        total_visual
+            .saturating_sub(inner_height)
+            .saturating_sub(app.detail_scroll)
+    } else {
+        0
+    };
+
+    let para = Paragraph::new(styled_lines)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_from_top as u16, 0));
+    frame.render_widget(para, area);
 }
 
 /// Render the main content of the detail view (output + optional pending panel).

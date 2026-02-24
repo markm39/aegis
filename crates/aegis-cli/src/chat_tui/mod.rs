@@ -186,6 +186,17 @@ pub enum InputMode {
     Command,
 }
 
+/// A saved conversation state for the restore picker.
+#[derive(Debug, Clone)]
+pub struct ConversationSnapshot {
+    /// First 60 chars of the user message that triggered this snapshot.
+    pub label: String,
+    /// Display messages at the time of the snapshot.
+    pub messages: Vec<ChatMessage>,
+    /// LLM conversation history at the time of the snapshot.
+    pub conversation: Vec<LlmMessage>,
+}
+
 /// Active overlay in the chat TUI.
 ///
 /// Overlays render on top of the main UI and capture all input until
@@ -221,6 +232,13 @@ pub enum Overlay {
         selected: usize,
         /// If set, showing the key input sub-view for a specific provider.
         key_input: Option<LoginKeyInput>,
+    },
+    /// Conversation restore picker: choose a past point to roll back to.
+    RestorePicker {
+        /// Snapshots to display, newest first.
+        snapshots: Vec<ConversationSnapshot>,
+        /// Index of the currently highlighted snapshot.
+        selected: usize,
     },
 }
 
@@ -872,8 +890,10 @@ pub struct ChatApp {
     // -- Chat --
     /// Display messages for the chat area.
     pub messages: Vec<ChatMessage>,
-    /// Scroll offset into the message history (0 = bottom).
+    /// Scroll offset into the message history (0 = bottom), in visual lines.
     pub scroll_offset: usize,
+    /// Total visual lines in the chat area (updated each frame by the renderer).
+    pub total_visual_lines: usize,
 
     // -- Session persistence --
     /// Unique identifier for this conversation session.
@@ -922,6 +942,12 @@ pub struct ChatApp {
     pub input_history: Vec<String>,
     /// Current position in input history (None = composing new).
     pub history_index: Option<usize>,
+    /// Saved draft buffer before navigating into input history.
+    pub input_draft: String,
+    /// Timestamp of the last Escape keypress (for double-Esc detection).
+    pub last_esc_at: Option<std::time::Instant>,
+    /// Conversation snapshots for the restore picker (taken after each assistant turn).
+    pub snapshots: Vec<ConversationSnapshot>,
 
     // -- Command bar --
     /// Text buffer for the command bar.
@@ -1047,6 +1073,7 @@ impl ChatApp {
 
             messages: Vec::new(),
             scroll_offset: 0,
+            total_visual_lines: 0,
 
             session_id: persistence::generate_conversation_id(),
             audit_session_id: None,
@@ -1070,6 +1097,9 @@ impl ChatApp {
             input_cursor: 0,
             input_history: Vec::new(),
             history_index: None,
+            input_draft: String::new(),
+            last_esc_at: None,
+            snapshots: Vec::new(),
 
             command_buffer: String::new(),
             command_cursor: 0,
@@ -1186,11 +1216,25 @@ impl ChatApp {
     /// Check for events from the agentic loop running in a background thread.
     fn poll_llm(&mut self) {
         // Drain all available events from the channel.
-        loop {
-            let event = self.agent_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-
-            let Some(event) = event else {
-                break;
+        while let Some(rx) = self.agent_rx.as_ref() {
+            let event = match rx.try_recv() {
+                Ok(event) => event,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Background thread died without sending Done.
+                    if self.awaiting_response {
+                        self.messages.push(ChatMessage::new(
+                            MessageRole::System,
+                            "Error: background request terminated unexpectedly."
+                                .to_string(),
+                        ));
+                        self.awaiting_response = false;
+                        self.auto_approve_turn = false;
+                        self.pending_tool_desc = None;
+                    }
+                    self.agent_rx = None;
+                    break;
+                }
             };
 
             match event {
@@ -1309,6 +1353,8 @@ impl ChatApp {
                 AgentLoopEvent::Done => {
                     self.awaiting_response = false;
                     self.auto_approve_turn = false;
+                    // Save a restore point after each completed assistant turn.
+                    self.push_snapshot();
                 }
                 AgentLoopEvent::SubagentComplete {
                     task_id,
@@ -1338,19 +1384,20 @@ impl ChatApp {
 
     /// Trigger the bootstrap "getting to know you" conversation.
     ///
-    /// Reads BOOTSTRAP.md from the workspace and sends it as the first user
-    /// message. The LLM will follow the bootstrap instructions to discover
-    /// its identity and learn about the user.
+    /// The full bootstrap instructions are included in the system prompt
+    /// (via system_prompt.rs) when BOOTSTRAP.md exists. Here we just inject
+    /// a short trigger message to kick off the conversation.
     fn trigger_bootstrap(&mut self) {
         let bootstrap_path = aegis_types::daemon::workspace_dir().join("BOOTSTRAP.md");
-        let content = match std::fs::read_to_string(&bootstrap_path) {
-            Ok(c) => c,
-            Err(_) => return, // BOOTSTRAP.md missing or unreadable; skip
-        };
+        if !bootstrap_path.exists() {
+            return;
+        }
 
-        // Inject as the first user message
-        let msg = format!("[First run -- reading BOOTSTRAP.md]\n\n{content}");
-        self.conversation.push(LlmMessage::user(msg.clone()));
+        // Short trigger -- full instructions are in the system prompt.
+        self.conversation.push(LlmMessage::user(
+            "[First run -- bootstrap mode active. Follow your bootstrap instructions.]"
+                .to_string(),
+        ));
         self.messages.push(ChatMessage::new(
             MessageRole::System,
             "Starting bootstrap -- getting to know you...".to_string(),
@@ -1361,6 +1408,41 @@ impl ChatApp {
     }
 
     /// Send the current conversation to the LLM and run the agentic loop.
+    /// Save the current conversation as a restore point.
+    ///
+    /// Called after each completed assistant turn. Capped at 20 snapshots;
+    /// oldest are dropped when the cap is exceeded.
+    fn push_snapshot(&mut self) {
+        // Label: preview of the last user message that triggered this turn.
+        let label = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::User)
+            .map(|m| {
+                let s = m.content.as_str();
+                if s.chars().count() > 60 {
+                    let end = s.char_indices().nth(60).map(|(i, _)| i).unwrap_or(s.len());
+                    format!("{}…", &s[..end])
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_else(|| "(empty)".to_string());
+
+        self.snapshots.push(ConversationSnapshot {
+            label,
+            messages: self.messages.clone(),
+            conversation: self.conversation.clone(),
+        });
+
+        // Keep at most 20 restore points.
+        const MAX_SNAPSHOTS: usize = 20;
+        if self.snapshots.len() > MAX_SNAPSHOTS {
+            self.snapshots.drain(..self.snapshots.len() - MAX_SNAPSHOTS);
+        }
+    }
+
     ///
     /// Abort the currently running LLM request/agent loop.
     fn abort_current_request(&mut self) {
@@ -1434,6 +1516,10 @@ impl ChatApp {
         let abort_flag = self.abort_flag.clone();
 
         std::thread::spawn(move || {
+            // Clone tx for the panic guard -- if the closure panics, we still
+            // send Error + Done so the UI thread doesn't hang on "Thinking...".
+            let panic_tx = event_tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let params = AgentLoopParams {
                 socket_path,
                 conversation: conv,
@@ -1500,6 +1586,13 @@ impl ChatApp {
                         }
                     }
                 }
+            }
+            })); // end catch_unwind closure
+            if result.is_err() {
+                let _ = panic_tx.send(AgentLoopEvent::Error(
+                    "Internal error: agent loop panicked".to_string(),
+                ));
+                let _ = panic_tx.send(AgentLoopEvent::Done);
             }
         });
     }
@@ -1582,6 +1675,39 @@ impl ChatApp {
 
         self.clear_stale_result();
 
+        // Handle Escape globally before per-mode dispatch.
+        if key.code == KeyCode::Esc {
+            let is_double = self
+                .last_esc_at
+                .is_some_and(|t| t.elapsed().as_millis() < 400);
+            self.last_esc_at = Some(std::time::Instant::now());
+
+            if is_double && !self.snapshots.is_empty() {
+                // Double Esc: open the conversation restore picker.
+                self.overlay = Some(Overlay::RestorePicker {
+                    snapshots: self.snapshots.clone(),
+                    selected: 0,
+                });
+                return;
+            }
+
+            if self.awaiting_response {
+                self.abort_current_request();
+                return;
+            }
+
+            if !self.input_buffer.is_empty() {
+                // Clear the current input, discarding any history navigation.
+                self.input_buffer.clear();
+                self.input_cursor = 0;
+                self.history_index = None;
+                self.input_draft.clear();
+                return;
+            }
+            // Buffer is empty -- fall through so per-mode handlers can switch
+            // between Chat/Scroll as before.
+        }
+
         match self.input_mode {
             InputMode::Chat => self.handle_chat_key(key),
             InputMode::Scroll => self.handle_scroll_key(key),
@@ -1643,9 +1769,13 @@ impl ChatApp {
                     self.input_cursor = 0;
                 }
             }
-            KeyCode::Up if self.input_buffer.is_empty() => {
-                // Browse input history backward
+            KeyCode::Up => {
+                // Browse input history backward (shell-style).
                 if !self.input_history.is_empty() {
+                    if self.history_index.is_none() {
+                        // Save current buffer as draft before entering history.
+                        self.input_draft = self.input_buffer.clone();
+                    }
                     let idx = match self.history_index {
                         Some(0) => 0,
                         Some(i) => i - 1,
@@ -1656,8 +1786,8 @@ impl ChatApp {
                     self.input_cursor = self.input_buffer.len();
                 }
             }
-            KeyCode::Down if self.input_buffer.is_empty() => {
-                // Browse input history forward
+            KeyCode::Down => {
+                // Browse input history forward (shell-style).
                 match self.history_index {
                     Some(i) if i + 1 < self.input_history.len() => {
                         self.history_index = Some(i + 1);
@@ -1665,9 +1795,11 @@ impl ChatApp {
                         self.input_cursor = self.input_buffer.len();
                     }
                     Some(_) => {
+                        // Past the end -- restore draft.
                         self.history_index = None;
-                        self.input_buffer.clear();
-                        self.input_cursor = 0;
+                        self.input_buffer = self.input_draft.clone();
+                        self.input_cursor = self.input_buffer.len();
+                        self.input_draft.clear();
                     }
                     None => {}
                 }
@@ -1749,23 +1881,22 @@ impl ChatApp {
 
     /// Handle keys in Scroll mode (message history navigation).
     fn handle_scroll_key(&mut self, key: KeyEvent) {
+        let max_scroll = self.total_visual_lines.saturating_sub(1);
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let max = self.messages.len().saturating_sub(1);
-                self.scroll_offset = (self.scroll_offset + 1).min(max);
+                self.scroll_offset = (self.scroll_offset + 1).min(max_scroll);
             }
             KeyCode::Char('g') | KeyCode::Home => {
-                self.scroll_offset = self.messages.len().saturating_sub(1);
+                self.scroll_offset = max_scroll;
             }
             KeyCode::Char('G') | KeyCode::End => {
                 self.scroll_offset = 0;
             }
             KeyCode::PageUp => {
-                let max = self.messages.len().saturating_sub(1);
-                self.scroll_offset = (self.scroll_offset + 20).min(max);
+                self.scroll_offset = (self.scroll_offset + 20).min(max_scroll);
             }
             KeyCode::PageDown => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(20);
@@ -2423,6 +2554,37 @@ impl ChatApp {
                 }
                 _ => {
                     self.overlay = Some(Overlay::Settings { selected });
+                }
+            },
+            Overlay::RestorePicker {
+                snapshots,
+                mut selected,
+            } => match key.code {
+                KeyCode::Esc => {
+                    // Close without restoring.
+                }
+                KeyCode::Up => {
+                    selected = selected.saturating_sub(1);
+                    self.overlay = Some(Overlay::RestorePicker { snapshots, selected });
+                }
+                KeyCode::Down => {
+                    if selected + 1 < snapshots.len() {
+                        selected += 1;
+                    }
+                    self.overlay = Some(Overlay::RestorePicker { snapshots, selected });
+                }
+                KeyCode::Enter => {
+                    // selected = 0 is newest (displayed at top); original vec is oldest-first.
+                    let original_idx = snapshots.len().saturating_sub(1).saturating_sub(selected);
+                    if let Some(snap) = snapshots.get(original_idx) {
+                        self.messages = snap.messages.clone();
+                        self.conversation = snap.conversation.clone();
+                        self.scroll_offset = 0;
+                        self.set_result("Conversation restored.".to_string());
+                    }
+                }
+                _ => {
+                    self.overlay = Some(Overlay::RestorePicker { snapshots, selected });
                 }
             },
         }

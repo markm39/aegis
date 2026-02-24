@@ -197,6 +197,28 @@ pub fn build_system_prompt(
         );
     }
 
+    // Bootstrap mode: when BOOTSTRAP.md exists, inject its instructions into
+    // the system prompt so the agent keeps guiding setup through ALL topics
+    // across multiple turns (not just the first exchange).
+    if is_full {
+        let bootstrap_path = ws.join("BOOTSTRAP.md");
+        if let Some(bootstrap_content) = read_file_capped(&bootstrap_path, MAX_FILE_CHARS) {
+            prompt.push_str("\n# Bootstrap Mode (ACTIVE)\n\n");
+            prompt.push_str(
+                "You are in first-run bootstrap mode. The following instructions \
+                 take priority over normal conversation behavior. You MUST keep \
+                 guiding the conversation through ALL topics listed below until \
+                 every item is fully addressed. Do NOT move on or give up after \
+                 one exchange -- ask follow-up questions for each topic. When all \
+                 topics are covered and the workspace files have been updated, \
+                 delete BOOTSTRAP.md using the bash tool \
+                 (`rm ~/.aegis/workspace/BOOTSTRAP.md`).\n\n",
+            );
+            prompt.push_str(&bootstrap_content);
+            prompt.push('\n');
+        }
+    }
+
     // 11. Project context files (from CWD)
     let cwd = std::env::current_dir().unwrap_or_default();
     let project_files: &[(&str, std::path::PathBuf)] = &[
