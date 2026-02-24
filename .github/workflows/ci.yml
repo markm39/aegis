@@ -5,12 +5,52 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
 
 jobs:
-  check:
-    name: Lint & Test (${{ matrix.os }})
+  # ---------- Format ----------
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # ---------- Clippy ----------
+  clippy:
+    name: Clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy-${{ matrix.os }}
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ---------- Test ----------
+  test:
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,14 +63,74 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.os }}
+          key: test-${{ matrix.os }}
 
-      - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+      - name: Build tests
+        run: cargo test --workspace --no-run
 
-      - name: Test
+      - name: Run tests
         run: cargo test --workspace
 
+  # ---------- Build release binary ----------
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.os }}
+
+      - name: Build release
+        run: cargo build --release -p aegis-cli
+
+      - name: Verify binary runs
+        run: ./target/release/aegis --version
+
+  # ---------- Documentation ----------
+  doc:
+    name: Documentation
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: doc
+
+      - name: Build docs
+        run: cargo doc --workspace --no-deps
+
+  # ---------- MSRV ----------
+  msrv:
+    name: MSRV (1.75)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.75"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: Check MSRV
+        run: cargo check --workspace
+
+  # ---------- Security audit ----------
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -40,9 +140,63 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: audit
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
         run: cargo audit
+
+  # ---------- Dependency checks (cargo-deny) ----------
+  deny:
+    name: Dependency Checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [advisories, licenses, bans, sources]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.check }}
+
+  # ---------- Unused dependencies ----------
+  unused-deps:
+    name: Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: udeps
+
+      - name: Install cargo-udeps
+        run: cargo install cargo-udeps --locked
+
+      - name: Check for unused deps
+        run: cargo +nightly udeps --workspace
+        continue-on-error: true  # advisory only, don't block CI
+
+  # ---------- Vendored coding runtime drift check ----------
+  coding-runtime:
+    name: Coding Runtime Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check coding runtime is in sync
+        run: |
+          if [ -f scripts/sync-coding-runtime.sh ]; then
+            chmod +x scripts/sync-coding-runtime.sh
+            ./scripts/sync-coding-runtime.sh --check || echo "::warning::Coding runtime may be out of sync"
+          else
+            echo "No sync script found, skipping"
+          fi
+        continue-on-error: true
