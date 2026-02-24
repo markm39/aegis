@@ -196,16 +196,19 @@ fn execute_hook_script(
 
     match cmd.spawn() {
         Ok(mut child) => {
-            // Write event JSON to stdin.
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(event_json.as_bytes());
-            }
-            // Fire and forget -- don't wait for the child to exit.
-            // The child process will be reaped when it finishes.
+            let event_bytes = event_json.as_bytes().to_vec();
             tracing::debug!(
                 script = %script_path.display(),
                 "fired hook"
             );
+            // Reaper thread: write stdin, then wait to prevent zombies.
+            std::thread::spawn(move || {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(&event_bytes);
+                    // Drop stdin so the child sees EOF.
+                }
+                let _ = child.wait();
+            });
         }
         Err(e) => {
             tracing::debug!(

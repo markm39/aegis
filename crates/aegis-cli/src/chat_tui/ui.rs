@@ -561,11 +561,7 @@ fn draw_session_picker(
                 Style::default().fg(Color::White)
             };
             // Truncate timestamp to date portion for display.
-            let ts = if m.timestamp.len() > 10 {
-                &m.timestamp[..10]
-            } else {
-                &m.timestamp
-            };
+            let ts: String = m.timestamp.chars().take(10).collect();
             let text = format!(
                 " {:8} {:30} {:>5}  {}",
                 m.id, m.model, m.message_count, ts,
