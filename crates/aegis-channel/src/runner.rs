@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use tracing::{info, warn};
 
-use crate::auto_reply::{AutoReplyEngine, HeartbeatConfig};
+use crate::auto_reply::HeartbeatConfig;
 use crate::hooks::MessageHook;
 use aegis_alert::AlertEvent;
 use aegis_control::daemon::DaemonCommand;
@@ -36,6 +36,8 @@ pub enum ChannelInput {
     TextMessage(String),
     /// A photo message to send (e.g., snapshot).
     Photo(OutboundPhoto),
+    /// Reload auto-reply rules (sent after add/remove/toggle operations).
+    ReloadAutoReplies(Vec<crate::auto_reply::PersistentAutoReplyRule>),
 }
 
 /// Run the channel on the current thread with a single-threaded tokio runtime.
@@ -48,7 +50,7 @@ pub enum ChannelInput {
 ///
 /// Call this from a dedicated `std::thread::spawn`.
 pub fn run(config: ChannelConfig, input_rx: Receiver<ChannelInput>) {
-    run_fleet(config, input_rx, None, None);
+    run_fleet(config, input_rx, None, None, vec![]);
 }
 
 /// Run the channel with fleet-aware inbound command forwarding.
@@ -63,6 +65,7 @@ pub fn run_fleet(
     input_rx: Receiver<ChannelInput>,
     feedback_tx: Option<Sender<DaemonCommand>>,
     router: Option<ChannelCommandRouter>,
+    initial_auto_reply_rules: Vec<crate::auto_reply::PersistentAutoReplyRule>,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -79,10 +82,10 @@ pub fn run_fleet(
         let channel_type = config.channel_type_name();
         match config {
             ChannelConfig::Telegram(tg_config) => {
-                run_telegram(tg_config, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_telegram(tg_config, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Slack(slack_config) => {
-                run_slack(slack_config, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_slack(slack_config, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Webhook(cfg) => {
                 let channel = crate::webhook::WebhookChannel::new(crate::webhook::WebhookConfig {
@@ -92,7 +95,7 @@ pub fn run_fleet(
                     auth_header: cfg.auth_header,
                     payload_template: cfg.payload_template,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Discord(cfg) => {
                 let channel = crate::discord::DiscordChannel::new(crate::discord::DiscordConfig {
@@ -105,7 +108,7 @@ pub fn run_fleet(
                     authorized_user_ids: cfg.authorized_user_ids,
                     command_channel_id: cfg.command_channel_id,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Whatsapp(cfg) => {
                 let channel =
@@ -118,7 +121,7 @@ pub fn run_fleet(
                         webhook_port: None,
                         template_namespace: None,
                     });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Signal(cfg) => {
                 let channel = match crate::signal::SignalChannel::new(crate::signal::SignalConfig {
@@ -135,7 +138,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Matrix(cfg) => {
                 let channel = crate::matrix::MatrixChannel::new(crate::matrix::MatrixConfig {
@@ -143,7 +146,7 @@ pub fn run_fleet(
                     access_token: cfg.access_token,
                     room_id: cfg.room_id,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Imessage(cfg) => {
                 let channel =
@@ -161,7 +164,7 @@ pub fn run_fleet(
                             return;
                         }
                     };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Irc(cfg) => {
                 let channel = crate::irc::IrcChannel::new(crate::irc::IrcConfig {
@@ -169,13 +172,13 @@ pub fn run_fleet(
                     channel: cfg.channel,
                     nick: cfg.nick,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Msteams(cfg) => {
                 let channel = crate::msteams::MsteamsChannel::new(crate::msteams::MsteamsConfig {
                     webhook_url: cfg.webhook_url,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Googlechat(cfg) => {
                 let channel = crate::googlechat::GooglechatChannel::new(
@@ -183,14 +186,14 @@ pub fn run_fleet(
                         webhook_url: cfg.webhook_url,
                     },
                 );
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Feishu(cfg) => {
                 let channel = crate::feishu::FeishuChannel::new(crate::feishu::FeishuConfig {
                     webhook_url: cfg.webhook_url,
                     secret: cfg.secret,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Line(cfg) => {
                 let channel = crate::line::LineChannel::new(crate::line::LineConfig {
@@ -201,14 +204,14 @@ pub fn run_fleet(
                     oauth_channel_id: None,
                     multicast_enabled: false,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Nostr(cfg) => {
                 let channel = crate::nostr::NostrChannel::new(crate::nostr::NostrConfig {
                     relay_url: cfg.relay_url,
                     private_key_hex: cfg.private_key_hex,
                 });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Mattermost(cfg) => {
                 let channel = crate::mattermost::MattermostChannel::new(
@@ -217,7 +220,7 @@ pub fn run_fleet(
                         channel_id: cfg.channel_id,
                     },
                 );
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::VoiceCall(cfg) => {
                 let channel =
@@ -226,7 +229,7 @@ pub fn run_fleet(
                         from_number: cfg.from_number,
                         to_number: cfg.to_number,
                     });
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Twitch(cfg) => {
                 let channel = match crate::twitch::TwitchChannel::new(crate::twitch::TwitchConfig {
@@ -240,7 +243,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Nextcloud(cfg) => {
                 let channel = match crate::nextcloud::NextcloudChannel::new(
@@ -257,7 +260,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Zalo(cfg) => {
                 let channel = match crate::zalo::ZaloChannel::new(crate::zalo::ZaloConfig {
@@ -271,7 +274,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Tlon(cfg) => {
                 let channel = match crate::tlon::TlonChannel::new(crate::tlon::TlonConfig {
@@ -284,7 +287,7 @@ pub fn run_fleet(
                         return;
                     }
                 };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Lobster(cfg) => {
                 let channel =
@@ -298,7 +301,7 @@ pub fn run_fleet(
                             return;
                         }
                     };
-                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref()).await;
+                run_generic_channel(channel, cfg.active_hours, input_rx, feedback_tx, channel_type, router.as_ref(), initial_auto_reply_rules).await;
             }
             ChannelConfig::Gmail(_cfg) => {
                 // Gmail channel trait implementation is not yet available (task 2).
@@ -320,10 +323,14 @@ async fn run_generic_channel(
     feedback_tx: Option<Sender<DaemonCommand>>,
     channel_type: &str,
     router: Option<&ChannelCommandRouter>,
+    initial_auto_reply_rules: Vec<crate::auto_reply::PersistentAutoReplyRule>,
 ) {
+    use crate::auto_reply::PersistentAutoReplyEngine;
+
     let channel_name = channel.name().to_string();
     let has_typing = channel.capabilities().typing_indicators;
-    info!(channel = %channel_name, "channel starting");
+    let rule_count = initial_auto_reply_rules.len();
+    info!(channel = %channel_name, rules = rule_count, "channel starting with auto-reply rules");
 
     let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<ChannelInput>(64);
     tokio::task::spawn_blocking(move || {
@@ -334,7 +341,7 @@ async fn run_generic_channel(
         }
     });
 
-    let auto_reply = AutoReplyEngine::new(vec![]);
+    let mut auto_reply = PersistentAutoReplyEngine::new(initial_auto_reply_rules);
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
 
     loop {
@@ -352,6 +359,12 @@ async fn run_generic_channel(
                     }
                     ChannelInput::Photo(_) => {
                         warn!(channel = %channel_name, "photo messages not supported");
+                        continue;
+                    }
+                    ChannelInput::ReloadAutoReplies(rules) => {
+                        let count = rules.len();
+                        auto_reply = PersistentAutoReplyEngine::new(rules);
+                        info!(channel = %channel_name, rules = count, "auto-reply rules reloaded");
                         continue;
                     }
                 };
@@ -389,8 +402,8 @@ async fn run_generic_channel(
 
                         // Check auto-reply before fleet command parsing
                         if let InboundAction::Unknown(ref text) = action {
-                            if let Some(crate::auto_reply::AutoAction::Reply(ref reply)) = auto_reply.check(text, None) {
-                                let msg = crate::channel::OutboundMessage::text(reply.clone());
+                            if let Some(reply) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply);
                                 if let Err(e) = channel.send(msg).await {
                                     warn!("failed to send auto-reply: {e}");
                                 }
@@ -423,13 +436,16 @@ async fn run_slack(
     feedback_tx: Option<Sender<DaemonCommand>>,
     channel_type: &str,
     router: Option<&ChannelCommandRouter>,
+    initial_auto_reply_rules: Vec<crate::auto_reply::PersistentAutoReplyRule>,
 ) {
+    use crate::auto_reply::PersistentAutoReplyEngine;
     use crate::channel::Channel;
 
     let mut channel = slack::SlackChannel::new(config.clone());
     let has_typing = channel.capabilities().typing_indicators;
 
-    info!("Slack channel starting");
+    let rule_count = initial_auto_reply_rules.len();
+    info!(rules = rule_count, "Slack channel starting with auto-reply rules");
 
     let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<ChannelInput>(64);
     tokio::task::spawn_blocking(move || {
@@ -440,7 +456,7 @@ async fn run_slack(
         }
     });
 
-    let auto_reply = AutoReplyEngine::new(vec![]);
+    let mut auto_reply = PersistentAutoReplyEngine::new(initial_auto_reply_rules);
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
 
     loop {
@@ -458,6 +474,12 @@ async fn run_slack(
                     }
                     ChannelInput::Photo(_) => {
                         warn!("slack channel does not support photos");
+                        continue;
+                    }
+                    ChannelInput::ReloadAutoReplies(rules) => {
+                        let count = rules.len();
+                        auto_reply = PersistentAutoReplyEngine::new(rules);
+                        info!(rules = count, "auto-reply rules reloaded");
                         continue;
                     }
                 };
@@ -495,8 +517,8 @@ async fn run_slack(
 
                         // Check auto-reply before fleet command parsing
                         if let InboundAction::Unknown(ref text) = action {
-                            if let Some(crate::auto_reply::AutoAction::Reply(ref reply)) = auto_reply.check(text, None) {
-                                let msg = crate::channel::OutboundMessage::text(reply.clone());
+                            if let Some(reply) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply);
                                 if let Err(e) = channel.send(msg).await {
                                     warn!("failed to send auto-reply: {e}");
                                 }
@@ -529,14 +551,17 @@ async fn run_telegram(
     feedback_tx: Option<Sender<DaemonCommand>>,
     channel_type: &str,
     router: Option<&ChannelCommandRouter>,
+    initial_auto_reply_rules: Vec<crate::auto_reply::PersistentAutoReplyRule>,
 ) {
+    use crate::auto_reply::PersistentAutoReplyEngine;
     use crate::channel::Channel;
 
     let mut channel = telegram::TelegramChannel::new(config.clone());
     let has_typing = channel.capabilities().typing_indicators;
 
     // Send startup announcement
-    info!("Telegram channel starting");
+    let rule_count = initial_auto_reply_rules.len();
+    info!(rules = rule_count, "Telegram channel starting with auto-reply rules");
 
     // Bridge the sync mpsc::Receiver to async. We use a small bridge task
     // that reads from the std channel and forwards to a tokio channel.
@@ -551,7 +576,7 @@ async fn run_telegram(
         }
     });
 
-    let auto_reply = AutoReplyEngine::new(vec![]);
+    let mut auto_reply = PersistentAutoReplyEngine::new(initial_auto_reply_rules);
 
     // Main loop: process outbound events and poll for inbound actions
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
@@ -580,6 +605,12 @@ async fn run_telegram(
                         if let Err(e) = channel.send_photo(photo.clone()).await {
                             warn!("failed to send photo: {e}");
                         }
+                        continue;
+                    }
+                    ChannelInput::ReloadAutoReplies(rules) => {
+                        let count = rules.len();
+                        auto_reply = PersistentAutoReplyEngine::new(rules);
+                        info!(rules = count, "auto-reply rules reloaded");
                         continue;
                     }
                 };
@@ -618,8 +649,8 @@ async fn run_telegram(
 
                         // Check auto-reply before fleet command parsing
                         if let InboundAction::Unknown(ref text) = action {
-                            if let Some(crate::auto_reply::AutoAction::Reply(ref reply)) = auto_reply.check(text, None) {
-                                let msg = crate::channel::OutboundMessage::text(reply.clone());
+                            if let Some(reply) = auto_reply.check(text, None) {
+                                let msg = crate::channel::OutboundMessage::text(reply);
                                 if let Err(e) = channel.send(msg).await {
                                     warn!("failed to send auto-reply: {e}");
                                 }

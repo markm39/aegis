@@ -1923,16 +1923,30 @@ impl DaemonRuntime {
                     }
                 });
 
+            // Load initial auto-reply rules from the store for the channel runner
+            let initial_auto_reply_rules = self
+                .auto_reply_store
+                .as_ref()
+                .and_then(|store| store.list_rules().ok())
+                .unwrap_or_default();
+            let rule_count = initial_auto_reply_rules.len();
+
             match std::thread::Builder::new()
                 .name("channel".to_string())
                 .spawn(move || {
-                    aegis_channel::run_fleet(config, input_rx, Some(feedback_tx), router);
+                    aegis_channel::run_fleet(
+                        config,
+                        input_rx,
+                        Some(feedback_tx),
+                        router,
+                        initial_auto_reply_rules,
+                    );
                 }) {
                 Ok(handle) => {
                     self.channel_tx = Some(input_tx);
                     self.channel_cmd_rx = Some(feedback_rx);
                     self.channel_thread = Some(handle);
-                    info!("notification channel started");
+                    info!(auto_reply_rules = rule_count, "notification channel started");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to spawn notification channel thread");
@@ -2118,14 +2132,68 @@ impl DaemonRuntime {
             info!(?cmd, "processing command from notification channel");
             let response = self.handle_command(cmd);
 
-            // Send the response back to the user via the notification channel
-            if let Some(tx) = &self.channel_tx {
-                let text = if response.ok {
-                    response.message
-                } else {
-                    format!("Error: {}", response.message)
-                };
-                let _ = tx.send(ChannelInput::TextMessage(text));
+            // Send the response back to the user via the notification channel,
+            // checking for deferral tokens like [[defer:30s]].
+            let text = if response.ok {
+                response.message
+            } else {
+                format!("Error: {}", response.message)
+            };
+            self.send_to_channel_with_deferral(&text, "channel");
+        }
+    }
+
+    /// Send text to the notification channel, intercepting deferral tokens.
+    ///
+    /// Parses `[[defer:30s]]`, `[[sleep:next_heartbeat]]`, and
+    /// `[[schedule:TIMESTAMP]]` tokens. If found, the reply is enqueued in the
+    /// deferred reply queue instead of being sent immediately.
+    fn send_to_channel_with_deferral(&mut self, text: &str, agent_name: &str) {
+        use crate::deferred_reply::{parse_deferral, ParseResult};
+
+        match parse_deferral(text) {
+            Ok(ParseResult::Immediate(immediate_text)) => {
+                if let Some(tx) = &self.channel_tx {
+                    let _ = tx.send(ChannelInput::TextMessage(immediate_text));
+                }
+            }
+            Ok(ParseResult::Deferred { text: deferred_text, kind }) => {
+                if let Err(e) = self.deferred_reply_queue.enqueue(
+                    agent_name,
+                    "telegram",
+                    &deferred_text,
+                    kind,
+                ) {
+                    warn!("failed to enqueue deferred reply: {e}");
+                    // Fall back to immediate delivery
+                    if let Some(tx) = &self.channel_tx {
+                        let _ = tx.send(ChannelInput::TextMessage(deferred_text));
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("failed to parse deferral token: {e}");
+                // Deliver as-is on parse error
+                if let Some(tx) = &self.channel_tx {
+                    let _ = tx.send(ChannelInput::TextMessage(text.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Reload auto-reply rules in the channel runner after a mutation.
+    ///
+    /// Loads all rules from the persistent store and sends them to the channel
+    /// thread via `ChannelInput::ReloadAutoReplies`. The channel runner replaces
+    /// its in-memory engine with the updated rules.
+    fn reload_auto_reply_rules(&self) {
+        if let Some(ref store) = self.auto_reply_store {
+            if let Ok(rules) = store.list_rules() {
+                if let Some(tx) = &self.channel_tx {
+                    let count = rules.len();
+                    let _ = tx.send(ChannelInput::ReloadAutoReplies(rules));
+                    info!(rules = count, "auto-reply rules sent to channel for reload");
+                }
             }
         }
     }
@@ -4409,35 +4477,44 @@ impl DaemonRuntime {
                 media_path: _,
                 language,
             } => {
-                let Some(ref store) = self.auto_reply_store else {
-                    return DaemonResponse::error("auto-reply store not initialized");
-                };
                 // Parse response_type from JSON string if provided.
                 let parsed_type: Option<aegis_channel::auto_reply::MediaResponseType> =
                     response_type.as_deref().and_then(|s| {
                         serde_json::from_str(s).ok()
                     });
-                match store.add_rule_full(
-                    &pattern,
-                    &response,
-                    chat_id,
-                    priority,
-                    parsed_type,
-                    language.as_deref(),
-                ) {
-                    Ok(id) => DaemonResponse::ok_with_data(
-                        format!("auto-reply rule added: {id}"),
-                        serde_json::json!({ "id": id }),
+                // Scope the store borrow so we can call reload_auto_reply_rules after
+                let result = match &self.auto_reply_store {
+                    Some(store) => store.add_rule_full(
+                        &pattern,
+                        &response,
+                        chat_id,
+                        priority,
+                        parsed_type,
+                        language.as_deref(),
                     ),
+                    None => return DaemonResponse::error("auto-reply store not initialized"),
+                };
+                match result {
+                    Ok(id) => {
+                        self.reload_auto_reply_rules();
+                        DaemonResponse::ok_with_data(
+                            format!("auto-reply rule added: {id}"),
+                            serde_json::json!({ "id": id }),
+                        )
+                    }
                     Err(e) => DaemonResponse::error(format!("failed to add auto-reply rule: {e}")),
                 }
             }
             DaemonCommand::RemoveAutoReply { id } => {
-                let Some(ref store) = self.auto_reply_store else {
-                    return DaemonResponse::error("auto-reply store not initialized");
+                let result = match &self.auto_reply_store {
+                    Some(store) => store.remove_rule(&id),
+                    None => return DaemonResponse::error("auto-reply store not initialized"),
                 };
-                match store.remove_rule(&id) {
-                    Ok(true) => DaemonResponse::ok(format!("auto-reply rule {id} removed")),
+                match result {
+                    Ok(true) => {
+                        self.reload_auto_reply_rules();
+                        DaemonResponse::ok(format!("auto-reply rule {id} removed"))
+                    }
                     Ok(false) => DaemonResponse::error(format!("auto-reply rule {id} not found")),
                     Err(e) => DaemonResponse::error(format!("failed to remove auto-reply rule: {e}")),
                 }
@@ -4469,11 +4546,13 @@ impl DaemonRuntime {
                 }
             }
             DaemonCommand::ToggleAutoReply { id, enabled } => {
-                let Some(ref store) = self.auto_reply_store else {
-                    return DaemonResponse::error("auto-reply store not initialized");
+                let result = match &self.auto_reply_store {
+                    Some(store) => store.toggle_rule(&id, enabled),
+                    None => return DaemonResponse::error("auto-reply store not initialized"),
                 };
-                match store.toggle_rule(&id, enabled) {
+                match result {
                     Ok(true) => {
+                        self.reload_auto_reply_rules();
                         let state = if enabled { "enabled" } else { "disabled" };
                         DaemonResponse::ok(format!("auto-reply rule {id} {state}"))
                     }
@@ -4482,11 +4561,13 @@ impl DaemonRuntime {
                 }
             }
             DaemonCommand::SetAutoReplyChat { chat_id, enabled } => {
-                let Some(ref store) = self.auto_reply_store else {
-                    return DaemonResponse::error("auto-reply store not initialized");
+                let result = match &self.auto_reply_store {
+                    Some(store) => store.set_chat_enabled(chat_id, enabled),
+                    None => return DaemonResponse::error("auto-reply store not initialized"),
                 };
-                match store.set_chat_enabled(chat_id, enabled) {
+                match result {
                     Ok(()) => {
+                        self.reload_auto_reply_rules();
                         let state = if enabled { "enabled" } else { "disabled" };
                         DaemonResponse::ok(format!("auto-reply {state} for chat {chat_id}"))
                     }

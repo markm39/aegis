@@ -271,13 +271,7 @@ fn draw_status_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
     } else {
         None
     };
-    let model_status = format!(
-        "{} [{}|{}]",
-        app.model,
-        app.mode.as_str(),
-        app.engine.as_str()
-    );
-    let status = render::render_status_bar(&model_status, area.width, usage.as_ref());
+    let status = render::render_status_bar(&app.model, area.width, usage.as_ref());
     let para = Paragraph::new(vec![status]).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
 }
@@ -737,8 +731,6 @@ fn draw_settings(f: &mut Frame, app: &ChatApp, selected: usize, area: Rect) {
                 ApprovalProfile::FullAuto => "Full Auto".to_string(),
             },
         ),
-        ("Mode", app.mode.as_str().to_string()),
-        ("Engine", app.engine.as_str().to_string()),
     ];
 
     let lines: Vec<Line<'static>> = settings
