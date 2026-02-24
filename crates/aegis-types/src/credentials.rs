@@ -19,6 +19,25 @@ use crate::providers::ProviderInfo;
 // Types
 // ---------------------------------------------------------------------------
 
+/// A resolved API key together with its credential type, so callers can
+/// choose the correct HTTP auth header (e.g. `x-api-key` vs `Authorization:
+/// Bearer`).
+#[derive(Debug, Clone)]
+pub struct ResolvedKey {
+    /// The raw API key or token string.
+    pub key: String,
+    /// What kind of credential this is.
+    pub credential_type: CredentialType,
+}
+
+impl ResolvedKey {
+    /// Returns `true` when this credential should be sent as a Bearer token
+    /// rather than a provider-specific API-key header.
+    pub fn is_bearer(&self) -> bool {
+        !matches!(self.credential_type, CredentialType::ApiKey)
+    }
+}
+
 /// A single provider credential entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCredential {
@@ -149,7 +168,7 @@ impl CredentialStore {
         self.providers.insert(
             provider_id.to_string(),
             ProviderCredential {
-                api_key,
+                api_key: api_key.trim().to_string(),
                 model,
                 base_url,
                 credential_type,
@@ -169,17 +188,23 @@ impl CredentialStore {
 
     /// Resolve the API key for a provider. Checks environment variables first
     /// (which take precedence), then falls back to the credential store.
-    pub fn resolve_api_key(&self, provider: &ProviderInfo) -> Option<String> {
+    pub fn resolve_api_key(&self, provider: &ProviderInfo) -> Option<ResolvedKey> {
         // Environment variables take precedence.
         if let Ok(key) = std::env::var(provider.env_var) {
             if !key.is_empty() {
-                return Some(key);
+                return Some(ResolvedKey {
+                    key,
+                    credential_type: CredentialType::ApiKey,
+                });
             }
         }
         for alt in provider.alt_env_vars {
             if let Ok(key) = std::env::var(alt) {
                 if !key.is_empty() {
-                    return Some(key);
+                    return Some(ResolvedKey {
+                        key,
+                        credential_type: CredentialType::ApiKey,
+                    });
                 }
             }
         }
@@ -187,7 +212,10 @@ impl CredentialStore {
         // Check stored credential.
         if let Some(cred) = self.get(provider.id) {
             if !cred.api_key.is_empty() {
-                return Some(cred.api_key.clone());
+                return Some(ResolvedKey {
+                    key: cred.api_key.clone(),
+                    credential_type: cred.credential_type,
+                });
             }
         }
 
@@ -196,7 +224,10 @@ impl CredentialStore {
             crate::oauth::FileTokenStore::new(provider.id).and_then(|store| store.load())
         {
             if !token.is_expired() {
-                return Some(token.access_token);
+                return Some(ResolvedKey {
+                    key: token.access_token,
+                    credential_type: CredentialType::OAuthToken,
+                });
             }
         }
 

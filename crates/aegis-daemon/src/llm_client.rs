@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use aegis_types::credentials::CredentialStore;
+use aegis_types::credentials::{CredentialStore, ResolvedKey};
 use aegis_types::llm::{
     from_gemini_response, to_anthropic_message, to_gemini_content, to_openai_message,
     AnthropicConfig, GeminiProviderConfig, LlmRequest, LlmResponse, LlmToolCall, LlmUsage,
@@ -246,7 +246,9 @@ impl LlmClient {
         &self,
         provider_name: &str,
         read_env_key: impl FnOnce() -> Result<String, String>,
-    ) -> Result<String, String> {
+    ) -> Result<ResolvedKey, String> {
+        use aegis_types::provider_auth::CredentialType;
+
         // 1. Try OAuth token resolver (handles refresh-token logic).
         if let Some(ref resolver) = self.oauth_resolver {
             if let Some(oauth_token) = resolver.resolve_token(provider_name) {
@@ -254,25 +256,27 @@ impl LlmClient {
                     provider = provider_name,
                     "using OAuth bearer token instead of API key"
                 );
-                return Ok(oauth_token);
+                return Ok(ResolvedKey {
+                    key: oauth_token,
+                    credential_type: CredentialType::OAuthToken,
+                });
             }
         }
 
         // 2. Try the unified credential store (env vars -> stored creds -> OAuth file).
         if let Some(provider) = provider_by_id(provider_name) {
             let store = CredentialStore::load_default().unwrap_or_default();
-            if let Some(key) = store.resolve_api_key(provider) {
+            if let Some(resolved) = store.resolve_api_key(provider) {
                 info!(
                     provider = provider_name,
                     "resolved API key from credential store"
                 );
-                return Ok(key);
+                return Ok(resolved);
             }
 
             // Backward-compat shim: older builds stored Codex OAuth credentials
             // under `openai`. Prefer the dedicated `openai-codex` provider now.
             if provider_name == "openai-codex" {
-                use aegis_types::provider_auth::CredentialType;
                 if let Some(legacy) = store.get("openai") {
                     let is_legacy_codex_oauth = legacy.credential_type
                         == CredentialType::OAuthToken
@@ -287,7 +291,10 @@ impl LlmClient {
                             provider = provider_name,
                             "resolved legacy Codex OAuth credential from openai entry"
                         );
-                        return Ok(legacy.api_key.clone());
+                        return Ok(ResolvedKey {
+                            key: legacy.api_key.clone(),
+                            credential_type: CredentialType::OAuthToken,
+                        });
                     }
                 }
             }
@@ -300,12 +307,18 @@ impl LlmClient {
                     provider = provider_name,
                     "resolved token from Codex CLI auth file"
                 );
-                return Ok(token);
+                return Ok(ResolvedKey {
+                    key: token,
+                    credential_type: CredentialType::CliExtracted,
+                });
             }
         }
 
         // 3. Fall back to provider-config env var read.
-        read_env_key()
+        read_env_key().map(|key| ResolvedKey {
+            key,
+            credential_type: CredentialType::ApiKey,
+        })
     }
 
     /// Get a reference to the provider registry.
@@ -456,10 +469,10 @@ impl LlmClient {
         config: &AnthropicConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let api_key = self.resolve_api_key_with_oauth("anthropic", || {
+        let resolved = self.resolve_api_key_with_oauth("anthropic", || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
-        let masked = MaskedApiKey(api_key.clone());
+        let masked = MaskedApiKey(resolved.key.clone());
         debug!(provider = "anthropic", key = %masked, "resolved API key");
 
         // Validate endpoint for SSRF.
@@ -538,11 +551,15 @@ impl LlmClient {
             "sending LLM completion request"
         );
 
-        // Send the request.
-        let resp = self
-            .http_client
-            .post(&url)
-            .header("x-api-key", &api_key)
+        // Send the request, choosing the auth header based on credential type.
+        // OAuth tokens use Authorization: Bearer; API keys use x-api-key.
+        let mut req = self.http_client.post(&url);
+        if resolved.is_bearer() {
+            req = req.header("Authorization", format!("Bearer {}", resolved.key));
+        } else {
+            req = req.header("x-api-key", &resolved.key);
+        }
+        let resp = req
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .body(body_bytes)
@@ -678,24 +695,15 @@ impl LlmClient {
         config: &OpenAiConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let api_key = self.resolve_api_key_with_oauth(provider_name, || {
+        let resolved = self.resolve_api_key_with_oauth(provider_name, || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
-        let masked = MaskedApiKey(api_key.clone());
+        let masked = MaskedApiKey(resolved.key.clone());
         debug!(provider = provider_name, key = %masked, "resolved API key");
 
-        // Check if the credential is an OAuth token -- route to Responses API.
-        // OpenAI Codex always uses the Responses API.
-        let is_oauth = {
-            use aegis_types::provider_auth::CredentialType;
-            let store = CredentialStore::load_default().unwrap_or_default();
-            store
-                .get(provider_name)
-                .map(|c| c.credential_type == CredentialType::OAuthToken)
-                .unwrap_or(false)
-        };
-        if provider_name == "openai-codex" || is_oauth {
-            return self.complete_openai_responses(request, provider_name, &api_key);
+        // OAuth tokens and the Codex provider route to the Responses API.
+        if provider_name == "openai-codex" || resolved.is_bearer() {
+            return self.complete_openai_responses(request, provider_name, &resolved.key);
         }
 
         // Validate endpoint for SSRF.
@@ -779,7 +787,7 @@ impl LlmClient {
         let resp = self
             .http_client
             .post(&url)
-            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Authorization", format!("Bearer {}", resolved.key))
             .header("content-type", "application/json")
             .body(body_bytes)
             .send()
@@ -825,19 +833,28 @@ impl LlmClient {
         config: &GeminiProviderConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let api_key = self.resolve_api_key_with_oauth("google", || {
+        let resolved = self.resolve_api_key_with_oauth("google", || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
-        let masked = MaskedApiKey(api_key.clone());
+        let masked = MaskedApiKey(resolved.key.clone());
         debug!(provider = "gemini", key = %masked, "resolved API key");
 
-        // Build the URL.
-        let url = format!(
-            "{}/v1beta/models/{}:generateContent?key={}",
-            aegis_types::llm::DEFAULT_GEMINI_ENDPOINT.trim_end_matches('/'),
-            request.model,
-            api_key,
-        );
+        // Build the URL. Bearer tokens use the endpoint without a key query
+        // parameter; API keys are appended as `?key=...`.
+        let url = if resolved.is_bearer() {
+            format!(
+                "{}/v1beta/models/{}:generateContent",
+                aegis_types::llm::DEFAULT_GEMINI_ENDPOINT.trim_end_matches('/'),
+                request.model,
+            )
+        } else {
+            format!(
+                "{}/v1beta/models/{}:generateContent?key={}",
+                aegis_types::llm::DEFAULT_GEMINI_ENDPOINT.trim_end_matches('/'),
+                request.model,
+                resolved.key,
+            )
+        };
 
         // Convert messages to Gemini format, separating out system messages.
         let mut system_text = request.system_prompt.clone().unwrap_or_default();
@@ -911,10 +928,13 @@ impl LlmClient {
             "sending LLM completion request"
         );
 
-        // Send the request.
-        let resp = self
-            .http_client
-            .post(&url)
+        // Send the request. Bearer tokens require an Authorization header;
+        // API key auth uses the key embedded in the URL query string.
+        let mut req = self.http_client.post(&url);
+        if resolved.is_bearer() {
+            req = req.header("Authorization", format!("Bearer {}", resolved.key));
+        }
+        let resp = req
             .header("content-type", "application/json")
             .body(body_bytes)
             .send()
@@ -1164,10 +1184,10 @@ impl LlmClient {
         config: &OpenRouterConfig,
     ) -> Result<LlmResponse, String> {
         // Resolve API key, preferring OAuth if available.
-        let api_key = self.resolve_api_key_with_oauth("openrouter", || {
+        let resolved = self.resolve_api_key_with_oauth("openrouter", || {
             config.read_api_key().map_err(|e| e.to_string())
         })?;
-        let masked = MaskedApiKey(api_key.clone());
+        let masked = MaskedApiKey(resolved.key.clone());
         debug!(provider = "openrouter", key = %masked, "resolved API key");
 
         // Build the URL.
@@ -1246,7 +1266,7 @@ impl LlmClient {
         let resp = self
             .http_client
             .post(&url)
-            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Authorization", format!("Bearer {}", resolved.key))
             .header("HTTP-Referer", "https://github.com/aegis-project/aegis")
             .header("content-type", "application/json")
             .body(body_bytes)
@@ -3087,7 +3107,9 @@ data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"o
 
         let key =
             client.resolve_api_key_with_oauth("anthropic", || Ok("env-key-fallback".to_string()));
-        assert_eq!(key.unwrap(), "oauth-preferred");
+        let resolved = key.unwrap();
+        assert_eq!(resolved.key, "oauth-preferred");
+        assert!(resolved.is_bearer());
 
         if let Some(h) = old_home {
             std::env::set_var("HOME", h);
@@ -3110,7 +3132,9 @@ data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"o
 
         let key =
             client.resolve_api_key_with_oauth("anthropic", || Ok("env-key-value".to_string()));
-        assert_eq!(key.unwrap(), "env-key-value");
+        let resolved = key.unwrap();
+        assert_eq!(resolved.key, "env-key-value");
+        assert!(!resolved.is_bearer());
 
         if let Some(h) = old_home {
             std::env::set_var("HOME", h);
@@ -3133,7 +3157,9 @@ data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"o
         client.oauth_resolver = None;
 
         let key = client.resolve_api_key_with_oauth("anthropic", || Ok("only-env".to_string()));
-        assert_eq!(key.unwrap(), "only-env");
+        let resolved = key.unwrap();
+        assert_eq!(resolved.key, "only-env");
+        assert!(!resolved.is_bearer());
 
         if let Some(h) = old_home {
             std::env::set_var("HOME", h);
@@ -3167,7 +3193,9 @@ data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":20,\"o
         let key = client.resolve_api_key_with_oauth("openai-codex", || {
             Err("OPENAI_API_KEY environment variable is not set".to_string())
         });
-        assert_eq!(key.unwrap(), "codex-cli-token");
+        let resolved = key.unwrap();
+        assert_eq!(resolved.key, "codex-cli-token");
+        assert!(resolved.is_bearer());
 
         if let Some(h) = old_home {
             std::env::set_var("HOME", h);
