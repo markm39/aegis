@@ -3,6 +3,8 @@
 //! Detects the current terminal environment and spawns new windows using
 //! the appropriate mechanism (tmux, iTerm2, Terminal.app, or fallback).
 
+#![allow(dead_code)]
+
 use std::process::Command;
 
 /// Supported terminal backends.

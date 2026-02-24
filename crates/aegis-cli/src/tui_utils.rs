@@ -1,6 +1,6 @@
 //! Shared utility functions for TUI modules.
 //!
-//! Common text-editing and display helpers used across fleet_tui, pilot_tui,
+//! Common text-editing and display helpers used across pilot_tui,
 //! and onboard_tui. Extracted here to avoid duplication.
 
 /// Find the byte position after deleting one word backward from `cursor`.

@@ -254,6 +254,7 @@ pub fn disable() -> anyhow::Result<()> {
 /// Remove Telegram configuration without printing to stdout.
 ///
 /// Returns a message describing what happened. Used by TUI.
+#[allow(dead_code)]
 pub(crate) fn disable_quiet() -> anyhow::Result<String> {
     let config_path = daemon_config_path();
     if !config_path.exists() {

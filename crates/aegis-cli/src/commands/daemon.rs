@@ -1742,6 +1742,7 @@ pub fn remove_agent(name: &str) -> anyhow::Result<()> {
 /// Remove an agent from daemon.toml without printing to stdout.
 ///
 /// Returns a message describing what happened. Used by TUI.
+#[allow(dead_code)]
 pub(crate) fn remove_agent_quiet(name: &str) -> anyhow::Result<String> {
     let config_path = daemon_config_path();
     if !config_path.exists() {

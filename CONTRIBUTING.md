@@ -101,9 +101,9 @@ Common shared structs and where they're constructed:
 - **TUI**: Full cursor support on all text inputs. Consistent back-navigation (Esc). Tab for next field.
 - **Errors**: Include what went wrong AND what the user should do about it.
 
-### TUI command bar
+### Chat TUI
 
-When adding a new CLI subcommand, you **must** also add a corresponding TUI command bar entry in `fleet_tui/command.rs`. The TUI is the primary interface.
+The chat TUI (bare `aegis` command) is the primary interface. New features should be accessible as `/slash` commands where appropriate.
 
 ## Multi-Agent Development
 

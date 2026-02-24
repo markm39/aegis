@@ -1,6 +1,5 @@
 mod chat_tui;
 mod commands;
-mod fleet_tui;
 mod onboard_tui;
 mod pilot_tui;
 mod terminal;
@@ -252,9 +251,6 @@ enum Commands {
         #[command(subcommand)]
         action: AuthCommands,
     },
-
-    /// Open the fleet dashboard (live agent management TUI)
-    Fleet,
 
     /// Manage the multi-agent daemon (fleet orchestration)
     Daemon {
@@ -1607,7 +1603,6 @@ fn dispatch_command(command: Commands) -> anyhow::Result<()> {
             AuthCommands::Status => commands::auth::status(),
             AuthCommands::Refresh { provider } => commands::auth::refresh(&provider),
         },
-        Commands::Fleet => fleet_tui::run_fleet_tui(),
         Commands::Daemon { action } => match action {
             DaemonCommands::Init => commands::daemon::init(),
             DaemonCommands::Run { launchd } => commands::daemon::run(launchd),
@@ -2958,14 +2953,6 @@ mod tests {
             }
             _ => panic!("expected Watch command"),
         }
-    }
-
-    #[test]
-    fn cli_parse_fleet() {
-        let cli = Cli::try_parse_from(["aegis", "fleet"]);
-        assert!(cli.is_ok(), "should parse fleet: {cli:?}");
-        let cli = cli.unwrap();
-        assert!(matches!(cli.command, Some(Commands::Fleet)));
     }
 
     #[test]
