@@ -1743,30 +1743,44 @@ fn draw_finish(f: &mut Frame, app: &OnboardApp, area: Rect) {
         .iter()
         .filter(|r| !r.success)
         .count();
+    let dep_warnings = app
+        .skill_install_results
+        .iter()
+        .filter(|r| r.warning.is_some())
+        .count();
 
-    if install_fail == 0 {
-        lines.push(Line::from(vec![
-            Span::styled("  Skills:    ", Style::default().fg(WHITE)),
-            Span::styled(
-                format!("{installed_ok} installed"),
-                Style::default().fg(CYAN),
-            ),
-        ]));
+    // Summary line.
+    let mut skill_parts = vec![format!("{installed_ok} installed")];
+    if install_fail > 0 {
+        skill_parts.push(format!("{install_fail} failed"));
+    }
+    if dep_warnings > 0 {
+        skill_parts.push(format!("{dep_warnings} need deps"));
+    }
+
+    let summary_color = if install_fail > 0 || dep_warnings > 0 {
+        YELLOW
     } else {
-        lines.push(Line::from(vec![
-            Span::styled("  Skills:    ", Style::default().fg(WHITE)),
-            Span::styled(
-                format!("{installed_ok} installed, {install_fail} failed"),
+        CYAN
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  Skills:    ", Style::default().fg(WHITE)),
+        Span::styled(skill_parts.join(", "), Style::default().fg(summary_color)),
+    ]));
+
+    // Per-skill errors and warnings.
+    for result in &app.skill_install_results {
+        if let Some(ref err) = result.error {
+            lines.push(Line::from(Span::styled(
+                format!("             {} -- {err}", result.name),
+                Style::default().fg(RED),
+            )));
+        }
+        if let Some(ref warn) = result.warning {
+            lines.push(Line::from(Span::styled(
+                format!("             {} -- {warn}", result.name),
                 Style::default().fg(YELLOW),
-            ),
-        ]));
-        for result in &app.skill_install_results {
-            if let Some(ref err) = result.error {
-                lines.push(Line::from(Span::styled(
-                    format!("             {} -- {err}", result.name),
-                    Style::default().fg(RED),
-                )));
-            }
+            )));
         }
     }
 

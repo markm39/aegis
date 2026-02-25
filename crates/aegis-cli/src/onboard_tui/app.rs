@@ -206,8 +206,12 @@ pub struct SkillEntry {
 #[derive(Debug, Clone)]
 pub struct SkillInstallResult {
     pub name: String,
+    /// Files were copied to ~/.aegis/skills/<name>/ successfully.
     pub success: bool,
+    /// Fatal error (file copy failed).
     pub error: Option<String>,
+    /// Non-fatal warning (e.g., system dependency install failed, missing env vars).
+    pub warning: Option<String>,
 }
 
 /// Health check result.
@@ -489,6 +493,47 @@ fn discover_skills() -> Vec<SkillEntry> {
     // Sort by category then name.
     entries.sort_by(|a, b| a.category.cmp(&b.category).then(a.name.cmp(&b.name)));
     entries
+}
+
+// ---------------------------------------------------------------------------
+// System dependency installation
+// ---------------------------------------------------------------------------
+
+/// Attempt to install system dependencies for a skill (brew, npm, uv, go).
+///
+/// Returns `None` if no deps needed or deps installed successfully.
+/// Returns `Some(warning)` if deps could not be installed.
+fn install_system_deps(installed: &aegis_skills::InstalledSkill) -> Option<String> {
+    let manifest = &installed.manifest;
+
+    // Skip if no install method or it's config-only.
+    let method = match manifest.install_method {
+        Some(aegis_skills::InstallMethod::Config) | None => return None,
+        Some(m) => m,
+    };
+
+    let target = match manifest.install_target.as_ref() {
+        Some(t) => t.clone(),
+        None => return None,
+    };
+
+    // Check if prerequisites are already met.
+    let missing = aegis_skills::check_prerequisites(manifest);
+    if missing.is_empty() {
+        return None;
+    }
+
+    let pm = aegis_skills::PackageManagerInstaller {
+        method,
+        target,
+        source_dir: installed.path.clone(),
+        required_bins: manifest.required_bins.clone(),
+    };
+
+    match pm.install_dependency() {
+        Ok(()) => None,
+        Err(e) => Some(format!("{e:#}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2220,9 +2265,14 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
     // Skill installation
     // -----------------------------------------------------------------------
 
-    /// Copy selected skills to ~/.aegis/skills/ and record install metadata.
+    /// Copy selected skills to ~/.aegis/skills/ and install system dependencies.
     ///
-    /// Individual skill failures are collected in `skill_install_results`
+    /// For each selected skill:
+    /// 1. Copies skill files to ~/.aegis/skills/<name>/
+    /// 2. Ensures entry point is executable
+    /// 3. Installs system dependencies (brew/npm/uv/go) if needed
+    ///
+    /// Individual failures are collected in `skill_install_results`
     /// rather than aborting the entire wizard.
     fn install_selected_skills(&mut self) {
         let client = aegis_skills::RegistryClient::new();
@@ -2247,10 +2297,15 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
                             let _ = std::fs::set_permissions(&entry, perms);
                         }
                     }
+
+                    // Install system dependencies if the skill needs them.
+                    let warning = install_system_deps(&installed);
+
                     results.push(SkillInstallResult {
                         name: skill.name.clone(),
                         success: true,
                         error: None,
+                        warning,
                     });
                 }
                 Err(e) => {
@@ -2258,6 +2313,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
                         name: skill.name.clone(),
                         success: false,
                         error: Some(format!("{e:#}")),
+                        warning: None,
                     });
                 }
             }
