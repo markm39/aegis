@@ -1193,11 +1193,17 @@ impl ChatApp {
         let thinking_budget = self.thinking_budget;
         let audit_session_id = self.audit_session_id.clone();
 
-        // Build tool descriptions for the system prompt.
+        // Build tool descriptions and runtime context for the system prompt.
         let tool_descs = get_tool_descriptions();
         let approval_ctx = approval_context_for_prompt(&approval_profile);
-        let sys_prompt =
-            system_prompt::build_system_prompt(&tool_descs, Some(approval_ctx), PromptMode::Full);
+        let runtime_ctx =
+            system_prompt::gather_runtime_context(self.client.as_ref(), &self.model);
+        let sys_prompt = system_prompt::build_system_prompt(
+            &tool_descs,
+            Some(approval_ctx),
+            PromptMode::Full,
+            Some(&runtime_ctx),
+        );
 
         // Get LLM tool definitions via the daemon.
         let tool_defs = get_tool_definitions_json();
@@ -2973,7 +2979,9 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
     vec![
         ToolDescription {
             name: "bash".into(),
-            description: "Run shell commands. Use for tests, builds, git, and system operations. \
+            description: "Run shell commands (pty available). Use for tests, builds, git, system \
+                          operations, and any installed CLI tool (sox, ffmpeg, whisper, etc.). \
+                          Also: `aegis channel send`, `aegis daemon reload`. \
                           Prefer `rg` for code search, `rg --files` for file search."
                 .into(),
         },
@@ -3014,8 +3022,9 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
         },
         ToolDescription {
             name: "task".into(),
-            description: "Spawn a subagent for complex or parallel work. Returns a summary when \
-                          done. Use run_in_background for concurrent tasks."
+            description: "Spawn a coding subagent (full agent instance with bash + file tools). \
+                          Use for complex multi-step work, audio processing, data pipelines, etc. \
+                          Returns a summary when done. Use run_in_background for concurrent tasks."
                 .into(),
         },
     ]
@@ -3659,6 +3668,7 @@ fn run_subagent_task(
         &tool_descs,
         Some(approval_context_for_prompt(&ApprovalProfile::FullAuto)),
         PromptMode::Minimal,
+        None, // subagents don't need runtime capability context
     );
     let tool_defs = build_tool_definitions(&tool_descs);
 
