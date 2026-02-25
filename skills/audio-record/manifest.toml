@@ -1,0 +1,18 @@
+name = "audio-record"
+version = "1.0.0"
+description = "Record audio from microphone or BlackHole virtual cable using ffmpeg"
+author = "Aegis Team"
+category = "audio"
+permissions = []
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+required_bins = ["ffmpeg"]
+required_env = []
+os = ["darwin"]
+
+[[commands]]
+name = "record"
+description = "Record audio: /record start [--device blackhole|mic] [--duration 50m], /record stop, /record status"
+usage = "/record [start|stop|status] [args...]"
+aliases = ["rec"]

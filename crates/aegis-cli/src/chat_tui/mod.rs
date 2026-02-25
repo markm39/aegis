@@ -357,6 +357,7 @@ fn classify_tool_risk(tool_name: &str, input: &serde_json::Value) -> ActionRisk 
         "write_file" | "edit_file" | "apply_patch" => ActionRisk::Medium,
         "bash" => classify_bash_risk(input),
         "task" => ActionRisk::Medium,
+        _ if tool_name.starts_with("skill_") => ActionRisk::Medium,
         _ => ActionRisk::High,
     }
 }
@@ -1197,7 +1198,7 @@ impl ChatApp {
         let audit_session_id = self.audit_session_id.clone();
 
         // Build tool descriptions and runtime context for the system prompt.
-        let tool_descs = get_tool_descriptions();
+        let tool_descs = get_tool_descriptions(&self.skill_registry);
         let approval_ctx = approval_context_for_prompt(&approval_profile);
         let runtime_ctx =
             system_prompt::gather_runtime_context(self.client.as_ref(), &self.model);
@@ -1209,7 +1210,7 @@ impl ChatApp {
         );
 
         // Get LLM tool definitions via the daemon.
-        let tool_defs = get_tool_definitions_json();
+        let tool_defs = get_tool_definitions_json(&self.skill_registry);
 
         let socket_path = aegis_types::daemon::daemon_dir().join("daemon.sock");
 
@@ -1221,6 +1222,20 @@ impl ChatApp {
         // Reset abort flag for new request.
         self.abort_flag.store(false, Ordering::Relaxed);
         let abort_flag = self.abort_flag.clone();
+
+        // Snapshot skill manifests + paths for the agent loop thread.
+        let skill_manifests: Vec<_> = self
+            .skill_registry
+            .list()
+            .iter()
+            .map(|inst| {
+                (
+                    inst.manifest.name.clone(),
+                    inst.manifest.clone(),
+                    inst.path.clone(),
+                )
+            })
+            .collect();
 
         std::thread::spawn(move || {
             // Clone tx for the panic guard -- if the closure panics, we still
@@ -1238,6 +1253,7 @@ impl ChatApp {
                 thinking_budget,
                 audit_session_id,
                 abort_flag,
+                skill_manifests,
             };
             // Orchestrator always uses the provider-backed agentic loop.
             // Coding work is delegated to subagents via the "task" tool.
@@ -2982,16 +2998,18 @@ impl ChatApp {
 
 /// Get tool descriptions for the system prompt.
 ///
-/// Queries the daemon for registered tools. Falls back to hardcoded
-/// descriptions if the daemon is not available.
-fn get_tool_descriptions() -> Vec<ToolDescription> {
-    vec![
+/// Returns builtin tool descriptions plus dynamically generated `skill_*`
+/// tool definitions for each installed skill's commands. The `skill_` prefix
+/// makes routing trivial in the agent loop.
+fn get_tool_descriptions(skills: &aegis_skills::SkillRegistry) -> Vec<ToolDescription> {
+    let mut descs = vec![
         ToolDescription {
             name: "bash".into(),
-            description: "Run shell commands (pty available). Use for tests, builds, git, system \
-                          operations, and any installed CLI tool (sox, ffmpeg, whisper, etc.). \
-                          Also: `aegis channel send`, `aegis daemon reload`. \
-                          Prefer `rg` for code search, `rg --files` for file search."
+            description: "Run shell commands for builds, tests, git, and system administration. \
+                          For capabilities covered by installed skills (audio, search, messaging, etc.), \
+                          use the dedicated skill_* tools instead -- they provide structured output, \
+                          subprocess isolation, and policy enforcement. Do not use bash to access \
+                          credential files or inject input directly."
                 .into(),
         },
         ToolDescription {
@@ -3036,7 +3054,33 @@ fn get_tool_descriptions() -> Vec<ToolDescription> {
                           Returns a summary when done. Use run_in_background for concurrent tasks."
                 .into(),
         },
-    ]
+    ];
+
+    // Add skill_* tool definitions from the skill registry.
+    for instance in skills.list() {
+        if let Some(commands) = &instance.manifest.commands {
+            for cmd in commands {
+                let tool_name = format!("skill_{}", cmd.name);
+                let desc = if cmd.description.is_empty() {
+                    format!(
+                        "Skill: {} ({}). Usage: {}",
+                        instance.manifest.name, instance.manifest.description, cmd.usage,
+                    )
+                } else {
+                    format!(
+                        "{}. Usage: {}",
+                        cmd.description, cmd.usage,
+                    )
+                };
+                descs.push(ToolDescription {
+                    name: tool_name,
+                    description: desc,
+                });
+            }
+        }
+    }
+
+    descs
 }
 
 /// Get the JSON Schema for a tool by name.
@@ -3173,6 +3217,16 @@ fn tool_schema_for(name: &str) -> serde_json::Value {
             },
             "required": ["description", "prompt"]
         }),
+        _ if name.starts_with("skill_") => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "string",
+                    "description": "Space-separated arguments to pass to the skill command"
+                }
+            },
+            "required": ["args"]
+        }),
         _ => serde_json::json!({"type": "object", "properties": {}}),
     }
 }
@@ -3197,8 +3251,8 @@ fn build_tool_definitions(descs: &[ToolDescription]) -> Option<serde_json::Value
 ///
 /// Returns the serialized tool definitions that will be passed to
 /// `DaemonCommand::LlmComplete { tools }`.
-fn get_tool_definitions_json() -> Option<serde_json::Value> {
-    build_tool_definitions(&get_tool_descriptions())
+fn get_tool_definitions_json(skills: &aegis_skills::SkillRegistry) -> Option<serde_json::Value> {
+    build_tool_definitions(&get_tool_descriptions(skills))
 }
 
 /// Create a short summary of a tool call's input for display.
@@ -3270,6 +3324,14 @@ fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("subagent task")
             .to_string(),
+        _ if name.starts_with("skill_") => {
+            let cmd = name.strip_prefix("skill_").unwrap_or(name);
+            let args = input
+                .get("args")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            format!("/{cmd} {args}")
+        }
         _ => serde_json::to_string(input)
             .unwrap_or_default()
             .chars()
@@ -3509,6 +3571,14 @@ fn format_tool_call_content(name: &str, input: &serde_json::Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        _ if name.starts_with("skill_") => {
+            let cmd = name.strip_prefix("skill_").unwrap_or(name);
+            let args = input
+                .get("args")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            format!("/{cmd} {args}")
+        }
         _ => serde_json::to_string_pretty(input).unwrap_or_default(),
     }
 }
@@ -3527,6 +3597,8 @@ struct AgentLoopParams {
     audit_session_id: Option<String>,
     /// Flag checked between iterations -- if true, the loop exits early.
     abort_flag: Arc<AtomicBool>,
+    /// Skill registry snapshot for executing skill_* tool calls.
+    skill_manifests: Vec<(String, aegis_skills::SkillManifest, std::path::PathBuf)>,
 }
 
 /// Run the agentic loop in a background thread.
@@ -3709,6 +3781,67 @@ fn run_agent_loop(
                         }
                     }
                 }
+            } else if tc.name.starts_with("skill_") {
+                // Route skill_* tool calls through the SkillExecutor.
+                let cmd_name = tc.name.strip_prefix("skill_").unwrap_or(&tc.name);
+                let args_str = tc
+                    .input
+                    .get("args")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let args: Vec<String> =
+                    args_str.split_whitespace().map(String::from).collect();
+
+                // Find the skill that owns this command.
+                let skill_match = params.skill_manifests.iter().find(|(_, manifest, _)| {
+                    manifest.commands.as_ref().is_some_and(|cmds| {
+                        cmds.iter().any(|c| c.name == cmd_name)
+                    })
+                });
+
+                match skill_match {
+                    Some((_, manifest, skill_dir)) => {
+                        let manifest = manifest.clone();
+                        let skill_dir = skill_dir.clone();
+                        let parameters = serde_json::json!({
+                            "args": args,
+                            "raw": format!("/{cmd_name} {args_str}"),
+                        });
+                        let context = aegis_skills::SkillContext {
+                            agent_name: Some("chat-tui".into()),
+                            session_id: params.audit_session_id.clone(),
+                            workspace_path: None,
+                            env_vars: Default::default(),
+                        };
+                        let action = cmd_name.to_string();
+                        let executor = aegis_skills::SkillExecutor::new();
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build();
+                        match rt {
+                            Ok(rt) => {
+                                match rt.block_on(executor.execute(
+                                    &manifest, &skill_dir, &action, parameters, context,
+                                )) {
+                                    Ok(output) => {
+                                        let text = output
+                                            .result
+                                            .as_str()
+                                            .map(String::from)
+                                            .unwrap_or_else(|| {
+                                                serde_json::to_string(&output.result)
+                                                    .unwrap_or_default()
+                                            });
+                                        Ok(text)
+                                    }
+                                    Err(e) => Err(format!("skill error: {e:#}")),
+                                }
+                            }
+                            Err(e) => Err(format!("failed to build runtime: {e}")),
+                        }
+                    }
+                    None => Err(format!("no skill found for command '{cmd_name}'")),
+                }
             } else if should_auto_approve_tool(
                 &tc.name,
                 &tc.input,
@@ -3877,7 +4010,9 @@ fn run_subagent_task(
     let mut conversation = vec![LlmMessage::user(task_prompt)];
 
     // Build subagent tools (everything except "task" -- no recursive spawning).
-    let tool_descs: Vec<ToolDescription> = get_tool_descriptions()
+    // Subagents don't get skill tools -- they use bash directly for simplicity.
+    let empty_registry = aegis_skills::SkillRegistry::new();
+    let tool_descs: Vec<ToolDescription> = get_tool_descriptions(&empty_registry)
         .into_iter()
         .filter(|t| t.name != "task")
         .collect();
@@ -3900,6 +4035,7 @@ fn run_subagent_task(
         thinking_budget: params.thinking_budget,
         audit_session_id: params.audit_session_id.clone(), // Share parent's audit session.
         abort_flag: params.abort_flag.clone(),
+        skill_manifests: Vec::new(), // Subagents don't execute skills directly.
     };
 
     const MAX_SUBAGENT_ITERATIONS: usize = 30;
@@ -3994,6 +4130,7 @@ fn run_background_task(
         thinking_budget: params.thinking_budget,
         audit_session_id: params.audit_session_id.clone(), // Share parent's audit session.
         abort_flag: params.abort_flag.clone(),
+        skill_manifests: Vec::new(), // Background tasks don't execute skills directly.
     };
     let prompt = task_prompt.to_string();
     let desc = description.to_string();
@@ -4580,6 +4717,7 @@ fn run_event_loop(
         match events.next()? {
             AppEvent::Key(key) => app.handle_key(key),
             AppEvent::Paste(text) => app.handle_paste(&text),
+            AppEvent::Mouse(_) => {}
             AppEvent::Tick => {}
         }
 

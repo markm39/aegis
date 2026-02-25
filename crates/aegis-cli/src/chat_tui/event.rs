@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 
 /// Events produced by the terminal event loop.
 pub enum AppEvent {
@@ -14,6 +14,9 @@ pub enum AppEvent {
     Key(KeyEvent),
     /// Text was pasted (bracketed paste).
     Paste(String),
+    /// A mouse event (scroll, click, etc.).
+    #[allow(dead_code)]
+    Mouse(MouseEvent),
     /// No user input within the tick window; used to poll for updates.
     Tick,
 }
@@ -37,6 +40,7 @@ impl EventHandler {
             match event::read()? {
                 CrosstermEvent::Key(key) => Ok(AppEvent::Key(key)),
                 CrosstermEvent::Paste(text) => Ok(AppEvent::Paste(text)),
+                CrosstermEvent::Mouse(mouse) => Ok(AppEvent::Mouse(mouse)),
                 _ => Ok(AppEvent::Tick),
             }
         } else {

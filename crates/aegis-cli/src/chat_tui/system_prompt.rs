@@ -37,8 +37,6 @@ pub struct SkillSummary {
     pub name: String,
     /// One-line description extracted from SKILL.md front matter.
     pub description: Option<String>,
-    /// Path to the SKILL.md file for lazy loading.
-    pub path: String,
 }
 
 /// Runtime context gathered before building the system prompt.
@@ -146,12 +144,10 @@ pub fn gather_runtime_context(client: Option<&DaemonClient>, model: &str) -> Run
             let skills_base = std::env::current_dir().unwrap_or_default().join("skills");
             for skill_name in config.skills.iter().take(30) {
                 let skill_md = skills_base.join(skill_name).join("SKILL.md");
-                let path_str = skill_md.display().to_string();
                 let description = read_skill_description(&skill_md);
                 ctx.installed_skills.push(SkillSummary {
                     name: skill_name.clone(),
                     description,
-                    path: path_str,
                 });
             }
         }
@@ -391,14 +387,16 @@ fn build_skills_section(ctx: &RuntimeContext) -> Option<String> {
     }
     let mut s = String::from("# Installed Skills\n\n");
     s.push_str(
-        "These skills extend your capabilities. Use `read_file` to load \
-         a skill's SKILL.md before using it.\n\n",
+        "These skills are registered as `skill_*` tools in your tool list. \
+         Call them directly via their tool_use names (e.g., `skill_calc`, `skill_reddit`). \
+         Each runs in a sandboxed subprocess with structured JSON output. \
+         Prefer skill tools over raw bash for any capability they cover.\n\n",
     );
     for skill in &ctx.installed_skills {
         if let Some(ref desc) = skill.description {
-            let _ = writeln!(s, "- **{}**: {} (`{}`)", skill.name, desc, skill.path);
+            let _ = writeln!(s, "- **{}**: {}", skill.name, desc);
         } else {
-            let _ = writeln!(s, "- **{}** (`{}`)", skill.name, skill.path);
+            let _ = writeln!(s, "- **{}**", skill.name);
         }
     }
     Some(s)
@@ -1077,7 +1075,6 @@ mod tests {
         ctx.installed_skills = vec![SkillSummary {
             name: "calculator".into(),
             description: Some("Basic arithmetic".into()),
-            path: "skills/calculator/SKILL.md".into(),
         }];
 
         let prompt = build_system_prompt(&[], None, PromptMode::Full, Some(&ctx));
