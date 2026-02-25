@@ -732,6 +732,8 @@ impl ChatApp {
             .map(|ci| ci.name.clone())
             .collect();
 
+        let (saved_input_history, saved_command_history) = persistence::load_history();
+
         Self {
             running: true,
             input_mode: InputMode::Chat,
@@ -759,7 +761,7 @@ impl ChatApp {
 
             input_buffer: String::new(),
             input_cursor: 0,
-            input_history: Vec::new(),
+            input_history: saved_input_history,
             history_index: None,
             input_draft: String::new(),
             last_esc_at: None,
@@ -767,7 +769,7 @@ impl ChatApp {
 
             command_buffer: String::new(),
             command_cursor: 0,
-            command_history: Vec::new(),
+            command_history: saved_command_history,
             command_history_index: None,
             command_completions: Vec::new(),
             completion_idx: None,
@@ -1420,7 +1422,10 @@ impl ChatApp {
                     // Bang command: !<cmd> runs locally, not through the LLM.
                     if text.starts_with('!') && text.len() > 1 {
                         self.execute_bang_command(&text[1..]);
-                        self.input_history.push(text);
+                        if self.input_history.last().map(String::as_str) != Some(&text) {
+                            self.input_history.push(text.clone());
+                            persistence::append_history('>', &text);
+                        }
                         self.history_index = None;
                         self.input_buffer.clear();
                         self.input_cursor = 0;
@@ -1438,7 +1443,10 @@ impl ChatApp {
                     self.send_llm_request();
 
                     // Update input state
-                    self.input_history.push(text);
+                    if self.input_history.last().map(String::as_str) != Some(&text) {
+                        self.input_history.push(text.clone());
+                        persistence::append_history('>', &text);
+                    }
                     self.history_index = None;
                     self.input_buffer.clear();
                     self.input_cursor = 0;
@@ -1626,7 +1634,10 @@ impl ChatApp {
             KeyCode::Enter => {
                 let buffer = self.command_buffer.clone();
                 if !buffer.is_empty() {
-                    self.command_history.push(buffer.clone());
+                    if self.command_history.last().map(String::as_str) != Some(&buffer) {
+                        self.command_history.push(buffer.clone());
+                        persistence::append_history('/', &buffer);
+                    }
                     self.execute_command(&buffer);
                 }
                 self.input_mode = InputMode::Chat;
@@ -5033,21 +5044,21 @@ mod tests {
         let mut app = make_app();
         app.input_history = vec!["first".into(), "second".into(), "third".into()];
 
-        // Up goes to latest (buffer must be empty)
+        // History navigation requires a non-empty buffer (empty buffer scrolls).
+        app.input_buffer = "draft".into();
+        app.input_cursor = 5;
+
+        // Up goes to latest entry.
         app.handle_key(press(KeyCode::Up));
         assert_eq!(app.input_buffer, "third");
         assert_eq!(app.history_index, Some(2));
 
-        // Clear buffer and go up again to get "second"
-        app.input_buffer.clear();
-        app.input_cursor = 0;
+        // Up again goes to "second".
         app.handle_key(press(KeyCode::Up));
         assert_eq!(app.input_buffer, "second");
         assert_eq!(app.history_index, Some(1));
 
-        // Clear buffer and down goes forward back to "third"
-        app.input_buffer.clear();
-        app.input_cursor = 0;
+        // Down goes forward back to "third".
         app.handle_key(press(KeyCode::Down));
         assert_eq!(app.input_buffer, "third");
         assert_eq!(app.history_index, Some(2));

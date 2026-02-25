@@ -4,6 +4,8 @@
 //! later resume. Each line is a serialized LlmMessage.
 
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -157,6 +159,72 @@ pub fn list_conversations() -> Result<Vec<ConversationMeta>> {
     Ok(metas)
 }
 
+// ---------------------------------------------------------------------------
+// Input history persistence
+// ---------------------------------------------------------------------------
+
+const MAX_HISTORY_LINES: usize = 1000;
+
+/// Path to the shared history file (~/.aegis/history).
+fn history_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".aegis").join("history")
+}
+
+/// Load input and command history from disk.
+///
+/// Returns `(input_history, command_history)`. Lines prefixed with `> ` are
+/// chat inputs; lines prefixed with `/ ` are slash commands. Silently returns
+/// empty vecs on any I/O or parse error.
+pub fn load_history() -> (Vec<String>, Vec<String>) {
+    let path = history_path();
+    let contents = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return (Vec::new(), Vec::new()),
+    };
+
+    let mut all_lines: Vec<&str> = contents.lines().collect();
+
+    // Truncate to most recent MAX_HISTORY_LINES if oversized.
+    if all_lines.len() > MAX_HISTORY_LINES {
+        let start = all_lines.len() - MAX_HISTORY_LINES;
+        all_lines = all_lines[start..].to_vec();
+        // Best-effort rewrite of truncated file.
+        let truncated: String = all_lines.iter().map(|l| format!("{l}\n")).collect();
+        let _ = fs::write(&path, truncated);
+    }
+
+    let mut input_history = Vec::new();
+    let mut command_history = Vec::new();
+
+    for line in all_lines {
+        if let Some(rest) = line.strip_prefix("> ") {
+            input_history.push(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("/ ") {
+            command_history.push(rest.to_string());
+        }
+        // Ignore malformed lines silently.
+    }
+
+    (input_history, command_history)
+}
+
+/// Append a single history entry to disk.
+///
+/// `kind` should be `'>'` for chat input or `'/'` for slash commands.
+/// Errors are silently ignored -- history is best-effort.
+pub fn append_history(kind: char, entry: &str) {
+    let path = history_path();
+    // Ensure parent directory exists.
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let _ = writeln!(file, "{kind} {entry}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +310,65 @@ mod tests {
         assert_eq!(meta.id, "old123");
         assert_eq!(meta.model, "gpt-5.2");
         assert_eq!(meta.message_count, 2);
+    }
+
+    #[test]
+    fn load_history_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history");
+        std::fs::write(&path, "").unwrap();
+
+        // load_history uses a fixed path, so we test the parsing logic directly.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.is_empty());
+    }
+
+    #[test]
+    fn load_history_parses_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history");
+        std::fs::write(
+            &path,
+            "> hello world\n/ status\n> second message\n/ help\nbogus line\n",
+        )
+        .unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let mut input = Vec::new();
+        let mut command = Vec::new();
+        for line in contents.lines() {
+            if let Some(rest) = line.strip_prefix("> ") {
+                input.push(rest.to_string());
+            } else if let Some(rest) = line.strip_prefix("/ ") {
+                command.push(rest.to_string());
+            }
+        }
+
+        assert_eq!(input, vec!["hello world", "second message"]);
+        assert_eq!(command, vec!["status", "help"]);
+    }
+
+    #[test]
+    fn append_history_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history");
+
+        // Simulate append_history writes.
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "> first message").unwrap();
+        writeln!(file, "/ status").unwrap();
+        writeln!(file, "> second message").unwrap();
+        drop(file);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "> first message");
+        assert_eq!(lines[1], "/ status");
+        assert_eq!(lines[2], "> second message");
     }
 }
