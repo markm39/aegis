@@ -132,18 +132,46 @@ struct SkillExecResult {
 
 /// Discover skills and build a registry + command router.
 ///
-/// Scans the bundled `skills/` directory for skill manifests, advances each
-/// through the lifecycle (discover -> validate -> load -> activate), and
-/// builds a `CommandRouter` from their `[[commands]]` sections.
+/// Scans both the bundled `skills/` directory and user-installed skills in
+/// `~/.aegis/skills/` for skill manifests, advances each through the
+/// lifecycle (discover -> validate -> load -> activate), and builds a
+/// `CommandRouter` from their `[[commands]]` sections.
+///
+/// User-installed skills take precedence over bundled skills with the same
+/// name (the bundled duplicate is skipped).
 ///
 /// Returns empty registry/router if no skills are found.
 fn init_skills() -> (aegis_skills::SkillRegistry, aegis_skills::CommandRouter) {
     let mut registry = aegis_skills::SkillRegistry::new();
     let mut router = aegis_skills::CommandRouter::new();
 
-    let instances = aegis_skills::discover_bundled_skills().unwrap_or_default();
+    // Collect all skill instances: user-installed first (so they take
+    // precedence), then bundled skills as fallback.
+    let mut all_instances = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
 
-    for mut instance in instances {
+    // 1. User-installed skills from ~/.aegis/skills/.
+    if let Ok(home) = std::env::var("HOME") {
+        let user_skills_dir = std::path::PathBuf::from(home).join(".aegis/skills");
+        if user_skills_dir.is_dir() {
+            if let Ok(instances) = aegis_skills::discover_skills(&user_skills_dir) {
+                for instance in instances {
+                    seen_names.insert(instance.manifest.name.clone());
+                    all_instances.push(instance);
+                }
+            }
+        }
+    }
+
+    // 2. Bundled skills (skip any already found in user dir).
+    for instance in aegis_skills::discover_bundled_skills().unwrap_or_default() {
+        if seen_names.contains(&instance.manifest.name) {
+            continue;
+        }
+        all_instances.push(instance);
+    }
+
+    for mut instance in all_instances {
         // Best-effort lifecycle advancement: validate -> load -> activate.
         if instance.validate().is_err() {
             continue;
