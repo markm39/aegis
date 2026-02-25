@@ -102,21 +102,6 @@ fn resolve_provider_for_display(model: &str) -> Option<String> {
     None
 }
 
-/// Estimate how many visual rows a single `Line` occupies after wrapping at
-/// the given width. Returns at least 1 (empty lines still take a row).
-fn count_visual_lines(line: &Line, width: u16) -> usize {
-    if width == 0 {
-        return 1;
-    }
-    let w = width as usize;
-    let char_count: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-    if char_count == 0 {
-        1
-    } else {
-        char_count.div_ceil(w)
-    }
-}
-
 /// Draw the scrollable chat message area.
 fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
     if app.messages.is_empty() {
@@ -146,26 +131,27 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         all_lines.extend(lines);
     }
 
-    // Compute total visual lines (accounting for wrapping at terminal width).
-    let total_visual: usize = all_lines
-        .iter()
-        .map(|line| count_visual_lines(line, area.width))
-        .sum();
+    // Use ratatui's exact wrap-aware line count so the scroll bound is accurate.
+    // The char-count estimate (char_count.div_ceil(width)) misses word-boundary
+    // effects and underestimates, which silently caps how far up the user can scroll.
+    let text = ratatui::text::Text::from(all_lines);
+    let total_visual = Paragraph::new(text.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(area.width);
     app.total_visual_lines = total_visual;
 
     // Handle scrolling: scroll_offset=0 means bottom (latest).
-    // Both scroll_offset and scroll_from_top are in visual-line space,
-    // which matches Paragraph::scroll() behavior after .wrap() is applied.
     let visible_height = area.height as usize;
     let scroll_from_top = if total_visual > visible_height {
         total_visual
             .saturating_sub(visible_height)
             .saturating_sub(app.scroll_offset)
+            .min(u16::MAX as usize)
     } else {
         0
     };
 
-    let para = Paragraph::new(all_lines)
+    let para = Paragraph::new(text)
         .scroll((scroll_from_top as u16, 0))
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
