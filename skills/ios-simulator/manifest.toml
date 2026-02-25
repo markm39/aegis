@@ -1,0 +1,99 @@
+name = "ios-simulator"
+version = "1.0.0"
+description = "iOS Simulator automation via ios-simulator-mcp -- open, tap, swipe, type, inspect UI, take screenshots, install and launch apps"
+author = "Aegis Team"
+category = "automation"
+permissions = ["action::network"]
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "npm"
+install_target = "ios-simulator-mcp"
+required_bins = ["node", "npx", "xcrun"]
+required_env = []
+os = ["darwin"]
+timeout_secs = 120
+
+[[commands]]
+name = "sim-open"
+description = "Boot and open the iOS Simulator"
+usage = "/sim-open"
+aliases = ["sopen"]
+
+[[commands]]
+name = "sim-id"
+description = "Get the booted simulator's UDID"
+usage = "/sim-id"
+aliases = ["sid"]
+
+[[commands]]
+name = "sim-describe"
+description = "Get the full accessibility tree of the simulator screen"
+usage = "/sim-describe"
+aliases = ["sdesc"]
+
+[[commands]]
+name = "sim-describe-point"
+description = "Describe the UI element at specific coordinates"
+usage = "/sim-describe-point <x> <y>"
+aliases = ["spoint"]
+
+[[commands]]
+name = "sim-tap"
+description = "Tap at coordinates on the simulator screen"
+usage = "/sim-tap <x> <y>"
+aliases = ["stap"]
+
+[[commands]]
+name = "sim-type"
+description = "Type text into the currently focused element"
+usage = "/sim-type <text...>"
+aliases = ["stype"]
+
+[[commands]]
+name = "sim-swipe"
+description = "Swipe from one point to another on the simulator screen"
+usage = "/sim-swipe <x1> <y1> <x2> <y2>"
+aliases = ["sswipe"]
+
+[[commands]]
+name = "sim-view"
+description = "Get a screenshot with text description of the simulator screen"
+usage = "/sim-view"
+aliases = ["sview"]
+
+[[commands]]
+name = "sim-screenshot"
+description = "Take a screenshot and save it to a file"
+usage = "/sim-screenshot [path]"
+aliases = ["sshot"]
+
+[[commands]]
+name = "sim-record"
+description = "Start recording the simulator screen to video"
+usage = "/sim-record [path]"
+aliases = ["srec"]
+
+[[commands]]
+name = "sim-stop-record"
+description = "Stop the current video recording"
+usage = "/sim-stop-record"
+aliases = ["sstop"]
+
+[[commands]]
+name = "sim-install"
+description = "Install an .app bundle on the booted simulator"
+usage = "/sim-install <path>"
+aliases = ["sinst"]
+
+[[commands]]
+name = "sim-launch"
+description = "Launch an app by its bundle ID on the simulator"
+usage = "/sim-launch <bundle_id>"
+aliases = ["slaunch"]
+
+[[commands]]
+name = "sim-close"
+description = "Stop the iOS Simulator MCP bridge"
+usage = "/sim-close"
+aliases = ["sclose"]
