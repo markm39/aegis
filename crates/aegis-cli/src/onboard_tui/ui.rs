@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use aegis_types::provider_auth::{AuthFlowKind, auth_flows_for};
 use aegis_types::providers::format_context_window;
@@ -1027,16 +1027,14 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Layout: history | status row (1 line) | input box (3 rows).
+    // Layout: history | status row (1 line) | input line (2 rows).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(3)])
+        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(2)])
         .split(inner);
 
-    // ----- Chat history -----
-    let history_height = chunks[0].height as usize;
+    // ----- Chat history (ratatui wraps, we scroll to bottom) -----
     let mut lines: Vec<Line> = Vec::new();
-
     for (role, content) in &app.security_ai_messages {
         let (label, style) = if role == "user" {
             ("You", Style::default().fg(CYAN))
@@ -1045,31 +1043,27 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
         };
         lines.push(Line::from(Span::styled(format!("  {label}:"), style)));
         for chunk in content.split('\n') {
-            let mut remaining = chunk;
-            loop {
-                let byte_len: usize =
-                    remaining.chars().take(68).map(|c| c.len_utf8()).sum();
-                let fits_in_one = remaining.chars().count() <= 68;
-                lines.push(Line::from(Span::styled(
-                    format!("    {}", &remaining[..byte_len]),
-                    Style::default().fg(WHITE),
-                )));
-                if fits_in_one {
-                    break;
-                }
-                remaining = &remaining[byte_len..];
-            }
+            lines.push(Line::from(Span::styled(
+                format!("    {chunk}"),
+                Style::default().fg(WHITE),
+            )));
         }
         lines.push(Line::from(""));
     }
 
-    // Show the last history_height lines (scroll to bottom).
-    let visible: Vec<Line> = if lines.len() > history_height {
-        lines[lines.len() - history_height..].to_vec()
-    } else {
-        lines
-    };
-    f.render_widget(Paragraph::new(visible), chunks[0]);
+    // Let ratatui wrap and compute total visual lines, then scroll to bottom.
+    let history_text = ratatui::text::Text::from(lines);
+    let total_visual = Paragraph::new(history_text.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(chunks[0].width);
+    let visible_height = chunks[0].height as usize;
+    let scroll_top = total_visual.saturating_sub(visible_height) as u16;
+    f.render_widget(
+        Paragraph::new(history_text)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_top, 0)),
+        chunks[0],
+    );
 
     // ----- Status / thinking row -----
     let status_line = if app.security_ai_pending {

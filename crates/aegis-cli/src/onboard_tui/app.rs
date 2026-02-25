@@ -1752,14 +1752,18 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
                 let model = self.selected_model().to_string();
                 let store = self.credential_store.clone();
                 let system = Self::SECURITY_GUIDE_SYSTEM.to_string();
-                let history: Vec<SimpleLlmMessage> = self
-                    .security_ai_messages
-                    .iter()
-                    .map(|(role, content)| SimpleLlmMessage {
+                // Prepend the silent trigger message so the conversation always
+                // starts with a user turn (Anthropic API requirement).
+                let mut history = vec![SimpleLlmMessage {
+                    role: "user".to_string(),
+                    content: "Start the security configuration interview.".to_string(),
+                }];
+                history.extend(self.security_ai_messages.iter().map(|(role, content)| {
+                    SimpleLlmMessage {
                         role: role.clone(),
                         content: content.clone(),
-                    })
-                    .collect();
+                    }
+                }));
 
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.security_ai_rx = Some(rx);

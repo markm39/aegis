@@ -182,10 +182,21 @@ fn call_anthropic(
     let parsed: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("JSON parse error: {e}"))?;
 
-    parsed["content"][0]["text"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("unexpected response shape: {text}"))
+    // Anthropic content is an array of typed blocks. Providers that support
+    // extended thinking (e.g. MiniMax) prepend a {"type":"thinking",...} block
+    // before the {"type":"text",...} block, so we must scan the array rather
+    // than assuming [0] is the text block.
+    if let Some(blocks) = parsed["content"].as_array() {
+        for block in blocks {
+            if block["type"].as_str() == Some("text") {
+                if let Some(s) = block["text"].as_str() {
+                    return Ok(s.to_string());
+                }
+            }
+        }
+    }
+
+    Err(format!("unexpected response shape from {provider_id}: {text}"))
 }
 
 // ---------------------------------------------------------------------------
