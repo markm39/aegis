@@ -186,6 +186,31 @@ pub fn default_pricing() -> Vec<ModelPricing> {
             cache_write_cost_per_mtok: 0.0,
             provider: "google".into(),
         },
+        // -- MiniMax --
+        ModelPricing {
+            model_pattern: "MiniMax-M2.5-Lightning*".into(),
+            input_cost_per_mtok: 0.30,
+            output_cost_per_mtok: 2.40,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "minimax".into(),
+        },
+        ModelPricing {
+            model_pattern: "MiniMax-M2*".into(),
+            input_cost_per_mtok: 0.30,
+            output_cost_per_mtok: 1.20,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "minimax".into(),
+        },
+        ModelPricing {
+            model_pattern: "MiniMax-VL*".into(),
+            input_cost_per_mtok: 0.30,
+            output_cost_per_mtok: 1.20,
+            cache_read_cost_per_mtok: 0.0,
+            cache_write_cost_per_mtok: 0.0,
+            provider: "minimax".into(),
+        },
         // -- Ollama (local, free) --
         ModelPricing {
             model_pattern: "llama*".into(),
