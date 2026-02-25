@@ -10,7 +10,7 @@ PID_FILE="$STATE_DIR/browser-mcp.pid"
 PORT_FILE="$STATE_DIR/browser-mcp.port"
 LOG_FILE="$STATE_DIR/browser-mcp.log"
 LOCK_FILE="$STATE_DIR/browser-mcp.lock"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check if the bridge process is running and responsive.
 is_bridge_running() {
@@ -66,7 +66,7 @@ start_bridge() {
     fi
 
     # Start the bridge as a background process.
-    nohup node "$SCRIPT_DIR/mcp-bridge.mjs" >> "$LOG_FILE" 2>&1 &
+    nohup node "$LIB_DIR/mcp-bridge.mjs" >> "$LOG_FILE" 2>&1 &
     local bridge_pid=$!
     disown "$bridge_pid" 2>/dev/null || true
 
@@ -127,7 +127,7 @@ start_bridge() {
 }
 
 # Ensure the bridge is running, starting it if needed.
-# Uses flock to prevent race conditions from concurrent invocations.
+# Uses a simple lock file to prevent race conditions.
 ensure_bridge() {
     if is_bridge_running; then
         return 0
@@ -135,27 +135,34 @@ ensure_bridge() {
 
     # Acquire lock to prevent concurrent startup.
     mkdir -p "$STATE_DIR"
-    (
-        flock -n 200 || {
-            # Another process is starting the bridge. Wait for it.
-            flock -w 120 200 || {
-                output_error "Timed out waiting for browser bridge lock"
-                exit 0
-            }
-            # Lock acquired after waiting -- bridge should be ready now.
-            if is_bridge_running; then
-                return 0
-            fi
-            # Bridge didn't start -- fall through to start it ourselves.
-        }
-
-        # Double-check after acquiring lock.
+    
+    # Simple lock: if lock file exists and process is alive, wait
+    local waited=0
+    while [ -f "$LOCK_FILE" ] && [ $waited -lt 30 ]; do
+        # Check if another process already started the bridge
         if is_bridge_running; then
             return 0
         fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    
+    # Check again before starting
+    if is_bridge_running; then
+        return 0
+    fi
+    
+    # Create lock file
+    echo $$ > "$LOCK_FILE"
+    
+    # Double-check after acquiring lock.
+    if is_bridge_running; then
+        rm -f "$LOCK_FILE"
+        return 0
+    fi
 
-        start_bridge
-    ) 200>"$LOCK_FILE"
+    start_bridge
+    rm -f "$LOCK_FILE"
 }
 
 # Stop the bridge process.
@@ -196,7 +203,7 @@ cleanup_state_files() {
 # Returns: raw JSON response from the bridge.
 mcp_call() {
     local tool_name="$1"
-    local arguments="${2:-{}}"
+    local arguments="${2:-{}"
     local port
     port=$(cat "$PORT_FILE" 2>/dev/null)
 
