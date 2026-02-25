@@ -1737,11 +1737,38 @@ fn draw_finish(f: &mut Frame, app: &OnboardApp, area: Rect) {
         ),
     ]));
 
-    let skill_count = app.skills.iter().filter(|s| s.selected).count();
-    lines.push(Line::from(vec![
-        Span::styled("  Skills:    ", Style::default().fg(WHITE)),
-        Span::styled(format!("{skill_count} selected"), Style::default().fg(CYAN)),
-    ]));
+    let installed_ok = app.skill_install_results.iter().filter(|r| r.success).count();
+    let install_fail = app
+        .skill_install_results
+        .iter()
+        .filter(|r| !r.success)
+        .count();
+
+    if install_fail == 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  Skills:    ", Style::default().fg(WHITE)),
+            Span::styled(
+                format!("{installed_ok} installed"),
+                Style::default().fg(CYAN),
+            ),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  Skills:    ", Style::default().fg(WHITE)),
+            Span::styled(
+                format!("{installed_ok} installed, {install_fail} failed"),
+                Style::default().fg(YELLOW),
+            ),
+        ]));
+        for result in &app.skill_install_results {
+            if let Some(ref err) = result.error {
+                lines.push(Line::from(Span::styled(
+                    format!("             {} -- {err}", result.name),
+                    Style::default().fg(RED),
+                )));
+            }
+        }
+    }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

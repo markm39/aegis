@@ -799,4 +799,90 @@ entry_point = "run.sh"
             "world"
         );
     }
+
+    /// Install every bundled skill from the project's skills/ directory into a
+    /// temp directory and verify each one succeeds. This catches bad manifests,
+    /// missing entry points, and other packaging issues.
+    #[test]
+    fn test_all_bundled_skills_install() {
+        let project_skills_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent() // crates/
+            .and_then(|p| p.parent()) // project root
+            .map(|p| p.join("skills"));
+
+        let skills_dir = match project_skills_dir {
+            Some(ref p) if p.is_dir() => p.as_path(),
+            _ => {
+                eprintln!("skipping test: project skills/ directory not found");
+                return;
+            }
+        };
+
+        let dest_root = TempDir::new().unwrap();
+        let discovered = crate::discover_skills(skills_dir).unwrap();
+        assert!(
+            !discovered.is_empty(),
+            "expected bundled skills in {}",
+            skills_dir.display()
+        );
+
+        let mut failures: Vec<String> = Vec::new();
+        let mut success_count = 0;
+
+        for skill in &discovered {
+            let dest = dest_root.path().join(&skill.manifest.name);
+            let installer = LocalInstaller {
+                source_dir: skill.path.clone(),
+            };
+
+            match installer.install(&dest) {
+                Ok(installed) => {
+                    // Verify manifest exists at destination.
+                    assert!(
+                        dest.join("manifest.toml").exists(),
+                        "manifest.toml missing for '{}'",
+                        skill.manifest.name
+                    );
+                    // Verify entry point exists at destination.
+                    assert!(
+                        dest.join(&installed.manifest.entry_point).exists(),
+                        "entry point '{}' missing for '{}'",
+                        installed.manifest.entry_point,
+                        skill.manifest.name
+                    );
+                    // Verify install metadata can be written.
+                    write_install_metadata(
+                        &dest,
+                        &installed.source,
+                        installed.installed_at,
+                    )
+                    .unwrap_or_else(|e| {
+                        failures.push(format!(
+                            "{}: metadata write failed: {e}",
+                            skill.manifest.name
+                        ));
+                    });
+                    success_count += 1;
+                }
+                Err(e) => {
+                    failures.push(format!("{}: {e:#}", skill.manifest.name));
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            panic!(
+                "{} of {} skills failed to install:\n  - {}",
+                failures.len(),
+                discovered.len(),
+                failures.join("\n  - ")
+            );
+        }
+
+        assert_eq!(
+            success_count,
+            discovered.len(),
+            "all discovered skills should install successfully"
+        );
+    }
 }

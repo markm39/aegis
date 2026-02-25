@@ -198,6 +198,16 @@ pub struct SkillEntry {
     pub category: String,
     pub selected: bool,
     pub installed: bool,
+    /// Filesystem path to the bundled skill directory (used for installation).
+    pub source_path: PathBuf,
+}
+
+/// Outcome of installing a single skill during wizard finalization.
+#[derive(Debug, Clone)]
+pub struct SkillInstallResult {
+    pub name: String,
+    pub success: bool,
+    pub error: Option<String>,
 }
 
 /// Health check result.
@@ -322,6 +332,7 @@ pub struct OnboardApp {
     pub skills: Vec<SkillEntry>,
     pub skill_selected: usize,
     pub skill_scroll_offset: usize,
+    pub skill_install_results: Vec<SkillInstallResult>,
 
     // Credential store
     pub credential_store: CredentialStore,
@@ -470,6 +481,7 @@ fn discover_skills() -> Vec<SkillEntry> {
                 category,
                 selected: false,
                 installed,
+                source_path: skill.path,
             }
         })
         .collect();
@@ -643,6 +655,7 @@ impl OnboardApp {
             skills,
             skill_selected: 0,
             skill_scroll_offset: 0,
+            skill_install_results: Vec::new(),
 
             credential_store,
         }
@@ -2204,11 +2217,64 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
     }
 
     // -----------------------------------------------------------------------
+    // Skill installation
+    // -----------------------------------------------------------------------
+
+    /// Copy selected skills to ~/.aegis/skills/ and record install metadata.
+    ///
+    /// Individual skill failures are collected in `skill_install_results`
+    /// rather than aborting the entire wizard.
+    fn install_selected_skills(&mut self) {
+        let client = aegis_skills::RegistryClient::new();
+        let mut results = Vec::new();
+
+        for skill in &self.skills {
+            if !skill.selected {
+                continue;
+            }
+
+            match client.install_local(&skill.name, &skill.source_path) {
+                Ok(installed) => {
+                    // Ensure entry point is executable.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let entry = installed.path.join(&installed.manifest.entry_point);
+                        if let Ok(meta) = std::fs::metadata(&entry) {
+                            let mut perms = meta.permissions();
+                            let mode = perms.mode() | 0o111;
+                            perms.set_mode(mode);
+                            let _ = std::fs::set_permissions(&entry, perms);
+                        }
+                    }
+                    results.push(SkillInstallResult {
+                        name: skill.name.clone(),
+                        success: true,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    results.push(SkillInstallResult {
+                        name: skill.name.clone(),
+                        success: false,
+                        error: Some(format!("{e:#}")),
+                    });
+                }
+            }
+        }
+
+        self.skill_install_results = results;
+    }
+
+    // -----------------------------------------------------------------------
     // Finalization
     // -----------------------------------------------------------------------
 
     /// Write all configuration and start the daemon.
     fn finalize_wizard(&mut self) {
+        // Install selected skills to ~/.aegis/skills/.
+        self.install_selected_skills();
+
         let config = self.build_daemon_config();
 
         // Ensure daemon directory exists.
