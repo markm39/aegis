@@ -24,7 +24,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_control::daemon::{DaemonClient, DaemonCommand, DaemonResponse};
-use aegis_types::llm::{LlmMessage, LlmResponse, LlmToolCall, StopReason};
+use aegis_types::llm::{LlmMessage, LlmResponse, LlmRole, LlmToolCall, StopReason};
 use aegis_types::tool_classification::ActionRisk;
 
 use self::event::{AppEvent, EventHandler};
@@ -1123,6 +1123,43 @@ impl ChatApp {
         self.agent_rx = None;
         // Reset the flag for the next request.
         self.abort_flag = Arc::new(AtomicBool::new(false));
+
+        // Inject synthetic tool_result messages for any unpaired tool_use blocks.
+        // Without this, the conversation history becomes malformed and the LLM API
+        // will reject subsequent requests with "tool call result does not follow
+        // tool call".
+        let pending_tool_ids: Vec<String> = {
+            let last_assistant_idx = self
+                .conversation
+                .iter()
+                .rposition(|m| m.role == LlmRole::Assistant && !m.tool_calls.is_empty());
+            match last_assistant_idx {
+                Some(idx) => {
+                    let expected: Vec<String> = self.conversation[idx]
+                        .tool_calls
+                        .iter()
+                        .map(|tc| tc.id.clone())
+                        .collect();
+                    // Some tool_results may already have been pushed by the
+                    // background thread before the abort took effect.
+                    let existing: std::collections::HashSet<&str> = self.conversation
+                        [idx + 1..]
+                        .iter()
+                        .filter_map(|m| m.tool_use_id.as_deref())
+                        .collect();
+                    expected
+                        .into_iter()
+                        .filter(|id| !existing.contains(id.as_str()))
+                        .collect()
+                }
+                None => vec![],
+            }
+        };
+        for tool_id in pending_tool_ids {
+            self.conversation
+                .push(LlmMessage::tool_result(tool_id, "[Aborted by user]"));
+        }
+
         self.messages.push(ChatMessage::new(
             MessageRole::System,
             "[Aborted]".to_string(),
@@ -4255,6 +4292,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     let mut stdout = std::io::stdout();
     crossterm::execute!(
         stdout,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
     )?;

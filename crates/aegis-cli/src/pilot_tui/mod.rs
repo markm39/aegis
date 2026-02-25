@@ -520,6 +520,7 @@ pub fn run_pilot_tui(
     let mut stdout = std::io::stdout();
     crossterm::execute!(
         stdout,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
     )?;
