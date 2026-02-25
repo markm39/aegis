@@ -1016,6 +1016,8 @@ fn draw_security_preset(f: &mut Frame, app: &OnboardApp, area: Rect) {
     f.render_widget(para, area);
 }
 
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1025,10 +1027,10 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Reserve 3 rows at the bottom: input box + error/thinking line.
+    // Layout: history | status row (1 line) | input box (3 rows).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(3)])
         .split(inner);
 
     // ----- Chat history -----
@@ -1041,12 +1043,7 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
         } else {
             ("Aegis", Style::default().fg(WHITE).add_modifier(Modifier::BOLD))
         };
-        // Prefix line.
-        lines.push(Line::from(Span::styled(
-            format!("  {label}:"),
-            style,
-        )));
-        // Content lines (wrap at 68 chars).
+        lines.push(Line::from(Span::styled(format!("  {label}:"), style)));
         for chunk in content.split('\n') {
             let mut remaining = chunk;
             loop {
@@ -1066,55 +1063,77 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    if app.security_ai_pending {
-        lines.push(Line::from(Span::styled(
-            "  Thinking...",
-            Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
-        )));
-    } else if let Some(ref err) = app.security_ai_error {
-        lines.push(Line::from(Span::styled(
-            format!("  Error: {err}"),
-            Style::default().fg(Color::Red),
-        )));
-    }
-
     // Show the last history_height lines (scroll to bottom).
     let visible: Vec<Line> = if lines.len() > history_height {
         lines[lines.len() - history_height..].to_vec()
     } else {
         lines
     };
-    let history_para = Paragraph::new(visible);
-    f.render_widget(history_para, chunks[0]);
+    f.render_widget(Paragraph::new(visible), chunks[0]);
+
+    // ----- Status / thinking row -----
+    let status_line = if app.security_ai_pending {
+        let elapsed_ms = app
+            .security_ai_pending_since
+            .map(|t| t.elapsed().as_millis())
+            .unwrap_or(0);
+        let frame = (elapsed_ms / 150) as usize % SPINNER_FRAMES.len();
+        let spinner = SPINNER_FRAMES[frame];
+        let elapsed_str = if elapsed_ms < 60_000 {
+            format!("{}s", elapsed_ms / 1000)
+        } else {
+            format!("{}m {}s", elapsed_ms / 60_000, (elapsed_ms % 60_000) / 1000)
+        };
+        Line::from(vec![
+            Span::styled(format!("  {spinner} "), Style::default().fg(Color::Yellow)),
+            Span::styled("Working…  ", Style::default().fg(DIM)),
+            Span::styled(format!("({elapsed_str})"), Style::default().fg(DIM)),
+        ])
+    } else if let Some(ref err) = app.security_ai_error {
+        Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(Color::Red),
+        ))
+    } else {
+        Line::from("")
+    };
+    f.render_widget(Paragraph::new(status_line), chunks[1]);
 
     // ----- Input box -----
     let input_block = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP)
         .border_style(if app.security_ai_pending {
             Style::default().fg(DIM)
         } else {
-            Style::default().fg(CYAN)
+            Style::default().fg(Color::Rgb(60, 60, 60))
         });
+    let prefix = Span::styled(
+        "> ",
+        Style::default()
+            .fg(if app.security_ai_pending { DIM } else { CYAN })
+            .add_modifier(Modifier::BOLD),
+    );
     let input_text = &app.security_ai_input;
     let cursor_pos = app.security_ai_cursor;
     let (before, after) = input_text.split_at(cursor_pos.min(input_text.len()));
-    let mut spans = vec![Span::styled(before, Style::default().fg(WHITE))];
+    let mut spans = vec![prefix, Span::styled(before, Style::default().fg(WHITE))];
     if !app.security_ai_pending {
         let cursor_char = after.chars().next().unwrap_or(' ');
-        let rest = if after.is_empty() { "" } else { &after[cursor_char.len_utf8()..] };
+        let rest = if after.is_empty() {
+            ""
+        } else {
+            &after[cursor_char.len_utf8()..]
+        };
         spans.push(Span::styled(
             cursor_char.to_string(),
-            Style::default()
-                .fg(Color::Black)
-                .bg(WHITE)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Black).bg(WHITE).add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(rest, Style::default().fg(WHITE)));
     } else {
         spans.push(Span::styled(after, Style::default().fg(DIM)));
     }
     let input_para = Paragraph::new(Line::from(spans)).block(input_block);
-    f.render_widget(input_para, chunks[1]);
+    f.render_widget(input_para, chunks[2]);
 }
 
 fn draw_security_isolation(f: &mut Frame, app: &OnboardApp, area: Rect) {

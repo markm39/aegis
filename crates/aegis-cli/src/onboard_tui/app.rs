@@ -6,6 +6,7 @@
 //! health check, skill installation, and a finish screen.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -288,6 +289,8 @@ pub struct OnboardApp {
     pub security_ai_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Holds the most recent LLM error for display.
     pub security_ai_error: Option<String>,
+    /// When the current LLM request was sent (for elapsed-time display).
+    pub security_ai_pending_since: Option<Instant>,
 
     // Step 5: Gateway Config
     pub gateway_port: String,
@@ -612,6 +615,7 @@ impl OnboardApp {
             security_ai_pending: false,
             security_ai_rx: None,
             security_ai_error: None,
+            security_ai_pending_since: None,
 
             gateway_port: "3100".into(),
             gateway_port_cursor: 4,
@@ -1716,6 +1720,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
         let (tx, rx) = std::sync::mpsc::channel();
         self.security_ai_rx = Some(rx);
         self.security_ai_pending = true;
+        self.security_ai_pending_since = Some(Instant::now());
 
         std::thread::spawn(move || {
             let result = call_llm_simple(&model, &system, &messages, &store);
@@ -1758,6 +1763,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
 
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.security_ai_rx = Some(rx);
+                self.security_ai_pending_since = Some(Instant::now());
 
                 std::thread::spawn(move || {
                     let result = call_llm_simple(&model, &system, &history, &store);
@@ -1788,6 +1794,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
         };
         self.security_ai_rx = None;
         self.security_ai_pending = false;
+        self.security_ai_pending_since = None;
 
         match result {
             Ok(response) => {
