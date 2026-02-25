@@ -291,6 +291,8 @@ pub struct OnboardApp {
     pub security_ai_error: Option<String>,
     /// When the current LLM request was sent (for elapsed-time display).
     pub security_ai_pending_since: Option<Instant>,
+    /// Lines scrolled back from the bottom of the history (0 = pinned to bottom).
+    pub security_ai_scroll_offset: usize,
 
     // Step 5: Gateway Config
     pub gateway_port: String,
@@ -616,6 +618,7 @@ impl OnboardApp {
             security_ai_rx: None,
             security_ai_error: None,
             security_ai_pending_since: None,
+            security_ai_scroll_offset: 0,
 
             gateway_port: "3100".into(),
             gateway_port_cursor: 4,
@@ -1721,6 +1724,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
         self.security_ai_rx = Some(rx);
         self.security_ai_pending = true;
         self.security_ai_pending_since = Some(Instant::now());
+        self.security_ai_scroll_offset = 0;
 
         std::thread::spawn(move || {
             let result = call_llm_simple(&model, &system, &messages, &store);
@@ -1737,6 +1741,20 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             KeyCode::Esc => {
                 self.security_sub_step = SecuritySubStep::PresetSelection;
             }
+            KeyCode::Up => {
+                self.security_ai_scroll_offset += 1;
+            }
+            KeyCode::PageUp => {
+                self.security_ai_scroll_offset += 10;
+            }
+            KeyCode::Down => {
+                self.security_ai_scroll_offset =
+                    self.security_ai_scroll_offset.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                self.security_ai_scroll_offset =
+                    self.security_ai_scroll_offset.saturating_sub(10);
+            }
             KeyCode::Enter if !self.security_ai_pending => {
                 let trimmed = self.security_ai_input.trim().to_string();
                 if trimmed.is_empty() {
@@ -1748,6 +1766,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
                 self.security_ai_cursor = 0;
                 self.security_ai_pending = true;
                 self.security_ai_error = None;
+                self.security_ai_scroll_offset = 0;
 
                 let model = self.selected_model().to_string();
                 let store = self.credential_store.clone();
@@ -1804,6 +1823,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             Ok(response) => {
                 self.security_ai_messages
                     .push(("assistant".to_string(), response.clone()));
+                self.security_ai_scroll_offset = 0; // pin to bottom on new message
                 if let Some(config) = Self::parse_ai_config(&response) {
                     // Apply the LLM-produced config and advance to the next step.
                     self.security_isolation_selected = config.0;

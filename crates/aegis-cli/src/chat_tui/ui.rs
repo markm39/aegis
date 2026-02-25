@@ -131,6 +131,37 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         all_lines.extend(lines);
     }
 
+    // Append a thinking indicator when waiting for the LLM, so it appears inline
+    // below the last message and scrolls with the content.
+    if app.awaiting_response {
+        let elapsed_ms = app
+            .response_started_at
+            .map(|t| t.elapsed().as_millis())
+            .unwrap_or(0);
+        const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame = (elapsed_ms / 150) as usize % FRAMES.len();
+        let spinner = FRAMES[frame];
+        let elapsed_str = if elapsed_ms < 60_000 {
+            format!("{}s", elapsed_ms / 1000)
+        } else {
+            format!("{}m {}s", elapsed_ms / 60_000, (elapsed_ms % 60_000) / 1000)
+        };
+        all_lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {spinner} "),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                "Working\u{2026}  ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("({elapsed_str})"),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
     // Use ratatui's exact wrap-aware line count so the scroll bound is accurate.
     // The char-count estimate (char_count.div_ceil(width)) misses word-boundary
     // effects and underestimates, which silently caps how far up the user can scroll.

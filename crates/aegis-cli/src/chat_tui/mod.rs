@@ -591,6 +591,8 @@ pub struct ChatApp {
     pub model: String,
     /// Whether we're waiting for an LLM response or tool execution.
     pub awaiting_response: bool,
+    /// When the current LLM request started (for elapsed-time display in header).
+    pub response_started_at: Option<Instant>,
     /// Channel for receiving agentic loop events from background thread.
     agent_rx: Option<mpsc::Receiver<AgentLoopEvent>>,
     /// Channel for sending approval decisions to the background thread.
@@ -781,6 +783,7 @@ impl ChatApp {
             conversation: Vec::new(),
             model,
             awaiting_response: false,
+            response_started_at: None,
             agent_rx: None,
             approval_tx: None,
             awaiting_approval: false,
@@ -928,6 +931,7 @@ impl ChatApp {
                                 .to_string(),
                         ));
                         self.awaiting_response = false;
+                        self.response_started_at = None;
                         self.auto_approve_turn = false;
                         self.pending_tool_desc = None;
                     }
@@ -1045,6 +1049,7 @@ impl ChatApp {
                         format!("Error: {msg}"),
                     ));
                     self.awaiting_response = false;
+                    self.response_started_at = None;
                     self.auto_approve_turn = false;
                 }
                 AgentLoopEvent::Notice(msg) => {
@@ -1054,6 +1059,7 @@ impl ChatApp {
                 }
                 AgentLoopEvent::Done => {
                     self.awaiting_response = false;
+                    self.response_started_at = None;
                     self.auto_approve_turn = false;
                     // Save a restore point after each completed assistant turn.
                     self.push_snapshot();
@@ -1157,6 +1163,7 @@ impl ChatApp {
         // Drop the approval channel so a blocking recv() in the agent loop unblocks.
         self.approval_tx = None;
         self.awaiting_response = false;
+        self.response_started_at = None;
         self.awaiting_approval = false;
         self.pending_tool_desc = None;
         self.agent_rx = None;
@@ -1211,6 +1218,7 @@ impl ChatApp {
     /// it executes each tool and loops. Tool approvals are handled via a
     /// separate mpsc channel that the UI thread sends decisions through.
     fn send_llm_request(&mut self) {
+        self.response_started_at = Some(Instant::now());
         // Auto-compact if the conversation exceeds the model's context window.
         if let Some(compacted) = compaction::compact_conversation(&self.conversation, &self.model) {
             let old_len = self.conversation.len();

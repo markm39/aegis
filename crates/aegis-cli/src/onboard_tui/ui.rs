@@ -1027,10 +1027,21 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Layout: history | status row (1 line) | input line (2 rows).
+    // Compute input height based on text length so the input box grows as the user types.
+    let usable_width = (inner.width as usize).max(1);
+    let prefix_len = 2; // "> "
+    let char_count = prefix_len + app.security_ai_input.chars().count();
+    let visual_lines = char_count.div_ceil(usable_width).max(1);
+    let input_height = (visual_lines as u16 + 1).clamp(2, 6); // +1 for TOP border
+
+    // Layout: history | status row (1 line) | input (grows with content).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(input_height),
+        ])
         .split(inner);
 
     // ----- Chat history (ratatui wraps, we scroll to bottom) -----
@@ -1051,13 +1062,15 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // Let ratatui wrap and compute total visual lines, then scroll to bottom.
+    // Let ratatui wrap and compute total visual lines, then apply scroll offset.
+    // scroll_offset=0 means pinned to bottom; higher values scroll back through history.
     let history_text = ratatui::text::Text::from(lines);
     let total_visual = Paragraph::new(history_text.clone())
         .wrap(Wrap { trim: false })
         .line_count(chunks[0].width);
     let visible_height = chunks[0].height as usize;
-    let scroll_top = total_visual.saturating_sub(visible_height) as u16;
+    let bottom_scroll = total_visual.saturating_sub(visible_height) as u16;
+    let scroll_top = bottom_scroll.saturating_sub(app.security_ai_scroll_offset as u16);
     f.render_widget(
         Paragraph::new(history_text)
             .wrap(Wrap { trim: false })
@@ -1126,7 +1139,9 @@ fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
     } else {
         spans.push(Span::styled(after, Style::default().fg(DIM)));
     }
-    let input_para = Paragraph::new(Line::from(spans)).block(input_block);
+    let input_para = Paragraph::new(Line::from(spans))
+        .block(input_block)
+        .wrap(Wrap { trim: false });
     f.render_widget(input_para, chunks[2]);
 }
 
