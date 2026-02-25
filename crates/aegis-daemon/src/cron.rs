@@ -163,6 +163,17 @@ impl CronScheduler {
         removed
     }
 
+    /// Replace all jobs with a new set, preserving `last_fired` state for
+    /// jobs that exist in both the old and new lists (by name). This prevents
+    /// previously-fired jobs from firing again immediately after a config reload.
+    pub fn reload_jobs(&mut self, new_jobs: Vec<CronJob>) {
+        // Drop last_fired entries for jobs that no longer exist.
+        let new_names: std::collections::HashSet<&str> =
+            new_jobs.iter().map(|j| j.name.as_str()).collect();
+        self.last_fired.retain(|name, _| new_names.contains(name.as_str()));
+        self.jobs = new_jobs;
+    }
+
     /// List all registered jobs.
     pub fn list(&self) -> &[CronJob] {
         &self.jobs

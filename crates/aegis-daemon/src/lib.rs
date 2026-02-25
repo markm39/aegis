@@ -6671,6 +6671,38 @@ impl DaemonRuntime {
         // Update fleet goal
         self.fleet.fleet_goal = new_config.goal.clone();
 
+        // Reload cron scheduler with new job definitions, preserving last_fired
+        // state for existing jobs so they don't fire again immediately.
+        {
+            let new_jobs: Vec<crate::cron::CronJob> = new_config
+                .cron
+                .jobs
+                .iter()
+                .filter_map(|jc| {
+                    let schedule = match crate::cron::Schedule::parse(&jc.schedule) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(
+                                name = %jc.name,
+                                error = %e,
+                                "skipping cron job with invalid schedule on reload"
+                            );
+                            return None;
+                        }
+                    };
+                    Some(crate::cron::CronJob {
+                        name: jc.name.clone(),
+                        schedule,
+                        command: jc.command.clone(),
+                        enabled: jc.enabled,
+                    })
+                })
+                .collect();
+            let new_count = new_jobs.len();
+            self.cron_scheduler.reload_jobs(new_jobs);
+            info!(count = new_count, "cron scheduler reloaded");
+        }
+
         // Update stored config
         self.config = new_config;
 
