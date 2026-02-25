@@ -22,6 +22,9 @@ pub enum MessageRole {
     Permission {
         prompt: String,
         resolved: Option<bool>, // None=pending, Some(true)=approved, Some(false)=denied
+        /// Diff/content preview lines shown before [Y]/[N].
+        /// Line prefix determines color: `+` green, `-` red, `@` cyan, else dim.
+        diff_preview: Vec<String>,
     },
     /// Session result (completion summary).
     Result { summary: String },

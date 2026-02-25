@@ -94,14 +94,18 @@ pub fn render_tool_call(
     ])]
 }
 
-/// Render a pending permission prompt.
-pub fn render_permission_pending(prompt: &str, _width: u16) -> Vec<Line<'static>> {
+/// Render a pending permission prompt with optional diff preview.
+pub fn render_permission_pending(
+    prompt: &str,
+    diff_preview: &[String],
+    _width: u16,
+) -> Vec<Line<'static>> {
     let border_style = Style::default().fg(Color::Yellow);
     let hint_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
-    vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             " --- Permission Required ---".to_string(),
             border_style,
@@ -110,17 +114,38 @@ pub fn render_permission_pending(prompt: &str, _width: u16) -> Vec<Line<'static>
             format!(" {prompt}"),
             Style::default().fg(Color::White),
         )),
-        Line::from(vec![
-            Span::styled(" [Y]".to_string(), hint_style),
-            Span::raw(" Allow  ".to_string()),
-            Span::styled("[N]".to_string(), hint_style),
-            Span::raw(" Deny".to_string()),
-        ]),
-        Line::from(Span::styled(
-            " ----------------------------".to_string(),
-            border_style,
-        )),
-    ]
+    ];
+
+    // Diff/content preview lines (color-coded by prefix)
+    if !diff_preview.is_empty() {
+        lines.push(Line::from(""));
+        for diff_line in diff_preview {
+            let style = match diff_line.chars().next() {
+                Some('+') => Style::default().fg(Color::Green),
+                Some('-') => Style::default().fg(Color::Red),
+                Some('@') => Style::default().fg(Color::Cyan),
+                _ => Style::default().fg(Color::DarkGray),
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {diff_line}"),
+                style,
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled(" [Y]".to_string(), hint_style),
+        Span::raw(" Allow  ".to_string()),
+        Span::styled("[N]".to_string(), hint_style),
+        Span::raw(" Deny".to_string()),
+    ]));
+    lines.push(Line::from(Span::styled(
+        " ----------------------------".to_string(),
+        border_style,
+    )));
+
+    lines
 }
 
 /// Render a resolved (approved or denied) permission line.
@@ -169,8 +194,12 @@ pub fn render_message(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
             render_tool_call(tool_name, summary, None, width)
         }
         MessageRole::System => render_system_message(&msg.content),
-        MessageRole::Permission { prompt, resolved } => match resolved {
-            None => render_permission_pending(prompt, width),
+        MessageRole::Permission {
+            prompt,
+            resolved,
+            diff_preview,
+        } => match resolved {
+            None => render_permission_pending(prompt, diff_preview, width),
             Some(true) => render_permission_resolved(prompt, true),
             Some(false) => render_permission_resolved(prompt, false),
         },
