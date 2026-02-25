@@ -34,7 +34,9 @@ pub fn run_wizard() -> Result<WizardResult> {
     let mut stdout = io::stdout();
     crossterm::execute!(
         stdout,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
         crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
+        crossterm::cursor::MoveTo(0, 0),
         EnterAlternateScreen,
     )?;
     let backend = CrosstermBackend::new(stdout);
