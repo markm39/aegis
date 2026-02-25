@@ -715,6 +715,27 @@ const COMMANDS: &[&str] = &[
     // Setup commands
     "setup",
     "setup telegram",
+    "setup slack",
+    "setup discord",
+    "setup whatsapp",
+    "setup signal",
+    "setup matrix",
+    "setup imessage",
+    "setup irc",
+    "setup msteams",
+    "setup googlechat",
+    "setup feishu",
+    "setup line",
+    "setup nostr",
+    "setup mattermost",
+    "setup voicecall",
+    "setup twitch",
+    "setup nextcloud",
+    "setup zalo",
+    "setup tlon",
+    "setup lobster",
+    "setup gmail",
+    "setup webhook",
     "telegram setup",
     "telegram status",
     "telegram disable",
@@ -2686,7 +2707,8 @@ impl ChatApp {
                 Err(e) => self.set_result(format!("{e}")),
             },
             _ if trimmed == "setup" => {
-                self.set_result("Usage: /setup <telegram>");
+                let names = crate::setup_wizard::WIZARD_CHANNEL_NAMES.join(", ");
+                self.set_result(format!("Usage: /setup <channel>\nAvailable: {names}"));
             }
             _ if trimmed.starts_with("setup ") => {
                 let target = trimmed.strip_prefix("setup ").unwrap().trim();
@@ -2985,17 +3007,39 @@ impl ChatApp {
     }
 
     /// Open a setup wizard overlay for the given target name.
+    ///
+    /// Tries channel wizards first, then skill wizards (for skills with
+    /// `required_env` that need credentials configured).
     fn open_setup_wizard(&mut self, target: &str) {
-        match crate::setup_wizard::channel_wizard(target) {
-            Some(wizard) => {
-                self.overlay = Some(Overlay::Setup { wizard });
-            }
-            None => {
+        // Try channel wizard first.
+        if let Some(wizard) = crate::setup_wizard::channel_wizard(target) {
+            self.overlay = Some(Overlay::Setup { wizard });
+            return;
+        }
+
+        // Try skill wizard (look up manifest for required_env).
+        if let Some(instance) = self.skill_registry.get(target) {
+            if !instance.manifest.required_env.is_empty() {
+                if let Some(wizard) = crate::setup_wizard::skill_wizard(
+                    target,
+                    &instance.manifest.required_env,
+                ) {
+                    self.overlay = Some(Overlay::Setup { wizard });
+                    return;
+                }
+            } else {
                 self.set_result(format!(
-                    "No setup wizard for '{target}'. Available: telegram"
+                    "Skill '{target}' has no required environment variables to configure."
                 ));
+                return;
             }
         }
+
+        let names = crate::setup_wizard::WIZARD_CHANNEL_NAMES.join(", ");
+        self.set_result(format!(
+            "No setup wizard for '{target}'. Available channels: {names}\n\
+             For skills: /setup <skill-name>"
+        ));
     }
 
     /// Handle the result of a completed setup wizard.
@@ -3006,6 +3050,13 @@ impl ChatApp {
                     Ok(msg) => self.set_result(msg),
                     Err(e) => self.set_result(format!("Setup failed: {e}")),
                 }
+            }
+            crate::setup_wizard::SetupResult::SkillEnv { skill_name, vars } => {
+                let count = vars.len();
+                self.set_result(format!(
+                    "Saved {count} environment variable(s) for '{skill_name}' \
+                     to ~/.aegis/skill_env/{skill_name}.env"
+                ));
             }
             crate::setup_wizard::SetupResult::Cancelled => {
                 self.set_result("Setup cancelled.".to_string());

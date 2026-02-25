@@ -4,6 +4,8 @@
 //! (Telegram, Slack, skill auth, etc.) that can be hosted in both the
 //! onboarding wizard and the chat TUI.
 
+pub mod channels;
+pub mod generic;
 pub mod skill_env;
 pub mod telegram;
 pub mod ui;
@@ -26,6 +28,11 @@ pub(crate) enum SetupEvent {
 pub enum SetupResult {
     /// Channel configuration ready to write to daemon.toml.
     Channel(Box<ChannelConfig>),
+    /// Skill environment variables collected.
+    SkillEnv {
+        skill_name: String,
+        vars: Vec<(String, String)>,
+    },
     /// User cancelled the wizard.
     Cancelled,
 }
@@ -51,8 +58,10 @@ pub struct SetupStep {
     pub title: String,
     /// Instruction lines shown above the input.
     pub instructions: Vec<String>,
-    /// Active text input field, if any.
-    pub input: Option<SetupInputField>,
+    /// Input fields to display. May be empty (no input needed).
+    pub inputs: Vec<SetupInputField>,
+    /// Index of the active input field (receives keystrokes).
+    pub active_input: usize,
     /// Status message (success, info).
     pub status: Option<String>,
     /// Error message.
@@ -91,6 +100,64 @@ pub trait SetupWizard {
 pub fn channel_wizard(channel_name: &str) -> Option<Box<dyn SetupWizard>> {
     match channel_name {
         "telegram" => Some(Box::new(telegram::TelegramSetupWizard::new())),
+        "slack" => Some(Box::new(channels::slack())),
+        "discord" => Some(Box::new(channels::discord())),
+        "whatsapp" => Some(Box::new(channels::whatsapp())),
+        "signal" => Some(Box::new(channels::signal())),
+        "matrix" => Some(Box::new(channels::matrix())),
+        "imessage" => Some(Box::new(channels::imessage())),
+        "irc" => Some(Box::new(channels::irc())),
+        "msteams" => Some(Box::new(channels::msteams())),
+        "googlechat" => Some(Box::new(channels::googlechat())),
+        "feishu" => Some(Box::new(channels::feishu())),
+        "line" => Some(Box::new(channels::line())),
+        "nostr" => Some(Box::new(channels::nostr())),
+        "mattermost" => Some(Box::new(channels::mattermost())),
+        "voicecall" => Some(Box::new(channels::voicecall())),
+        "twitch" => Some(Box::new(channels::twitch())),
+        "nextcloud" => Some(Box::new(channels::nextcloud())),
+        "zalo" => Some(Box::new(channels::zalo())),
+        "tlon" => Some(Box::new(channels::tlon())),
+        "lobster" => Some(Box::new(channels::lobster())),
+        "gmail" => Some(Box::new(channels::gmail())),
+        "webhook" => Some(Box::new(channels::webhook())),
         _ => None,
     }
+}
+
+/// All channel names that have setup wizards.
+pub const WIZARD_CHANNEL_NAMES: &[&str] = &[
+    "telegram",
+    "slack",
+    "discord",
+    "whatsapp",
+    "signal",
+    "matrix",
+    "imessage",
+    "irc",
+    "msteams",
+    "googlechat",
+    "feishu",
+    "line",
+    "nostr",
+    "mattermost",
+    "voicecall",
+    "twitch",
+    "nextcloud",
+    "zalo",
+    "tlon",
+    "lobster",
+    "gmail",
+    "webhook",
+];
+
+/// Create a setup wizard for a skill's required environment variables.
+pub fn skill_wizard(skill_name: &str, required_env: &[String]) -> Option<Box<dyn SetupWizard>> {
+    if required_env.is_empty() {
+        return None;
+    }
+    Some(Box::new(skill_env::SkillEnvWizard::new(
+        skill_name,
+        required_env,
+    )))
 }

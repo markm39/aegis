@@ -332,7 +332,7 @@ fn default_channels() -> Vec<ChannelEntry> {
         ChannelEntry {
             name: "discord",
             label: "Discord",
-            description: "Bot token from Developer Portal",
+            description: "Webhook or bot token",
             selected: false,
         },
         ChannelEntry {
@@ -342,9 +342,27 @@ fn default_channels() -> Vec<ChannelEntry> {
             selected: false,
         },
         ChannelEntry {
+            name: "msteams",
+            label: "Microsoft Teams",
+            description: "Incoming webhook URL",
+            selected: false,
+        },
+        ChannelEntry {
+            name: "googlechat",
+            label: "Google Chat",
+            description: "Incoming webhook URL",
+            selected: false,
+        },
+        ChannelEntry {
+            name: "mattermost",
+            label: "Mattermost",
+            description: "Incoming webhook URL",
+            selected: false,
+        },
+        ChannelEntry {
             name: "whatsapp",
             label: "WhatsApp",
-            description: "API URL and access token",
+            description: "Cloud API URL and access token",
             selected: false,
         },
         ChannelEntry {
@@ -356,7 +374,7 @@ fn default_channels() -> Vec<ChannelEntry> {
         ChannelEntry {
             name: "imessage",
             label: "iMessage",
-            description: "macOS only, Full Disk Access required",
+            description: "macOS only, API bridge required",
             selected: false,
         },
         ChannelEntry {
@@ -368,7 +386,13 @@ fn default_channels() -> Vec<ChannelEntry> {
         ChannelEntry {
             name: "irc",
             label: "IRC",
-            description: "Server, port, nick, and channels",
+            description: "Server, channel, and nickname",
+            selected: false,
+        },
+        ChannelEntry {
+            name: "webhook",
+            label: "Generic Webhook",
+            description: "POST messages to any URL",
             selected: false,
         },
     ]

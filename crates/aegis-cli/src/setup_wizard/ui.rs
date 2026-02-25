@@ -13,7 +13,7 @@ use super::SetupStep;
 
 /// Draw a setup wizard step as a centered popup overlay.
 pub fn draw_setup_wizard(f: &mut Frame, step: &SetupStep, area: Rect) {
-    let popup = centered_rect(65, 50, area);
+    let popup = centered_rect(65, 60, area);
     f.render_widget(Clear, popup);
 
     let title = format!(" {} ", step.title);
@@ -88,69 +88,98 @@ pub fn draw_setup_wizard(f: &mut Frame, step: &SetupStep, area: Rect) {
         y += 1;
     }
 
-    // Text input field
-    if let Some(ref input) = step.input {
-        if y < inner.y + inner.height {
-            // Label
-            let label_line = Line::from(Span::styled(
-                format!("  {}", input.label),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            f.render_widget(
-                Paragraph::new(label_line),
-                Rect {
-                    x: inner.x,
-                    y,
-                    width: inner.width,
-                    height: 1,
-                },
-            );
-            y += 1;
+    // Input fields (supports multiple with active highlighting)
+    for (i, input) in step.inputs.iter().enumerate() {
+        let is_active = i == step.active_input;
+
+        if y >= inner.y + inner.height {
+            break;
         }
 
-        if y < inner.y + inner.height {
-            // Input line with cursor
-            let display_text = if input.masked && !input.value.is_empty() {
-                let chars: Vec<char> = input.value.chars().collect();
-                if chars.len() > 4 {
-                    let hidden: String = "\u{2022}".repeat(chars.len() - 4);
-                    let visible: String = chars[chars.len() - 4..].iter().collect();
-                    format!("{hidden}{visible}")
-                } else {
-                    input.value.clone()
-                }
+        // Label
+        let label_color = if is_active {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+        let label_line = Line::from(Span::styled(
+            format!("  {}", input.label),
+            Style::default()
+                .fg(label_color)
+                .add_modifier(Modifier::BOLD),
+        ));
+        f.render_widget(
+            Paragraph::new(label_line),
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+        );
+        y += 1;
+
+        if y >= inner.y + inner.height {
+            break;
+        }
+
+        // Input line with optional cursor
+        let display_text = if input.masked && !input.value.is_empty() {
+            let chars: Vec<char> = input.value.chars().collect();
+            if chars.len() > 4 {
+                let hidden: String = "\u{2022}".repeat(chars.len() - 4);
+                let visible: String = chars[chars.len() - 4..].iter().collect();
+                format!("{hidden}{visible}")
             } else {
                 input.value.clone()
-            };
+            }
+        } else {
+            input.value.clone()
+        };
 
+        let prefix_style = Style::default()
+            .fg(if is_active { Color::Cyan } else { Color::DarkGray })
+            .add_modifier(Modifier::BOLD);
+
+        let mut spans = vec![Span::styled("  > ".to_string(), prefix_style)];
+
+        if is_active {
             let char_cursor = input.value[..input.cursor.min(input.value.len())]
                 .chars()
                 .count();
             let display_cursor = display_text
                 .char_indices()
                 .nth(char_cursor)
-                .map(|(i, _)| i)
+                .map(|(idx, _)| idx)
                 .unwrap_or(display_text.len());
-
-            let mut spans = vec![Span::styled(
-                "  > ".to_string(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )];
             spans.extend(build_cursor_spans(&display_text, display_cursor));
+        } else {
+            let text_style = if input.value.is_empty() {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let shown = if input.value.is_empty() {
+                "(empty)".to_string()
+            } else {
+                display_text
+            };
+            spans.push(Span::styled(shown, text_style));
+        }
 
-            f.render_widget(
-                Paragraph::new(Line::from(spans)),
-                Rect {
-                    x: inner.x,
-                    y,
-                    width: inner.width,
-                    height: 1,
-                },
-            );
+        f.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+        );
+        y += 1;
+
+        // Small gap between fields (but not after last)
+        if i + 1 < step.inputs.len() {
             y += 1;
         }
     }
