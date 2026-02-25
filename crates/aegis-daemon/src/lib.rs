@@ -7053,6 +7053,9 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
         let aegis_config = AegisConfig::default_for("test", &PathBuf::from("/tmp/aegis"));
         DaemonRuntime::new(config, aegis_config)
@@ -7401,6 +7404,9 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
         config.toolkit.loop_executor.halt_on_high_risk = false;
         config.toolkit.browser.extra_args = vec!["--disable-extensions".to_string()];
@@ -8088,6 +8094,9 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
         let aegis_config = AegisConfig::default_for("relay-subagent-result-ok", &base);
         let mut runtime = DaemonRuntime::new(config, aegis_config.clone());
@@ -8186,6 +8195,9 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
         let aegis_config =
             AegisConfig::default_for("relay-subagent-result-no-parent-channel", &base);

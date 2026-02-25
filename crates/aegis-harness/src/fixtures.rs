@@ -155,6 +155,9 @@ impl FixtureBuilder {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
 
         TestFixture {
@@ -204,6 +207,9 @@ pub fn build_test_daemon_config(temp_dir: &Path) -> DaemonConfig {
         retention: Default::default(),
         redaction: Default::default(),
         heartbeat: Default::default(),
+        default_security_preset: None,
+        default_isolation: None,
+        default_network_rules: vec![],
     }
 }
 

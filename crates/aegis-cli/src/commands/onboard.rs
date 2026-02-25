@@ -221,6 +221,9 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -287,6 +290,9 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
         };
 
         let toml_str = config.to_toml().unwrap();

@@ -1,16 +1,19 @@
 //! Onboarding wizard state machine.
 //!
-//! A 9-step wizard that guides users through full Aegis setup: config detection,
+//! A 10-step wizard that guides users through full Aegis setup: config detection,
 //! provider selection (25+ providers with manual API key entry), workspace config,
-//! gateway config, channel selection, service installation, health check, skill
-//! installation, and a finish screen.
+//! security/sandbox config, gateway config, channel selection, service installation,
+//! health check, skill installation, and a finish screen.
 
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use aegis_types::CredentialStore;
-use aegis_types::daemon::{DaemonConfig, DaemonControlConfig, DashboardConfig, PersistenceConfig};
+use aegis_types::config::{DockerSandboxConfig, IsolationConfig, NetworkRule, Protocol};
+use aegis_types::daemon::{
+    DaemonConfig, DaemonControlConfig, DashboardConfig, PersistenceConfig, SecurityPresetKind,
+};
 use aegis_types::provider_auth::{
     AuthFlowKind, auth_flows_for, has_multiple_auth_flows, needs_auth,
 };
@@ -34,17 +37,19 @@ pub enum OnboardStep {
     ProviderSelection,
     /// Step 3: Workspace directory configuration.
     WorkspaceConfig,
-    /// Step 4: Gateway / control server configuration.
+    /// Step 4: Security and sandbox configuration.
+    SecurityConfig,
+    /// Step 5: Gateway / control server configuration.
     GatewayConfig,
-    /// Step 5: Messaging channel selection.
+    /// Step 6: Messaging channel selection.
     ChannelSelection,
-    /// Step 6: Daemon service installation (launchd/systemd).
+    /// Step 7: Daemon service installation (launchd/systemd).
     ServiceInstall,
-    /// Step 7: Health verification.
+    /// Step 8: Health verification.
     HealthCheck,
-    /// Step 8: Skill installation.
+    /// Step 9: Skill installation.
     SkillSelection,
-    /// Step 9: Summary and finish.
+    /// Step 10: Summary and finish.
     Finish,
     /// User cancelled.
     Cancelled,
@@ -58,19 +63,20 @@ impl OnboardStep {
             Self::ConfigDetection => 1,
             Self::ProviderSelection => 2,
             Self::WorkspaceConfig => 3,
-            Self::GatewayConfig => 4,
-            Self::ChannelSelection => 5,
-            Self::ServiceInstall => 6,
-            Self::HealthCheck => 7,
-            Self::SkillSelection => 8,
-            Self::Finish => 9,
+            Self::SecurityConfig => 4,
+            Self::GatewayConfig => 5,
+            Self::ChannelSelection => 6,
+            Self::ServiceInstall => 7,
+            Self::HealthCheck => 8,
+            Self::SkillSelection => 9,
+            Self::Finish => 10,
             Self::Cancelled => 0,
         }
     }
 
     /// Total number of wizard steps.
     #[allow(dead_code)]
-    pub const TOTAL: usize = 9;
+    pub const TOTAL: usize = 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +122,28 @@ impl ConfigAction {
             Self::Reset => "Reset and start fresh",
         }
     }
+}
+
+/// Sub-steps within security configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecuritySubStep {
+    /// Choose a security preset (ObserveOnly / ReadOnly / FullLockdown / Custom).
+    PresetSelection,
+    /// Choose the OS-level isolation backend.
+    IsolationBackend,
+    /// Configure the list of allowed outbound network hosts.
+    NetworkRules,
+    /// Configure extra directories the agent may write to beyond the workspace.
+    WritePaths,
+}
+
+/// Sub-steps within channel selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelSubStep {
+    /// Selecting channels from the checkbox list.
+    SelectChannels,
+    /// Running a channel-specific setup wizard inline.
+    RunningSetup,
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +259,22 @@ pub struct OnboardApp {
     pub workspace_path: String,
     pub workspace_cursor: usize,
 
-    // Step 4: Gateway Config
+    // Step 4: Security Config
+    pub security_sub_step: SecuritySubStep,
+    /// Index into the four presets: 0=ObserveOnly, 1=ReadOnly, 2=FullLockdown, 3=Custom.
+    pub security_preset_selected: usize,
+    /// Index into the four isolation backends: 0=Seatbelt, 1=Docker, 2=Process, 3=None.
+    pub security_isolation_selected: usize,
+    pub security_hosts_input: String,
+    pub security_hosts_cursor: usize,
+    pub security_hosts: Vec<String>,
+    pub security_hosts_selected: usize,
+    pub security_paths_input: String,
+    pub security_paths_cursor: usize,
+    pub security_paths: Vec<String>,
+    pub security_paths_selected: usize,
+
+    // Step 5: Gateway Config
     pub gateway_port: String,
     pub gateway_port_cursor: usize,
     pub gateway_bind_selected: usize,
@@ -239,9 +282,13 @@ pub struct OnboardApp {
     pub gateway_token_cursor: usize,
     pub gateway_field: GatewayField,
 
-    // Step 5: Channel Selection
+    // Step 6: Channel Selection
     pub channels: Vec<ChannelEntry>,
     pub channel_selected: usize,
+    pub channel_sub_step: ChannelSubStep,
+    pub channel_setup_wizard: Option<Box<dyn crate::setup_wizard::SetupWizard>>,
+    pub channel_setup_queue: Vec<String>,
+    pub channel_setup_results: Vec<crate::setup_wizard::SetupResult>,
 
     // Step 6: Service Install
     pub service_action_selected: usize,
@@ -508,6 +555,18 @@ impl OnboardApp {
             workspace_path,
             workspace_cursor: 0,
 
+            security_sub_step: SecuritySubStep::PresetSelection,
+            security_preset_selected: 0,
+            security_isolation_selected: 2, // Process (matching ObserveOnly default)
+            security_hosts_input: String::new(),
+            security_hosts_cursor: 0,
+            security_hosts: vec![],
+            security_hosts_selected: 0,
+            security_paths_input: String::new(),
+            security_paths_cursor: 0,
+            security_paths: vec![],
+            security_paths_selected: 0,
+
             gateway_port: "3100".into(),
             gateway_port_cursor: 4,
             gateway_bind_selected: 0,
@@ -517,6 +576,10 @@ impl OnboardApp {
 
             channels: default_channels(),
             channel_selected: 0,
+            channel_sub_step: ChannelSubStep::SelectChannels,
+            channel_setup_wizard: None,
+            channel_setup_queue: Vec::new(),
+            channel_setup_results: Vec::new(),
 
             service_action_selected: 0,
             service_status: None,
@@ -542,6 +605,7 @@ impl OnboardApp {
             OnboardStep::ConfigDetection => "Configuration",
             OnboardStep::ProviderSelection => "AI Provider",
             OnboardStep::WorkspaceConfig => "Workspace",
+            OnboardStep::SecurityConfig => "Security",
             OnboardStep::GatewayConfig => "Gateway",
             OnboardStep::ChannelSelection => "Channels",
             OnboardStep::ServiceInstall => "Service",
@@ -620,6 +684,7 @@ impl OnboardApp {
             OnboardStep::ConfigDetection => self.handle_config_detection(key),
             OnboardStep::ProviderSelection => self.handle_provider_selection(key),
             OnboardStep::WorkspaceConfig => self.handle_workspace_config(key),
+            OnboardStep::SecurityConfig => self.handle_security_config(key),
             OnboardStep::GatewayConfig => self.handle_gateway_config(key),
             OnboardStep::ChannelSelection => self.handle_channel_selection(key),
             OnboardStep::ServiceInstall => self.handle_service_install(key),
@@ -1222,13 +1287,27 @@ impl OnboardApp {
 
     /// Handle background polling for device flows and PKCE browser flows.
     pub fn tick(&mut self) {
-        if self.step != OnboardStep::ProviderSelection {
-            return;
-        }
-        match self.provider_sub_step {
-            ProviderSubStep::DeviceFlowWaiting => self.tick_device_flow(),
-            ProviderSubStep::PkceBrowserWaiting => self.tick_pkce_browser(),
+        match self.step {
+            OnboardStep::ProviderSelection => match self.provider_sub_step {
+                ProviderSubStep::DeviceFlowWaiting => self.tick_device_flow(),
+                ProviderSubStep::PkceBrowserWaiting => self.tick_pkce_browser(),
+                _ => {}
+            },
+            OnboardStep::ChannelSelection => self.tick_channel_setup(),
             _ => {}
+        }
+    }
+
+    /// Tick the active channel setup wizard.
+    fn tick_channel_setup(&mut self) {
+        if let Some(ref mut wizard) = self.channel_setup_wizard {
+            wizard.tick();
+            if wizard.is_done() {
+                let result = wizard.take_result();
+                self.channel_setup_results.push(result);
+                self.channel_setup_wizard = None;
+                self.advance_channel_setup_queue();
+            }
         }
     }
 
@@ -1338,7 +1417,8 @@ impl OnboardApp {
                     self.error_message = Some(format!("Failed to create directory: {e}"));
                     return;
                 }
-                self.step = OnboardStep::GatewayConfig;
+                self.security_sub_step = SecuritySubStep::PresetSelection;
+                self.step = OnboardStep::SecurityConfig;
             }
             KeyCode::Esc => {
                 self.step = OnboardStep::ProviderSelection;
@@ -1384,7 +1464,155 @@ impl OnboardApp {
     }
 
     // -----------------------------------------------------------------------
-    // Step 4: Gateway Config
+    // Step 4: Security Config
+    // -----------------------------------------------------------------------
+
+    fn handle_security_config(&mut self, key: KeyEvent) {
+        match self.security_sub_step {
+            SecuritySubStep::PresetSelection => self.handle_security_preset(key),
+            SecuritySubStep::IsolationBackend => self.handle_security_isolation(key),
+            SecuritySubStep::NetworkRules => self.handle_security_network(key),
+            SecuritySubStep::WritePaths => self.handle_security_paths(key),
+        }
+    }
+
+    fn handle_security_preset(&mut self, key: KeyEvent) {
+        const PRESET_COUNT: usize = 4;
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.security_preset_selected =
+                    (self.security_preset_selected + 1).min(PRESET_COUNT - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.security_preset_selected = self.security_preset_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                // Apply isolation default for this preset.
+                self.security_isolation_selected = match self.security_preset_selected {
+                    0 => 2, // ObserveOnly → Process (no kernel sandbox overhead)
+                    _ => 0, // ReadOnly / FullLockdown / Custom → Seatbelt
+                };
+                // Reset any previously configured hosts/paths when switching presets.
+                self.security_hosts.clear();
+                self.security_hosts_input.clear();
+                self.security_hosts_cursor = 0;
+                self.security_paths.clear();
+                self.security_paths_input.clear();
+                self.security_paths_cursor = 0;
+                self.security_sub_step = SecuritySubStep::IsolationBackend;
+            }
+            KeyCode::Esc => {
+                self.step = OnboardStep::WorkspaceConfig;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_security_isolation(&mut self, key: KeyEvent) {
+        const ISOLATION_COUNT: usize = 4;
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.security_isolation_selected =
+                    (self.security_isolation_selected + 1).min(ISOLATION_COUNT - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.security_isolation_selected =
+                    self.security_isolation_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                self.security_sub_step = SecuritySubStep::NetworkRules;
+            }
+            KeyCode::Esc => {
+                self.security_sub_step = SecuritySubStep::PresetSelection;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_security_network(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let trimmed = self.security_hosts_input.trim().to_string();
+                if trimmed.is_empty() {
+                    self.security_sub_step = SecuritySubStep::WritePaths;
+                } else {
+                    self.security_hosts.push(trimmed);
+                    self.security_hosts_input.clear();
+                    self.security_hosts_cursor = 0;
+                }
+            }
+            KeyCode::Esc => {
+                self.security_sub_step = SecuritySubStep::IsolationBackend;
+            }
+            KeyCode::Char('d') if self.security_hosts_input.is_empty() => {
+                if !self.security_hosts.is_empty() {
+                    let idx = self.security_hosts_selected.min(self.security_hosts.len() - 1);
+                    self.security_hosts.remove(idx);
+                    if self.security_hosts_selected >= self.security_hosts.len()
+                        && !self.security_hosts.is_empty()
+                    {
+                        self.security_hosts_selected = self.security_hosts.len() - 1;
+                    }
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down if self.security_hosts_input.is_empty() => {
+                if !self.security_hosts.is_empty() {
+                    self.security_hosts_selected = (self.security_hosts_selected + 1)
+                        .min(self.security_hosts.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.security_hosts_input.is_empty() => {
+                self.security_hosts_selected = self.security_hosts_selected.saturating_sub(1);
+            }
+            _ => {
+                self.handle_text_input(key.code, TextInputTarget::SecurityHostInput);
+            }
+        }
+    }
+
+    fn handle_security_paths(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let trimmed = self.security_paths_input.trim().to_string();
+                if trimmed.is_empty() {
+                    self.step = OnboardStep::GatewayConfig;
+                } else {
+                    self.security_paths.push(trimmed);
+                    self.security_paths_input.clear();
+                    self.security_paths_cursor = 0;
+                }
+            }
+            KeyCode::Esc => {
+                self.security_sub_step = SecuritySubStep::NetworkRules;
+            }
+            KeyCode::Char('d') if self.security_paths_input.is_empty() => {
+                if !self.security_paths.is_empty() {
+                    let idx = self.security_paths_selected.min(self.security_paths.len() - 1);
+                    self.security_paths.remove(idx);
+                    if self.security_paths_selected >= self.security_paths.len()
+                        && !self.security_paths.is_empty()
+                    {
+                        self.security_paths_selected = self.security_paths.len() - 1;
+                    }
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down if self.security_paths_input.is_empty() => {
+                if !self.security_paths.is_empty() {
+                    self.security_paths_selected = (self.security_paths_selected + 1)
+                        .min(self.security_paths.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.security_paths_input.is_empty() => {
+                self.security_paths_selected = self.security_paths_selected.saturating_sub(1);
+            }
+            _ => {
+                self.handle_text_input(key.code, TextInputTarget::SecurityPathInput);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 5: Gateway Config
     // -----------------------------------------------------------------------
 
     fn handle_gateway_config(&mut self, key: KeyEvent) {
@@ -1407,7 +1635,8 @@ impl OnboardApp {
                 self.step = OnboardStep::ChannelSelection;
             }
             KeyCode::Esc => {
-                self.step = OnboardStep::WorkspaceConfig;
+                self.security_sub_step = SecuritySubStep::WritePaths;
+                self.step = OnboardStep::SecurityConfig;
             }
             _ => {
                 // Delegate to the active field.
@@ -1439,6 +1668,18 @@ impl OnboardApp {
     // -----------------------------------------------------------------------
 
     fn handle_channel_selection(&mut self, key: KeyEvent) {
+        match self.channel_sub_step {
+            ChannelSubStep::SelectChannels => {
+                self.handle_channel_select_list(key);
+            }
+            ChannelSubStep::RunningSetup => {
+                self.handle_channel_setup_key(key);
+            }
+        }
+    }
+
+    /// Handle keys in the channel checkbox list.
+    fn handle_channel_select_list(&mut self, key: KeyEvent) {
         let count = self.channels.len();
         if count == 0 {
             if key.code == KeyCode::Enter || key.code == KeyCode::Esc {
@@ -1464,13 +1705,57 @@ impl OnboardApp {
                     !self.channels[self.channel_selected].selected;
             }
             KeyCode::Enter => {
-                self.step = OnboardStep::ServiceInstall;
+                // Queue selected channels that have wizards.
+                self.channel_setup_queue = self
+                    .channels
+                    .iter()
+                    .filter(|c| c.selected)
+                    .filter(|c| crate::setup_wizard::channel_wizard(c.name).is_some())
+                    .map(|c| c.name.to_string())
+                    .collect();
+
+                self.advance_channel_setup_queue();
             }
             KeyCode::Esc => {
                 self.step = OnboardStep::GatewayConfig;
             }
             _ => {}
         }
+    }
+
+    /// Handle keys when a channel setup wizard is running inline.
+    fn handle_channel_setup_key(&mut self, key: KeyEvent) {
+        if let Some(ref mut wizard) = self.channel_setup_wizard {
+            let consumed = wizard.handle_key(key);
+            if wizard.is_done() {
+                let result = wizard.take_result();
+                self.channel_setup_results.push(result);
+                self.channel_setup_wizard = None;
+                self.advance_channel_setup_queue();
+            } else if !consumed {
+                // Esc not consumed -> cancel this wizard, move on.
+                self.channel_setup_results
+                    .push(crate::setup_wizard::SetupResult::Cancelled);
+                self.channel_setup_wizard = None;
+                self.advance_channel_setup_queue();
+            }
+        }
+    }
+
+    /// Pop the next channel from the setup queue and launch its wizard,
+    /// or advance to the next step if the queue is empty.
+    fn advance_channel_setup_queue(&mut self) {
+        if let Some(name) = self.channel_setup_queue.pop() {
+            if let Some(wizard) = crate::setup_wizard::channel_wizard(&name) {
+                self.channel_setup_wizard = Some(wizard);
+                self.channel_sub_step = ChannelSubStep::RunningSetup;
+                return;
+            }
+        }
+        // No more wizards -- advance to next step.
+        self.channel_sub_step = ChannelSubStep::SelectChannels;
+        self.channel_setup_wizard = None;
+        self.step = OnboardStep::ServiceInstall;
     }
 
     // -----------------------------------------------------------------------
@@ -1717,7 +2002,13 @@ impl OnboardApp {
             dashboard: DashboardConfig::default(),
             alerts: vec![],
             agents: vec![],
-            channel: None,
+            channel: self.channel_setup_results.iter().rev().find_map(|r| {
+                if let crate::setup_wizard::SetupResult::Channel(config) = r {
+                    Some(*config.clone())
+                } else {
+                    None
+                }
+            }),
             channel_routing: None,
             toolkit: Default::default(),
             memory: Default::default(),
@@ -1738,6 +2029,29 @@ impl OnboardApp {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            default_security_preset: Some(match self.security_preset_selected {
+                0 => SecurityPresetKind::ObserveOnly,
+                1 => SecurityPresetKind::ReadOnly,
+                2 => SecurityPresetKind::FullLockdown,
+                _ => SecurityPresetKind::Custom,
+            }),
+            default_isolation: Some(match self.security_isolation_selected {
+                0 => IsolationConfig::Seatbelt {
+                    profile_overrides: None,
+                },
+                1 => IsolationConfig::Docker(DockerSandboxConfig::default()),
+                2 => IsolationConfig::Process,
+                _ => IsolationConfig::None,
+            }),
+            default_network_rules: self
+                .security_hosts
+                .iter()
+                .map(|h| NetworkRule {
+                    host: h.clone(),
+                    port: None,
+                    protocol: Protocol::Https,
+                })
+                .collect(),
         }
     }
 
@@ -1756,6 +2070,12 @@ impl OnboardApp {
             }
             TextInputTarget::ModelManual => {
                 (&mut self.model_manual_input, &mut self.model_manual_cursor)
+            }
+            TextInputTarget::SecurityHostInput => {
+                (&mut self.security_hosts_input, &mut self.security_hosts_cursor)
+            }
+            TextInputTarget::SecurityPathInput => {
+                (&mut self.security_paths_input, &mut self.security_paths_cursor)
             }
         };
 
@@ -1806,6 +2126,8 @@ enum TextInputTarget {
     GatewayToken,
     SetupToken,
     ModelManual,
+    SecurityHostInput,
+    SecurityPathInput,
 }
 
 // ---------------------------------------------------------------------------
@@ -1891,12 +2213,13 @@ mod tests {
         assert_eq!(OnboardStep::ConfigDetection.number(), 1);
         assert_eq!(OnboardStep::ProviderSelection.number(), 2);
         assert_eq!(OnboardStep::WorkspaceConfig.number(), 3);
-        assert_eq!(OnboardStep::GatewayConfig.number(), 4);
-        assert_eq!(OnboardStep::ChannelSelection.number(), 5);
-        assert_eq!(OnboardStep::ServiceInstall.number(), 6);
-        assert_eq!(OnboardStep::HealthCheck.number(), 7);
-        assert_eq!(OnboardStep::SkillSelection.number(), 8);
-        assert_eq!(OnboardStep::Finish.number(), 9);
+        assert_eq!(OnboardStep::SecurityConfig.number(), 4);
+        assert_eq!(OnboardStep::GatewayConfig.number(), 5);
+        assert_eq!(OnboardStep::ChannelSelection.number(), 6);
+        assert_eq!(OnboardStep::ServiceInstall.number(), 7);
+        assert_eq!(OnboardStep::HealthCheck.number(), 8);
+        assert_eq!(OnboardStep::SkillSelection.number(), 9);
+        assert_eq!(OnboardStep::Finish.number(), 10);
     }
 
     #[test]

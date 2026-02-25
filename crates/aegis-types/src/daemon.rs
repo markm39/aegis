@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    AdapterConfig, AlertRule, ChannelConfig, ChannelRoutingConfig, IsolationConfig, PilotConfig,
-    RedactionConfig, RetentionConfig,
+    AdapterConfig, AlertRule, ChannelConfig, ChannelRoutingConfig, IsolationConfig, NetworkRule,
+    PilotConfig, RedactionConfig, RetentionConfig,
 };
 use crate::ids::AgentName;
 
@@ -108,6 +108,22 @@ pub struct DaemonConfig {
     /// Agent heartbeat runner configuration for keepalive messages.
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
+    /// Default security preset applied to agents that don't override it.
+    ///
+    /// Set during onboarding; controls default policy generation and
+    /// isolation selection when an agent slot has no `security_preset`.
+    #[serde(default)]
+    pub default_security_preset: Option<SecurityPresetKind>,
+    /// Default OS-level isolation for agents. Applies when `default_security_preset`
+    /// is `Custom` and the agent slot has no `isolation` override.
+    #[serde(default)]
+    pub default_isolation: Option<IsolationConfig>,
+    /// Default allowed network hosts for agents.
+    ///
+    /// Set during onboarding; agents without their own `allowed_network`
+    /// inherit this list. An empty list means all outbound is blocked.
+    #[serde(default)]
+    pub default_network_rules: Vec<NetworkRule>,
 }
 
 /// Configuration for per-workspace hook discovery and merge behavior.
@@ -1052,6 +1068,9 @@ mod tests {
             retention: RetentionConfig::default(),
             redaction: RedactionConfig::default(),
             heartbeat: HeartbeatConfig::default(),
+            default_security_preset: None,
+            default_isolation: None,
+            default_network_rules: vec![],
             agents: vec![AgentSlotConfig {
                 name: "claude-1".into(),
                 tool: AgentToolConfig::ClaudeCode {

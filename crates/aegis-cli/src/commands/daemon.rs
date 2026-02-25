@@ -93,6 +93,9 @@ pub fn init() -> anyhow::Result<()> {
         retention: Default::default(),
         redaction: Default::default(),
         heartbeat: Default::default(),
+        default_security_preset: None,
+        default_isolation: None,
+        default_network_rules: vec![],
     };
 
     let toml_str = example.to_toml()?;
@@ -169,6 +172,9 @@ pub(crate) fn init_quiet() -> anyhow::Result<String> {
         retention: Default::default(),
         redaction: Default::default(),
         heartbeat: Default::default(),
+        default_security_preset: None,
+        default_isolation: None,
+        default_network_rules: vec![],
     };
 
     let toml_str = example.to_toml()?;

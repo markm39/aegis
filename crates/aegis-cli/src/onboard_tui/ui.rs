@@ -14,7 +14,7 @@ use aegis_types::providers::format_context_window;
 
 use super::app::{
     BIND_OPTIONS, ConfigAction, GatewayField, OnboardApp, OnboardStep, ProviderSubStep,
-    filtered_providers,
+    SecuritySubStep, filtered_providers,
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +49,7 @@ pub fn draw(f: &mut Frame, app: &OnboardApp) {
         OnboardStep::ConfigDetection => draw_config_detection(f, app, chunks[1]),
         OnboardStep::ProviderSelection => draw_provider_selection(f, app, chunks[1]),
         OnboardStep::WorkspaceConfig => draw_workspace_config(f, app, chunks[1]),
+        OnboardStep::SecurityConfig => draw_security_config(f, app, chunks[1]),
         OnboardStep::GatewayConfig => draw_gateway_config(f, app, chunks[1]),
         OnboardStep::ChannelSelection => draw_channel_selection(f, app, chunks[1]),
         OnboardStep::ServiceInstall => draw_service_install(f, app, chunks[1]),
@@ -119,6 +120,16 @@ fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
             }
         },
         OnboardStep::WorkspaceConfig => "Enter: confirm  Esc: back",
+        OnboardStep::SecurityConfig => match app.security_sub_step {
+            SecuritySubStep::PresetSelection => "j/k: navigate  Enter: next  Esc: back",
+            SecuritySubStep::IsolationBackend => "j/k: navigate  Enter: next  Esc: back",
+            SecuritySubStep::NetworkRules => {
+                "Type host  Enter: add/next  d: delete  j/k: scroll list  Esc: back"
+            }
+            SecuritySubStep::WritePaths => {
+                "Type path  Enter: add/finish  d: delete  j/k: scroll list  Esc: back"
+            }
+        },
         OnboardStep::GatewayConfig => "Tab/Shift+Tab: next/prev field  Enter: continue  Esc: back",
         OnboardStep::ChannelSelection => "j/k: navigate  Space: toggle  Enter: continue  Esc: back",
         OnboardStep::ServiceInstall => "j/k: navigate  Enter: confirm  Esc: back",
@@ -927,7 +938,239 @@ fn draw_workspace_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 4: Gateway Config
+// Step 4: Security Config
+// ---------------------------------------------------------------------------
+
+fn draw_security_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    match app.security_sub_step {
+        SecuritySubStep::PresetSelection => draw_security_preset(f, app, area),
+        SecuritySubStep::IsolationBackend => draw_security_isolation(f, app, area),
+        SecuritySubStep::NetworkRules => draw_security_network(f, app, area),
+        SecuritySubStep::WritePaths => draw_security_paths(f, app, area),
+    }
+}
+
+const PRESET_LABELS: [(&str, &str); 4] = [
+    ("Observe Only", "Log activity; enforce nothing"),
+    ("Read Only", "Reads allowed; writes and network blocked"),
+    ("Full Lockdown", "Minimal access; most operations blocked"),
+    ("Custom", "Configure specific permissions"),
+];
+
+const ISOLATION_LABELS: [(&str, &str); 4] = [
+    ("Seatbelt (recommended)", "macOS kernel sandbox"),
+    ("Docker", "Container isolation"),
+    ("Process", "No OS isolation; observer + policy only"),
+    ("None", "No isolation at all"),
+];
+
+fn draw_security_preset(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Security & Sandbox Configuration",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  The agent runs inside a macOS Seatbelt sandbox.",
+            Style::default().fg(WHITE),
+        )),
+        Line::from(Span::styled(
+            "  Choose a security level -- you can adjust it on the next screen.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, (label, desc)) in PRESET_LABELS.iter().enumerate() {
+        let selected = i == app.security_preset_selected;
+        let marker = if selected { "> " } else { "  " };
+        let label_style = if selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WHITE)
+        };
+        let desc_style = Style::default().fg(DIM);
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker}{label:<20}", label = label), label_style),
+            Span::styled(format!("  {desc}"), desc_style),
+        ]));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_security_isolation(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security  >  Isolation Backend");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Choose the OS-level isolation mechanism.",
+            Style::default().fg(WHITE),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, (label, desc)) in ISOLATION_LABELS.iter().enumerate() {
+        let selected = i == app.security_isolation_selected;
+        let marker = if selected { "> " } else { "  " };
+        let label_style = if selected {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(WHITE)
+        };
+        let desc_style = Style::default().fg(DIM);
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker}{label:<28}", label = label), label_style),
+            Span::styled(format!("  {desc}"), desc_style),
+        ]));
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_security_network(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security  >  Network Access");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Add hosts the agent may connect to.",
+            Style::default().fg(WHITE),
+        )),
+        Line::from(Span::styled(
+            "  Empty list = block all outbound network.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "  Press Enter with an empty field to proceed.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    // Text input.
+    let cursor_spans =
+        build_cursor_spans(&app.security_hosts_input, app.security_hosts_cursor);
+    let mut input_line = vec![Span::styled("  Add host: ", Style::default().fg(YELLOW))];
+    input_line.extend(cursor_spans);
+    lines.push(Line::from(input_line));
+    lines.push(Line::from(""));
+
+    // Existing hosts list.
+    if app.security_hosts.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (none -- all outbound network blocked)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Allowed hosts:",
+            Style::default().fg(WHITE),
+        )));
+        for (i, host) in app.security_hosts.iter().enumerate() {
+            let selected = i == app.security_hosts_selected;
+            let style = if selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(GREEN)
+            };
+            let marker = if selected { "> " } else { "  " };
+            lines.push(Line::from(Span::styled(
+                format!("  {marker}* {host}"),
+                style,
+            )));
+        }
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_security_paths(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security  >  Filesystem Write Access");
+
+    let workspace_display = if app.workspace_path.is_empty() {
+        "~/.aegis/workspace".to_string()
+    } else {
+        app.workspace_path.clone()
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Add extra directories the agent may write to.",
+            Style::default().fg(WHITE),
+        )),
+        Line::from(Span::styled(
+            format!("  Workspace: {workspace_display}  (always writable)"),
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "  Press Enter with an empty field to finish.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    // Text input.
+    let cursor_spans =
+        build_cursor_spans(&app.security_paths_input, app.security_paths_cursor);
+    let mut input_line = vec![Span::styled("  Add path: ", Style::default().fg(YELLOW))];
+    input_line.extend(cursor_spans);
+    lines.push(Line::from(input_line));
+    lines.push(Line::from(""));
+
+    // Existing paths list.
+    if app.security_paths.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (none -- press Enter to continue)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Extra writable paths:",
+            Style::default().fg(WHITE),
+        )));
+        for (i, path) in app.security_paths.iter().enumerate() {
+            let selected = i == app.security_paths_selected;
+            let style = if selected {
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(GREEN)
+            };
+            let marker = if selected { "> " } else { "  " };
+            lines.push(Line::from(Span::styled(
+                format!("  {marker}* {path}"),
+                style,
+            )));
+        }
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step 5: Gateway Config
 // ---------------------------------------------------------------------------
 
 fn draw_gateway_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
@@ -1037,6 +1280,14 @@ fn draw_gateway_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
 // ---------------------------------------------------------------------------
 
 fn draw_channel_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    // If a setup wizard is running inline, render it instead of the checkbox list.
+    if app.channel_sub_step == super::app::ChannelSubStep::RunningSetup {
+        if let Some(ref wizard) = app.channel_setup_wizard {
+            crate::setup_wizard::ui::draw_setup_wizard(f, &wizard.current_step(), area);
+            return;
+        }
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(CYAN))
@@ -1049,7 +1300,7 @@ fn draw_channel_selection(f: &mut Frame, app: &OnboardApp, area: Rect) {
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            "  Configure channels later from the TUI with :config",
+            "  Selected channels will be set up next",
             Style::default().fg(DIM),
         )),
         Line::from(""),
