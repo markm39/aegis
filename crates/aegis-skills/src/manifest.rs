@@ -89,6 +89,11 @@ pub struct SkillManifest {
     /// Supported operating systems (empty = all). Values: "darwin", "linux".
     #[serde(default)]
     pub os: Vec<String>,
+    /// Per-skill execution timeout in seconds (overrides executor default 30s).
+    /// Useful for skills that need longer than the default (e.g., browser
+    /// automation where first-run downloads browser binaries).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// Validate a parsed manifest for security and correctness constraints.
@@ -242,7 +247,22 @@ entry_point = "main.py"
         assert_eq!(manifest.entry_point, "main.py");
         assert!(manifest.dependencies.is_empty());
         assert!(manifest.min_aegis_version.is_none());
+        assert!(manifest.timeout_secs.is_none());
 
+        validate_manifest(&manifest).unwrap();
+    }
+
+    #[test]
+    fn test_manifest_with_timeout_secs() {
+        let toml = r#"
+name = "browser"
+version = "1.0.0"
+description = "Browser automation"
+entry_point = "run.sh"
+timeout_secs = 120
+"#;
+        let manifest = parse_manifest(toml).unwrap();
+        assert_eq!(manifest.timeout_secs, Some(120));
         validate_manifest(&manifest).unwrap();
     }
 

@@ -1,0 +1,81 @@
+name = "browser"
+version = "1.0.0"
+description = "Browser automation via Playwright MCP -- navigate, click, type, extract content, take screenshots"
+author = "Aegis Team"
+category = "automation"
+permissions = ["action::network"]
+entry_point = "run.sh"
+dependencies = []
+min_aegis_version = "0.1.0"
+install_method = "npm"
+install_target = "@playwright/mcp"
+required_bins = ["node", "npx"]
+required_env = []
+os = []
+timeout_secs = 120
+
+[[commands]]
+name = "browse"
+description = "Navigate to a URL and return the page content as an accessibility snapshot"
+usage = "/browse <url>"
+aliases = ["goto", "nav"]
+
+[[commands]]
+name = "browser-click"
+description = "Click an element by its accessibility ref from a previous snapshot"
+usage = "/browser-click <ref>"
+aliases = ["bclick"]
+
+[[commands]]
+name = "browser-type"
+description = "Type text into an element by its accessibility ref"
+usage = "/browser-type <ref> <text...>"
+aliases = ["btype"]
+
+[[commands]]
+name = "browser-screenshot"
+description = "Take a full-page screenshot (returned as base64 artifact)"
+usage = "/browser-screenshot"
+aliases = ["bshot"]
+
+[[commands]]
+name = "browser-snapshot"
+description = "Get the current page accessibility tree"
+usage = "/browser-snapshot"
+aliases = ["bsnap"]
+
+[[commands]]
+name = "browser-back"
+description = "Navigate back in browser history"
+usage = "/browser-back"
+aliases = ["bback"]
+
+[[commands]]
+name = "browser-forward"
+description = "Navigate forward in browser history"
+usage = "/browser-forward"
+aliases = ["bfwd"]
+
+[[commands]]
+name = "browser-scroll"
+description = "Scroll the page up or down"
+usage = "/browser-scroll <up|down>"
+aliases = ["bscroll"]
+
+[[commands]]
+name = "browser-close"
+description = "Close the browser session and stop the MCP server"
+usage = "/browser-close"
+aliases = ["bclose"]
+
+[[commands]]
+name = "browser-tabs"
+description = "List open browser tabs"
+usage = "/browser-tabs"
+aliases = ["btabs"]
+
+[[commands]]
+name = "browser-select-tab"
+description = "Switch to a specific browser tab by index"
+usage = "/browser-select-tab <index>"
+aliases = ["btab"]

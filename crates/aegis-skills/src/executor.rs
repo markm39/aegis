@@ -149,14 +149,18 @@ impl SkillExecutor {
             // Drop stdin to signal EOF
         }
 
-        // Wait with timeout
-        let output = tokio::time::timeout(self.config.timeout, child.wait_with_output())
+        // Wait with timeout (manifest can override default)
+        let effective_timeout = manifest
+            .timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(self.config.timeout);
+        let output = tokio::time::timeout(effective_timeout, child.wait_with_output())
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
                     "skill '{}' timed out after {:.0}s",
                     manifest.name,
-                    self.config.timeout.as_secs_f64()
+                    effective_timeout.as_secs_f64()
                 )
             })?
             .with_context(|| format!("skill '{}' process failed", manifest.name))?;
