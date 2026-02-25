@@ -2,6 +2,7 @@ mod chat_tui;
 mod commands;
 mod onboard_tui;
 mod pilot_tui;
+mod setup_wizard;
 mod terminal;
 mod tui_utils;
 mod wizard;

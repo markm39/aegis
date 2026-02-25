@@ -464,6 +464,7 @@ impl RegistrySkillMeta {
             required_bins: Vec::new(),
             required_env: Vec::new(),
             os: Vec::new(),
+            timeout_secs: None,
         }
     }
 }

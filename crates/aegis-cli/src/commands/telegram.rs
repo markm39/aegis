@@ -224,6 +224,35 @@ pub fn status() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Return Telegram status as a string. Safe for TUI contexts.
+pub(crate) fn status_quiet() -> String {
+    let config_path = daemon_config_path();
+    if !config_path.exists() {
+        return "No daemon config found. Run /setup telegram.".to_string();
+    }
+
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => return format!("Failed to read config: {e}"),
+    };
+    let config = match DaemonConfig::from_toml(&content) {
+        Ok(c) => c,
+        Err(e) => return format!("Failed to parse config: {e}"),
+    };
+
+    match &config.channel {
+        Some(ChannelConfig::Telegram(tg)) => {
+            let token_preview = crate::tui_utils::truncate_str(&tg.bot_token, 13);
+            format!(
+                "Telegram: configured | Token: {token_preview} | Chat ID: {} | Poll: {}s",
+                tg.chat_id, tg.poll_timeout_secs,
+            )
+        }
+        Some(_) => "Telegram: not configured (other channel active)".to_string(),
+        None => "Telegram: not configured. Use /setup telegram".to_string(),
+    }
+}
+
 /// Remove Telegram configuration from daemon.toml.
 pub fn disable() -> anyhow::Result<()> {
     let config_path = daemon_config_path();
@@ -276,6 +305,51 @@ pub(crate) fn disable_quiet() -> anyhow::Result<String> {
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
     Ok("Telegram notifications disabled. Run :daemon reload to apply.".to_string())
+}
+
+/// Write a channel config into `daemon.toml`, merging with existing config.
+///
+/// Returns a status message. Safe for TUI contexts (no stdout output).
+pub(crate) fn write_channel_config_quiet(
+    channel: &ChannelConfig,
+) -> anyhow::Result<String> {
+    let dir = daemon_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+
+    let config_path = daemon_config_path();
+
+    let mut config = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)
+            .with_context(|| format!("failed to read {}", config_path.display()))?;
+        DaemonConfig::from_toml(&content)
+            .with_context(|| format!("failed to parse {}", config_path.display()))?
+    } else {
+        DaemonConfig::from_toml("").context("failed to create default config")?
+    };
+
+    config.channel = Some(channel.clone());
+
+    let toml_str = config.to_toml().context("failed to serialize config")?;
+    std::fs::write(&config_path, &toml_str)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+    let label = match channel {
+        ChannelConfig::Telegram(_) => "Telegram",
+        ChannelConfig::Slack(_) => "Slack",
+        ChannelConfig::Discord(_) => "Discord",
+        ChannelConfig::Webhook(_) => "Webhook",
+        ChannelConfig::Whatsapp(_) => "WhatsApp",
+        ChannelConfig::Signal(_) => "Signal",
+        ChannelConfig::Matrix(_) => "Matrix",
+        ChannelConfig::Imessage(_) => "iMessage",
+        ChannelConfig::Irc(_) => "IRC",
+        _ => "Channel",
+    };
+
+    Ok(format!(
+        "{label} configured. Run /daemon reload to apply."
+    ))
 }
 
 /// Write the Telegram config into `daemon.toml`, merging with existing config.

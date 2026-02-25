@@ -441,6 +441,9 @@ fn draw_overlay(f: &mut Frame, app: &ChatApp, overlay: &Overlay, area: Rect) {
         Overlay::RestorePicker { snapshots, selected } => {
             draw_restore_picker(f, snapshots, *selected, area);
         }
+        Overlay::Setup { ref wizard } => {
+            crate::setup_wizard::ui::draw_setup_wizard(f, &wizard.current_step(), area);
+        }
     }
 }
 

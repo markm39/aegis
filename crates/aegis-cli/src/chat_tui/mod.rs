@@ -199,7 +199,6 @@ pub struct ConversationSnapshot {
 ///
 /// Overlays render on top of the main UI and capture all input until
 /// dismissed. They are modal: only one overlay can be active at a time.
-#[derive(Debug, Clone)]
 pub enum Overlay {
     /// Model picker: filterable list of available models.
     ModelPicker {
@@ -237,6 +236,11 @@ pub enum Overlay {
         snapshots: Vec<ConversationSnapshot>,
         /// Index of the currently highlighted snapshot.
         selected: usize,
+    },
+    /// Feature setup wizard (Telegram, skill auth, etc.)
+    Setup {
+        /// The active setup wizard.
+        wizard: Box<dyn crate::setup_wizard::SetupWizard>,
     },
 }
 
@@ -708,6 +712,12 @@ const COMMANDS: &[&str] = &[
     "daemon restart",
     "daemon reload",
     "daemon init",
+    // Setup commands
+    "setup",
+    "setup telegram",
+    "telegram setup",
+    "telegram status",
+    "telegram disable",
     // Skill commands
     "debug",
     "doc",
@@ -811,6 +821,7 @@ impl ChatApp {
         self.clear_stale_result();
         self.poll_llm();
         self.poll_skills();
+        self.poll_setup_wizard();
 
         if self.last_poll.elapsed().as_millis() < POLL_INTERVAL_MS {
             return;
@@ -2274,6 +2285,16 @@ impl ChatApp {
                     self.overlay = Some(Overlay::RestorePicker { snapshots, selected });
                 }
             },
+            Overlay::Setup { mut wizard } => {
+                let consumed = wizard.handle_key(key);
+                if wizard.is_done() {
+                    let result = wizard.take_result();
+                    self.handle_setup_result(result);
+                } else if consumed {
+                    self.overlay = Some(Overlay::Setup { wizard });
+                }
+                // If !consumed (Esc pressed), overlay is dropped (closed).
+            }
         }
     }
 
@@ -2652,6 +2673,25 @@ impl ChatApp {
                     self.last_error = Some(format!("{e}"));
                 }
             },
+            // Setup wizard commands
+            "telegram setup" | "telegram" => {
+                self.open_setup_wizard("telegram");
+            }
+            "telegram status" => {
+                let msg = crate::commands::telegram::status_quiet();
+                self.set_result(msg);
+            }
+            "telegram disable" => match crate::commands::telegram::disable_quiet() {
+                Ok(msg) => self.set_result(msg),
+                Err(e) => self.set_result(format!("{e}")),
+            },
+            _ if trimmed == "setup" => {
+                self.set_result("Usage: /setup <telegram>");
+            }
+            _ if trimmed.starts_with("setup ") => {
+                let target = trimmed.strip_prefix("setup ").unwrap().trim();
+                self.open_setup_wizard(target);
+            }
             "new" => {
                 // Fire BeforeReset hook before clearing.
                 hooks::fire_hook_event(hooks::ChatHookEvent::BeforeReset {
@@ -2928,6 +2968,51 @@ impl ChatApp {
         }
     }
 
+    /// Tick the active setup wizard overlay, if any.
+    fn poll_setup_wizard(&mut self) {
+        let done = if let Some(Overlay::Setup { ref mut wizard }) = self.overlay {
+            wizard.tick();
+            wizard.is_done()
+        } else {
+            false
+        };
+        if done {
+            if let Some(Overlay::Setup { mut wizard }) = self.overlay.take() {
+                let result = wizard.take_result();
+                self.handle_setup_result(result);
+            }
+        }
+    }
+
+    /// Open a setup wizard overlay for the given target name.
+    fn open_setup_wizard(&mut self, target: &str) {
+        match crate::setup_wizard::channel_wizard(target) {
+            Some(wizard) => {
+                self.overlay = Some(Overlay::Setup { wizard });
+            }
+            None => {
+                self.set_result(format!(
+                    "No setup wizard for '{target}'. Available: telegram"
+                ));
+            }
+        }
+    }
+
+    /// Handle the result of a completed setup wizard.
+    fn handle_setup_result(&mut self, result: crate::setup_wizard::SetupResult) {
+        match result {
+            crate::setup_wizard::SetupResult::Channel(config) => {
+                match crate::commands::telegram::write_channel_config_quiet(&config) {
+                    Ok(msg) => self.set_result(msg),
+                    Err(e) => self.set_result(format!("Setup failed: {e}")),
+                }
+            }
+            crate::setup_wizard::SetupResult::Cancelled => {
+                self.set_result("Setup cancelled.".to_string());
+            }
+        }
+    }
+
     /// Show current model and available providers.
     fn show_model_info(&mut self) {
         let providers: Vec<String> = aegis_types::providers::scan_providers()
@@ -2961,6 +3046,15 @@ impl ChatApp {
             input.buffer.insert_str(input.cursor, &cleaned);
             input.cursor += cleaned.len();
             input.error = None;
+            return;
+        }
+
+        // If a Setup wizard overlay is active, simulate Char events.
+        if let Some(Overlay::Setup { ref mut wizard }) = self.overlay {
+            let cleaned = text.replace(['\n', '\r'], "");
+            for c in cleaned.chars() {
+                wizard.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
             return;
         }
 
