@@ -3344,6 +3344,13 @@ fn run_agent_loop(
         // Display all tool calls.
         let _ = event_tx.send(AgentLoopEvent::ToolCalls(resp.tool_calls.clone()));
 
+        // Add assistant message (with tool_calls) to conversation so the next
+        // LLM call sees the tool_use blocks that match the tool_result IDs.
+        conversation.push(LlmMessage::assistant_with_tools(
+            resp.content.clone(),
+            resp.tool_calls.clone(),
+        ));
+
         // Execute each tool call (checking abort between calls).
         for tc in &resp.tool_calls {
             if params.abort_flag.load(Ordering::Relaxed) {

@@ -6,7 +6,7 @@
 //! context window limit.
 
 use aegis_pilot::compaction::{self, CompactionStrategy, Message as CompactionMessage};
-use aegis_types::llm::LlmMessage;
+use aegis_types::llm::{LlmMessage, LlmRole};
 use aegis_types::providers::ALL_PROVIDERS;
 
 /// Fraction of the context window at which to trigger compaction.
@@ -107,7 +107,20 @@ pub fn compact_conversation(messages: &[LlmMessage], model: &str) -> Option<Vec<
         // original (where N = compacted.len()). The compaction module
         // keeps the first message + trailing messages that fit.
         let tail_count = compacted.len() - 1;
-        let start_idx = messages.len().saturating_sub(tail_count);
+        let mut start_idx = messages.len().saturating_sub(tail_count);
+
+        // Ensure we don't start on a Tool (tool_result) message, which
+        // would orphan it from its preceding assistant+tool_use message.
+        // Walk backward until we find a non-Tool message.
+        while start_idx > 1
+            && messages
+                .get(start_idx)
+                .map(|m| m.role == LlmRole::Tool)
+                .unwrap_or(false)
+        {
+            start_idx -= 1;
+        }
+
         for msg in &messages[start_idx..] {
             result.push(msg.clone());
         }
