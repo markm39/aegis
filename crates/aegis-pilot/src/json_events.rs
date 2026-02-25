@@ -13,7 +13,7 @@ use crate::session::ToolKind;
 pub fn format_json_line(tool: ToolKind, raw: &str) -> Vec<String> {
     match tool {
         ToolKind::Codex => format_codex_json_line(raw),
-        ToolKind::ClaudeCode => Vec::new(),
+        ToolKind::ClaudeCode => crate::ndjson_fmt::format_ndjson_line(raw),
     }
 }
 

@@ -295,6 +295,32 @@ enum AgentLoopEvent {
 /// Global counter for background task IDs.
 static NEXT_TASK_ID: AtomicUsize = AtomicUsize::new(1);
 
+/// Which coding CLI backend to use for subagent spawning.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SubagentBackend {
+    /// Claude Code CLI (`claude --dangerously-skip-permissions -p "prompt"`).
+    ClaudeCode,
+    /// OpenAI Codex CLI (`codex --full-auto -p "prompt"`).
+    Codex,
+    /// No external CLI found; fall back to nested LLM loop.
+    LlmFallback,
+}
+
+/// Detect and cache the best available coding CLI. Checked via `which`.
+static SUBAGENT_BACKEND: std::sync::OnceLock<SubagentBackend> = std::sync::OnceLock::new();
+
+fn detect_subagent_backend() -> SubagentBackend {
+    *SUBAGENT_BACKEND.get_or_init(|| {
+        if crate::tui_utils::binary_exists("claude") {
+            SubagentBackend::ClaudeCode
+        } else if crate::tui_utils::binary_exists("codex") {
+            SubagentBackend::Codex
+        } else {
+            SubagentBackend::LlmFallback
+        }
+    })
+}
+
 /// Tools that are auto-approved (read-only, safe operations).
 const SAFE_TOOLS: &[&str] = &[
     "read_file",
@@ -3083,6 +3109,11 @@ fn tool_schema_for(name: &str) -> serde_json::Value {
                 "run_in_background": {
                     "type": "boolean",
                     "description": "If true, run in background and return immediately. Default: false."
+                },
+                "agent": {
+                    "type": "string",
+                    "enum": ["auto", "claude", "codex", "llm"],
+                    "description": "Which coding agent to use. 'auto' picks the best available CLI. Default: auto."
                 }
             },
             "required": ["description", "prompt"]
@@ -3341,14 +3372,72 @@ fn run_agent_loop(
                     .get("run_in_background")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let agent_pref = tc
+                    .input
+                    .get("agent")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto");
 
-                if background {
-                    run_background_task(&params, desc, prompt, &event_tx)
-                } else {
-                    let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
-                        "\n  [Task: {desc} ...]\n"
-                    )));
-                    run_subagent_task(&params, prompt, &event_tx)
+                // Resolve which backend to use.
+                let backend: Result<SubagentBackend, String> = match agent_pref {
+                    "claude" => {
+                        if crate::tui_utils::binary_exists("claude") {
+                            Ok(SubagentBackend::ClaudeCode)
+                        } else {
+                            Err("claude CLI not found in PATH".to_string())
+                        }
+                    }
+                    "codex" => {
+                        if crate::tui_utils::binary_exists("codex") {
+                            Ok(SubagentBackend::Codex)
+                        } else {
+                            Err("codex CLI not found in PATH".to_string())
+                        }
+                    }
+                    "llm" => Ok(SubagentBackend::LlmFallback),
+                    _ => Ok(detect_subagent_backend()), // "auto" or unrecognized
+                };
+
+                match backend {
+                    Err(e) => Err(e),
+                    Ok(SubagentBackend::LlmFallback) => {
+                        if background {
+                            run_background_task(&params, desc, prompt, &event_tx)
+                        } else {
+                            let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+                                "\n  [Task: {desc} (LLM) ...]\n"
+                            )));
+                            run_subagent_task(&params, prompt, &event_tx)
+                        }
+                    }
+                    Ok(backend) => {
+                        let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+                            "\n  [Task: {desc} ({backend:?}) ...]\n"
+                        )));
+                        let result = if background {
+                            run_background_pilot_task(
+                                desc, prompt, &event_tx, backend, &params.abort_flag,
+                            )
+                        } else {
+                            run_pilot_subagent(
+                                prompt, &event_tx, backend, &params.abort_flag,
+                            )
+                        };
+                        // Fall back to LLM loop if pilot spawn fails.
+                        match result {
+                            Ok(output) => Ok(output),
+                            Err(e) => {
+                                let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+                                    "  [Subagent spawn failed: {e}. Falling back to LLM loop.]\n"
+                                )));
+                                if background {
+                                    run_background_task(&params, desc, prompt, &event_tx)
+                                } else {
+                                    run_subagent_task(&params, prompt, &event_tx)
+                                }
+                            }
+                        }
+                    }
                 }
             } else if should_auto_approve_tool(
                 &tc.name,
@@ -3665,6 +3754,267 @@ fn run_background_task(
         "output_file": output_path,
         "message": format!(
             "Background task spawned. Results will be written to {output_path}. \
+             Use read_file to check output when notified."
+        )
+    })
+    .to_string())
+}
+
+/// Spawn a real coding CLI (claude/codex) under aegis-pilot supervision.
+///
+/// Creates a subprocess via aegis-pilot's driver system, streams its output
+/// back to the chat TUI, and returns the collected output as the tool result.
+/// This is the primary path for the "task" tool when a coding CLI is available.
+fn run_pilot_subagent(
+    task_prompt: &str,
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+    backend: SubagentBackend,
+    abort_flag: &Arc<AtomicBool>,
+) -> Result<String, String> {
+    use aegis_pilot::adapters::passthrough::PassthroughAdapter;
+    use aegis_pilot::driver::{ProcessKind, SpawnStrategy, TaskInjection};
+    use aegis_pilot::drivers::create_driver;
+    use aegis_pilot::json_stream::JsonStreamSession;
+    use aegis_pilot::jsonl::{CodexJsonProtocol, JsonlSession};
+    use aegis_pilot::ndjson_fmt::format_ndjson_line;
+    use aegis_pilot::session::{AgentSession, ToolKind};
+    use aegis_pilot::supervisor::{self, SupervisorConfig};
+    use aegis_types::config::PilotConfig;
+    use aegis_types::AgentToolConfig;
+
+    // 1. Build tool config for the selected backend.
+    let tool_config = match backend {
+        SubagentBackend::ClaudeCode => AgentToolConfig::ClaudeCode {
+            skip_permissions: true,
+            one_shot: true,
+            extra_args: vec![],
+        },
+        SubagentBackend::Codex => AgentToolConfig::Codex {
+            runtime_engine: "external".into(),
+            approval_mode: "full-auto".into(),
+            one_shot: true,
+            extra_args: vec![],
+        },
+        SubagentBackend::LlmFallback => {
+            return Err("LlmFallback should not reach run_pilot_subagent".into());
+        }
+    };
+
+    // 2. Create driver and resolve spawn strategy.
+    let driver = create_driver(&tool_config, Some("chat-subagent"));
+    let working_dir = std::env::current_dir()
+        .map_err(|e| format!("cannot determine working directory: {e}"))?;
+    let strategy = driver.spawn_strategy(&working_dir);
+    let injection = driver.task_injection(task_prompt);
+    let prompt_text = match &injection {
+        TaskInjection::CliArg { value, .. } => value.clone(),
+        TaskInjection::Stdin { text } => text.clone(),
+        TaskInjection::None => String::new(),
+    };
+
+    // 3. Spawn the appropriate session type.
+    let session: Box<dyn AgentSession> = match strategy {
+        SpawnStrategy::Process {
+            command,
+            args,
+            env,
+            kind,
+        } => match kind {
+            ProcessKind::Json {
+                tool: ToolKind::ClaudeCode,
+                ..
+            } => Box::new(
+                JsonStreamSession::spawn(
+                    "chat-subagent",
+                    &command,
+                    &args,
+                    &working_dir,
+                    &env,
+                    &prompt_text,
+                )
+                .map_err(|e| format!("failed to spawn claude: {e}"))?,
+            ),
+            ProcessKind::Json {
+                tool: ToolKind::Codex,
+                global_args,
+            } => {
+                let protocol = CodexJsonProtocol::new(global_args);
+                Box::new(
+                    JsonlSession::spawn(
+                        "chat-subagent",
+                        protocol,
+                        &command,
+                        &args,
+                        &working_dir,
+                        &env,
+                        &prompt_text,
+                    )
+                    .map_err(|e| format!("failed to spawn codex: {e}"))?,
+                )
+            }
+            _ => return Err("unexpected process kind for subagent".into()),
+        },
+        SpawnStrategy::Pty {
+            command, args, env, ..
+        } => Box::new(
+            aegis_pilot::pty::PtySession::spawn(&command, &args, &working_dir, &env)
+                .map_err(|e| format!("failed to spawn PTY subagent: {e}"))?,
+        ),
+        SpawnStrategy::External => {
+            return Err("external spawn strategy not supported for subagents".into());
+        }
+    };
+
+    let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+        "  [Spawned {} subagent, pid {}]\n",
+        driver.name(),
+        session.pid()
+    )));
+
+    // 4. Create adapter (passthrough for full-auto CLIs).
+    let mut adapter: Box<dyn aegis_pilot::adapter::AgentAdapter> =
+        match driver.create_adapter() {
+            Some(a) => a,
+            None => Box::new(PassthroughAdapter),
+        };
+
+    // 5. Create policy engine (permissive -- the orchestrator already approved the task).
+    let policy_dir = aegis_types::daemon::daemon_dir().join("policies");
+    let engine = aegis_policy::PolicyEngine::new(&policy_dir, None).unwrap_or_else(|_| {
+        let tmp = std::env::temp_dir().join("aegis-subagent-policy");
+        let _ = std::fs::create_dir_all(&tmp);
+        aegis_policy::PolicyEngine::new(&tmp, None).expect("policy engine from temp dir")
+    });
+
+    // 6. Configure supervisor (non-interactive, default stall settings).
+    let sup_config = SupervisorConfig {
+        pilot_config: PilotConfig::default(),
+        principal: "chat-subagent".to_string(),
+        interactive: false,
+    };
+
+    // 7. Set up output collection: supervisor -> collector thread -> chat TUI.
+    let (output_tx, output_rx) = std::sync::mpsc::sync_channel::<String>(256);
+    let relay_tx = event_tx.clone();
+    let is_claude = backend == SubagentBackend::ClaudeCode;
+    let collector_abort = abort_flag.clone();
+    let collector_handle = std::thread::spawn(move || {
+        let mut lines = Vec::new();
+        while let Ok(line) = output_rx.recv() {
+            // Format JSON output for human display.
+            let display_lines = if is_claude {
+                format_ndjson_line(&line)
+            } else {
+                aegis_pilot::json_events::format_json_line(ToolKind::Codex, &line)
+            };
+            for dl in &display_lines {
+                let _ = relay_tx.send(AgentLoopEvent::StreamDelta(format!("  {dl}\n")));
+            }
+            lines.push(line);
+            if collector_abort.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+        lines
+    });
+
+    // 8. Abort watchdog: terminates child if user cancels.
+    let abort_watch = abort_flag.clone();
+    let child_pid = session.pid() as i32;
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if abort_watch.load(Ordering::Relaxed) {
+            let config = aegis_pilot::kill_tree::KillTreeConfig::default();
+            let _ = aegis_pilot::kill_tree::kill_tree(child_pid, &config);
+            break;
+        }
+    });
+
+    // 9. Run supervisor (blocks until child exits).
+    let result = supervisor::run(
+        session.as_ref(),
+        adapter.as_mut(),
+        &engine,
+        &sup_config,
+        None,
+        Some(&output_tx),
+        None,
+        None,
+    );
+
+    drop(output_tx);
+
+    let (exit_code, _stats) = result.map_err(|e| format!("supervisor error: {e}"))?;
+    let collected_lines = collector_handle
+        .join()
+        .map_err(|_| "collector thread panicked".to_string())?;
+
+    let _ = event_tx.send(AgentLoopEvent::StreamDelta(format!(
+        "  [Subagent exited with code {exit_code}]\n"
+    )));
+
+    // 10. Return collected output, truncated for context window safety.
+    if collected_lines.is_empty() {
+        Ok(format!(
+            "Subagent completed with exit code {exit_code} (no output)"
+        ))
+    } else {
+        let full = collected_lines.join("\n");
+        const MAX_OUTPUT: usize = 50_000;
+        if full.len() > MAX_OUTPUT {
+            let truncated = &full[full.len() - MAX_OUTPUT..];
+            Ok(format!("...(truncated)...\n{truncated}"))
+        } else {
+            Ok(full)
+        }
+    }
+}
+
+/// Run a pilot subagent in the background, returning immediately with a task ID.
+fn run_background_pilot_task(
+    description: &str,
+    task_prompt: &str,
+    event_tx: &mpsc::Sender<AgentLoopEvent>,
+    backend: SubagentBackend,
+    abort_flag: &Arc<AtomicBool>,
+) -> Result<String, String> {
+    let task_id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
+    let task_id_str = format!("task-{task_id}");
+
+    let output_dir = aegis_types::daemon::daemon_dir().join("tasks");
+    let _ = std::fs::create_dir_all(&output_dir);
+    let output_file = output_dir.join(format!("{task_id_str}.txt"));
+    let output_path = output_file.display().to_string();
+
+    let prompt = task_prompt.to_string();
+    let desc = description.to_string();
+    let tx = event_tx.clone();
+    let tid = task_id_str.clone();
+    let ofile = output_file.clone();
+    let abort = abort_flag.clone();
+
+    std::thread::spawn(move || {
+        let result = run_pilot_subagent(&prompt, &tx, backend, &abort);
+        let result_text = match &result {
+            Ok(text) => text.clone(),
+            Err(e) => format!("Error: {e}"),
+        };
+        let _ = std::fs::write(&ofile, &result_text);
+        let _ = tx.send(AgentLoopEvent::SubagentComplete {
+            task_id: tid,
+            description: desc,
+            result: result_text,
+            output_file: ofile.display().to_string(),
+        });
+    });
+
+    Ok(serde_json::json!({
+        "task_id": task_id_str,
+        "status": "running",
+        "backend": format!("{backend:?}"),
+        "output_file": output_path,
+        "message": format!(
+            "Background task spawned via {backend:?}. Results will be written to {output_path}. \
              Use read_file to check output when notified."
         )
     })

@@ -23,6 +23,7 @@ pub mod driver;
 pub mod drivers;
 pub mod json_events;
 pub mod json_stream;
+pub mod ndjson_fmt;
 pub mod jsonl;
 pub mod kill_tree;
 pub mod output;
