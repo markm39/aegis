@@ -121,7 +121,14 @@ fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
         },
         OnboardStep::WorkspaceConfig => "Enter: confirm  Esc: back",
         OnboardStep::SecurityConfig => match app.security_sub_step {
-            SecuritySubStep::PresetSelection => "j/k: navigate  Enter: next  Esc: back",
+            SecuritySubStep::PresetSelection => "j/k: navigate  Enter: select  Esc: back",
+            SecuritySubStep::AiGuide => {
+                if app.security_ai_pending {
+                    "Waiting for response...  Esc: back to presets"
+                } else {
+                    "Type reply  Enter: send  Esc: back to presets"
+                }
+            }
             SecuritySubStep::IsolationBackend => "j/k: navigate  Enter: next  Esc: back",
             SecuritySubStep::NetworkRules => {
                 "Type host  Enter: add/next  d: delete  j/k: scroll list  Esc: back"
@@ -944,17 +951,19 @@ fn draw_workspace_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
 fn draw_security_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
     match app.security_sub_step {
         SecuritySubStep::PresetSelection => draw_security_preset(f, app, area),
+        SecuritySubStep::AiGuide => draw_security_ai_guide(f, app, area),
         SecuritySubStep::IsolationBackend => draw_security_isolation(f, app, area),
         SecuritySubStep::NetworkRules => draw_security_network(f, app, area),
         SecuritySubStep::WritePaths => draw_security_paths(f, app, area),
     }
 }
 
-const PRESET_LABELS: [(&str, &str); 4] = [
+const PRESET_LABELS: [(&str, &str); 5] = [
+    ("Configure with AI", "Let the LLM interview you and build a custom config (recommended)"),
     ("Observe Only", "Log activity; enforce nothing"),
     ("Read Only", "Reads allowed; writes and network blocked"),
     ("Full Lockdown", "Minimal access; most operations blocked"),
-    ("Custom", "Configure specific permissions"),
+    ("Custom", "Configure specific permissions manually"),
 ];
 
 const ISOLATION_LABELS: [(&str, &str); 4] = [
@@ -1005,6 +1014,107 @@ fn draw_security_preset(f: &mut Frame, app: &OnboardApp, area: Rect) {
 
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, area);
+}
+
+fn draw_security_ai_guide(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security  >  Configure with AI");
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Reserve 3 rows at the bottom: input box + error/thinking line.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(inner);
+
+    // ----- Chat history -----
+    let history_height = chunks[0].height as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (role, content) in &app.security_ai_messages {
+        let (label, style) = if role == "user" {
+            ("You", Style::default().fg(CYAN))
+        } else {
+            ("Aegis", Style::default().fg(WHITE).add_modifier(Modifier::BOLD))
+        };
+        // Prefix line.
+        lines.push(Line::from(Span::styled(
+            format!("  {label}:"),
+            style,
+        )));
+        // Content lines (wrap at 68 chars).
+        for chunk in content.split('\n') {
+            let mut remaining = chunk;
+            loop {
+                let byte_len: usize =
+                    remaining.chars().take(68).map(|c| c.len_utf8()).sum();
+                let fits_in_one = remaining.chars().count() <= 68;
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", &remaining[..byte_len]),
+                    Style::default().fg(WHITE),
+                )));
+                if fits_in_one {
+                    break;
+                }
+                remaining = &remaining[byte_len..];
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
+    if app.security_ai_pending {
+        lines.push(Line::from(Span::styled(
+            "  Thinking...",
+            Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
+        )));
+    } else if let Some(ref err) = app.security_ai_error {
+        lines.push(Line::from(Span::styled(
+            format!("  Error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    // Show the last history_height lines (scroll to bottom).
+    let visible: Vec<Line> = if lines.len() > history_height {
+        lines[lines.len() - history_height..].to_vec()
+    } else {
+        lines
+    };
+    let history_para = Paragraph::new(visible);
+    f.render_widget(history_para, chunks[0]);
+
+    // ----- Input box -----
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(if app.security_ai_pending {
+            Style::default().fg(DIM)
+        } else {
+            Style::default().fg(CYAN)
+        });
+    let input_text = &app.security_ai_input;
+    let cursor_pos = app.security_ai_cursor;
+    let (before, after) = input_text.split_at(cursor_pos.min(input_text.len()));
+    let mut spans = vec![Span::styled(before, Style::default().fg(WHITE))];
+    if !app.security_ai_pending {
+        let cursor_char = after.chars().next().unwrap_or(' ');
+        let rest = if after.is_empty() { "" } else { &after[cursor_char.len_utf8()..] };
+        spans.push(Span::styled(
+            cursor_char.to_string(),
+            Style::default()
+                .fg(Color::Black)
+                .bg(WHITE)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(rest, Style::default().fg(WHITE)));
+    } else {
+        spans.push(Span::styled(after, Style::default().fg(DIM)));
+    }
+    let input_para = Paragraph::new(Line::from(spans)).block(input_block);
+    f.render_widget(input_para, chunks[1]);
 }
 
 fn draw_security_isolation(f: &mut Frame, app: &OnboardApp, area: Rect) {

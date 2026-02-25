@@ -23,6 +23,7 @@ use aegis_types::providers::{
 };
 
 use super::auth_flow::{self, AuthToken, AuthTokenType, DevicePollResult};
+use crate::llm_call::{SimpleLlmMessage, call_llm_simple};
 
 // ---------------------------------------------------------------------------
 // Step enum
@@ -127,8 +128,10 @@ impl ConfigAction {
 /// Sub-steps within security configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecuritySubStep {
-    /// Choose a security preset (ObserveOnly / ReadOnly / FullLockdown / Custom).
+    /// Choose a security preset (Configure with AI / ObserveOnly / ReadOnly / FullLockdown / Custom).
     PresetSelection,
+    /// LLM-guided configuration interview.
+    AiGuide,
     /// Choose the OS-level isolation backend.
     IsolationBackend,
     /// Configure the list of allowed outbound network hosts.
@@ -273,6 +276,18 @@ pub struct OnboardApp {
     pub security_paths_cursor: usize,
     pub security_paths: Vec<String>,
     pub security_paths_selected: usize,
+
+    // AI guide sub-step state (within SecurityConfig)
+    /// Chat history: each entry is (role, content) where role is "user" or "assistant".
+    pub security_ai_messages: Vec<(String, String)>,
+    pub security_ai_input: String,
+    pub security_ai_cursor: usize,
+    /// True while waiting for an LLM response.
+    pub security_ai_pending: bool,
+    /// Receives the LLM reply from a background thread.
+    pub security_ai_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// Holds the most recent LLM error for display.
+    pub security_ai_error: Option<String>,
 
     // Step 5: Gateway Config
     pub gateway_port: String,
@@ -590,6 +605,13 @@ impl OnboardApp {
             security_paths_cursor: 0,
             security_paths: vec![],
             security_paths_selected: 0,
+
+            security_ai_messages: Vec::new(),
+            security_ai_input: String::new(),
+            security_ai_cursor: 0,
+            security_ai_pending: false,
+            security_ai_rx: None,
+            security_ai_error: None,
 
             gateway_port: "3100".into(),
             gateway_port_cursor: 4,
@@ -1309,7 +1331,7 @@ impl OnboardApp {
     // Background polling (called on each tick)
     // -----------------------------------------------------------------------
 
-    /// Handle background polling for device flows and PKCE browser flows.
+    /// Handle background polling for device flows, PKCE browser flows, and AI guide responses.
     pub fn tick(&mut self) {
         match self.step {
             OnboardStep::ProviderSelection => match self.provider_sub_step {
@@ -1317,6 +1339,11 @@ impl OnboardApp {
                 ProviderSubStep::PkceBrowserWaiting => self.tick_pkce_browser(),
                 _ => {}
             },
+            OnboardStep::SecurityConfig => {
+                if self.security_sub_step == SecuritySubStep::AiGuide {
+                    self.poll_ai_security_response();
+                }
+            }
             OnboardStep::ChannelSelection => self.tick_channel_setup(),
             _ => {}
         }
@@ -1494,6 +1521,7 @@ impl OnboardApp {
     fn handle_security_config(&mut self, key: KeyEvent) {
         match self.security_sub_step {
             SecuritySubStep::PresetSelection => self.handle_security_preset(key),
+            SecuritySubStep::AiGuide => self.handle_security_ai_guide(key),
             SecuritySubStep::IsolationBackend => self.handle_security_isolation(key),
             SecuritySubStep::NetworkRules => self.handle_security_network(key),
             SecuritySubStep::WritePaths => self.handle_security_paths(key),
@@ -1501,7 +1529,8 @@ impl OnboardApp {
     }
 
     fn handle_security_preset(&mut self, key: KeyEvent) {
-        const PRESET_COUNT: usize = 4;
+        // Index 0 = Configure with AI; 1-4 = manual presets.
+        const PRESET_COUNT: usize = 5;
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.security_preset_selected =
@@ -1510,10 +1539,22 @@ impl OnboardApp {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.security_preset_selected = self.security_preset_selected.saturating_sub(1);
             }
+            KeyCode::Enter if self.security_preset_selected == 0 => {
+                // AI guide path: launch the LLM interview.
+                self.security_ai_messages.clear();
+                self.security_ai_input.clear();
+                self.security_ai_cursor = 0;
+                self.security_ai_pending = false;
+                self.security_ai_rx = None;
+                self.security_ai_error = None;
+                self.security_sub_step = SecuritySubStep::AiGuide;
+                self.start_ai_security_guide();
+            }
             KeyCode::Enter => {
+                // Manual preset path (indices 1-4).
                 // Apply isolation default for this preset.
                 self.security_isolation_selected = match self.security_preset_selected {
-                    0 => 2, // ObserveOnly → Process (no kernel sandbox overhead)
+                    1 => 2, // ObserveOnly → Process (no kernel sandbox overhead)
                     _ => 0, // ReadOnly / FullLockdown / Custom → Seatbelt
                 };
                 // Reset any previously configured hosts/paths when switching presets.
@@ -1633,6 +1674,180 @@ impl OnboardApp {
                 self.handle_text_input(key.code, TextInputTarget::SecurityPathInput);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 4b: AI Security Guide
+    // -----------------------------------------------------------------------
+
+    /// System prompt used for the LLM-guided security configuration interview.
+    const SECURITY_GUIDE_SYSTEM: &'static str = "\
+You are a security configuration assistant for Aegis, an AI agent supervision system on macOS. \
+Help the user configure sandbox rules for their AI coding agent running under macOS Seatbelt.
+
+Ask 3-5 natural questions to understand:
+1. Network: which hosts the agent needs (LLM API, package registries, git hosts, etc.)
+2. Filesystem: any extra directories it should write to beyond the project workspace
+3. Isolation: Seatbelt (kernel sandbox), Docker (container), Process (policy only), or None
+
+After gathering enough information, output ONLY this JSON block with no extra text:
+```json
+{
+  \"isolation\": \"seatbelt\",
+  \"allowed_hosts\": [\"api.anthropic.com\"],
+  \"extra_write_paths\": []
+}
+```
+Valid isolation values: \"seatbelt\", \"docker\", \"process\", \"none\".
+Be conversational and concise. Most developers want Seatbelt plus their specific API hosts.";
+
+    /// Kick off the LLM interview by sending a silent trigger message.
+    ///
+    /// The user sees the LLM's opening question without having to type first.
+    fn start_ai_security_guide(&mut self) {
+        let model = self.selected_model().to_string();
+        let store = self.credential_store.clone();
+        let messages = vec![SimpleLlmMessage {
+            role: "user".to_string(),
+            content: "Start the security configuration interview.".to_string(),
+        }];
+        let system = Self::SECURITY_GUIDE_SYSTEM.to_string();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.security_ai_rx = Some(rx);
+        self.security_ai_pending = true;
+
+        std::thread::spawn(move || {
+            let result = call_llm_simple(&model, &system, &messages, &store);
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Handle key events while in the AI guide sub-step.
+    fn handle_security_ai_guide(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.security_sub_step = SecuritySubStep::PresetSelection;
+            }
+            KeyCode::Enter if !self.security_ai_pending => {
+                let trimmed = self.security_ai_input.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                self.security_ai_messages
+                    .push(("user".to_string(), trimmed.clone()));
+                self.security_ai_input.clear();
+                self.security_ai_cursor = 0;
+                self.security_ai_pending = true;
+                self.security_ai_error = None;
+
+                let model = self.selected_model().to_string();
+                let store = self.credential_store.clone();
+                let system = Self::SECURITY_GUIDE_SYSTEM.to_string();
+                let history: Vec<SimpleLlmMessage> = self
+                    .security_ai_messages
+                    .iter()
+                    .map(|(role, content)| SimpleLlmMessage {
+                        role: role.clone(),
+                        content: content.clone(),
+                    })
+                    .collect();
+
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.security_ai_rx = Some(rx);
+
+                std::thread::spawn(move || {
+                    let result = call_llm_simple(&model, &system, &history, &store);
+                    let _ = tx.send(result);
+                });
+            }
+            _ if !self.security_ai_pending => {
+                self.handle_text_input(key.code, TextInputTarget::SecurityAiInput);
+            }
+            _ => {}
+        }
+    }
+
+    /// Poll the AI response channel; called from `tick()`.
+    fn poll_ai_security_response(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+
+        let result = match self.security_ai_rx.as_ref() {
+            Some(rx) => match rx.try_recv() {
+                Ok(r) => r,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.security_ai_rx = None;
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.security_ai_rx = None;
+        self.security_ai_pending = false;
+
+        match result {
+            Ok(response) => {
+                self.security_ai_messages
+                    .push(("assistant".to_string(), response.clone()));
+                if let Some(config) = Self::parse_ai_config(&response) {
+                    // Apply the LLM-produced config and advance to the next step.
+                    self.security_isolation_selected = config.0;
+                    self.security_hosts = config.1;
+                    self.security_paths = config.2;
+                    self.step = OnboardStep::GatewayConfig;
+                }
+                // If no JSON config yet, stay in AiGuide and await next user message.
+            }
+            Err(e) => {
+                self.security_ai_error = Some(e);
+            }
+        }
+    }
+
+    /// Try to extract the AI's JSON config block from its reply.
+    ///
+    /// Returns `(isolation_idx, hosts, paths)` on success.
+    fn parse_ai_config(response: &str) -> Option<(usize, Vec<String>, Vec<String>)> {
+        // Look for a ```json ... ``` fence.
+        let start = response.find("```json")?;
+        let after = &response[start + 7..];
+        let end = after.find("```")?;
+        let json_str = after[..end].trim();
+
+        let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+        let isolation_str = v["isolation"].as_str().unwrap_or("seatbelt").to_lowercase();
+        let isolation_idx = match isolation_str.as_str() {
+            "seatbelt" => 0,
+            "docker" => 1,
+            "process" => 2,
+            "none" => 3,
+            _ => 0,
+        };
+
+        let hosts: Vec<String> = v["allowed_hosts"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|h| h.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let paths: Vec<String> = v["extra_write_paths"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Some((isolation_idx, hosts, paths))
     }
 
     // -----------------------------------------------------------------------
@@ -2054,9 +2269,11 @@ impl OnboardApp {
             redaction: Default::default(),
             heartbeat: Default::default(),
             default_security_preset: Some(match self.security_preset_selected {
-                0 => SecurityPresetKind::ObserveOnly,
-                1 => SecurityPresetKind::ReadOnly,
-                2 => SecurityPresetKind::FullLockdown,
+                // 0 = AI-guided (uses custom rules)
+                0 => SecurityPresetKind::Custom,
+                1 => SecurityPresetKind::ObserveOnly,
+                2 => SecurityPresetKind::ReadOnly,
+                3 => SecurityPresetKind::FullLockdown,
                 _ => SecurityPresetKind::Custom,
             }),
             default_isolation: Some(match self.security_isolation_selected {
@@ -2100,6 +2317,9 @@ impl OnboardApp {
             }
             TextInputTarget::SecurityPathInput => {
                 (&mut self.security_paths_input, &mut self.security_paths_cursor)
+            }
+            TextInputTarget::SecurityAiInput => {
+                (&mut self.security_ai_input, &mut self.security_ai_cursor)
             }
         };
 
@@ -2152,6 +2372,7 @@ enum TextInputTarget {
     ModelManual,
     SecurityHostInput,
     SecurityPathInput,
+    SecurityAiInput,
 }
 
 // ---------------------------------------------------------------------------

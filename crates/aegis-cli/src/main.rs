@@ -1,5 +1,6 @@
 mod chat_tui;
 mod commands;
+mod llm_call;
 mod onboard_tui;
 mod pilot_tui;
 mod setup_wizard;

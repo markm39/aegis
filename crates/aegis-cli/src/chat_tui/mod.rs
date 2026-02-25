@@ -739,6 +739,7 @@ const COMMANDS: &[&str] = &[
     "telegram setup",
     "telegram status",
     "telegram disable",
+    "sandbox",
     // Skill commands
     "debug",
     "doc",
@@ -2530,7 +2531,7 @@ impl ChatApp {
             }
             "help" | "h" => {
                 self.set_result(
-                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /login [provider]  /mode [auto|chat|code]  /engine [auto|provider|native]  /usage  /think  /auto  /save  /resume <id>  /sessions  /settings  /daemon ...  !<cmd>  |  Skills: /debug /doc /explain /refactor /test /review /security /perf /panel-review /link-worktree",
+                    "/quit  /clear  /new  /compact  /abort  /model [name]  /provider  /login [provider]  /mode [auto|chat|code]  /engine [auto|provider|native]  /usage  /think  /auto  /save  /resume <id>  /sessions  /settings  /sandbox  /daemon ...  !<cmd>  |  Skills: /debug /doc /explain /refactor /test /review /security /perf /panel-review /link-worktree",
                 );
             }
             "usage" => {
@@ -2839,6 +2840,9 @@ impl ChatApp {
                     "Current: {current}. Options: /auto off | /auto edits | /auto high | /auto full"
                 ));
             }
+            "sandbox" => {
+                self.handle_sandbox_command();
+            }
             other => {
                 // 1. Check hardcoded prompt-based skill commands.
                 if let Some(skill_cmd) = SKILL_COMMANDS
@@ -2864,6 +2868,35 @@ impl ChatApp {
                 ));
             }
         }
+    }
+
+    /// Start the LLM-guided sandbox configuration conversation.
+    ///
+    /// Injects an opening user message that causes the LLM to interview the user
+    /// about network access, filesystem paths, and isolation level, then produce
+    /// a JSON config block that can be applied to daemon.toml.
+    fn handle_sandbox_command(&mut self) {
+        const SANDBOX_OPENING: &str = "\
+I need help configuring the Aegis sandbox security rules for my AI coding agent. \
+Please ask me about what network hosts the agent needs access to, what filesystem \
+paths it should be able to write to beyond the project directory, and what isolation \
+level makes sense (macOS Seatbelt, Docker, process-level policy, or none). \
+When you have gathered enough information, output a JSON configuration block in this format:
+```json
+{
+  \"isolation\": \"seatbelt\",
+  \"allowed_hosts\": [\"api.anthropic.com\"],
+  \"extra_write_paths\": []
+}
+```
+Start by asking your first question.";
+
+        self.conversation.push(LlmMessage::user(SANDBOX_OPENING.to_string()));
+        self.messages
+            .push(ChatMessage::new(MessageRole::User, "/sandbox".to_string()));
+        self.scroll_offset = 0;
+        self.awaiting_response = true;
+        self.send_llm_request();
     }
 
     /// Execute a skill command by injecting its prompt into the conversation.
