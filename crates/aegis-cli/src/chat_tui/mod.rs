@@ -1554,6 +1554,21 @@ impl ChatApp {
         }
     }
 
+    /// Handle mouse events — route scroll wheel to message history.
+    fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) {
+        use crossterm::event::MouseEventKind;
+        let max_scroll = self.total_visual_lines.saturating_sub(1);
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = (self.scroll_offset + 3).min(max_scroll);
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(3);
+            }
+            _ => {}
+        }
+    }
+
     /// Handle keys in Scroll mode (message history navigation).
     fn handle_scroll_key(&mut self, key: KeyEvent) {
         let max_scroll = self.total_visual_lines.saturating_sub(1);
@@ -4644,6 +4659,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(
             std::io::stderr(),
+            crossterm::event::DisableMouseCapture,
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::event::DisableBracketedPaste,
             crossterm::cursor::Show,
@@ -4656,11 +4672,10 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     let mut stdout = std::io::stdout();
     crossterm::execute!(
         stdout,
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
-        crossterm::cursor::MoveTo(0, 0),
+        crossterm::style::Print("\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H"),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
+        crossterm::event::EnableMouseCapture,
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -4697,6 +4712,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
+        crossterm::event::DisableMouseCapture,
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableBracketedPaste,
     )?;
@@ -4717,7 +4733,7 @@ fn run_event_loop(
         match events.next()? {
             AppEvent::Key(key) => app.handle_key(key),
             AppEvent::Paste(text) => app.handle_paste(&text),
-            AppEvent::Mouse(_) => {}
+            AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
             AppEvent::Tick => {}
         }
 

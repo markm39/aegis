@@ -34,9 +34,7 @@ pub fn run_wizard() -> Result<WizardResult> {
     let mut stdout = io::stdout();
     crossterm::execute!(
         stdout,
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
-        crossterm::cursor::MoveTo(0, 0),
+        crossterm::style::Print("\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H"),
         EnterAlternateScreen,
     )?;
     let backend = CrosstermBackend::new(stdout);

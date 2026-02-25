@@ -520,9 +520,7 @@ pub fn run_pilot_tui(
     let mut stdout = std::io::stdout();
     crossterm::execute!(
         stdout,
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
-        crossterm::cursor::MoveTo(0, 0),
+        crossterm::style::Print("\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H"),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
     )?;
