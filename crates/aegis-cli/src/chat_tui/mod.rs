@@ -1445,38 +1445,47 @@ impl ChatApp {
                 }
             }
             KeyCode::Up => {
-                // Browse input history backward (shell-style).
-                if !self.input_history.is_empty() {
-                    if self.history_index.is_none() {
-                        // Save current buffer as draft before entering history.
-                        self.input_draft = self.input_buffer.clone();
+                if self.input_buffer.is_empty() {
+                    // Scroll messages up (from wheel via \x1b[?1007h or direct keypress).
+                    let max_scroll = self.total_visual_lines.saturating_sub(1);
+                    self.scroll_offset = (self.scroll_offset + 3).min(max_scroll);
+                } else {
+                    // Browse input history backward (shell-style).
+                    if !self.input_history.is_empty() {
+                        if self.history_index.is_none() {
+                            self.input_draft = self.input_buffer.clone();
+                        }
+                        let idx = match self.history_index {
+                            Some(0) => 0,
+                            Some(i) => i - 1,
+                            None => self.input_history.len() - 1,
+                        };
+                        self.history_index = Some(idx);
+                        self.input_buffer = self.input_history[idx].clone();
+                        self.input_cursor = self.input_buffer.len();
                     }
-                    let idx = match self.history_index {
-                        Some(0) => 0,
-                        Some(i) => i - 1,
-                        None => self.input_history.len() - 1,
-                    };
-                    self.history_index = Some(idx);
-                    self.input_buffer = self.input_history[idx].clone();
-                    self.input_cursor = self.input_buffer.len();
                 }
             }
             KeyCode::Down => {
-                // Browse input history forward (shell-style).
-                match self.history_index {
-                    Some(i) if i + 1 < self.input_history.len() => {
-                        self.history_index = Some(i + 1);
-                        self.input_buffer = self.input_history[i + 1].clone();
-                        self.input_cursor = self.input_buffer.len();
+                if self.input_buffer.is_empty() && self.scroll_offset > 0 {
+                    // Scroll messages down (from wheel via \x1b[?1007h or direct keypress).
+                    self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                } else {
+                    // Browse input history forward (shell-style).
+                    match self.history_index {
+                        Some(i) if i + 1 < self.input_history.len() => {
+                            self.history_index = Some(i + 1);
+                            self.input_buffer = self.input_history[i + 1].clone();
+                            self.input_cursor = self.input_buffer.len();
+                        }
+                        Some(_) => {
+                            self.history_index = None;
+                            self.input_buffer = self.input_draft.clone();
+                            self.input_cursor = self.input_buffer.len();
+                            self.input_draft.clear();
+                        }
+                        None => {}
                     }
-                    Some(_) => {
-                        // Past the end -- restore draft.
-                        self.history_index = None;
-                        self.input_buffer = self.input_draft.clone();
-                        self.input_cursor = self.input_buffer.len();
-                        self.input_draft.clear();
-                    }
-                    None => {}
                 }
             }
             KeyCode::Char('/') if self.input_buffer.is_empty() => {
@@ -1549,21 +1558,6 @@ impl ChatApp {
             }
             KeyCode::End => {
                 self.input_cursor = self.input_buffer.len();
-            }
-            _ => {}
-        }
-    }
-
-    /// Handle mouse events — route scroll wheel to message history.
-    fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) {
-        use crossterm::event::MouseEventKind;
-        let max_scroll = self.total_visual_lines.saturating_sub(1);
-        match event.kind {
-            MouseEventKind::ScrollUp => {
-                self.scroll_offset = (self.scroll_offset + 3).min(max_scroll);
-            }
-            MouseEventKind::ScrollDown => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(3);
             }
             _ => {}
         }
@@ -4659,7 +4653,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(
             std::io::stderr(),
-            crossterm::event::DisableMouseCapture,
+            crossterm::style::Print("\x1b[?1007l"),
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::event::DisableBracketedPaste,
             crossterm::cursor::Show,
@@ -4675,7 +4669,9 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
         crossterm::style::Print("\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H"),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
-        crossterm::event::EnableMouseCapture,
+        // Alternate scroll mode: terminal translates wheel events to Up/Down arrow
+        // keys without requiring mouse capture, so native text selection still works.
+        crossterm::style::Print("\x1b[?1007h"),
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -4712,7 +4708,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
-        crossterm::event::DisableMouseCapture,
+        crossterm::style::Print("\x1b[?1007l"),
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableBracketedPaste,
     )?;
@@ -4733,7 +4729,7 @@ fn run_event_loop(
         match events.next()? {
             AppEvent::Key(key) => app.handle_key(key),
             AppEvent::Paste(text) => app.handle_paste(&text),
-            AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
+            AppEvent::Mouse(_) => {}
             AppEvent::Tick => {}
         }
 
