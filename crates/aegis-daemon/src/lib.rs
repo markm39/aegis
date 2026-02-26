@@ -5623,9 +5623,30 @@ impl DaemonRuntime {
                     self.channel_chat_history.drain(..drain);
                 }
 
-                // Use a sensible default model. The registry always registers
-                // Anthropic, so this will route to the available provider.
-                let model = "claude-sonnet-4-20250514".to_string();
+                // Detect model: credential store model > first available provider default.
+                let model = {
+                    let store =
+                        aegis_types::credentials::CredentialStore::load_default().unwrap_or_default();
+                    let mut found = None;
+                    for detected in aegis_types::providers::scan_providers() {
+                        if detected.available {
+                            if let Some(cred) = store.get(detected.info.id) {
+                                if let Some(ref m) = cred.model {
+                                    found = Some(m.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    found
+                        .or_else(|| {
+                            aegis_types::providers::scan_providers()
+                                .into_iter()
+                                .find(|d| d.available && !d.info.default_model.is_empty())
+                                .map(|d| d.info.default_model.to_string())
+                        })
+                        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
+                };
 
                 let system_prompt = "You are Aegis, a fleet management assistant. \
                     You are chatting via Telegram. Keep responses concise \
