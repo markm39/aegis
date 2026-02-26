@@ -604,6 +604,8 @@ pub struct ChatApp {
     pub scroll_offset: usize,
     /// Total visual lines in the chat area (updated each frame by the renderer).
     pub total_visual_lines: usize,
+    /// Visible height of the chat area (updated each frame by the renderer).
+    pub visible_height: usize,
 
     // -- Session persistence --
     /// Unique identifier for this conversation session.
@@ -825,6 +827,7 @@ impl ChatApp {
             messages: Vec::new(),
             scroll_offset: 0,
             total_visual_lines: 0,
+            visible_height: 0,
 
             session_id: persistence::generate_conversation_id(),
             audit_session_id: None,
@@ -886,6 +889,20 @@ impl ChatApp {
             heartbeat_consecutive_ok: 0,
             last_user_interaction: Instant::now(),
         }
+    }
+
+    /// Maximum valid scroll offset (scrolling past this shows blank space).
+    fn max_scroll(&self) -> usize {
+        self.total_visual_lines.saturating_sub(self.visible_height)
+    }
+
+    /// Scroll to the bottom, but only if the user hasn't scrolled up.
+    ///
+    /// This prevents new content (streaming deltas, tool results, etc.) from
+    /// yanking the scroll position when the user is reading earlier messages.
+    fn auto_scroll_to_bottom(&mut self) {
+        // scroll_offset == 0 means already at bottom; nonzero means the user
+        // has deliberately scrolled up, so we don't yank them back.
     }
 
     /// Clear stale command result messages after timeout.
@@ -1031,7 +1048,7 @@ impl ChatApp {
                                 .push(ChatMessage::new(MessageRole::Assistant, resp.content));
                         }
                     }
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
                 AgentLoopEvent::StreamDelta(text) => {
                     // Append to the current assistant message, or create one.
@@ -1047,7 +1064,7 @@ impl ChatApp {
                         self.messages
                             .push(ChatMessage::new(MessageRole::Assistant, text));
                     }
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
                 AgentLoopEvent::ToolCalls(tool_calls) => {
                     for tc in &tool_calls {
@@ -1060,7 +1077,7 @@ impl ChatApp {
                             format_tool_call_content(&tc.name, &tc.input),
                         ));
                     }
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
                 AgentLoopEvent::ToolResult {
                     tool_call_id,
@@ -1080,7 +1097,7 @@ impl ChatApp {
                         MessageRole::System,
                         format!("[{tool_name}] {display}"),
                     ));
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
                 AgentLoopEvent::ToolApprovalNeeded { tool_call, .. } => {
                     let desc = format!(
@@ -1100,7 +1117,7 @@ impl ChatApp {
                     ));
                     self.pending_tool_desc = Some(desc);
                     self.awaiting_approval = true;
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
                 AgentLoopEvent::Error(msg) => {
                     self.messages.push(ChatMessage::new(
@@ -1114,7 +1131,7 @@ impl ChatApp {
                 AgentLoopEvent::Notice(msg) => {
                     self.messages
                         .push(ChatMessage::new(MessageRole::System, msg));
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
                 AgentLoopEvent::Done => {
                     self.awaiting_response = false;
@@ -1147,7 +1164,7 @@ impl ChatApp {
                         },
                         summary,
                     ));
-                    self.scroll_offset = 0;
+                    self.auto_scroll_to_bottom();
                 }
             }
         }
@@ -1173,7 +1190,7 @@ impl ChatApp {
             MessageRole::System,
             "Starting bootstrap -- getting to know you...".to_string(),
         ));
-        self.scroll_offset = 0;
+        self.auto_scroll_to_bottom();
         self.awaiting_response = true;
         self.send_llm_request();
     }
@@ -1799,8 +1816,7 @@ impl ChatApp {
             KeyCode::Up => {
                 if self.input_buffer.is_empty() {
                     // Scroll messages up (from wheel via \x1b[?1007h or direct keypress).
-                    let max_scroll = self.total_visual_lines.saturating_sub(1);
-                    self.scroll_offset = (self.scroll_offset + 3).min(max_scroll);
+                    self.scroll_offset = (self.scroll_offset + 3).min(self.max_scroll());
                 } else {
                     // Browse input history backward (shell-style).
                     if !self.input_history.is_empty() {
@@ -1917,7 +1933,7 @@ impl ChatApp {
 
     /// Handle keys in Scroll mode (message history navigation).
     fn handle_scroll_key(&mut self, key: KeyEvent) {
-        let max_scroll = self.total_visual_lines.saturating_sub(1);
+        let max_scroll = self.max_scroll();
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
@@ -3383,7 +3399,7 @@ Start by asking your first question.";
                 }
             }
             self.skill_result_rx = None;
-            self.scroll_offset = 0;
+            self.auto_scroll_to_bottom();
         }
     }
 

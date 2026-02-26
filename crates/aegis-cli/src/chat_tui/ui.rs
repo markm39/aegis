@@ -171,9 +171,10 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         .wrap(Wrap { trim: false })
         .line_count(area.width);
     app.total_visual_lines = total_visual;
+    app.visible_height = area.height as usize;
 
     // Handle scrolling: scroll_offset=0 means bottom (latest).
-    let visible_height = area.height as usize;
+    let visible_height = app.visible_height;
     let scroll_from_top = if total_visual > visible_height {
         total_visual
             .saturating_sub(visible_height)
