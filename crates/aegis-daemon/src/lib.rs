@@ -502,7 +502,10 @@ fn build_channel_system_prompt() -> String {
 
     prompt.push_str(
         "You are chatting via Telegram. Keep responses concise (under 2000 chars). \
-         Use plain text, no markdown formatting or code blocks.\n\n",
+         Use plain text, no markdown formatting or code blocks.\n\
+         You have access to tools (bash, read_file, write_file, edit_file, glob_search, \
+         grep_search) that let you take actions on the user's computer. Use them when \
+         the user asks you to do something -- read files, run commands, take notes, etc.\n\n",
     );
 
     // Load workspace context files (same set as the TUI's system_prompt.rs)
@@ -554,6 +557,141 @@ fn build_channel_system_prompt() -> String {
     }
 
     prompt
+}
+
+// ---------------------------------------------------------------------------
+// Channel session persistence (shared with TUI via ~/.aegis/conversations/)
+// ---------------------------------------------------------------------------
+
+/// Metadata header stored as the first line of a conversation JSONL file.
+/// Mirrors `ConversationMeta` in `aegis-cli/src/chat_tui/persistence.rs`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ChannelConversationMeta {
+    id: String,
+    model: String,
+    timestamp: String,
+    message_count: usize,
+}
+
+/// Return the conversations directory (~/.aegis/conversations/), creating it
+/// if it does not exist.
+fn channel_conversations_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let dir = std::path::PathBuf::from(home)
+        .join(".aegis")
+        .join("conversations");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Generate a short conversation ID from the current timestamp (6-char hex).
+fn channel_generate_conversation_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{:06x}", millis & 0xFFFFFF)
+}
+
+/// Save a conversation to disk as a JSONL file (same format as TUI persistence).
+fn channel_save_conversation(
+    id: &str,
+    messages: &[aegis_types::llm::LlmMessage],
+    model: &str,
+) {
+    let dir = channel_conversations_dir();
+    let path = dir.join(format!("{id}.jsonl"));
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let meta = ChannelConversationMeta {
+        id: id.to_string(),
+        model: model.to_string(),
+        timestamp,
+        message_count: messages.len(),
+    };
+
+    let mut contents = match serde_json::to_string(&meta) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to serialize conversation metadata");
+            return;
+        }
+    };
+    contents.push('\n');
+
+    for msg in messages {
+        match serde_json::to_string(msg) {
+            Ok(line) => {
+                contents.push_str(&line);
+                contents.push('\n');
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to serialize conversation message");
+            }
+        }
+    }
+
+    if let Err(e) = std::fs::write(&path, contents) {
+        tracing::warn!(error = %e, path = %path.display(), "failed to write conversation file");
+    }
+}
+
+/// Load a conversation from disk by ID.
+fn channel_load_conversation(
+    id: &str,
+) -> Option<(Vec<aegis_types::llm::LlmMessage>, ChannelConversationMeta)> {
+    let dir = channel_conversations_dir();
+    let path = dir.join(format!("{id}.jsonl"));
+
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let mut lines = contents.lines();
+
+    let header_line = lines.next()?;
+    let meta: ChannelConversationMeta = serde_json::from_str(header_line).ok()?;
+
+    let mut messages = Vec::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(msg) = serde_json::from_str::<aegis_types::llm::LlmMessage>(line) {
+            messages.push(msg);
+        }
+    }
+
+    Some((messages, meta))
+}
+
+/// List all saved conversations, newest first (reads only header lines).
+fn channel_list_conversations() -> Vec<ChannelConversationMeta> {
+    let dir = channel_conversations_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut metas = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let first_line = match contents.lines().next() {
+            Some(l) => l,
+            None => continue,
+        };
+        if let Ok(meta) = serde_json::from_str::<ChannelConversationMeta>(first_line) {
+            metas.push(meta);
+        }
+    }
+
+    metas.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    metas
 }
 
 /// Check if HEARTBEAT.md content has actionable items (not just template boilerplate).
@@ -1028,8 +1166,10 @@ pub struct DaemonRuntime {
     channel_tx: Option<mpsc::Sender<ChannelInput>>,
     /// Receiver for inbound commands from the notification channel.
     channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
-    /// Conversation history for Telegram/channel chat (capped at 20 turns).
+    /// Conversation history for Telegram/channel chat (capped at 40 turns).
     channel_chat_history: Vec<aegis_types::llm::LlmMessage>,
+    /// Active conversation ID for Telegram/channel chat session persistence.
+    channel_session_id: Option<String>,
     /// Cached system prompt for channel chat (built from workspace context files).
     channel_system_prompt: Option<String>,
     /// Last time a channel heartbeat LLM check was triggered.
@@ -1405,7 +1545,10 @@ impl DaemonRuntime {
             channel_tx: None,
             channel_cmd_rx: None,
             channel_chat_history: Vec::new(),
+            channel_session_id: None,
             channel_system_prompt: None,
+            // NOTE: channel session is loaded lazily on first ChannelChat command
+            // to avoid blocking the constructor.
             channel_heartbeat_last: Instant::now(),
             channel_heartbeat_consecutive_ok: 0,
             channel_heartbeat_last_text: None,
@@ -1480,6 +1623,33 @@ impl DaemonRuntime {
             heartbeat_runner,
             deferred_reply_queue,
         }
+    }
+
+    /// Ensure the channel session is loaded. On first call, loads the most
+    /// recent conversation from ~/.aegis/conversations/. On subsequent calls
+    /// this is a no-op (session already loaded).
+    fn ensure_channel_session(&mut self) {
+        if self.channel_session_id.is_some() {
+            return;
+        }
+        // Try to load most recent conversation.
+        let conversations = channel_list_conversations();
+        if let Some(most_recent) = conversations.first() {
+            if let Some((messages, meta)) = channel_load_conversation(&most_recent.id) {
+                info!(
+                    session_id = %meta.id,
+                    messages = messages.len(),
+                    "resumed most recent channel session"
+                );
+                self.channel_chat_history = messages;
+                self.channel_session_id = Some(meta.id);
+                return;
+            }
+        }
+        // No existing session -- create a fresh one.
+        let id = channel_generate_conversation_id();
+        info!(session_id = %id, "created new channel session");
+        self.channel_session_id = Some(id);
     }
 
     fn stop_capture_stream(&mut self, name: &str) {
@@ -5933,25 +6103,94 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::ChannelChat { text } => {
-                // Handle /reset: clear history and force prompt rebuild.
+                // Ensure session is loaded (lazy: first call loads most recent
+                // conversation from ~/.aegis/conversations/).
+                self.ensure_channel_session();
+
+                // Handle /reset: clear history, new session, force prompt rebuild.
                 if text == "/reset" {
                     self.channel_chat_history.clear();
                     self.channel_system_prompt = None;
-                    return DaemonResponse::ok("Chat history and context cleared.");
+                    let new_id = channel_generate_conversation_id();
+                    info!(session_id = %new_id, "channel session reset");
+                    self.channel_session_id = Some(new_id);
+                    return DaemonResponse::ok("Chat history and context cleared. New session started.");
                 }
 
-                let Some(ref client) = self.llm_client else {
+                // Handle /session commands.
+                if text == "/session" || text.starts_with("/session ") {
+                    let arg = text.strip_prefix("/session").unwrap().trim();
+                    return if arg.is_empty() {
+                        // Show current session ID.
+                        let id = self.channel_session_id.as_deref().unwrap_or("none");
+                        let count = self.channel_chat_history.len();
+                        DaemonResponse::ok(format!("Session: {id} ({count} messages)"))
+                    } else if arg == "list" {
+                        let sessions = channel_list_conversations();
+                        if sessions.is_empty() {
+                            DaemonResponse::ok("No saved sessions.".to_string())
+                        } else {
+                            let current = self.channel_session_id.as_deref().unwrap_or("");
+                            let mut out = String::from("Sessions:\n");
+                            for (i, s) in sessions.iter().take(5).enumerate() {
+                                let marker = if s.id == current { " *" } else { "" };
+                                out.push_str(&format!(
+                                    "{}. {} ({} msgs, {}){}\n",
+                                    i + 1,
+                                    s.id,
+                                    s.message_count,
+                                    &s.timestamp[..10],
+                                    marker,
+                                ));
+                            }
+                            DaemonResponse::ok(out.trim_end().to_string())
+                        }
+                    } else if arg == "new" {
+                        // Save current session before switching.
+                        if let Some(ref id) = self.channel_session_id {
+                            let model = detect_channel_model();
+                            channel_save_conversation(id, &self.channel_chat_history, &model);
+                        }
+                        self.channel_chat_history.clear();
+                        self.channel_system_prompt = None;
+                        let new_id = channel_generate_conversation_id();
+                        info!(session_id = %new_id, "new channel session created");
+                        self.channel_session_id = Some(new_id.clone());
+                        DaemonResponse::ok(format!("New session started: {new_id}"))
+                    } else {
+                        // Switch to a specific session by ID.
+                        let target_id = arg;
+                        if let Some((messages, meta)) = channel_load_conversation(target_id) {
+                            // Save current session first.
+                            if let Some(ref id) = self.channel_session_id {
+                                let model = detect_channel_model();
+                                channel_save_conversation(id, &self.channel_chat_history, &model);
+                            }
+                            self.channel_chat_history = messages;
+                            self.channel_session_id = Some(meta.id.clone());
+                            self.channel_system_prompt = None;
+                            DaemonResponse::ok(format!(
+                                "Switched to session {} ({} messages)",
+                                meta.id, meta.message_count
+                            ))
+                        } else {
+                            DaemonResponse::error(format!("Session not found: {target_id}"))
+                        }
+                    };
+                }
+
+                if self.llm_client.is_none() {
                     return DaemonResponse::error(
                         "LLM client not initialized (no API keys configured)",
                     );
-                };
+                }
 
                 // Append user message to history.
                 self.channel_chat_history
                     .push(aegis_types::llm::LlmMessage::user(&text));
 
-                // Cap history at 20 messages to bound token usage.
-                const MAX_HISTORY: usize = 20;
+                // Cap history at 40 messages to bound token usage.
+                const MAX_HISTORY: usize = 40;
                 if self.channel_chat_history.len() > MAX_HISTORY {
                     let drain = self.channel_chat_history.len() - MAX_HISTORY;
                     self.channel_chat_history.drain(..drain);
@@ -5959,62 +6198,163 @@ impl DaemonRuntime {
 
                 let model = detect_channel_model();
 
-                // Build/cache system prompt from workspace context files
-                // (SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md).
+                // Build/cache system prompt from workspace context files.
                 let system_prompt = self
                     .channel_system_prompt
                     .get_or_insert_with(build_channel_system_prompt)
                     .clone();
 
-                let request = aegis_types::llm::LlmRequest {
-                    model: model.clone(),
-                    messages: self.channel_chat_history.clone(),
-                    temperature: Some(0.7),
-                    max_tokens: Some(1024),
-                    system_prompt: Some(system_prompt),
-                    tools: Vec::new(),
-                    thinking_budget: None,
-                };
+                // Get tool definitions from registry.
+                let tool_defs = self
+                    .tool_registry
+                    .as_ref()
+                    .map(|r| r.to_llm_definitions())
+                    .unwrap_or_default();
 
-                match client.complete(&request) {
-                    Ok(response) => {
-                        // Append assistant reply to history.
-                        self.channel_chat_history
-                            .push(aegis_types::llm::LlmMessage::assistant(&response.content));
+                // Agentic tool-use loop: call LLM, execute any tool calls,
+                // feed results back, repeat until EndTurn or max iterations.
+                const MAX_TOOL_ITERATIONS: usize = 10;
+                let mut final_text = String::new();
 
-                        // Audit logging (same pattern as LlmComplete).
-                        let action = Action::new(
-                            "channel-chat".to_string(),
-                            ActionKind::LlmComplete {
-                                provider: client
+                for iteration in 0..MAX_TOOL_ITERATIONS {
+                    // Scoped borrow: complete LLM call then release client ref.
+                    let llm_result = {
+                        let client = self.llm_client.as_ref().unwrap();
+                        let request = aegis_types::llm::LlmRequest {
+                            model: model.clone(),
+                            messages: self.channel_chat_history.clone(),
+                            temperature: Some(0.7),
+                            max_tokens: Some(2048),
+                            system_prompt: Some(system_prompt.clone()),
+                            tools: tool_defs.clone(),
+                            thinking_budget: None,
+                        };
+                        match client.complete(&request) {
+                            Ok(resp) => {
+                                let provider = client
                                     .registry()
                                     .resolve_provider(&model)
                                     .unwrap_or("unknown")
-                                    .to_string(),
-                                model: response.model.clone(),
-                                endpoint: String::new(),
-                                input_tokens: response.usage.input_tokens,
-                                output_tokens: response.usage.output_tokens,
-                            },
-                        );
-                        let verdict = Verdict::allow(
-                            action.id,
-                            format!(
-                                "channel chat: {} in={} out={}",
-                                response.model,
-                                response.usage.input_tokens,
-                                response.usage.output_tokens
-                            ),
-                            None,
-                        );
-                        self.append_audit_entry(&action, &verdict);
+                                    .to_string();
+                                Ok((resp, provider))
+                            }
+                            Err(e) => Err(e),
+                        }
+                    };
 
-                        // Return content directly -- drain_channel_commands()
-                        // sends response.message to Telegram.
-                        DaemonResponse::ok(response.content)
+                    let (response, provider_name) = match llm_result {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            let msg = format!("LLM error: {e}");
+                            // Save what we have so far.
+                            if let Some(ref id) = self.channel_session_id {
+                                channel_save_conversation(id, &self.channel_chat_history, &model);
+                            }
+                            return DaemonResponse::error(msg);
+                        }
+                    };
+
+                    // Audit the LLM call.
+                    let action = Action::new(
+                        "channel-chat".to_string(),
+                        ActionKind::LlmComplete {
+                            provider: provider_name,
+                            model: response.model.clone(),
+                            endpoint: String::new(),
+                            input_tokens: response.usage.input_tokens,
+                            output_tokens: response.usage.output_tokens,
+                        },
+                    );
+                    let verdict = Verdict::allow(
+                        action.id,
+                        format!(
+                            "channel chat iter={}: {} in={} out={}",
+                            iteration,
+                            response.model,
+                            response.usage.input_tokens,
+                            response.usage.output_tokens
+                        ),
+                        None,
+                    );
+                    self.append_audit_entry(&action, &verdict);
+
+                    // Check if the LLM wants to use tools.
+                    let wants_tools = response
+                        .stop_reason
+                        .as_ref()
+                        .map(|r| matches!(r, aegis_types::llm::StopReason::ToolUse))
+                        .unwrap_or(false)
+                        && !response.tool_calls.is_empty();
+
+                    if wants_tools {
+                        // Append assistant message with tool calls to history.
+                        self.channel_chat_history.push(
+                            aegis_types::llm::LlmMessage::assistant_with_tools(
+                                &response.content,
+                                response.tool_calls.clone(),
+                            ),
+                        );
+
+                        // Execute each tool call.
+                        for tc in &response.tool_calls {
+                            // Send progress indicator to Telegram.
+                            if let Some(tx) = &self.channel_tx {
+                                let _ = tx.send(ChannelInput::TextMessage(format!(
+                                    "[Running: {}]",
+                                    tc.name
+                                )));
+                            }
+
+                            let tool_result_text = if let Some(ref registry) = self.tool_registry {
+                                if let Some(tool) = registry.get_tool(&tc.name) {
+                                    match self
+                                        .tokio_rt
+                                        .handle()
+                                        .block_on(tool.execute(tc.input.clone()))
+                                    {
+                                        Ok(output) => {
+                                            // Use .content if available, fall back to serialized .result
+                                            output.content.unwrap_or_else(|| {
+                                                serde_json::to_string_pretty(&output.result)
+                                                    .unwrap_or_else(|_| {
+                                                        output.result.to_string()
+                                                    })
+                                            })
+                                        }
+                                        Err(e) => format!("Error: {e}"),
+                                    }
+                                } else {
+                                    format!("Error: tool not found: {}", tc.name)
+                                }
+                            } else {
+                                "Error: tool registry not initialized".to_string()
+                            };
+
+                            // Append tool result to history.
+                            self.channel_chat_history.push(
+                                aegis_types::llm::LlmMessage::tool_result(
+                                    &tc.id,
+                                    &tool_result_text,
+                                ),
+                            );
+                        }
+                        // Continue the loop for the next LLM call.
+                        continue;
                     }
-                    Err(e) => DaemonResponse::error(format!("LLM error: {e}")),
+
+                    // EndTurn / MaxTokens -- we're done.
+                    final_text = response.content.clone();
+                    self.channel_chat_history
+                        .push(aegis_types::llm::LlmMessage::assistant(&response.content));
+                    break;
                 }
+
+                // Persist the conversation after the turn.
+                if let Some(ref id) = self.channel_session_id {
+                    channel_save_conversation(id, &self.channel_chat_history, &model);
+                }
+
+                DaemonResponse::ok(final_text)
             }
 
             DaemonCommand::ExecuteTool {
