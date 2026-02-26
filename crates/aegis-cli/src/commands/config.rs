@@ -302,7 +302,7 @@ pub fn layers() -> Result<()> {
 
 fn describe_isolation(config: &AegisConfig) -> String {
     match &config.isolation {
-        aegis_types::IsolationConfig::Seatbelt { profile_overrides } => {
+        aegis_types::IsolationConfig::Seatbelt { profile_overrides, .. } => {
             if let Some(path) = profile_overrides {
                 format!("Seatbelt (custom profile: {})", path.display())
             } else {
@@ -332,6 +332,7 @@ mod tests {
             allowed_network: vec![],
             isolation: aegis_types::IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),

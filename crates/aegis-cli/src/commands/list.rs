@@ -237,6 +237,7 @@ mod tests {
             allowed_network: vec![],
             isolation: aegis_types::IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
             observer: aegis_types::ObserverConfig::default(),
             alerts: Vec::new(),

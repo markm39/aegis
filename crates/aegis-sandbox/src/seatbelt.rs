@@ -278,6 +278,7 @@ mod tests {
             sandbox_dir,
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
         )
     }

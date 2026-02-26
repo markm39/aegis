@@ -36,9 +36,20 @@ pub fn generate_seatbelt_profile(config: &AegisConfig) -> Result<String, AegisEr
         profile.push_str("(allow network-outbound)\n");
     }
 
+    // Kernel-level deny rules: block all file access to explicitly listed paths.
+    // SBPL resolves the most-specific matching path predicate, so a deny on a
+    // subpath of the workspace correctly overrides the workspace-wide allow above.
+    if let IsolationConfig::Seatbelt { deny_paths, .. } = &config.isolation {
+        for path in deny_paths {
+            let escaped = escape_sbpl_path(&path.display().to_string())?;
+            profile.push_str(&format!("(deny file-* (subpath \"{escaped}\"))\n"));
+        }
+    }
+
     // Append profile overrides if specified (fail hard if the file is configured but unreadable)
     if let IsolationConfig::Seatbelt {
         profile_overrides: Some(ref overrides_path),
+        ..
     } = config.isolation
     {
         let contents = std::fs::read_to_string(overrides_path).map_err(|e| {
@@ -67,6 +78,7 @@ mod tests {
             PathBuf::from("/tmp/aegis-test-sandbox"),
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
         )
     }
@@ -137,10 +149,43 @@ mod tests {
         let mut config = base_config();
         config.isolation = IsolationConfig::Seatbelt {
             profile_overrides: Some(overrides_path),
+            deny_paths: vec![],
         };
 
         let profile = generate_seatbelt_profile(&config).unwrap();
 
         assert!(profile.contains("(allow file-read* (literal \"/custom/path\"))"));
+    }
+
+    #[test]
+    fn profile_emits_deny_rules_for_deny_paths() {
+        let mut config = base_config();
+        config.isolation = IsolationConfig::Seatbelt {
+            profile_overrides: None,
+            deny_paths: vec![
+                PathBuf::from("/tmp/aegis-test-sandbox/call-ecl-app"),
+                PathBuf::from("/tmp/secrets"),
+            ],
+        };
+
+        let profile = generate_seatbelt_profile(&config).unwrap();
+
+        assert!(
+            profile.contains("(deny file-* (subpath \"/tmp/aegis-test-sandbox/call-ecl-app\"))"),
+            "should deny subpath inside sandbox"
+        );
+        assert!(
+            profile.contains("(deny file-* (subpath \"/tmp/secrets\"))"),
+            "should deny external path"
+        );
+        // Deny rules must appear after the sandbox allow rules so the file ordering
+        // makes intent clear (allow parent, then deny subpath).
+        let allow_pos = profile
+            .find("(allow file-write* (subpath \"/tmp/aegis-test-sandbox\"))")
+            .expect("sandbox allow rule must be present");
+        let deny_pos = profile
+            .find("(deny file-* (subpath \"/tmp/aegis-test-sandbox/call-ecl-app\"))")
+            .expect("deny rule must be present");
+        assert!(deny_pos > allow_pos, "deny rule should appear after allow rule");
     }
 }

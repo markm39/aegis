@@ -61,6 +61,7 @@ pub fn run(
     if seatbelt {
         config.isolation = IsolationConfig::Seatbelt {
             profile_overrides: None,
+            deny_paths: vec![],
         };
     }
 

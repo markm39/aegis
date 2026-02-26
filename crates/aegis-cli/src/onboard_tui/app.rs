@@ -133,12 +133,16 @@ pub enum SecuritySubStep {
     PresetSelection,
     /// LLM-guided configuration interview.
     AiGuide,
+    /// Review the AI-produced config before confirming (AI path only).
+    AiConfigReview,
     /// Choose the OS-level isolation backend.
     IsolationBackend,
     /// Configure the list of allowed outbound network hosts.
     NetworkRules,
     /// Configure extra directories the agent may write to beyond the workspace.
     WritePaths,
+    /// Configure paths the agent is denied access to at the kernel level.
+    DenyPaths,
 }
 
 /// Sub-steps within channel selection.
@@ -291,6 +295,10 @@ pub struct OnboardApp {
     pub security_paths_cursor: usize,
     pub security_paths: Vec<String>,
     pub security_paths_selected: usize,
+    pub security_deny_paths_input: String,
+    pub security_deny_paths_cursor: usize,
+    pub security_deny_paths: Vec<String>,
+    pub security_deny_paths_selected: usize,
 
     // AI guide sub-step state (within SecurityConfig)
     /// Chat history: each entry is (role, content) where role is "user" or "assistant".
@@ -667,6 +675,10 @@ impl OnboardApp {
             security_paths_cursor: 0,
             security_paths: vec![],
             security_paths_selected: 0,
+            security_deny_paths_input: String::new(),
+            security_deny_paths_cursor: 0,
+            security_deny_paths: vec![],
+            security_deny_paths_selected: 0,
 
             security_ai_messages: Vec::new(),
             security_ai_input: String::new(),
@@ -1587,9 +1599,11 @@ impl OnboardApp {
         match self.security_sub_step {
             SecuritySubStep::PresetSelection => self.handle_security_preset(key),
             SecuritySubStep::AiGuide => self.handle_security_ai_guide(key),
+            SecuritySubStep::AiConfigReview => self.handle_security_ai_config_review(key),
             SecuritySubStep::IsolationBackend => self.handle_security_isolation(key),
             SecuritySubStep::NetworkRules => self.handle_security_network(key),
             SecuritySubStep::WritePaths => self.handle_security_paths(key),
+            SecuritySubStep::DenyPaths => self.handle_security_deny_paths(key),
         }
     }
 
@@ -1629,6 +1643,9 @@ impl OnboardApp {
                 self.security_paths.clear();
                 self.security_paths_input.clear();
                 self.security_paths_cursor = 0;
+                self.security_deny_paths.clear();
+                self.security_deny_paths_input.clear();
+                self.security_deny_paths_cursor = 0;
                 self.security_sub_step = SecuritySubStep::IsolationBackend;
             }
             KeyCode::Esc => {
@@ -1705,7 +1722,7 @@ impl OnboardApp {
             KeyCode::Enter => {
                 let trimmed = self.security_paths_input.trim().to_string();
                 if trimmed.is_empty() {
-                    self.step = OnboardStep::GatewayConfig;
+                    self.security_sub_step = SecuritySubStep::DenyPaths;
                 } else {
                     self.security_paths.push(trimmed);
                     self.security_paths_input.clear();
@@ -1741,6 +1758,64 @@ impl OnboardApp {
         }
     }
 
+    fn handle_security_deny_paths(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let trimmed = self.security_deny_paths_input.trim().to_string();
+                if trimmed.is_empty() {
+                    self.step = OnboardStep::GatewayConfig;
+                } else {
+                    self.security_deny_paths.push(trimmed);
+                    self.security_deny_paths_input.clear();
+                    self.security_deny_paths_cursor = 0;
+                }
+            }
+            KeyCode::Esc => {
+                self.security_sub_step = SecuritySubStep::WritePaths;
+            }
+            KeyCode::Char('d') if self.security_deny_paths_input.is_empty() => {
+                if !self.security_deny_paths.is_empty() {
+                    let idx =
+                        self.security_deny_paths_selected.min(self.security_deny_paths.len() - 1);
+                    self.security_deny_paths.remove(idx);
+                    if self.security_deny_paths_selected >= self.security_deny_paths.len()
+                        && !self.security_deny_paths.is_empty()
+                    {
+                        self.security_deny_paths_selected = self.security_deny_paths.len() - 1;
+                    }
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down if self.security_deny_paths_input.is_empty() => {
+                if !self.security_deny_paths.is_empty() {
+                    self.security_deny_paths_selected = (self.security_deny_paths_selected + 1)
+                        .min(self.security_deny_paths.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.security_deny_paths_input.is_empty() => {
+                self.security_deny_paths_selected =
+                    self.security_deny_paths_selected.saturating_sub(1);
+            }
+            _ => {
+                self.handle_text_input(key.code, TextInputTarget::SecurityDenyPathInput);
+            }
+        }
+    }
+
+    fn handle_security_ai_config_review(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Enter => {
+                self.step = OnboardStep::GatewayConfig;
+            }
+            KeyCode::Esc => {
+                self.security_sub_step = SecuritySubStep::AiGuide;
+            }
+            _ => {}
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Step 4b: AI Security Guide
     // -----------------------------------------------------------------------
@@ -1753,14 +1828,20 @@ Help the user configure sandbox rules for their AI coding agent running under ma
 Ask 3-5 natural questions to understand:
 1. Network: which hosts the agent needs (LLM API, package registries, git hosts, etc.)
 2. Filesystem: any extra directories it should write to beyond the project workspace
-3. Isolation: Seatbelt (kernel sandbox), Docker (container), Process (policy only), or None
+3. Filesystem: any directories that should be explicitly blocked at the kernel level (deny_paths)
+4. Isolation: Seatbelt (kernel sandbox), Docker (container), Process (policy only), or None
+
+deny_paths are enforced by the macOS Seatbelt kernel sandbox — the agent cannot access them \
+even if it tries. Use them for sensitive directories you want to protect (e.g. a subdirectory \
+the agent should never touch).
 
 After gathering enough information, output ONLY this JSON block with no extra text:
 ```json
 {
   \"isolation\": \"seatbelt\",
   \"allowed_hosts\": [\"api.anthropic.com\"],
-  \"extra_write_paths\": []
+  \"extra_write_paths\": [],
+  \"deny_paths\": []
 }
 ```
 Valid isolation values: \"seatbelt\", \"docker\", \"process\", \"none\".
@@ -1883,11 +1964,12 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
                     .push(("assistant".to_string(), response.clone()));
                 self.security_ai_scroll_offset = 0; // pin to bottom on new message
                 if let Some(config) = Self::parse_ai_config(&response) {
-                    // Apply the LLM-produced config and advance to the next step.
+                    // Apply the LLM-produced config and show a review screen.
                     self.security_isolation_selected = config.0;
                     self.security_hosts = config.1;
                     self.security_paths = config.2;
-                    self.step = OnboardStep::GatewayConfig;
+                    self.security_deny_paths = config.3;
+                    self.security_sub_step = SecuritySubStep::AiConfigReview;
                 }
                 // If no JSON config yet, stay in AiGuide and await next user message.
             }
@@ -1899,8 +1981,9 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
 
     /// Try to extract the AI's JSON config block from its reply.
     ///
-    /// Returns `(isolation_idx, hosts, paths)` on success.
-    fn parse_ai_config(response: &str) -> Option<(usize, Vec<String>, Vec<String>)> {
+    /// Returns `(isolation_idx, hosts, write_paths, deny_paths)` on success.
+    #[allow(clippy::type_complexity)]
+    fn parse_ai_config(response: &str) -> Option<(usize, Vec<String>, Vec<String>, Vec<String>)> {
         // Look for a ```json ... ``` fence.
         let start = response.find("```json")?;
         let after = &response[start + 7..];
@@ -1927,7 +2010,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             })
             .unwrap_or_default();
 
-        let paths: Vec<String> = v["extra_write_paths"]
+        let write_paths: Vec<String> = v["extra_write_paths"]
             .as_array()
             .map(|arr| {
                 arr.iter()
@@ -1936,7 +2019,16 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             })
             .unwrap_or_default();
 
-        Some((isolation_idx, hosts, paths))
+        let deny_paths: Vec<String> = v["deny_paths"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Some((isolation_idx, hosts, write_paths, deny_paths))
     }
 
     // -----------------------------------------------------------------------
@@ -2432,6 +2524,11 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             default_isolation: Some(match self.security_isolation_selected {
                 0 => IsolationConfig::Seatbelt {
                     profile_overrides: None,
+                    deny_paths: self
+                        .security_deny_paths
+                        .iter()
+                        .map(PathBuf::from)
+                        .collect(),
                 },
                 1 => IsolationConfig::Docker(DockerSandboxConfig::default()),
                 2 => IsolationConfig::Process,
@@ -2470,6 +2567,9 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             }
             TextInputTarget::SecurityPathInput => {
                 (&mut self.security_paths_input, &mut self.security_paths_cursor)
+            }
+            TextInputTarget::SecurityDenyPathInput => {
+                (&mut self.security_deny_paths_input, &mut self.security_deny_paths_cursor)
             }
             TextInputTarget::SecurityAiInput => {
                 (&mut self.security_ai_input, &mut self.security_ai_cursor)
@@ -2525,6 +2625,7 @@ enum TextInputTarget {
     ModelManual,
     SecurityHostInput,
     SecurityPathInput,
+    SecurityDenyPathInput,
     SecurityAiInput,
 }
 

@@ -231,6 +231,7 @@ impl SecurityPreset {
                 if cfg!(target_os = "macos") {
                     IsolationConfig::Seatbelt {
                         profile_overrides: None,
+                        deny_paths: vec![],
                     }
                 } else {
                     IsolationConfig::Process

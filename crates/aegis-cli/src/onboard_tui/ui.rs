@@ -129,11 +129,15 @@ fn draw_help(f: &mut Frame, app: &OnboardApp, area: Rect) {
                     "Type reply  Enter: send  Esc: back to presets"
                 }
             }
+            SecuritySubStep::AiConfigReview => "Enter: confirm  Esc: go back and refine",
             SecuritySubStep::IsolationBackend => "j/k: navigate  Enter: next  Esc: back",
             SecuritySubStep::NetworkRules => {
                 "Type host  Enter: add/next  d: delete  j/k: scroll list  Esc: back"
             }
             SecuritySubStep::WritePaths => {
+                "Type path  Enter: add/next  d: delete  j/k: scroll list  Esc: back"
+            }
+            SecuritySubStep::DenyPaths => {
                 "Type path  Enter: add/finish  d: delete  j/k: scroll list  Esc: back"
             }
         },
@@ -952,9 +956,11 @@ fn draw_security_config(f: &mut Frame, app: &OnboardApp, area: Rect) {
     match app.security_sub_step {
         SecuritySubStep::PresetSelection => draw_security_preset(f, app, area),
         SecuritySubStep::AiGuide => draw_security_ai_guide(f, app, area),
+        SecuritySubStep::AiConfigReview => draw_security_ai_config_review(f, app, area),
         SecuritySubStep::IsolationBackend => draw_security_isolation(f, app, area),
         SecuritySubStep::NetworkRules => draw_security_network(f, app, area),
         SecuritySubStep::WritePaths => draw_security_paths(f, app, area),
+        SecuritySubStep::DenyPaths => draw_security_deny_paths(f, app, area),
     }
 }
 
@@ -1304,6 +1310,164 @@ fn draw_security_paths(f: &mut Frame, app: &OnboardApp, area: Rect) {
     }
 
     let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_security_deny_paths(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security  >  Kernel-level Deny Paths");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Add paths the agent is denied access to at the kernel level.",
+            Style::default().fg(WHITE),
+        )),
+        Line::from(Span::styled(
+            "  These are enforced by macOS Seatbelt regardless of what the agent tries.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "  Example: /path/to/project/secrets  or  /path/to/other-project",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "  Press Enter with an empty field to finish.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    // Text input.
+    let cursor_spans =
+        build_cursor_spans(&app.security_deny_paths_input, app.security_deny_paths_cursor);
+    let mut input_line = vec![Span::styled("  Deny path: ", Style::default().fg(RED))];
+    input_line.extend(cursor_spans);
+    lines.push(Line::from(input_line));
+    lines.push(Line::from(""));
+
+    // Existing deny paths list.
+    if app.security_deny_paths.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (none -- press Enter to skip)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Blocked paths (kernel-enforced):",
+            Style::default().fg(WHITE),
+        )));
+        for (i, path) in app.security_deny_paths.iter().enumerate() {
+            let selected = i == app.security_deny_paths_selected;
+            let style = if selected {
+                Style::default().fg(RED).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(RED)
+            };
+            let marker = if selected { "> " } else { "  " };
+            lines.push(Line::from(Span::styled(
+                format!("  {marker}x {path}"),
+                style,
+            )));
+        }
+    }
+
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, area);
+}
+
+fn draw_security_ai_config_review(f: &mut Frame, app: &OnboardApp, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .title("Security  >  AI Configuration Review");
+
+    let isolation_name = ISOLATION_LABELS
+        .get(app.security_isolation_selected)
+        .map(|(label, _)| *label)
+        .unwrap_or("Unknown");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  The AI has configured your security settings. Review before confirming.",
+            Style::default().fg(WHITE),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Isolation:   ", Style::default().fg(DIM)),
+            Span::styled(isolation_name, Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+    ];
+
+    // Allowed hosts.
+    lines.push(Line::from(Span::styled(
+        "  Allowed hosts:",
+        Style::default().fg(DIM),
+    )));
+    if app.security_hosts.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (none -- outbound network blocked)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for host in &app.security_hosts {
+            lines.push(Line::from(Span::styled(
+                format!("    * {host}"),
+                Style::default().fg(GREEN),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Extra write paths.
+    lines.push(Line::from(Span::styled(
+        "  Extra writable paths:",
+        Style::default().fg(DIM),
+    )));
+    if app.security_paths.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (none -- writes limited to workspace)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for path in &app.security_paths {
+            lines.push(Line::from(Span::styled(
+                format!("    * {path}"),
+                Style::default().fg(GREEN),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Kernel-level deny paths.
+    lines.push(Line::from(Span::styled(
+        "  Kernel deny paths:",
+        Style::default().fg(DIM),
+    )));
+    if app.security_deny_paths.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (none -- no kernel-level path blocks)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for path in &app.security_deny_paths {
+            lines.push(Line::from(Span::styled(
+                format!("    x {path}"),
+                Style::default().fg(RED),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press Enter to confirm, Esc to go back and refine.",
+        Style::default().fg(DIM),
+    )));
+
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 

@@ -77,6 +77,7 @@ mod tests {
             PathBuf::from("/tmp/aegis-test-sandbox"),
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
         )
     }

@@ -126,6 +126,14 @@ pub enum IsolationConfig {
     Seatbelt {
         /// Optional path to a hand-written SBPL file that overrides the generated profile.
         profile_overrides: Option<PathBuf>,
+        /// Paths that the agent is explicitly denied access to at the kernel level.
+        ///
+        /// These emit `(deny file-* (subpath "..."))` rules in the SBPL profile.
+        /// Because SBPL resolves more-specific path predicates first, a deny entry
+        /// for a subpath of the workspace correctly overrides the workspace-wide
+        /// allow rule — useful for protecting secrets or unrelated project dirs.
+        #[serde(default)]
+        deny_paths: Vec<PathBuf>,
     },
     /// Docker container isolation with security-hardened defaults.
     Docker(DockerSandboxConfig),
@@ -227,11 +235,13 @@ impl std::fmt::Display for IsolationConfig {
         match self {
             IsolationConfig::Seatbelt {
                 profile_overrides: Some(path),
+                ..
             } => {
                 write!(f, "Seatbelt (overrides: {})", path.display())
             }
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                ..
             } => write!(f, "Seatbelt"),
             IsolationConfig::Docker(cfg) => {
                 write!(f, "Docker (image: {}, network: {})", cfg.image, cfg.network)
@@ -1212,6 +1222,7 @@ impl AegisConfig {
         let isolation = if cfg!(target_os = "macos") {
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             }
         } else {
             IsolationConfig::Process
@@ -1253,6 +1264,7 @@ mod tests {
             }],
             isolation: IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
             observer: ObserverConfig::default(),
             alerts: vec![AlertRule {
@@ -1303,6 +1315,7 @@ mod tests {
         let variants = vec![
             IsolationConfig::Seatbelt {
                 profile_overrides: None,
+                deny_paths: vec![],
             },
             IsolationConfig::Process,
             IsolationConfig::None,
@@ -1446,14 +1459,16 @@ mod tests {
         assert_eq!(IsolationConfig::None.to_string(), "None");
         assert_eq!(
             IsolationConfig::Seatbelt {
-                profile_overrides: None
+                profile_overrides: None,
+                deny_paths: vec![],
             }
             .to_string(),
             "Seatbelt"
         );
         assert_eq!(
             IsolationConfig::Seatbelt {
-                profile_overrides: Some(PathBuf::from("/tmp/custom.sb"))
+                profile_overrides: Some(PathBuf::from("/tmp/custom.sb")),
+                deny_paths: vec![],
             }
             .to_string(),
             "Seatbelt (overrides: /tmp/custom.sb)"
