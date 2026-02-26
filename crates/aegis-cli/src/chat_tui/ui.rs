@@ -175,9 +175,16 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
 
     // Handle scrolling: scroll_offset=0 means bottom (latest).
     let visible_height = app.visible_height;
+    let max_scroll = total_visual.saturating_sub(visible_height);
+
+    // Clamp scroll_offset so it never points into blank space (can happen
+    // when messages are pruned or the terminal is resized).
+    if app.scroll_offset > max_scroll {
+        app.scroll_offset = max_scroll;
+    }
+
     let scroll_from_top = if total_visual > visible_height {
-        total_visual
-            .saturating_sub(visible_height)
+        max_scroll
             .saturating_sub(app.scroll_offset)
             .min(u16::MAX as usize)
     } else {
@@ -189,22 +196,25 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 
-    // Scroll indicator
+    // Scroll indicator pinned to top of chat area when scrolled up
     if app.scroll_offset > 0 {
-        let indicator = Span::styled(
-            format!(" [{} lines above] ", app.scroll_offset),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::DIM),
-        );
-        let indicator_line = Paragraph::new(Line::from(indicator));
+        let pct = if max_scroll > 0 {
+            100 * app.scroll_offset / max_scroll
+        } else {
+            100
+        };
+        let indicator = Line::from(Span::styled(
+            format!(" Scroll: {}% ({}/{} lines)  [Esc] scroll mode  [G/End] jump to bottom ",
+                    pct, app.scroll_offset, max_scroll),
+            Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 40, 40)),
+        ));
         let indicator_area = Rect {
             x: area.x,
-            y: area.y + area.height.saturating_sub(1),
+            y: area.y,
             width: area.width,
             height: 1,
         };
-        f.render_widget(indicator_line, indicator_area);
+        f.render_widget(Paragraph::new(vec![indicator]), indicator_area);
     }
 }
 
