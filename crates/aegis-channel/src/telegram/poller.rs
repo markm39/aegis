@@ -69,34 +69,12 @@ pub async fn poll_loop(
                         if let Some(text) = msg.text {
                             let action = format::parse_text_command(&text);
 
-                            match &action {
-                                InboundAction::Unknown(s) => {
-                                    // Send help text back
-                                    let help = if s.is_empty() {
-                                        format::help_text()
-                                    } else {
-                                        format!(
-                                            "Unknown command: `{}`\n\n{}",
-                                            format::escape_md(s),
-                                            format::help_text()
-                                        )
-                                    };
-                                    let _ = api
-                                        .send_message(
-                                            chat_id,
-                                            &help,
-                                            Some("MarkdownV2"),
-                                            None,
-                                            false,
-                                        )
-                                        .await;
-                                }
-                                InboundAction::Command(_) => {
-                                    if action_tx.send(action).await.is_err() {
-                                        warn!("action channel closed, stopping poller");
-                                        return;
-                                    }
-                                }
+                            // Forward all actions to the channel runner.
+                            // The runner handles commands (fleet routing) and
+                            // plain text (LLM chat via ChannelChat).
+                            if action_tx.send(action).await.is_err() {
+                                warn!("action channel closed, stopping poller");
+                                return;
                             }
                         }
                     }
