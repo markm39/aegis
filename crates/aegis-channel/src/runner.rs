@@ -700,12 +700,48 @@ async fn handle_inbound_action(
 ) {
     match action {
         InboundAction::Command(ref cmd) => {
-            // Legacy single-agent command -- log it
             info!(?cmd, "received inbound command");
 
-            // If in fleet mode, try to convert to a DaemonCommand
-            // (single-agent commands don't have agent names, so they
-            // can't be forwarded directly -- just log for now)
+            // Convert single-agent Command to DaemonCommand and forward.
+            // Commands that need an agent name use the first agent (fleet
+            // mode expects agent names, but the single-agent Telegram
+            // commands don't include them).
+            if let Some(tx) = feedback_tx {
+                use aegis_control::command::Command;
+                let daemon_cmd = match cmd {
+                    Command::Status => Some(DaemonCommand::ListAgents),
+                    Command::Approve { request_id } => {
+                        // Single-agent approve: use first agent
+                        Some(DaemonCommand::ApproveRequest {
+                            name: String::new(),
+                            request_id: request_id.to_string(),
+                        })
+                    }
+                    Command::Deny { request_id, reason: _ } => {
+                        Some(DaemonCommand::DenyRequest {
+                            name: String::new(),
+                            request_id: request_id.to_string(),
+                        })
+                    }
+                    Command::GetOutput { lines: _ } => {
+                        Some(DaemonCommand::ListAgents) // Show fleet status
+                    }
+                    Command::SendInput { text: _ } => {
+                        // Can't route without agent name; log and skip
+                        None
+                    }
+                    Command::Nudge { message: _ } => None,
+                    Command::Shutdown { message: _ } => {
+                        Some(DaemonCommand::Shutdown)
+                    }
+                    Command::UpdatePolicy => None,
+                };
+                if let Some(dcmd) = daemon_cmd {
+                    if tx.send(dcmd).is_err() {
+                        warn!("failed to forward command (daemon feedback channel closed)");
+                    }
+                }
+            }
         }
         InboundAction::Unknown(ref text) => {
             if text.is_empty() {
