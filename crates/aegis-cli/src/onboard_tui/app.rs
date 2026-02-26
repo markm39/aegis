@@ -2513,6 +2513,7 @@ Be conversational and concise. Most developers want Seatbelt plus their specific
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            channel_heartbeat: Default::default(),
             default_security_preset: Some(match self.security_preset_selected {
                 // 0 = AI-guided (uses custom rules)
                 0 => SecurityPresetKind::Custom,

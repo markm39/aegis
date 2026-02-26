@@ -108,6 +108,12 @@ pub struct DaemonConfig {
     /// Agent heartbeat runner configuration for keepalive messages.
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
+    /// LLM-powered autonomous heartbeat for messaging channels.
+    ///
+    /// Reads HEARTBEAT.md periodically, sends to LLM, and delivers
+    /// substantive responses to Telegram. Suppresses HEARTBEAT_OK no-ops.
+    #[serde(default)]
+    pub channel_heartbeat: ChannelHeartbeatConfig,
     /// Default security preset applied to agents that don't override it.
     ///
     /// Set during onboarding; controls default policy generation and
@@ -574,6 +580,44 @@ impl Default for HeartbeatConfig {
         Self {
             enabled: true,
             interval_secs: 60,
+        }
+    }
+}
+
+/// Configuration for the LLM-powered channel heartbeat.
+///
+/// When enabled, the daemon periodically reads HEARTBEAT.md, sends it to the
+/// LLM with workspace context, and delivers substantive responses to the
+/// messaging channel (Telegram). Responses containing only `HEARTBEAT_OK` are
+/// suppressed to avoid spam.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChannelHeartbeatConfig {
+    /// Whether the channel heartbeat is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Interval in seconds between checks (default 600 = 10 minutes).
+    #[serde(default = "default_channel_heartbeat_interval")]
+    pub interval_secs: u64,
+    /// Max chars remaining after HEARTBEAT_OK stripping to still count as
+    /// "empty" (default 300). Responses shorter than this are suppressed.
+    #[serde(default = "default_ack_max_chars")]
+    pub ack_max_chars: usize,
+}
+
+fn default_channel_heartbeat_interval() -> u64 {
+    600
+}
+
+fn default_ack_max_chars() -> usize {
+    300
+}
+
+impl Default for ChannelHeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: 600,
+            ack_max_chars: 300,
         }
     }
 }
@@ -1068,6 +1112,7 @@ mod tests {
             retention: RetentionConfig::default(),
             redaction: RedactionConfig::default(),
             heartbeat: HeartbeatConfig::default(),
+            channel_heartbeat: ChannelHeartbeatConfig::default(),
             default_security_preset: None,
             default_isolation: None,
             default_network_rules: vec![],

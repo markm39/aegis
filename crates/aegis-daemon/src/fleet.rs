@@ -976,6 +976,7 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            channel_heartbeat: Default::default(),
             default_security_preset: None,
             default_isolation: None,
             default_network_rules: vec![],

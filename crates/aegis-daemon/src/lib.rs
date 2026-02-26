@@ -556,6 +556,101 @@ fn build_channel_system_prompt() -> String {
     prompt
 }
 
+/// Check if HEARTBEAT.md content has actionable items (not just template boilerplate).
+///
+/// Ported from TUI's `ChatApp::is_heartbeat_content_actionable()`. Returns true
+/// only if at least one line contains non-boilerplate content.
+fn is_heartbeat_content_actionable(content: &str) -> bool {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Skip empty, headers, horizontal rules, fenced code markers.
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("---")
+            || trimmed.starts_with("```")
+        {
+            continue;
+        }
+        // Skip markdown emphasis-only lines (e.g. _Things to check..._)
+        if trimmed.starts_with('_') && trimmed.ends_with('_') {
+            continue;
+        }
+        // Skip known template boilerplate.
+        let lower = trimmed.to_lowercase();
+        if lower.contains("what goes here")
+            || lower.contains("update this file")
+            || lower.contains("keep this file empty")
+            || lower.contains("persists across sessions")
+            || lower.starts_with("if nothing needs attention")
+            || lower.contains("heartbeat_ok")
+        {
+            continue;
+        }
+        // Skip generic list items without checkboxes.
+        if lower.starts_with("- ")
+            && !lower.contains("- [ ]")
+            && !lower.contains("- [x]")
+            && (lower.contains("recurring checks")
+                || lower.contains("monitoring")
+                || lower.contains("build status")
+                || lower.contains("files or configs")
+                || lower.contains("reminders about")
+                || lower.contains("time-sensitive"))
+        {
+            continue;
+        }
+        // Found a non-boilerplate, non-empty line.
+        return true;
+    }
+    false
+}
+
+/// Check if a heartbeat LLM response is effectively empty (HEARTBEAT_OK or trivial).
+///
+/// Strips HEARTBEAT_OK token variants and returns true if the remaining text
+/// is shorter than `ack_max_chars`.
+fn is_heartbeat_response_empty(content: &str, ack_max_chars: usize) -> bool {
+    let text = content.trim();
+    if text.is_empty() {
+        return true;
+    }
+    let stripped = text
+        .replace("HEARTBEAT_OK", "")
+        .replace("heartbeat_ok", "")
+        .replace("Heartbeat_OK", "")
+        .replace("HEARTBEAT_OK.", "")
+        .trim()
+        .to_string();
+    stripped.len() < ack_max_chars
+}
+
+/// Detect the LLM model to use for channel operations (chat, heartbeat).
+///
+/// Checks the credential store for a configured model, then falls back to
+/// the first available provider's default model.
+fn detect_channel_model() -> String {
+    let store = aegis_types::credentials::CredentialStore::load_default().unwrap_or_default();
+    let mut found = None;
+    for detected in aegis_types::providers::scan_providers() {
+        if detected.available {
+            if let Some(cred) = store.get(detected.info.id) {
+                if let Some(ref m) = cred.model {
+                    found = Some(m.clone());
+                    break;
+                }
+            }
+        }
+    }
+    found
+        .or_else(|| {
+            aegis_types::providers::scan_providers()
+                .into_iter()
+                .find(|d| d.available && !d.info.default_model.is_empty())
+                .map(|d| d.info.default_model.to_string())
+        })
+        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FeatureListField {
     RequiredControls,
@@ -937,6 +1032,12 @@ pub struct DaemonRuntime {
     channel_chat_history: Vec<aegis_types::llm::LlmMessage>,
     /// Cached system prompt for channel chat (built from workspace context files).
     channel_system_prompt: Option<String>,
+    /// Last time a channel heartbeat LLM check was triggered.
+    channel_heartbeat_last: Instant,
+    /// Consecutive heartbeats that returned empty/HEARTBEAT_OK (for adaptive backoff).
+    channel_heartbeat_consecutive_ok: u32,
+    /// Last substantive heartbeat text sent (for duplicate suppression).
+    channel_heartbeat_last_text: Option<String>,
     /// Thread handle for the notification channel (detect panics).
     channel_thread: Option<std::thread::JoinHandle<()>>,
     /// Cedar policy engine for evaluating tool use requests from hooks.
@@ -1305,6 +1406,9 @@ impl DaemonRuntime {
             channel_cmd_rx: None,
             channel_chat_history: Vec::new(),
             channel_system_prompt: None,
+            channel_heartbeat_last: Instant::now(),
+            channel_heartbeat_consecutive_ok: 0,
+            channel_heartbeat_last_text: None,
             channel_thread: None,
             policy_engine,
             aegis_config,
@@ -2142,6 +2246,9 @@ impl DaemonRuntime {
                 // Agent keepalives + heartbeat-gated deferred reply drain
                 self.tick_heartbeat();
 
+                // LLM-powered channel heartbeat (HEARTBEAT.md -> LLM -> Telegram)
+                self.tick_channel_heartbeat();
+
                 // Drain time-based deferred replies that are now due
                 self.drain_deferred_replies();
 
@@ -2360,6 +2467,154 @@ impl DaemonRuntime {
         for reply in heartbeat_replies {
             self.deliver_deferred_reply(reply);
         }
+    }
+
+    /// LLM-powered channel heartbeat: read HEARTBEAT.md, send to LLM with
+    /// workspace context, and deliver substantive responses to Telegram.
+    ///
+    /// Suppresses HEARTBEAT_OK no-ops and uses adaptive backoff (up to 4x
+    /// interval) when consecutive checks find nothing actionable. Duplicates
+    /// are also suppressed.
+    fn tick_channel_heartbeat(&mut self) {
+        // Preflight: need channel + LLM + feature enabled.
+        if self.channel_tx.is_none() || self.llm_client.is_none() {
+            return;
+        }
+        if !self.config.channel_heartbeat.enabled {
+            return;
+        }
+
+        // Adaptive backoff: effective interval grows with consecutive no-ops (up to 4x).
+        let base_secs = self.config.channel_heartbeat.interval_secs;
+        let backoff_mult = (1 + self.channel_heartbeat_consecutive_ok).min(4) as u64;
+        let effective = std::time::Duration::from_secs(base_secs.saturating_mul(backoff_mult));
+        if self.channel_heartbeat_last.elapsed() < effective {
+            return;
+        }
+        self.channel_heartbeat_last = Instant::now();
+
+        // Read HEARTBEAT.md from workspace.
+        let path = aegis_types::daemon::workspace_dir().join("HEARTBEAT.md");
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return, // No file, skip silently.
+        };
+
+        // Skip if only template boilerplate (no API call wasted).
+        if !is_heartbeat_content_actionable(&content) {
+            return;
+        }
+
+        // Build heartbeat prompt (same format as TUI's trigger_heartbeat).
+        let now = chrono::Local::now();
+        let uptime_secs = self.started_at.elapsed().as_secs();
+        let uptime_display = if uptime_secs < 60 {
+            format!("{uptime_secs}s")
+        } else if uptime_secs < 3600 {
+            format!("{}m {}s", uptime_secs / 60, uptime_secs % 60)
+        } else {
+            format!("{}h {}m", uptime_secs / 3600, (uptime_secs % 3600) / 60)
+        };
+
+        let prompt = format!(
+            "[HEARTBEAT -- autonomous check @ {}]\n\
+             Daemon uptime: {}\n\
+             Consecutive idle heartbeats: {}\n\n\
+             ---\n\n\
+             {}",
+            now.format("%Y-%m-%d %H:%M %Z"),
+            uptime_display,
+            self.channel_heartbeat_consecutive_ok,
+            content.trim(),
+        );
+
+        let model = detect_channel_model();
+
+        // Build/cache system prompt from workspace context files.
+        let system_prompt = self
+            .channel_system_prompt
+            .get_or_insert_with(build_channel_system_prompt)
+            .clone();
+
+        // Heartbeat uses its own isolated conversation (not channel_chat_history).
+        let messages = vec![aegis_types::llm::LlmMessage::user(&prompt)];
+        let request = aegis_types::llm::LlmRequest {
+            model: model.clone(),
+            messages,
+            temperature: Some(0.3),
+            max_tokens: Some(1024),
+            system_prompt: Some(system_prompt),
+            tools: Vec::new(),
+            thinking_budget: None,
+        };
+
+        // Complete the LLM call and extract needed data before taking &mut self.
+        let (response, provider_name) = {
+            let client = self.llm_client.as_ref().unwrap();
+            match client.complete(&request) {
+                Ok(resp) => {
+                    let provider = client
+                        .registry()
+                        .resolve_provider(&model)
+                        .unwrap_or("unknown")
+                        .to_string();
+                    (resp, provider)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "channel heartbeat LLM call failed");
+                    return;
+                }
+            }
+        };
+
+        let ack_max = self.config.channel_heartbeat.ack_max_chars;
+        if is_heartbeat_response_empty(&response.content, ack_max) {
+            self.channel_heartbeat_consecutive_ok += 1;
+            tracing::debug!(
+                consecutive_ok = self.channel_heartbeat_consecutive_ok,
+                "channel heartbeat: no action needed"
+            );
+            return;
+        }
+
+        // Duplicate suppression: don't send the same text twice in a row.
+        if self
+            .channel_heartbeat_last_text
+            .as_deref()
+            == Some(response.content.trim())
+        {
+            tracing::debug!("channel heartbeat: duplicate response suppressed");
+            self.channel_heartbeat_consecutive_ok += 1;
+            return;
+        }
+
+        // Substantive response -- deliver to channel.
+        self.channel_heartbeat_consecutive_ok = 0;
+        self.channel_heartbeat_last_text = Some(response.content.trim().to_string());
+        self.send_to_channel_with_deferral(&response.content, "heartbeat");
+
+        // Audit log.
+        let action = Action::new(
+            "channel-heartbeat".to_string(),
+            ActionKind::LlmComplete {
+                provider: provider_name,
+                model: response.model.clone(),
+                endpoint: String::new(),
+                input_tokens: response.usage.input_tokens,
+                output_tokens: response.usage.output_tokens,
+            },
+        );
+        let verdict = Verdict::allow(
+            action.id,
+            format!(
+                "channel heartbeat: {} in={} out={}",
+                response.model,
+                response.usage.input_tokens,
+                response.usage.output_tokens
+            ),
+            None,
+        );
+        self.append_audit_entry(&action, &verdict);
     }
 
     /// Drain time-based deferred replies that are ready for delivery.
@@ -5702,30 +5957,7 @@ impl DaemonRuntime {
                     self.channel_chat_history.drain(..drain);
                 }
 
-                // Detect model: credential store model > first available provider default.
-                let model = {
-                    let store =
-                        aegis_types::credentials::CredentialStore::load_default().unwrap_or_default();
-                    let mut found = None;
-                    for detected in aegis_types::providers::scan_providers() {
-                        if detected.available {
-                            if let Some(cred) = store.get(detected.info.id) {
-                                if let Some(ref m) = cred.model {
-                                    found = Some(m.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    found
-                        .or_else(|| {
-                            aegis_types::providers::scan_providers()
-                                .into_iter()
-                                .find(|d| d.available && !d.info.default_model.is_empty())
-                                .map(|d| d.info.default_model.to_string())
-                        })
-                        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
-                };
+                let model = detect_channel_model();
 
                 // Build/cache system prompt from workspace context files
                 // (SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md).
@@ -7257,6 +7489,7 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            channel_heartbeat: Default::default(),
             default_security_preset: None,
             default_isolation: None,
             default_network_rules: vec![],
@@ -7608,6 +7841,7 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            channel_heartbeat: Default::default(),
             default_security_preset: None,
             default_isolation: None,
             default_network_rules: vec![],
@@ -8298,6 +8532,7 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            channel_heartbeat: Default::default(),
             default_security_preset: None,
             default_isolation: None,
             default_network_rules: vec![],
@@ -8399,6 +8634,7 @@ mod tests {
             retention: Default::default(),
             redaction: Default::default(),
             heartbeat: Default::default(),
+            channel_heartbeat: Default::default(),
             default_security_preset: None,
             default_isolation: None,
             default_network_rules: vec![],
