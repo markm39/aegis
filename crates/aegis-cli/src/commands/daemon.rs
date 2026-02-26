@@ -39,7 +39,10 @@ use crate::tui_utils::truncate_str;
 ///
 /// Called before starting a new daemon to prevent zombie accumulation.
 /// Sends SIGTERM first, waits briefly, then SIGKILL if still alive.
+/// Only removes socket/PID files if a stale process was found and killed,
+/// or if the PID file points to a dead process.
 fn kill_stale_daemon() {
+    let should_cleanup;
     if let Some(pid) = persistence::read_pid() {
         if persistence::is_process_alive(pid) {
             let pid_str = pid.to_string();
@@ -56,10 +59,17 @@ fn kill_stale_daemon() {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
+        // PID file exists (process was alive or dead) -- clean up stale files
+        should_cleanup = true;
+    } else {
+        // No PID file but socket might be stale from a crash
+        should_cleanup = daemon_dir().join("daemon.sock").exists();
     }
-    // Clean up stale socket and PID file regardless
-    let _ = std::fs::remove_file(daemon_dir().join("daemon.sock"));
-    persistence::remove_pid_file();
+
+    if should_cleanup {
+        let _ = std::fs::remove_file(daemon_dir().join("daemon.sock"));
+        persistence::remove_pid_file();
+    }
 }
 
 /// Initialize a daemon configuration file at `~/.aegis/daemon/daemon.toml`.
@@ -371,11 +381,11 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
 
     let pid = child.id();
 
-    // Poll to verify the daemon started and is accepting connections.
+    // Poll until the daemon is accepting connections (responds to Ping).
     // The daemon needs time to parse config, bind socket, and start the
-    // control server. We try for up to 3 seconds with 200ms intervals.
+    // control server. We try for up to 5 seconds with 200ms intervals.
     let client = DaemonClient::default_path();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
         if !persistence::is_process_alive(pid) {
@@ -384,7 +394,11 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
                 log_dir.display()
             );
         }
-        if client.is_running() {
+        // Use send_with_timeout for the ping -- faster failure than is_running()
+        if client
+            .send_with_timeout(&DaemonCommand::Ping, 500)
+            .is_ok()
+        {
             return Ok(format!("Daemon started (PID {pid})."));
         }
         if std::time::Instant::now() >= deadline {
@@ -393,7 +407,9 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
     }
 
     // Process alive but socket not responding -- could still be initializing
-    Ok(format!("Daemon started (PID {pid}), socket not yet ready."))
+    Ok(format!(
+        "Daemon started (PID {pid}), socket not yet ready."
+    ))
 }
 
 /// Stop a running daemon via the control socket.

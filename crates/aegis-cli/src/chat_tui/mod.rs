@@ -1202,7 +1202,7 @@ impl ChatApp {
 
     /// Check whether a heartbeat thinking turn should fire now.
     fn is_heartbeat_due(&self) -> bool {
-        if !self.heartbeat_enabled || !self.connected {
+        if !self.heartbeat_enabled {
             return false;
         }
         // Don't stack on top of an active LLM request.
@@ -5260,6 +5260,12 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     // Seed workspace with template files; detect first run.
     let is_first_run = seed_workspace();
 
+    // Auto-start daemon if config exists and daemon isn't running.
+    // The daemon must be running for LLM requests, Telegram, and agents.
+    if !client.is_running() && aegis_types::daemon::daemon_config_path().exists() {
+        let _ = crate::commands::daemon::start_quiet();
+    }
+
     let events = EventHandler::new(TICK_RATE_MS);
     let mut app = ChatApp::new(Some(client), model);
     app.bootstrap_pending = is_first_run;
@@ -5285,11 +5291,9 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
 
     let result = run_event_loop(&mut terminal, &events, &mut app);
 
-    // Stop daemon on TUI exit to prevent zombie process accumulation.
-    // Uses the short timeout variant so we don't hang on a frozen daemon.
-    if let Some(client) = &app.client {
-        let _ = client.send_with_timeout(&DaemonCommand::Shutdown, 1000);
-    }
+    // NOTE: Do NOT shut down the daemon here. The daemon must outlive the TUI
+    // so Telegram, agents, and background services keep running. Zombie
+    // prevention is handled by kill_stale_daemon() on daemon startup.
 
     // Restore terminal
     crossterm::terminal::disable_raw_mode()?;
