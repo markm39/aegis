@@ -838,6 +838,16 @@ pub enum DaemonCommand {
         #[serde(default)]
         tools: Option<serde_json::Value>,
     },
+    /// Chat message from a notification channel (Telegram, Slack, etc.).
+    ///
+    /// The daemon maintains a short conversation history per channel and
+    /// routes the message to the configured LLM provider. The response
+    /// content is returned directly in `DaemonResponse::message` so
+    /// `drain_channel_commands()` can forward it to Telegram as-is.
+    ChannelChat {
+        /// The user's message text.
+        text: String,
+    },
 
     // -- Setup code generation --
     /// Generate a setup code with QR code for device pairing.
@@ -1157,6 +1167,7 @@ impl DaemonCommand {
             DaemonCommand::RemoveDevice { .. } => "daemon:remove_device",
             DaemonCommand::DeviceHeartbeat { .. } => "daemon:device_heartbeat",
             DaemonCommand::LlmComplete { .. } => "daemon:llm_complete",
+            DaemonCommand::ChannelChat { .. } => "daemon:channel_chat",
             DaemonCommand::GenerateSetupCode { .. } => "daemon:generate_setup_code",
             DaemonCommand::QueueDeviceCommand { .. } => "daemon:queue_device_command",
             DaemonCommand::PollDeviceCommands { .. } => "daemon:poll_device_commands",

@@ -864,6 +864,8 @@ pub struct DaemonRuntime {
     channel_tx: Option<mpsc::Sender<ChannelInput>>,
     /// Receiver for inbound commands from the notification channel.
     channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
+    /// Conversation history for Telegram/channel chat (capped at 20 turns).
+    channel_chat_history: Vec<aegis_types::llm::LlmMessage>,
     /// Thread handle for the notification channel (detect panics).
     channel_thread: Option<std::thread::JoinHandle<()>>,
     /// Cedar policy engine for evaluating tool use requests from hooks.
@@ -1230,6 +1232,7 @@ impl DaemonRuntime {
             started_at: Instant::now(),
             channel_tx: None,
             channel_cmd_rx: None,
+            channel_chat_history: Vec::new(),
             channel_thread: None,
             policy_engine,
             aegis_config,
@@ -5599,6 +5602,84 @@ impl DaemonRuntime {
                         }
                     }
                     Err(e) => DaemonResponse::error(format!("LLM completion failed: {e}")),
+                }
+            }
+
+            DaemonCommand::ChannelChat { text } => {
+                let Some(ref client) = self.llm_client else {
+                    return DaemonResponse::error(
+                        "LLM client not initialized (no API keys configured)",
+                    );
+                };
+
+                // Append user message to history.
+                self.channel_chat_history
+                    .push(aegis_types::llm::LlmMessage::user(&text));
+
+                // Cap history at 20 messages to bound token usage.
+                const MAX_HISTORY: usize = 20;
+                if self.channel_chat_history.len() > MAX_HISTORY {
+                    let drain = self.channel_chat_history.len() - MAX_HISTORY;
+                    self.channel_chat_history.drain(..drain);
+                }
+
+                // Use a sensible default model. The registry always registers
+                // Anthropic, so this will route to the available provider.
+                let model = "claude-sonnet-4-20250514".to_string();
+
+                let system_prompt = "You are Aegis, a fleet management assistant. \
+                    You are chatting via Telegram. Keep responses concise \
+                    (under 2000 chars for Telegram limits). Use plain text, no markdown."
+                    .to_string();
+
+                let request = aegis_types::llm::LlmRequest {
+                    model: model.clone(),
+                    messages: self.channel_chat_history.clone(),
+                    temperature: Some(0.7),
+                    max_tokens: Some(1024),
+                    system_prompt: Some(system_prompt),
+                    tools: Vec::new(),
+                    thinking_budget: None,
+                };
+
+                match client.complete(&request) {
+                    Ok(response) => {
+                        // Append assistant reply to history.
+                        self.channel_chat_history
+                            .push(aegis_types::llm::LlmMessage::assistant(&response.content));
+
+                        // Audit logging (same pattern as LlmComplete).
+                        let action = Action::new(
+                            "channel-chat".to_string(),
+                            ActionKind::LlmComplete {
+                                provider: client
+                                    .registry()
+                                    .resolve_provider(&model)
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                model: response.model.clone(),
+                                endpoint: String::new(),
+                                input_tokens: response.usage.input_tokens,
+                                output_tokens: response.usage.output_tokens,
+                            },
+                        );
+                        let verdict = Verdict::allow(
+                            action.id,
+                            format!(
+                                "channel chat: {} in={} out={}",
+                                response.model,
+                                response.usage.input_tokens,
+                                response.usage.output_tokens
+                            ),
+                            None,
+                        );
+                        self.append_audit_entry(&action, &verdict);
+
+                        // Return content directly -- drain_channel_commands()
+                        // sends response.message to Telegram.
+                        DaemonResponse::ok(response.content)
+                    }
+                    Err(e) => DaemonResponse::error(format!("LLM error: {e}")),
                 }
             }
 

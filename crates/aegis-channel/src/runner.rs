@@ -781,7 +781,19 @@ async fn handle_inbound_action(
                 }
             }
 
-            info!(text, "unrecognized input from channel");
+            // Forward plain text to daemon for LLM chat.
+            if let Some(tx) = feedback_tx {
+                if tx
+                    .send(DaemonCommand::ChannelChat {
+                        text: text.to_string(),
+                    })
+                    .is_err()
+                {
+                    warn!("failed to forward chat message (daemon feedback channel closed)");
+                }
+            } else {
+                info!(text, "unrecognized input from channel (no feedback channel)");
+            }
         }
     }
 }
