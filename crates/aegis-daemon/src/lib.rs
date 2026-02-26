@@ -487,6 +487,75 @@ fn strip_yaml_scalar(value: &str) -> String {
         .to_string()
 }
 
+/// Build a system prompt for channel (Telegram) chat.
+///
+/// Loads the same workspace context files as the TUI's system prompt
+/// (SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md) but tailored
+/// for Telegram's constraints (concise responses, plain text).
+fn build_channel_system_prompt() -> String {
+    use std::fmt::Write;
+
+    let ws = aegis_types::daemon::workspace_dir();
+    let max_file_chars: usize = 8000;
+
+    let mut prompt = String::with_capacity(4096);
+
+    prompt.push_str(
+        "You are chatting via Telegram. Keep responses concise (under 2000 chars). \
+         Use plain text, no markdown formatting or code blocks.\n\n",
+    );
+
+    // Load workspace context files (same set as the TUI's system_prompt.rs)
+    let files: &[(&str, &str)] = &[
+        ("SOUL.md", "Soul"),
+        ("IDENTITY.md", "Identity"),
+        ("USER.md", "User"),
+        ("MEMORY.md", "Memory"),
+        ("HEARTBEAT.md", "Heartbeat"),
+    ];
+
+    let mut has_soul = false;
+    let mut has_memory = false;
+
+    for &(filename, label) in files {
+        let path = ws.join(filename);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            let trimmed = contents.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if filename == "SOUL.md" {
+                has_soul = true;
+            }
+            if filename == "MEMORY.md" {
+                has_memory = true;
+            }
+            let content = if contents.len() > max_file_chars {
+                format!("{}...[truncated]", &contents[..max_file_chars])
+            } else {
+                contents
+            };
+            let _ = writeln!(prompt, "# {label}\n\n{content}\n");
+        }
+    }
+
+    // Context-file instructions (matches TUI behaviour)
+    if has_soul {
+        prompt.push_str(
+            "Embody the persona and tone from SOUL.md above. \
+             Avoid stiff, generic replies.\n\n",
+        );
+    }
+    if has_memory {
+        prompt.push_str(
+            "MEMORY.md contains your persistent notes from prior sessions. \
+             Reference it for context.\n\n",
+        );
+    }
+
+    prompt
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FeatureListField {
     RequiredControls,
@@ -866,6 +935,8 @@ pub struct DaemonRuntime {
     channel_cmd_rx: Option<mpsc::Receiver<DaemonCommand>>,
     /// Conversation history for Telegram/channel chat (capped at 20 turns).
     channel_chat_history: Vec<aegis_types::llm::LlmMessage>,
+    /// Cached system prompt for channel chat (built from workspace context files).
+    channel_system_prompt: Option<String>,
     /// Thread handle for the notification channel (detect panics).
     channel_thread: Option<std::thread::JoinHandle<()>>,
     /// Cedar policy engine for evaluating tool use requests from hooks.
@@ -1233,6 +1304,7 @@ impl DaemonRuntime {
             channel_tx: None,
             channel_cmd_rx: None,
             channel_chat_history: Vec::new(),
+            channel_system_prompt: None,
             channel_thread: None,
             policy_engine,
             aegis_config,
@@ -5606,6 +5678,13 @@ impl DaemonRuntime {
             }
 
             DaemonCommand::ChannelChat { text } => {
+                // Handle /reset: clear history and force prompt rebuild.
+                if text == "/reset" {
+                    self.channel_chat_history.clear();
+                    self.channel_system_prompt = None;
+                    return DaemonResponse::ok("Chat history and context cleared.");
+                }
+
                 let Some(ref client) = self.llm_client else {
                     return DaemonResponse::error(
                         "LLM client not initialized (no API keys configured)",
@@ -5648,10 +5727,12 @@ impl DaemonRuntime {
                         .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
                 };
 
-                let system_prompt = "You are Aegis, a fleet management assistant. \
-                    You are chatting via Telegram. Keep responses concise \
-                    (under 2000 chars for Telegram limits). Use plain text, no markdown."
-                    .to_string();
+                // Build/cache system prompt from workspace context files
+                // (SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md).
+                let system_prompt = self
+                    .channel_system_prompt
+                    .get_or_insert_with(build_channel_system_prompt)
+                    .clone();
 
                 let request = aegis_types::llm::LlmRequest {
                     model: model.clone(),
