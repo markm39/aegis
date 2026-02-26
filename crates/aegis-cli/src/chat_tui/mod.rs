@@ -1969,6 +1969,20 @@ impl ChatApp {
         }
     }
 
+    /// Handle mouse events (scroll wheel).
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::MouseEventKind;
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = (self.scroll_offset + 3).min(self.max_scroll());
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(3);
+            }
+            _ => {}
+        }
+    }
+
     /// Enter command mode.
     fn enter_command_mode(&mut self) {
         self.input_mode = InputMode::Command;
@@ -5222,7 +5236,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(
             std::io::stderr(),
-            crossterm::style::Print("\x1b[?1007l"),
+            crossterm::event::DisableMouseCapture,
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::event::DisableBracketedPaste,
             crossterm::cursor::Show,
@@ -5238,9 +5252,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
         crossterm::style::Print("\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H"),
         crossterm::terminal::EnterAlternateScreen,
         crossterm::event::EnableBracketedPaste,
-        // Alternate scroll mode: terminal translates wheel events to Up/Down arrow
-        // keys without requiring mouse capture, so native text selection still works.
-        crossterm::style::Print("\x1b[?1007h"),
+        crossterm::event::EnableMouseCapture,
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -5283,7 +5295,7 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
-        crossterm::style::Print("\x1b[?1007l"),
+        crossterm::event::DisableMouseCapture,
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::event::DisableBracketedPaste,
     )?;
@@ -5304,7 +5316,7 @@ fn run_event_loop(
         match events.next()? {
             AppEvent::Key(key) => app.handle_key(key),
             AppEvent::Paste(text) => app.handle_paste(&text),
-            AppEvent::Mouse(_) => {}
+            AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
             AppEvent::Tick => {
                 if app.is_heartbeat_due() {
                     app.trigger_heartbeat();
