@@ -498,15 +498,92 @@ fn build_channel_system_prompt() -> String {
     let ws = aegis_types::daemon::workspace_dir();
     let max_file_chars: usize = 8000;
 
-    let mut prompt = String::with_capacity(4096);
+    let mut prompt = String::with_capacity(8192);
 
+    // Core identity and behaviour
     prompt.push_str(
-        "You are chatting via Telegram. Keep responses concise (under 2000 chars). \
-         Use plain text, no markdown formatting or code blocks.\n\
-         You have access to tools (bash, read_file, write_file, edit_file, glob_search, \
-         grep_search) that let you take actions on the user's computer. Use them when \
-         the user asks you to do something -- read files, run commands, take notes, etc.\n\n",
+        "You are an autonomous agent chatting via Telegram. Keep responses concise \
+         (under 2000 chars). Use plain text, no markdown formatting.\n\n\
+         You have FULL access to the user's computer through your tools: bash, \
+         read_file, write_file, edit_file, glob_search, grep_search. When the user \
+         asks you to DO something -- record audio, take notes, search files, run \
+         commands, manage tasks -- use your tools to actually do it. Do not describe \
+         what you would do or say you can't. Check what's available and make it happen.\n\n",
     );
+
+    // Discover installed skills from ~/.aegis/skills/
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let skills_dir = std::path::PathBuf::from(&home)
+        .join(".aegis")
+        .join("skills");
+
+    let mut skills: Vec<(String, String, Vec<String>)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let manifest_path = path.join("manifest.toml");
+            if let Ok(manifest) = std::fs::read_to_string(&manifest_path) {
+                let desc = parse_manifest_field(&manifest, "description")
+                    .unwrap_or_default();
+                let entry_point = parse_manifest_field(&manifest, "entry_point")
+                    .unwrap_or_else(|| "run.sh".to_string());
+                let commands = parse_manifest_commands(&manifest);
+                let invoke_path = path.join(&entry_point);
+                let mut skill_lines = vec![format!(
+                    "- {name}: {desc}\n  Path: {}",
+                    invoke_path.display()
+                )];
+                if !commands.is_empty() {
+                    for cmd in &commands {
+                        skill_lines.push(format!("  {cmd}"));
+                    }
+                }
+                skills.push((name, skill_lines.join("\n"), commands));
+            }
+        }
+    }
+    skills.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if !skills.is_empty() {
+        prompt.push_str("# Installed Skills\n\n");
+        prompt.push_str(
+            "Skills are shell scripts. Invoke via bash with JSON on stdin:\n\
+             echo '{\"parameters\":{\"args\":[\"ARG1\",\"ARG2\"]}}' | SCRIPT_PATH\n\n",
+        );
+        for (_, desc, _) in &skills {
+            prompt.push_str(desc);
+            prompt.push('\n');
+        }
+        prompt.push('\n');
+    }
+
+    // Check for useful CLI tools
+    let mut available_tools = Vec::new();
+    for tool in &["ffmpeg", "whisper", "sox", "say", "pandoc", "jq"] {
+        if std::process::Command::new("which")
+            .arg(tool)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            available_tools.push(*tool);
+        }
+    }
+    if !available_tools.is_empty() {
+        let _ = writeln!(
+            prompt,
+            "Available CLI tools: {}\n",
+            available_tools.join(", ")
+        );
+    }
 
     // Load workspace context files (same set as the TUI's system_prompt.rs)
     let files: &[(&str, &str)] = &[
@@ -557,6 +634,87 @@ fn build_channel_system_prompt() -> String {
     }
 
     prompt
+}
+
+/// Parse a simple `key = "value"` field from a TOML manifest string.
+fn parse_manifest_field(manifest: &str, key: &str) -> Option<String> {
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(key) {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let val = rest.trim().trim_matches('"').trim_matches('\'').trim();
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse `[[commands]]` entries from a skill manifest, returning usage strings.
+fn parse_manifest_commands(manifest: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut in_command = false;
+    let mut current_usage: Option<String> = None;
+    let mut current_desc: Option<String> = None;
+
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[commands]]" {
+            // Flush previous command
+            if let Some(usage) = current_usage.take() {
+                let desc = current_desc.take().unwrap_or_default();
+                if desc.is_empty() {
+                    commands.push(format!("Command: {usage}"));
+                } else {
+                    commands.push(format!("Command: {usage} -- {desc}"));
+                }
+            }
+            in_command = true;
+            continue;
+        }
+        if in_command {
+            if trimmed.starts_with('[') && trimmed != "[[commands]]" {
+                // New section, flush
+                if let Some(usage) = current_usage.take() {
+                    let desc = current_desc.take().unwrap_or_default();
+                    if desc.is_empty() {
+                        commands.push(format!("Command: {usage}"));
+                    } else {
+                        commands.push(format!("Command: {usage} -- {desc}"));
+                    }
+                }
+                in_command = false;
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("usage") {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    current_usage =
+                        Some(rest.trim().trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+            if let Some(rest) = trimmed.strip_prefix("description") {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    current_desc =
+                        Some(rest.trim().trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+        }
+    }
+    // Flush last command
+    if let Some(usage) = current_usage {
+        let desc = current_desc.unwrap_or_default();
+        if desc.is_empty() {
+            commands.push(format!("Command: {usage}"));
+        } else {
+            commands.push(format!("Command: {usage} -- {desc}"));
+        }
+    }
+    commands
 }
 
 // ---------------------------------------------------------------------------

@@ -140,21 +140,43 @@ pub fn gather_runtime_context(client: Option<&DaemonClient>, model: &str) -> Run
             ctx.input_injection_enabled = config.toolkit.input.enabled;
             ctx.browser_enabled = config.toolkit.browser.enabled;
 
-            // Skills discovery
-            let skills_base = std::env::current_dir().unwrap_or_default().join("skills");
-            for skill_name in config.skills.iter().take(30) {
-                let skill_md = skills_base.join(skill_name).join("SKILL.md");
-                let description = read_skill_description(&skill_md);
-                ctx.installed_skills.push(SkillSummary {
-                    name: skill_name.clone(),
-                    description,
-                });
+            // Skills discovery: scan ~/.aegis/skills/ for installed skills.
+            // Each skill is a directory with a manifest.toml.
+            let skills_dir = std::path::PathBuf::from(
+                std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
+            )
+            .join(".aegis")
+            .join("skills");
+            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+                let mut skills: Vec<_> = entries
+                    .flatten()
+                    .filter(|e| e.path().is_dir())
+                    .take(50)
+                    .map(|e| {
+                        let name = e
+                            .path()
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        let manifest = e.path().join("manifest.toml");
+                        let description = read_manifest_description(&manifest)
+                            .or_else(|| {
+                                // Fallback: try SKILL.md
+                                read_skill_description(&e.path().join("SKILL.md"))
+                            });
+                        SkillSummary { name, description }
+                    })
+                    .collect();
+                skills.sort_by(|a, b| a.name.cmp(&b.name));
+                ctx.installed_skills = skills;
             }
         }
     }
 
-    // Audio: check for mic capture tools
-    ctx.mic_capture_available = command_exists("sox") || command_exists("arecord");
+    // Audio: check for mic capture tools (ffmpeg used by audio-record skill)
+    ctx.mic_capture_available =
+        command_exists("sox") || command_exists("arecord") || command_exists("ffmpeg");
     // TTS/STT: check for whisper CLI
     ctx.stt_available = command_exists("whisper");
     // TTS: check for say (macOS) or espeak
@@ -208,6 +230,36 @@ fn read_skill_description(path: &Path) -> Option<String> {
             trimmed.to_string()
         };
         return Some(desc);
+    }
+    None
+}
+
+/// Extract the `description` field from a TOML manifest file.
+///
+/// Parses lines looking for `description = "..."`. Avoids pulling in a full
+/// TOML parser since we only need one field.
+fn read_manifest_description(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("description") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let rest = rest.trim();
+                let desc = rest
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .trim();
+                if !desc.is_empty() {
+                    let desc = if desc.len() > 100 {
+                        format!("{}...", &desc[..97])
+                    } else {
+                        desc.to_string()
+                    };
+                    return Some(desc);
+                }
+            }
+        }
     }
     None
 }
