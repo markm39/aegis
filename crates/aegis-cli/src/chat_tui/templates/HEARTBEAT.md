@@ -1,23 +1,22 @@
 # Heartbeat Checklist
 
-_Things to check at the start of each session._
+_Checked autonomously at regular intervals. Follow strictly._
+
+If nothing needs attention, reply with exactly: HEARTBEAT_OK
 
 Keep this file empty (or with only comments) to skip heartbeat checks.
 
 ## What Goes Here
 
-Recurring checks and reminders:
-
-- Build status or test suites to run
-- Files or configs to verify
-- Reminders about in-progress work
-- Monitoring tasks
+- Recurring checks, reminders, scheduled tasks
+- Monitoring rules (build status, PR reviews)
+- Time-sensitive items (class schedule, deadlines)
 
 ## Examples
 
 ```markdown
+- [ ] Check if it's time for a class (MWF 10am, TTh 2pm)
 - [ ] Run `cargo test --workspace` and report failures
-- [ ] Check if PR #42 was merged
 - [ ] Remind user about the deploy scheduled for Friday
 ```
 

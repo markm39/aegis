@@ -28,6 +28,8 @@ pub enum MessageRole {
     },
     /// Session result (completion summary).
     Result { summary: String },
+    /// A heartbeat-triggered autonomous check (displayed dimly in UI).
+    Heartbeat,
 }
 
 /// A single message in the chat transcript.

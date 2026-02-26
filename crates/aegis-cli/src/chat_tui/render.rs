@@ -169,6 +169,16 @@ pub fn render_system_message(content: &str) -> Vec<Line<'static>> {
     ))]
 }
 
+/// Render a heartbeat indicator message (dim, subtle).
+pub fn render_heartbeat_message(content: &str) -> Vec<Line<'static>> {
+    vec![Line::from(Span::styled(
+        format!("  {content}"),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
+    ))]
+}
+
 /// Render a result/completion message.
 pub fn render_result_message(content: &str) -> Vec<Line<'static>> {
     vec![
@@ -204,6 +214,7 @@ pub fn render_message(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
             Some(false) => render_permission_resolved(prompt, false),
         },
         MessageRole::Result { summary } => render_result_message(summary),
+        MessageRole::Heartbeat => render_heartbeat_message(&msg.content),
     }
 }
 
@@ -224,10 +235,13 @@ pub fn render_header(
     provider: Option<&str>,
     connected: bool,
     thinking: bool,
+    heartbeat_in_flight: bool,
     approval_mode: Option<&str>,
     _width: u16,
 ) -> Line<'static> {
-    let (status_text, status_color) = if thinking {
+    let (status_text, status_color) = if thinking && heartbeat_in_flight {
+        ("Pulse...".to_string(), Color::DarkGray)
+    } else if thinking {
         ("Thinking...".to_string(), Color::Yellow)
     } else if connected {
         ("Connected".to_string(), Color::Green)
@@ -464,6 +478,7 @@ mod tests {
             Some("anthropic"),
             true,
             false,
+            false,
             None,
             80,
         );
@@ -476,7 +491,7 @@ mod tests {
 
     #[test]
     fn render_header_disconnected() {
-        let line = render_header("gpt-4o", Some("openai"), false, false, None, 80);
+        let line = render_header("gpt-4o", Some("openai"), false, false, false, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Disconnected"));
         assert!(text.contains("(openai)"));
@@ -484,7 +499,7 @@ mod tests {
 
     #[test]
     fn render_header_no_provider() {
-        let line = render_header("custom-model", None, true, false, None, 80);
+        let line = render_header("custom-model", None, true, false, false, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("custom-model"));
         assert!(!text.contains("("));
@@ -492,14 +507,14 @@ mod tests {
 
     #[test]
     fn render_header_thinking() {
-        let line = render_header("claude-sonnet-4-20250514", None, true, true, None, 80);
+        let line = render_header("claude-sonnet-4-20250514", None, true, true, false, None, 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Thinking..."));
     }
 
     #[test]
     fn render_header_thinking_is_yellow() {
-        let line = render_header("model", None, true, true, None, 80);
+        let line = render_header("model", None, true, true, false, None, 80);
         let status_span = line
             .spans
             .iter()
@@ -510,7 +525,7 @@ mod tests {
 
     #[test]
     fn render_header_connected_is_green() {
-        let line = render_header("model", None, true, false, None, 80);
+        let line = render_header("model", None, true, false, false, None, 80);
         let status_span = line
             .spans
             .iter()
@@ -521,21 +536,21 @@ mod tests {
 
     #[test]
     fn render_header_full_auto_shown() {
-        let line = render_header("model", None, true, false, Some("full-auto"), 80);
+        let line = render_header("model", None, true, false, false, Some("full-auto"), 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("FULL AUTO"));
     }
 
     #[test]
     fn render_header_auto_edits_shown() {
-        let line = render_header("model", None, true, false, Some("auto-edits"), 80);
+        let line = render_header("model", None, true, false, false, Some("auto-edits"), 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Auto-edits"));
     }
 
     #[test]
     fn render_header_manual_hidden() {
-        let line = render_header("model", None, true, false, Some("manual"), 80);
+        let line = render_header("model", None, true, false, false, Some("manual"), 80);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         // "manual" mode should not add an extra indicator
         assert!(!text.contains("Manual"));

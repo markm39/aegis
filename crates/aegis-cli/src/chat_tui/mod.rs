@@ -708,6 +708,22 @@ pub struct ChatApp {
     skill_command_names: Vec<String>,
     /// Channel for receiving skill execution results from background thread.
     skill_result_rx: Option<mpsc::Receiver<SkillExecResult>>,
+
+    // -- Heartbeat (autonomous thinking) --
+    /// Whether periodic heartbeat thinking is enabled.
+    pub heartbeat_enabled: bool,
+    /// Interval between heartbeat checks in seconds.
+    pub heartbeat_interval_secs: u64,
+    /// When the last heartbeat was fired (or app start).
+    pub last_heartbeat_at: Instant,
+    /// Whether a heartbeat-triggered LLM turn is currently in flight.
+    pub heartbeat_in_flight: bool,
+    /// Set to true to trigger an immediate heartbeat on next tick.
+    pub heartbeat_wake_pending: bool,
+    /// Count of consecutive HEARTBEAT_OK responses (for adaptive backoff).
+    pub heartbeat_consecutive_ok: u32,
+    /// When the user last sent a message (for idle duration context).
+    pub last_user_interaction: Instant,
 }
 
 /// Commands recognized by the minimal command bar.
@@ -782,6 +798,11 @@ const COMMANDS: &[&str] = &[
     "panel-review",
     "link-worktree",
     "login",
+    "heartbeat",
+    "heartbeat now",
+    "heartbeat on",
+    "heartbeat off",
+    "heartbeat interval",
 ];
 
 impl ChatApp {
@@ -856,6 +877,14 @@ impl ChatApp {
             skill_router,
             skill_command_names,
             skill_result_rx: None,
+
+            heartbeat_enabled: true,
+            heartbeat_interval_secs: 600, // 10 minutes
+            last_heartbeat_at: Instant::now(),
+            heartbeat_in_flight: false,
+            heartbeat_wake_pending: false,
+            heartbeat_consecutive_ok: 0,
+            last_user_interaction: Instant::now(),
         }
     }
 
@@ -1089,8 +1118,12 @@ impl ChatApp {
                     self.awaiting_response = false;
                     self.response_started_at = None;
                     self.auto_approve_turn = false;
-                    // Save a restore point after each completed assistant turn.
-                    self.push_snapshot();
+                    if self.heartbeat_in_flight {
+                        self.complete_heartbeat();
+                    } else {
+                        // Save a restore point after each completed assistant turn.
+                        self.push_snapshot();
+                    }
                 }
                 AgentLoopEvent::SubagentComplete {
                     task_id,
@@ -1142,6 +1175,239 @@ impl ChatApp {
         self.awaiting_response = true;
         self.send_llm_request();
     }
+
+    // -- Heartbeat (autonomous thinking) ------------------------------------------
+
+    /// Maximum characters in an LLM response to still count as a no-op heartbeat ack.
+    const HEARTBEAT_ACK_MAX_CHARS: usize = 300;
+
+    /// Check whether a heartbeat thinking turn should fire now.
+    fn is_heartbeat_due(&self) -> bool {
+        if !self.heartbeat_enabled || !self.connected {
+            return false;
+        }
+        // Don't stack on top of an active LLM request.
+        if self.awaiting_response || self.awaiting_approval {
+            return false;
+        }
+        // Immediate wake bypasses the timer.
+        if self.heartbeat_wake_pending {
+            return true;
+        }
+        // Adaptive backoff: effective interval grows with consecutive no-ops (up to 4x).
+        let backoff_mult = (1 + self.heartbeat_consecutive_ok).min(4) as u64;
+        let effective_secs = self.heartbeat_interval_secs.saturating_mul(backoff_mult);
+        self.last_heartbeat_at.elapsed().as_secs() >= effective_secs
+    }
+
+    /// Check if HEARTBEAT.md content has actionable items (not just template boilerplate).
+    fn is_heartbeat_content_actionable(content: &str) -> bool {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            // Skip empty, pure whitespace, markdown headers, horizontal rules, fenced code markers.
+            if trimmed.is_empty()
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("---")
+                || trimmed.starts_with("```")
+            {
+                continue;
+            }
+            // Skip markdown emphasis-only lines (e.g. _Things to check..._)
+            if trimmed.starts_with('_') && trimmed.ends_with('_') {
+                continue;
+            }
+            // Skip known template boilerplate.
+            let lower = trimmed.to_lowercase();
+            if lower.contains("what goes here")
+                || lower.contains("update this file")
+                || lower.contains("keep this file empty")
+                || lower.contains("persists across sessions")
+                || lower.starts_with("if nothing needs attention")
+                || lower.contains("heartbeat_ok")
+            {
+                continue;
+            }
+            // Skip lines that are only list items with generic descriptions (no checkboxes).
+            if lower.starts_with("- ") && !lower.contains("- [ ]") && !lower.contains("- [x]") {
+                // Heuristic: if the line looks like a template description, skip it.
+                if lower.contains("recurring checks")
+                    || lower.contains("monitoring")
+                    || lower.contains("build status")
+                    || lower.contains("files or configs")
+                    || lower.contains("reminders about")
+                    || lower.contains("time-sensitive")
+                {
+                    continue;
+                }
+            }
+            // Found a non-boilerplate, non-empty line -- there's actionable content.
+            return true;
+        }
+        false
+    }
+
+    /// Trigger an autonomous heartbeat thinking turn.
+    ///
+    /// Reads HEARTBEAT.md, injects context (current time, idle duration), and
+    /// sends to the LLM. Follows the same pattern as `trigger_bootstrap`.
+    fn trigger_heartbeat(&mut self) {
+        self.heartbeat_wake_pending = false;
+        self.last_heartbeat_at = Instant::now();
+
+        let heartbeat_path = aegis_types::daemon::workspace_dir().join("HEARTBEAT.md");
+        let heartbeat_content = match std::fs::read_to_string(&heartbeat_path) {
+            Ok(c) => c,
+            Err(_) => return, // No HEARTBEAT.md, skip silently.
+        };
+
+        if !Self::is_heartbeat_content_actionable(&heartbeat_content) {
+            return; // Only template boilerplate, skip the API call.
+        }
+
+        let now = chrono::Local::now();
+        let idle_secs = self.last_user_interaction.elapsed().as_secs();
+        let idle_display = if idle_secs < 60 {
+            format!("{idle_secs}s")
+        } else if idle_secs < 3600 {
+            format!("{}m {}s", idle_secs / 60, idle_secs % 60)
+        } else {
+            format!("{}h {}m", idle_secs / 3600, (idle_secs % 3600) / 60)
+        };
+
+        let prompt = format!(
+            "[HEARTBEAT -- autonomous check @ {}]\n\
+             Time since last user message: {}\n\
+             Consecutive idle heartbeats: {}\n\n\
+             ---\n\n\
+             {}",
+            now.format("%Y-%m-%d %H:%M %Z"),
+            idle_display,
+            self.heartbeat_consecutive_ok,
+            heartbeat_content.trim(),
+        );
+
+        self.conversation.push(LlmMessage::user(prompt));
+        self.messages.push(ChatMessage::new(
+            MessageRole::Heartbeat,
+            format!("[Heartbeat @ {}]", now.format("%H:%M")),
+        ));
+        self.scroll_offset = 0;
+        self.awaiting_response = true;
+        self.heartbeat_in_flight = true;
+        self.send_llm_request();
+    }
+
+    /// Check if the most recent assistant response is a no-op heartbeat ack.
+    ///
+    /// Returns false if tools were used during this heartbeat turn (even if
+    /// the final response says HEARTBEAT_OK), because tool use means real
+    /// work happened and the conversation entries shouldn't be pruned.
+    fn is_heartbeat_response_empty(&self) -> bool {
+        // Check if any tool calls happened since the heartbeat prompt.
+        let heartbeat_idx = self
+            .messages
+            .iter()
+            .rposition(|m| m.role == MessageRole::Heartbeat);
+        if let Some(idx) = heartbeat_idx {
+            let has_tool_calls = self.messages[idx..]
+                .iter()
+                .any(|m| matches!(m.role, MessageRole::ToolCall { .. }));
+            if has_tool_calls {
+                return false; // Tools ran -- not a simple no-op.
+            }
+        }
+
+        let last_assistant = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant);
+        match last_assistant {
+            Some(msg) => {
+                let text = msg.content.trim();
+                if text.is_empty() {
+                    return true;
+                }
+                // Strip the HEARTBEAT_OK token and check remainder.
+                let stripped = text
+                    .replace("HEARTBEAT_OK", "")
+                    .replace("heartbeat_ok", "")
+                    .replace("Heartbeat_OK", "")
+                    .trim()
+                    .to_string();
+                stripped.len() < Self::HEARTBEAT_ACK_MAX_CHARS
+            }
+            None => true,
+        }
+    }
+
+    /// Remove the last heartbeat prompt + response from conversation and display.
+    fn prune_last_heartbeat_exchange(&mut self) {
+        // Prune display messages: remove trailing Heartbeat + Assistant pair.
+        while let Some(msg) = self.messages.last() {
+            if msg.role == MessageRole::Assistant || msg.role == MessageRole::Heartbeat {
+                self.messages.pop();
+            } else {
+                break;
+            }
+        }
+
+        // Prune LLM conversation: remove trailing user (heartbeat prompt) + assistant pair.
+        while let Some(msg) = self.conversation.last() {
+            if msg.role == LlmRole::Assistant {
+                self.conversation.pop();
+            } else if msg.role == LlmRole::User {
+                // Check if this is a heartbeat prompt.
+                if msg.content.starts_with("[HEARTBEAT") {
+                    self.conversation.pop();
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Called when a heartbeat-triggered LLM turn completes.
+    fn complete_heartbeat(&mut self) {
+        self.heartbeat_in_flight = false;
+        if self.is_heartbeat_response_empty() {
+            self.prune_last_heartbeat_exchange();
+            self.heartbeat_consecutive_ok += 1;
+        } else {
+            // Real content -- reset backoff and save snapshot.
+            self.heartbeat_consecutive_ok = 0;
+            self.push_snapshot();
+            // Save conversation to disk.
+            let _ = persistence::save_conversation(
+                &self.session_id,
+                &self.conversation,
+                &self.model,
+            );
+        }
+    }
+
+    /// Abort a heartbeat in flight so the user's message can proceed immediately.
+    fn abort_heartbeat_for_user_input(&mut self) {
+        if !self.heartbeat_in_flight {
+            return;
+        }
+        // Signal the background thread to stop.
+        self.abort_flag.store(true, Ordering::Relaxed);
+        self.approval_tx = None;
+        self.awaiting_response = false;
+        self.response_started_at = None;
+        self.awaiting_approval = false;
+        self.pending_tool_desc = None;
+        self.agent_rx = None;
+        self.abort_flag = Arc::new(AtomicBool::new(false));
+        self.heartbeat_in_flight = false;
+
+        // Prune any partial heartbeat messages from conversation/display.
+        self.prune_last_heartbeat_exchange();
+    }
+
+    // -- End heartbeat --------------------------------------------------------
 
     /// Send the current conversation to the LLM and run the agentic loop.
     /// Save the current conversation as a restore point.
@@ -1483,9 +1749,15 @@ impl ChatApp {
         match key.code {
             KeyCode::Enter => {
                 if self.awaiting_response {
-                    return; // Don't stack requests
+                    if self.heartbeat_in_flight && !self.input_buffer.is_empty() {
+                        // User typed while heartbeat is running -- abort heartbeat.
+                        self.abort_heartbeat_for_user_input();
+                    } else {
+                        return; // Don't stack requests
+                    }
                 }
                 if !self.input_buffer.is_empty() {
+                    self.last_user_interaction = Instant::now();
                     let text = self.input_buffer.clone();
 
                     // Bang command: !<cmd> runs locally, not through the LLM.
@@ -2875,6 +3147,59 @@ impl ChatApp {
                 self.set_result(format!(
                     "Current: {current}. Options: /auto off | /auto edits | /auto high | /auto full"
                 ));
+            }
+            "heartbeat" => {
+                let effective_secs = self
+                    .heartbeat_interval_secs
+                    .saturating_mul((1 + self.heartbeat_consecutive_ok).min(4) as u64);
+                let since_last = self.last_heartbeat_at.elapsed().as_secs();
+                self.set_result(format!(
+                    "Heartbeat: {} | interval: {}s (effective: {}s with {} consecutive OKs) | \
+                     last: {}s ago | in-flight: {}",
+                    if self.heartbeat_enabled {
+                        "ON"
+                    } else {
+                        "OFF"
+                    },
+                    self.heartbeat_interval_secs,
+                    effective_secs,
+                    self.heartbeat_consecutive_ok,
+                    since_last,
+                    self.heartbeat_in_flight,
+                ));
+            }
+            "heartbeat now" => {
+                self.heartbeat_wake_pending = true;
+                self.set_result("Heartbeat will fire on next tick.");
+            }
+            "heartbeat on" => {
+                self.heartbeat_enabled = true;
+                self.set_result("Heartbeat enabled.");
+            }
+            "heartbeat off" => {
+                self.heartbeat_enabled = false;
+                self.set_result("Heartbeat disabled.");
+            }
+            _ if trimmed.starts_with("heartbeat interval ") => {
+                let arg = trimmed
+                    .strip_prefix("heartbeat interval ")
+                    .unwrap()
+                    .trim();
+                match arg.parse::<u64>() {
+                    Ok(secs) if secs >= 30 => {
+                        self.heartbeat_interval_secs = secs;
+                        self.heartbeat_consecutive_ok = 0; // Reset backoff.
+                        self.set_result(format!("Heartbeat interval set to {secs}s."));
+                    }
+                    Ok(_) => {
+                        self.set_result("Minimum heartbeat interval is 30 seconds.");
+                    }
+                    Err(_) => {
+                        self.set_result(format!(
+                            "Invalid interval: '{arg}'. Use seconds (e.g. /heartbeat interval 300)"
+                        ));
+                    }
+                }
             }
             "sandbox" => {
                 self.handle_sandbox_command();
@@ -4955,7 +5280,11 @@ fn run_event_loop(
             AppEvent::Key(key) => app.handle_key(key),
             AppEvent::Paste(text) => app.handle_paste(&text),
             AppEvent::Mouse(_) => {}
-            AppEvent::Tick => {}
+            AppEvent::Tick => {
+                if app.is_heartbeat_due() {
+                    app.trigger_heartbeat();
+                }
+            }
         }
 
         app.poll_daemon();

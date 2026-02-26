@@ -67,6 +67,7 @@ fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
         provider.as_deref(),
         app.connected,
         app.awaiting_response,
+        app.heartbeat_in_flight,
         Some(approval_label),
         area.width,
     );
