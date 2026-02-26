@@ -2098,6 +2098,12 @@ impl DaemonRuntime {
 
         info!("daemon shutting down");
 
+        // Give background threads (control socket, dashboard) time to notice
+        // the shutdown flag and exit cleanly. Without this pause, the tokio
+        // runtime can be dropped while they're still running, causing a panic
+        // ("A Tokio 1.x context was found, but it is being shutdown.").
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+
         // Stop all running agents to prevent orphaned processes
         self.fleet.stop_all();
         self.stop_all_capture_streams();

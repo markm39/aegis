@@ -371,6 +371,17 @@ fn parse_anthropic_sse(
                                     }
                                 }
                             }
+                            Some("thinking_delta") => {
+                                // Extended thinking (MiniMax, Anthropic).
+                                // Send to UI so it can show a thinking indicator.
+                                if let Some(text) =
+                                    delta.get("thinking").and_then(|t| t.as_str())
+                                {
+                                    let _ = event_tx.send(
+                                        AgentLoopEvent::StreamThinking(text.to_string()),
+                                    );
+                                }
+                            }
                             _ => {}
                         }
                     }

@@ -147,13 +147,18 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         } else {
             format!("{}m {}s", elapsed_ms / 60_000, (elapsed_ms % 60_000) / 1000)
         };
+        let status = if app.thinking_tokens > 0 {
+            format!("Thinking ({} chunks)\u{2026}  ", app.thinking_tokens)
+        } else {
+            "Working\u{2026}  ".to_string()
+        };
         all_lines.push(Line::from(vec![
             Span::styled(
                 format!("  {spinner} "),
                 Style::default().fg(Color::Yellow),
             ),
             Span::styled(
-                "Working\u{2026}  ",
+                status,
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(

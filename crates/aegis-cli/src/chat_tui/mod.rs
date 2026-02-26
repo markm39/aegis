@@ -298,6 +298,8 @@ enum AgentLoopEvent {
     Response(LlmResponse),
     /// Incremental text from a streaming LLM response.
     StreamDelta(String),
+    /// Incremental thinking text from a streaming LLM response (e.g., MiniMax).
+    StreamThinking(String),
     /// LLM wants to call tools -- display them to the user.
     ToolCalls(Vec<LlmToolCall>),
     /// A tool finished executing -- display the result.
@@ -621,6 +623,8 @@ pub struct ChatApp {
     pub model: String,
     /// Whether we're waiting for an LLM response or tool execution.
     pub awaiting_response: bool,
+    /// Count of thinking delta chunks received (for thinking spinner display).
+    pub thinking_tokens: usize,
     /// When the current LLM request started (for elapsed-time display in header).
     pub response_started_at: Option<Instant>,
     /// Channel for receiving agentic loop events from background thread.
@@ -835,6 +839,7 @@ impl ChatApp {
             conversation: Vec::new(),
             model,
             awaiting_response: false,
+            thinking_tokens: 0,
             response_started_at: None,
             agent_rx: None,
             approval_tx: None,
@@ -1050,7 +1055,16 @@ impl ChatApp {
                     }
                     self.auto_scroll_to_bottom();
                 }
+                AgentLoopEvent::StreamThinking(_text) => {
+                    // Model is thinking (e.g., MiniMax extended thinking).
+                    // Show a visible "thinking" indicator so the user knows
+                    // the request is being processed. We don't display the
+                    // actual thinking text -- just update a counter.
+                    self.thinking_tokens += 1;
+                }
                 AgentLoopEvent::StreamDelta(text) => {
+                    // Clear thinking indicator once real text arrives.
+                    self.thinking_tokens = 0;
                     // Append to the current assistant message, or create one.
                     let is_assistant = self
                         .messages
@@ -1125,6 +1139,7 @@ impl ChatApp {
                         format!("Error: {msg}"),
                     ));
                     self.awaiting_response = false;
+                    self.thinking_tokens = 0;
                     self.response_started_at = None;
                     self.auto_approve_turn = false;
                 }
@@ -1135,6 +1150,7 @@ impl ChatApp {
                 }
                 AgentLoopEvent::Done => {
                     self.awaiting_response = false;
+                    self.thinking_tokens = 0;
                     self.response_started_at = None;
                     self.auto_approve_turn = false;
                     if self.heartbeat_in_flight {
