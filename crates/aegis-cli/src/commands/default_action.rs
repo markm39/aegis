@@ -28,6 +28,15 @@ pub fn run(auto_mode: Option<&str>) -> Result<()> {
     let daemon_running = DaemonClient::default_path().is_running();
 
     if has_daemon_config || daemon_running {
+        // Auto-start the daemon if the config exists but the daemon is not running.
+        // This is the most common case: the user runs `aegis` after setup. Without
+        // this, features like Telegram receive no messages with no explanation.
+        if has_daemon_config && !daemon_running {
+            match crate::commands::daemon::start_quiet() {
+                Ok(msg) => eprintln!("{msg}"),
+                Err(e) => eprintln!("Warning: could not auto-start daemon: {e}"),
+            }
+        }
         // Chat TUI -- works in offline mode, auto-connects when daemon starts
         return crate::chat_tui::run_chat_tui(auto_mode);
     }
