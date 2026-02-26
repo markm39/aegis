@@ -919,8 +919,10 @@ impl ChatApp {
             }
         };
 
-        // Ping
-        match client.send(&DaemonCommand::Ping) {
+        // Ping with a short timeout (500ms) to avoid freezing the TUI event
+        // loop when the daemon is unresponsive. The default 5s timeout would
+        // block every 2-second poll cycle, making the entire UI unresponsive.
+        match client.send_with_timeout(&DaemonCommand::Ping, 500) {
             Ok(resp) if resp.ok => {
                 let was_disconnected = !self.connected;
                 self.connected = true;
@@ -1291,7 +1293,8 @@ impl ChatApp {
             MessageRole::Heartbeat,
             format!("[Heartbeat @ {}]", now.format("%H:%M")),
         ));
-        self.scroll_offset = 0;
+        // Don't reset scroll_offset here -- heartbeats are background activity
+        // and should not yank the user's scroll position.
         self.awaiting_response = true;
         self.heartbeat_in_flight = true;
         self.send_llm_request();
@@ -5253,6 +5256,12 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     });
 
     let result = run_event_loop(&mut terminal, &events, &mut app);
+
+    // Stop daemon on TUI exit to prevent zombie process accumulation.
+    // Uses the short timeout variant so we don't hang on a frozen daemon.
+    if let Some(client) = &app.client {
+        let _ = client.send_with_timeout(&DaemonCommand::Shutdown, 1000);
+    }
 
     // Restore terminal
     crossterm::terminal::disable_raw_mode()?;

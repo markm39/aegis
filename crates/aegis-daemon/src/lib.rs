@@ -1830,6 +1830,21 @@ impl DaemonRuntime {
     /// 5. Enter tick loop (health checks, restart logic, command dispatch)
     /// 6. On shutdown: stop all agents, clean up
     pub fn run(&mut self) -> Result<(), String> {
+        // Kill any stale daemon before we take over.
+        if let Some(old_pid) = persistence::read_pid() {
+            if persistence::is_process_alive(old_pid) {
+                if let Ok(raw_pid) = i32::try_from(old_pid) {
+                    let nix_pid = nix::unistd::Pid::from_raw(raw_pid);
+                    let _ = nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGTERM);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if persistence::is_process_alive(old_pid) {
+                        let _ =
+                            nix::sys::signal::kill(nix_pid, nix::sys::signal::Signal::SIGKILL);
+                    }
+                }
+            }
+        }
+
         // Write PID file
         let _pid_path = persistence::write_pid_file()?;
 

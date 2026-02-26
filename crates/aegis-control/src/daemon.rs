@@ -1809,6 +1809,57 @@ impl DaemonClient {
         serde_json::from_str(&line).map_err(|e| format!("failed to parse response: {e}"))
     }
 
+    /// Send a command with a custom timeout (in milliseconds).
+    ///
+    /// Same as [`send`] but uses the provided timeout instead of the default
+    /// 5 seconds. Use shorter timeouts for non-critical pings to avoid
+    /// blocking the caller when the daemon is unresponsive.
+    pub fn send_with_timeout(
+        &self,
+        command: &DaemonCommand,
+        timeout_ms: u64,
+    ) -> Result<DaemonResponse, String> {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+            format!(
+                "failed to connect to daemon at {}: {e}",
+                self.socket_path.display()
+            )
+        })?;
+
+        let timeout = Some(std::time::Duration::from_millis(timeout_ms));
+        stream
+            .set_read_timeout(timeout)
+            .map_err(|e| format!("failed to set read timeout: {e}"))?;
+        stream
+            .set_write_timeout(timeout)
+            .map_err(|e| format!("failed to set write timeout: {e}"))?;
+
+        let mut writer = stream
+            .try_clone()
+            .map_err(|e| format!("failed to clone stream: {e}"))?;
+
+        let mut json = serde_json::to_string(command)
+            .map_err(|e| format!("failed to serialize command: {e}"))?;
+        json.push('\n');
+        writer
+            .write_all(json.as_bytes())
+            .map_err(|e| format!("failed to send command: {e}"))?;
+        writer
+            .flush()
+            .map_err(|e| format!("failed to flush: {e}"))?;
+
+        let mut reader = BufReader::new(stream.take(10 * 1024 * 1024));
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("failed to read response: {e}"))?;
+
+        serde_json::from_str(&line).map_err(|e| format!("failed to parse response: {e}"))
+    }
+
     /// Check if the daemon is running by attempting a Ping.
     pub fn is_running(&self) -> bool {
         self.send(&DaemonCommand::Ping).is_ok()

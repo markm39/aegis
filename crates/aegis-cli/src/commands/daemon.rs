@@ -35,6 +35,33 @@ use aegis_types::daemon::{
 
 use crate::tui_utils::truncate_str;
 
+/// Kill any stale daemon process and clean up its socket/PID file.
+///
+/// Called before starting a new daemon to prevent zombie accumulation.
+/// Sends SIGTERM first, waits briefly, then SIGKILL if still alive.
+fn kill_stale_daemon() {
+    if let Some(pid) = persistence::read_pid() {
+        if persistence::is_process_alive(pid) {
+            let pid_str = pid.to_string();
+            // SIGTERM for graceful shutdown
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid_str])
+                .output();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            // SIGKILL if still alive
+            if persistence::is_process_alive(pid) {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &pid_str])
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    // Clean up stale socket and PID file regardless
+    let _ = std::fs::remove_file(daemon_dir().join("daemon.sock"));
+    persistence::remove_pid_file();
+}
+
 /// Initialize a daemon configuration file at `~/.aegis/daemon/daemon.toml`.
 pub fn init() -> anyhow::Result<()> {
     let config_path = daemon_config_path();
@@ -257,13 +284,10 @@ pub fn start() -> anyhow::Result<()> {
     let _config = DaemonConfig::from_toml(&content)
         .map_err(|e| anyhow::anyhow!("invalid daemon config: {e}"))?;
 
-    // Check for an existing daemon
-    if let Some(pid) = persistence::read_pid() {
-        if persistence::is_process_alive(pid) {
-            println!("Daemon already running (PID {pid}).");
-            return Ok(());
-        }
-    }
+    // Kill any stale daemon before starting a new one.
+    // The PID file can be wrong (crash without cleanup), so we aggressively
+    // clean up rather than trusting the "already running" check.
+    kill_stale_daemon();
 
     // Try to find our own binary path
     let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis"));
@@ -322,11 +346,8 @@ pub(crate) fn start_quiet() -> anyhow::Result<String> {
     let _config = DaemonConfig::from_toml(&content)
         .map_err(|e| anyhow::anyhow!("invalid daemon config: {e}"))?;
 
-    if let Some(pid) = persistence::read_pid() {
-        if persistence::is_process_alive(pid) {
-            return Ok(format!("Daemon already running (PID {pid})."));
-        }
-    }
+    // Kill any stale daemon before starting a new one.
+    kill_stale_daemon();
 
     let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis"));
 
