@@ -94,6 +94,35 @@ jobs:
       - name: Verify binary runs
         run: ./target/release/aegis --version
 
+  # ---------- Build aegis-probe ----------
+  build-probe:
+    name: Build aegis-probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-probe-${{ matrix.os }}
+
+      - name: Build aegis-probe
+        run: cargo build --release -p aegis-probe
+
+      - name: Verify binary runs
+        run: ./target/release/aegis-probe --version
+
+      - name: Validate built-in probes
+        run: ./target/release/aegis-probe validate --probes-dir probes
+
+      - name: List probes
+        run: ./target/release/aegis-probe list --probes-dir probes
+
   # ---------- Documentation ----------
   doc:
     name: Documentation
