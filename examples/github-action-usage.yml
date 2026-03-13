@@ -1,0 +1,38 @@
+# Example: Run Aegis Probe security tests against your AI agent.
+#
+# Copy this file to .github/workflows/security-test.yml in your repo.
+# Requires the agent binary to be available in the runner's PATH.
+
+name: AI Agent Security Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Run weekly to catch regressions from agent updates
+    - cron: '0 9 * * 1'
+
+jobs:
+  security-test:
+    name: Aegis Probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Install your agent (example: Claude Code)
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Run all security probes
+      - uses: markm39/aegis@main
+        with:
+          agent: claude-code
+          fail-on-findings: true
+
+      # Or run only specific categories:
+      # - uses: markm39/aegis@main
+      #   with:
+      #     agent: claude-code
+      #     category: prompt_injection
+      #     fail-on-findings: true
