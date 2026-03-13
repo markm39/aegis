@@ -5,8 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "AI agent security testing: adversarial probes for coding agents"
+repository = "https://github.com/markm39/aegis"
 keywords = ["ai-security", "red-team", "agent-testing", "adversarial"]
 categories = ["development-tools::testing"]
+readme = "../../README.md"
 
 [dependencies]
 aegis-types = { path = "../aegis-types" }

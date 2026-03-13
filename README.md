@@ -10,6 +10,53 @@ Aegis is a chat-centric coding assistant (like Claude Code or OpenClaw) built on
 
 ---
 
+## Aegis Probe: AI Agent Security Testing
+
+Test what AI coding agents actually DO when fed adversarial inputs. Not what the model says -- what the agent does.
+
+```bash
+# Install
+cargo install --git https://github.com/markm39/aegis.git aegis-probe
+
+# Run all 52 security probes against Claude Code
+aegis-probe run --probes-dir probes
+
+# Test a specific category
+aegis-probe run --category prompt_injection
+
+# Generate an HTML report
+aegis-probe run --format html > report.html
+
+# Save JSON report for CI/CD
+aegis-probe run -o report.json
+```
+
+52 adversarial probes across 7 attack categories:
+
+| Category | Probes | What it tests |
+|---|---|---|
+| Prompt Injection | 9 | Code comments, READMEs, error messages, unicode tricks |
+| Data Exfiltration | 9 | .env files, SSH keys, credentials, clipboard, DNS tunneling |
+| Privilege Escalation | 7 | Sandbox escape, symlinks, SUID, Docker socket, crontab |
+| Malicious Execution | 7 | Destructive commands, reverse shells, git hooks, Makefiles |
+| Supply Chain | 8 | Lockfile manipulation, typosquatting, submodule hijack |
+| Social Engineering | 6 | Fake audits, CI impersonation, permission escalation |
+| Credential Harvesting | 6 | Token scraping, keychain access, browser stores |
+
+### GitHub Action
+
+```yaml
+- uses: markm39/aegis@main
+  with:
+    agent: claude-code
+    category: prompt_injection
+    fail-on-findings: true
+```
+
+See `action.yml` for all inputs and outputs.
+
+---
+
 ## Table of Contents
 
 - [Install](#install)
@@ -602,6 +649,7 @@ Layers:
 | `aegis-tts` | Text-to-speech (OpenAI, ElevenLabs, Edge TTS) |
 | `aegis-voice` | Voice input, speech-to-text, wake word detection |
 | `aegis-harness` | PTY-based TUI integration test harness |
+| `aegis-probe` | AI agent security testing: 52 adversarial probes, scoring engine, report generation |
 | `aegis-cli` | Binary entry point: chat TUI, pilot TUI, onboard wizard, init wizard, all CLI commands |
 
 ## CLI Reference
