@@ -510,11 +510,119 @@ td{{padding:0.5rem;border-bottom:1px solid #222;vertical-align:top}}
     )
 }
 
+/// Render report as JUnit XML for CI integration (Jenkins, GitLab, Azure DevOps).
+pub fn render_junit(report: &SecurityReport) -> String {
+    let mut out = String::new();
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+
+    let s = &report.summary;
+    out.push_str(&format!(
+        "<testsuites name=\"aegis-probe\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
+        s.total_probes,
+        s.failed,
+        s.errors,
+        report.results.iter().map(|r| r.duration_ms as f64 / 1000.0).sum::<f64>(),
+    ));
+
+    // Group by category
+    let categories = [
+        AttackCategory::PromptInjection,
+        AttackCategory::DataExfiltration,
+        AttackCategory::PrivilegeEscalation,
+        AttackCategory::MaliciousExecution,
+        AttackCategory::SupplyChain,
+        AttackCategory::SocialEngineering,
+        AttackCategory::CredentialHarvesting,
+    ];
+
+    for category in &categories {
+        let cat_results: Vec<&ProbeResult> = report
+            .results
+            .iter()
+            .filter(|r| r.category == *category)
+            .collect();
+
+        if cat_results.is_empty() {
+            continue;
+        }
+
+        let cat_failures = cat_results.iter().filter(|r| r.verdict == Verdict::Fail).count();
+        let cat_errors = cat_results.iter().filter(|r| r.verdict == Verdict::Error).count();
+        let cat_time: f64 = cat_results.iter().map(|r| r.duration_ms as f64 / 1000.0).sum();
+
+        out.push_str(&format!(
+            "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
+            xml_escape(category_label(category)),
+            cat_results.len(),
+            cat_failures,
+            cat_errors,
+            cat_time,
+        ));
+
+        for result in &cat_results {
+            let time_secs = result.duration_ms as f64 / 1000.0;
+            out.push_str(&format!(
+                "    <testcase name=\"{}\" classname=\"aegis.{}\" time=\"{:.3}\"",
+                xml_escape(&result.probe_name),
+                xml_escape(category_label(category)),
+                time_secs,
+            ));
+
+            match result.verdict {
+                Verdict::Pass => {
+                    out.push_str(" />\n");
+                }
+                Verdict::Fail => {
+                    out.push_str(">\n");
+                    let msg: Vec<String> = result.findings.iter().map(|f| f.description.clone()).collect();
+                    out.push_str(&format!(
+                        "      <failure message=\"{}\" type=\"SecurityFailure\">{}</failure>\n",
+                        xml_escape(&format!("{:?} severity security failure", result.severity)),
+                        xml_escape(&msg.join("\n")),
+                    ));
+                    out.push_str("    </testcase>\n");
+                }
+                Verdict::Error => {
+                    out.push_str(">\n");
+                    let msg: Vec<String> = result.findings.iter().map(|f| f.description.clone()).collect();
+                    out.push_str(&format!(
+                        "      <error message=\"Probe error\" type=\"ProbeError\">{}</error>\n",
+                        xml_escape(&msg.join("\n")),
+                    ));
+                    out.push_str("    </testcase>\n");
+                }
+                Verdict::Partial => {
+                    out.push_str(">\n");
+                    let msg: Vec<String> = result.findings.iter().map(|f| f.description.clone()).collect();
+                    out.push_str(&format!(
+                        "      <failure message=\"Partial resistance\" type=\"PartialFailure\">{}</failure>\n",
+                        xml_escape(&msg.join("\n")),
+                    ));
+                    out.push_str("    </testcase>\n");
+                }
+            }
+        }
+
+        out.push_str("  </testsuite>\n");
+    }
+
+    out.push_str("</testsuites>\n");
+    out
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn category_label(cat: &AttackCategory) -> &'static str {

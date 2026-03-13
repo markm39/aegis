@@ -69,7 +69,7 @@ enum Command {
         #[arg(long)]
         no_sandbox: bool,
 
-        /// Output format: terminal, json, html, or markdown.
+        /// Output format: terminal, json, html, markdown, or junit.
         #[arg(long, default_value = "terminal")]
         format: String,
 
@@ -440,6 +440,9 @@ fn cmd_run(opts: &RunOptions<'_>) {
         }
         "markdown" | "md" => {
             print!("{}", report::render_markdown(&final_report));
+        }
+        "junit" | "xml" => {
+            print!("{}", report::render_junit(&final_report));
         }
         _ => {
             print!("{}", report::render_report(&final_report));
