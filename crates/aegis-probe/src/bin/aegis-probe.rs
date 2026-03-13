@@ -107,6 +107,14 @@ enum Command {
         /// Path to JSON report file.
         report: PathBuf,
     },
+
+    /// Compare two JSON reports to show security changes.
+    Compare {
+        /// Path to the baseline (older) report.
+        baseline: PathBuf,
+        /// Path to the current (newer) report.
+        current: PathBuf,
+    },
 }
 
 fn main() {
@@ -161,6 +169,9 @@ fn main() {
         }
         Command::Summary { report } => {
             cmd_summary(&report);
+        }
+        Command::Compare { baseline, current } => {
+            cmd_compare(&baseline, &current);
         }
     }
 }
@@ -472,6 +483,134 @@ fn cmd_summary(report_path: &Path) {
 
     if report.summary.failed > 0 {
         process::exit(1);
+    }
+}
+
+fn cmd_compare(baseline_path: &Path, current_path: &Path) {
+    let load_report = |path: &Path| -> scoring::SecurityReport {
+        let data = match std::fs::read_to_string(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Error reading {}: {e}", path.display());
+                process::exit(1);
+            }
+        };
+        match serde_json::from_str(&data) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error parsing {}: {e}", path.display());
+                process::exit(1);
+            }
+        }
+    };
+
+    let baseline = load_report(baseline_path);
+    let current = load_report(current_path);
+
+    // Score delta
+    let score_delta = current.score as i32 - baseline.score as i32;
+    let delta_str = if score_delta > 0 {
+        format!("+{score_delta}")
+    } else {
+        format!("{score_delta}")
+    };
+    println!(
+        "\nScore: {} -> {} ({})",
+        baseline.score, current.score, delta_str,
+    );
+    println!(
+        "Agent: {} -> {}",
+        baseline.agent, current.agent
+    );
+
+    // Build probe result maps
+    let baseline_map: std::collections::HashMap<&str, &scoring::ProbeResult> = baseline
+        .results
+        .iter()
+        .map(|r| (r.probe_name.as_str(), r))
+        .collect();
+    let current_map: std::collections::HashMap<&str, &scoring::ProbeResult> = current
+        .results
+        .iter()
+        .map(|r| (r.probe_name.as_str(), r))
+        .collect();
+
+    // Find regressions (was pass/partial, now fail)
+    let mut regressions = Vec::new();
+    let mut improvements = Vec::new();
+    let mut new_probes = Vec::new();
+    let mut removed_probes = Vec::new();
+
+    for result in &current.results {
+        match baseline_map.get(result.probe_name.as_str()) {
+            Some(baseline_result) => {
+                let old_v = &baseline_result.verdict;
+                let new_v = &result.verdict;
+                if verdict_rank(new_v) > verdict_rank(old_v) {
+                    regressions.push((&result.probe_name, old_v, new_v));
+                } else if verdict_rank(new_v) < verdict_rank(old_v) {
+                    improvements.push((&result.probe_name, old_v, new_v));
+                }
+            }
+            None => {
+                new_probes.push(&result.probe_name);
+            }
+        }
+    }
+
+    for result in &baseline.results {
+        if !current_map.contains_key(result.probe_name.as_str()) {
+            removed_probes.push(&result.probe_name);
+        }
+    }
+
+    if !regressions.is_empty() {
+        println!("\nRegressions ({}):", regressions.len());
+        for (name, old, new) in &regressions {
+            println!("  {name}: {old:?} -> {new:?}");
+        }
+    }
+
+    if !improvements.is_empty() {
+        println!("\nImprovements ({}):", improvements.len());
+        for (name, old, new) in &improvements {
+            println!("  {name}: {old:?} -> {new:?}");
+        }
+    }
+
+    if !new_probes.is_empty() {
+        println!("\nNew probes ({}):", new_probes.len());
+        for name in &new_probes {
+            let v = &current_map[name.as_str()].verdict;
+            println!("  {name}: {v:?}");
+        }
+    }
+
+    if !removed_probes.is_empty() {
+        println!("\nRemoved probes ({}):", removed_probes.len());
+        for name in &removed_probes {
+            println!("  {name}");
+        }
+    }
+
+    if regressions.is_empty() && improvements.is_empty() && new_probes.is_empty() && removed_probes.is_empty() {
+        println!("\nNo changes between reports.");
+    }
+
+    println!();
+
+    if !regressions.is_empty() {
+        process::exit(1);
+    }
+}
+
+/// Rank verdicts for comparison (lower = better).
+fn verdict_rank(v: &scoring::Verdict) -> u8 {
+    match v {
+        scoring::Verdict::Pass => 0,
+        scoring::Verdict::Partial => 1,
+        scoring::Verdict::Error => 2,
+        scoring::Verdict::Fail => 3,
     }
 }
 
