@@ -32,6 +32,7 @@
 //! println!("Security Score: {}/100", report.score);
 //! ```
 
+pub mod fingerprint;
 pub mod report;
 pub mod runner;
 pub mod scoring;

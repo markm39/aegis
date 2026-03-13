@@ -160,6 +160,20 @@ enum Command {
         #[arg(short, long, default_value = "benchmark-results")]
         output_dir: PathBuf,
     },
+
+    /// Extract a behavioral fingerprint from a JSON report.
+    Fingerprint {
+        /// Path to a JSON report file.
+        report: PathBuf,
+    },
+
+    /// Compare behavioral fingerprints from two JSON reports.
+    Similarity {
+        /// Path to first report.
+        report_a: PathBuf,
+        /// Path to second report.
+        report_b: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -255,6 +269,12 @@ fn main() {
             output_dir,
         } => {
             cmd_benchmark(&agents, &probes_dir, timeout, jobs, &output_dir);
+        }
+        Command::Fingerprint { report } => {
+            cmd_fingerprint(&report);
+        }
+        Command::Similarity { report_a, report_b } => {
+            cmd_similarity(&report_a, &report_b);
         }
     }
 }
@@ -547,23 +567,6 @@ fn cmd_summary(report_path: &Path) {
 }
 
 fn cmd_compare(baseline_path: &Path, current_path: &Path) {
-    let load_report = |path: &Path| -> scoring::SecurityReport {
-        let data = match std::fs::read_to_string(path) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Error reading {}: {e}", path.display());
-                process::exit(1);
-            }
-        };
-        match serde_json::from_str(&data) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Error parsing {}: {e}", path.display());
-                process::exit(1);
-            }
-        }
-    };
-
     let baseline = load_report(baseline_path);
     let current = load_report(current_path);
 
@@ -672,6 +675,68 @@ fn verdict_rank(v: &scoring::Verdict) -> u8 {
         scoring::Verdict::Error => 2,
         scoring::Verdict::Fail => 3,
     }
+}
+
+fn load_report(path: &Path) -> scoring::SecurityReport {
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error reading {}: {e}", path.display());
+            process::exit(1);
+        }
+    };
+    match serde_json::from_str(&data) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing {}: {e}", path.display());
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_fingerprint(report_path: &Path) {
+    let report = load_report(report_path);
+    let fp = aegis_probe::fingerprint::extract_fingerprint(&report);
+
+    match serde_json::to_string_pretty(&fp) {
+        Ok(json) => println!("{json}"),
+        Err(e) => {
+            eprintln!("Error serializing fingerprint: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_similarity(path_a: &Path, path_b: &Path) {
+    let report_a = load_report(path_a);
+    let report_b = load_report(path_b);
+
+    let fp_a = aegis_probe::fingerprint::extract_fingerprint(&report_a);
+    let fp_b = aegis_probe::fingerprint::extract_fingerprint(&report_b);
+    let result = aegis_probe::fingerprint::compare_fingerprints(&fp_a, &fp_b);
+
+    println!("\nBehavioral Similarity: {} vs {}", result.agent_a, result.agent_b);
+    println!("{}", "=".repeat(55));
+    println!("Overall similarity: {:.1}%", result.similarity * 100.0);
+    println!("Exact behavioral match: {}", result.exact_match);
+
+    println!("\n{:<25} {:>10} {:>10} {:>10}", "CATEGORY", &result.agent_a, &result.agent_b, "DELTA");
+    println!("{}", "-".repeat(55));
+
+    for cs in &result.category_similarity {
+        println!(
+            "{:<25} {:>9.0}% {:>9.0}% {:>+9.0}%",
+            cs.category,
+            cs.rate_a * 100.0,
+            cs.rate_b * 100.0,
+            (cs.rate_b - cs.rate_a) * 100.0,
+        );
+    }
+
+    println!("\nFingerprint hashes:");
+    println!("  {}: {}", fp_a.agent, &fp_a.behavioral_hash[..16]);
+    println!("  {}: {}", fp_b.agent, &fp_b.behavioral_hash[..16]);
+    println!();
 }
 
 fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize, output_dir: &Path) {
