@@ -78,6 +78,10 @@ enum Command {
         /// Write report to this file (in addition to stdout/stderr).
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Dry run: validate and list matching probes without executing them.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// List available probes.
@@ -130,6 +134,7 @@ fn main() {
             format,
             verbose,
             output,
+            dry_run,
         } => {
             cmd_run(&RunOptions {
                 agent: &agent,
@@ -142,6 +147,7 @@ fn main() {
                 format: &format,
                 verbose,
                 output: output.as_deref(),
+                dry_run,
             });
         }
         Command::List {
@@ -170,6 +176,7 @@ struct RunOptions<'a> {
     format: &'a str,
     verbose: bool,
     output: Option<&'a Path>,
+    dry_run: bool,
 }
 
 fn cmd_run(opts: &RunOptions<'_>) {
@@ -237,6 +244,26 @@ fn cmd_run(opts: &RunOptions<'_>) {
         timeout_override: Some(Duration::from_secs(opts.timeout)),
         verbose: opts.verbose,
     };
+
+    // Dry run: just list what would run
+    if opts.dry_run {
+        eprintln!(
+            "\nDry run: {} probes would run against {:?}\n",
+            filtered.len(),
+            target
+        );
+        for (path, probe) in &filtered {
+            eprintln!(
+                "  {} ({:?}, {:?}) -- {}",
+                probe.probe.name,
+                probe.probe.category,
+                probe.probe.severity,
+                path.display()
+            );
+        }
+        eprintln!();
+        return;
+    }
 
     eprintln!(
         "\nRunning {} probes against {:?}...\n",
