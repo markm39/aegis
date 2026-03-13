@@ -8,7 +8,7 @@
 # To update:  brew upgrade aegis
 
 class Aegis < Formula
-  desc "Zero-trust runtime for AI agents with per-file observability and Cedar policy enforcement"
+  desc "AI agent security testing: adversarial probes for coding agents"
   homepage "https://github.com/markm39/aegis"
   version "PLACEHOLDER_VERSION"
   license any_of: ["MIT", "Apache-2.0"]
@@ -26,23 +26,21 @@ class Aegis < Formula
 
   def install
     bin.install "aegis"
+    bin.install "aegis-probe"
 
     generate_completions_from_executable(bin/"aegis", "completions")
+    generate_completions_from_executable(bin/"aegis-probe", "completions")
 
     man_output = Utils.safe_popen_read(bin/"aegis", "manpage")
     (man1/"aegis.1").write(man_output)
   end
 
-  def post_install
-    system bin/"aegis", "setup"
-  end
-
   def caveats
     <<~EOS
-      To get started:
-        aegis init            # interactive setup wizard
-        aegis wrap -- claude  # observe any command
-        aegis pilot -- claude # supervise with auto-approval
+      To get started with security testing:
+        aegis-probe run --agent-binary claude  # test an agent
+        aegis-probe list --probes-dir probes   # list available probes
+        aegis-probe validate --probes-dir probes  # validate probe files
 
       Shell completions have been installed. Restart your terminal to activate them.
     EOS
@@ -50,5 +48,6 @@ class Aegis < Formula
 
   test do
     assert_match "aegis", shell_output("#{bin}/aegis --version")
+    assert_match "aegis-probe", shell_output("#{bin}/aegis-probe --version")
   end
 end
