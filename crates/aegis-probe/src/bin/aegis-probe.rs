@@ -131,6 +131,22 @@ enum Command {
         /// Shell to generate completions for.
         shell: Shell,
     },
+
+    /// View or manage local telemetry data.
+    Telemetry {
+        #[command(subcommand)]
+        action: TelemetryAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TelemetryAction {
+    /// Show telemetry status and event count.
+    Status,
+    /// Export telemetry events as JSON.
+    Export,
+    /// Delete all local telemetry data.
+    Clear,
 }
 
 fn main() {
@@ -204,6 +220,9 @@ fn main() {
                 "aegis-probe",
                 &mut std::io::stdout(),
             );
+        }
+        Command::Telemetry { action } => {
+            cmd_telemetry(action);
         }
     }
 }
@@ -620,6 +639,75 @@ fn verdict_rank(v: &scoring::Verdict) -> u8 {
         scoring::Verdict::Partial => 1,
         scoring::Verdict::Error => 2,
         scoring::Verdict::Fail => 3,
+    }
+}
+
+fn cmd_telemetry(action: TelemetryAction) {
+    let path = aegis_probe::telemetry::default_telemetry_path();
+
+    match action {
+        TelemetryAction::Status => {
+            let enabled = aegis_probe::telemetry::is_enabled();
+            println!("Telemetry: {}", if enabled { "enabled" } else { "disabled" });
+            println!("Data file: {}", path.display());
+
+            if path.exists() {
+                let content = std::fs::read_to_string(&path).unwrap_or_default();
+                let count = content.lines().filter(|l| !l.is_empty()).count();
+                let size = std::fs::metadata(&path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                println!("Events: {count}");
+                println!("Size: {:.1} KB", size as f64 / 1024.0);
+            } else {
+                println!("Events: 0 (no data file)");
+            }
+
+            println!("\nTo enable: aegis-probe run --telemetry");
+            println!("Or set:    AEGIS_TELEMETRY=1");
+        }
+        TelemetryAction::Export => {
+            if !path.exists() {
+                eprintln!("No telemetry data found at {}", path.display());
+                process::exit(1);
+            }
+
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error reading {}: {e}", path.display());
+                    process::exit(1);
+                }
+            };
+
+            // Parse JSONL into JSON array
+            let events: Vec<serde_json::Value> = content
+                .lines()
+                .filter(|l| !l.is_empty())
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+
+            match serde_json::to_string_pretty(&events) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("Error serializing: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        TelemetryAction::Clear => {
+            if path.exists() {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => println!("Telemetry data cleared: {}", path.display()),
+                    Err(e) => {
+                        eprintln!("Error deleting {}: {e}", path.display());
+                        process::exit(1);
+                    }
+                }
+            } else {
+                println!("No telemetry data to clear.");
+            }
+        }
     }
 }
 

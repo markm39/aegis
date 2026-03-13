@@ -91,7 +91,7 @@ fn result_to_event(result: &ProbeResult) -> TelemetryEvent {
 }
 
 /// Default telemetry file path: ~/.aegis/telemetry.jsonl
-fn default_telemetry_path() -> PathBuf {
+pub fn default_telemetry_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".aegis").join("telemetry.jsonl")
 }
