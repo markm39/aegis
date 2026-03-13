@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -82,6 +83,10 @@ enum Command {
         /// Dry run: validate and list matching probes without executing them.
         #[arg(long)]
         dry_run: bool,
+
+        /// Number of probes to run in parallel (default: 1, sequential).
+        #[arg(short, long, default_value = "1")]
+        jobs: usize,
     },
 
     /// List available probes.
@@ -143,6 +148,7 @@ fn main() {
             verbose,
             output,
             dry_run,
+            jobs,
         } => {
             cmd_run(&RunOptions {
                 agent: &agent,
@@ -156,6 +162,7 @@ fn main() {
                 verbose,
                 output: output.as_deref(),
                 dry_run,
+                jobs: jobs.max(1),
             });
         }
         Command::List {
@@ -188,6 +195,7 @@ struct RunOptions<'a> {
     verbose: bool,
     output: Option<&'a Path>,
     dry_run: bool,
+    jobs: usize,
 }
 
 fn cmd_run(opts: &RunOptions<'_>) {
@@ -276,51 +284,24 @@ fn cmd_run(opts: &RunOptions<'_>) {
         return;
     }
 
+    let jobs = opts.jobs;
     eprintln!(
-        "\nRunning {} probes against {:?}...\n",
+        "\nRunning {} probes against {:?}{}...\n",
         filtered.len(),
-        target
+        target,
+        if jobs > 1 {
+            format!(" ({jobs} parallel)")
+        } else {
+            String::new()
+        }
     );
 
-    // Run probes with streaming output
-    let mut results = Vec::new();
-    for (i, (path, probe)) in filtered.iter().enumerate() {
-        if opts.verbose {
-            eprintln!(
-                "[{}/{}] {} ({})",
-                i + 1,
-                filtered.len(),
-                probe.probe.name,
-                path.display()
-            );
-        }
-
-        match runner::run_probe(probe, &config) {
-            Ok(result) => {
-                // Stream individual result
-                eprint!("{}", report::render_probe_result(&result));
-                results.push(result);
-            }
-            Err(e) => {
-                eprintln!("  Error running {}: {e}", probe.probe.name);
-                results.push(scoring::ProbeResult {
-                    probe_name: probe.probe.name.clone(),
-                    category: probe.probe.category,
-                    severity: probe.probe.severity,
-                    verdict: scoring::Verdict::Error,
-                    findings: vec![scoring::Finding {
-                        description: format!("Execution error: {e}"),
-                        kind: scoring::FindingKind::Suspicious,
-                        severity: testcase::Severity::Info,
-                        evidence: None,
-                    }],
-                    agent: format!("{target:?}"),
-                    duration_ms: 0,
-                    timestamp: chrono::Utc::now(),
-                });
-            }
-        }
-    }
+    // Run probes -- sequential (jobs=1) or parallel (jobs>1)
+    let results = if jobs <= 1 {
+        run_probes_sequential(&filtered, &config, &target, opts.verbose)
+    } else {
+        run_probes_parallel(&filtered, &config, &target, jobs)
+    };
 
     // Generate final report
     let agent_name = format!("{target:?}");
@@ -612,6 +593,155 @@ fn verdict_rank(v: &scoring::Verdict) -> u8 {
         scoring::Verdict::Error => 2,
         scoring::Verdict::Fail => 3,
     }
+}
+
+fn run_probes_sequential(
+    probes: &[(PathBuf, testcase::Probe)],
+    config: &RunnerConfig,
+    target: &AgentTarget,
+    verbose: bool,
+) -> Vec<scoring::ProbeResult> {
+    let mut results = Vec::with_capacity(probes.len());
+
+    for (i, (_path, probe)) in probes.iter().enumerate() {
+        eprintln!(
+            "[{}/{}] {} ({:?}, {:?})",
+            i + 1,
+            probes.len(),
+            probe.probe.name,
+            probe.probe.category,
+            probe.probe.severity,
+        );
+
+        match runner::run_probe(probe, config) {
+            Ok(result) => {
+                let icon = match result.verdict {
+                    scoring::Verdict::Pass => "PASS",
+                    scoring::Verdict::Partial => "PARTIAL",
+                    scoring::Verdict::Error => "ERROR",
+                    scoring::Verdict::Fail => "FAIL",
+                };
+                eprintln!("        -> {icon}");
+                if verbose {
+                    for finding in &result.findings {
+                        eprintln!("           {:?}: {}", finding.severity, finding.description);
+                    }
+                }
+                results.push(result);
+            }
+            Err(e) => {
+                eprintln!("        -> ERROR: {e}");
+                results.push(scoring::ProbeResult {
+                    probe_name: probe.probe.name.clone(),
+                    category: probe.probe.category,
+                    severity: probe.probe.severity,
+                    verdict: scoring::Verdict::Error,
+                    findings: vec![scoring::Finding {
+                        description: format!("Runner error: {e}"),
+                        kind: scoring::FindingKind::ForbiddenAction,
+                        severity: testcase::Severity::Critical,
+                        evidence: None,
+                    }],
+                    agent: format!("{target:?}"),
+                    duration_ms: 0,
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+        }
+    }
+
+    results
+}
+
+fn run_probes_parallel(
+    probes: &[(PathBuf, testcase::Probe)],
+    config: &RunnerConfig,
+    target: &AgentTarget,
+    jobs: usize,
+) -> Vec<scoring::ProbeResult> {
+    let total = probes.len();
+    let counter = Arc::new(Mutex::new(0usize));
+    let results: Arc<Mutex<Vec<(usize, scoring::ProbeResult)>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(total)));
+
+    std::thread::scope(|scope| {
+        let work_index = Arc::new(Mutex::new(0usize));
+
+        for _ in 0..jobs {
+            let work_index = Arc::clone(&work_index);
+            let counter = Arc::clone(&counter);
+            let results = Arc::clone(&results);
+
+            scope.spawn(move || {
+                loop {
+                    let idx = {
+                        let mut wi = work_index.lock().unwrap();
+                        let i = *wi;
+                        if i >= total {
+                            return;
+                        }
+                        *wi += 1;
+                        i
+                    };
+
+                    let (_path, probe) = &probes[idx];
+
+                    let seq = {
+                        let mut c = counter.lock().unwrap();
+                        *c += 1;
+                        *c
+                    };
+
+                    eprintln!(
+                        "[{}/{}] {} ({:?}, {:?})",
+                        seq,
+                        total,
+                        probe.probe.name,
+                        probe.probe.category,
+                        probe.probe.severity,
+                    );
+
+                    let result = match runner::run_probe(probe, config) {
+                        Ok(r) => {
+                            let icon = match r.verdict {
+                                scoring::Verdict::Pass => "PASS",
+                                scoring::Verdict::Partial => "PARTIAL",
+                                scoring::Verdict::Error => "ERROR",
+                                scoring::Verdict::Fail => "FAIL",
+                            };
+                            eprintln!("        -> {icon} ({})", probe.probe.name);
+                            r
+                        }
+                        Err(e) => {
+                            eprintln!("        -> ERROR ({}): {e}", probe.probe.name);
+                            scoring::ProbeResult {
+                                probe_name: probe.probe.name.clone(),
+                                category: probe.probe.category,
+                                severity: probe.probe.severity,
+                                verdict: scoring::Verdict::Error,
+                                findings: vec![scoring::Finding {
+                                    description: format!("Runner error: {e}"),
+                                    kind: scoring::FindingKind::ForbiddenAction,
+                                    severity: testcase::Severity::Critical,
+                                    evidence: None,
+                                }],
+                                agent: format!("{target:?}"),
+                                duration_ms: 0,
+                                timestamp: chrono::Utc::now(),
+                            }
+                        }
+                    };
+
+                    results.lock().unwrap().push((idx, result));
+                }
+            });
+        }
+    });
+
+    // Sort by original probe order
+    let mut indexed = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
+    indexed.sort_by_key(|(idx, _)| *idx);
+    indexed.into_iter().map(|(_, r)| r).collect()
 }
 
 fn parse_agent_target(s: &str) -> AgentTarget {
