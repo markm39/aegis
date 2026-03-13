@@ -137,6 +137,29 @@ enum Command {
         #[command(subcommand)]
         action: TelemetryAction,
     },
+
+    /// Run the full benchmark suite and output a standardized scorecard.
+    Benchmark {
+        /// Agents to benchmark (comma-separated, e.g. "claude-code,codex").
+        #[arg(long, default_value = "claude-code")]
+        agents: String,
+
+        /// Directory containing probe TOML files.
+        #[arg(long, default_value = "probes")]
+        probes_dir: PathBuf,
+
+        /// Timeout per probe in seconds.
+        #[arg(long, default_value = "120")]
+        timeout: u64,
+
+        /// Number of probes to run in parallel per agent.
+        #[arg(short, long, default_value = "1")]
+        jobs: usize,
+
+        /// Output directory for benchmark reports.
+        #[arg(short, long, default_value = "benchmark-results")]
+        output_dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -223,6 +246,15 @@ fn main() {
         }
         Command::Telemetry { action } => {
             cmd_telemetry(action);
+        }
+        Command::Benchmark {
+            agents,
+            probes_dir,
+            timeout,
+            jobs,
+            output_dir,
+        } => {
+            cmd_benchmark(&agents, &probes_dir, timeout, jobs, &output_dir);
         }
     }
 }
@@ -639,6 +671,164 @@ fn verdict_rank(v: &scoring::Verdict) -> u8 {
         scoring::Verdict::Partial => 1,
         scoring::Verdict::Error => 2,
         scoring::Verdict::Fail => 3,
+    }
+}
+
+fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize, output_dir: &Path) {
+    let agent_names: Vec<&str> = agents_str.split(',').map(|s| s.trim()).collect();
+
+    if agent_names.is_empty() {
+        eprintln!("No agents specified.");
+        process::exit(1);
+    }
+
+    // Load probes
+    let probes = match testcase::load_probes(probes_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error loading probes: {e}");
+            process::exit(1);
+        }
+    };
+
+    if probes.is_empty() {
+        eprintln!("No probes found in {}", probes_dir.display());
+        process::exit(1);
+    }
+
+    // Create output directory
+    if let Err(e) = std::fs::create_dir_all(output_dir) {
+        eprintln!("Error creating output directory: {e}");
+        process::exit(1);
+    }
+
+    let mut all_reports = Vec::new();
+
+    for agent_name in &agent_names {
+        let target = parse_agent_target(agent_name);
+        let binary = resolve_agent_binary(&target);
+
+        // Filter probes that target this agent
+        let filtered: Vec<(PathBuf, testcase::Probe)> = probes
+            .iter()
+            .filter(|(_, p)| p.probe.targets.contains(&target))
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            eprintln!("No probes target {agent_name}, skipping.");
+            continue;
+        }
+
+        let config = RunnerConfig {
+            target: target.clone(),
+            agent_binary: binary,
+            agent_args: default_agent_args(&target),
+            sandboxed: true,
+            timeout_override: Some(Duration::from_secs(timeout)),
+            verbose: false,
+        };
+
+        eprintln!(
+            "\n=== Benchmarking {agent_name} ({} probes) ===\n",
+            filtered.len()
+        );
+
+        let results = if jobs <= 1 {
+            run_probes_sequential(&filtered, &config, &target, false)
+        } else {
+            run_probes_parallel(&filtered, &config, &target, jobs)
+        };
+
+        let agent_label = format!("{target:?}");
+        let report = scoring::compute_report(&agent_label, results);
+
+        // Write individual report
+        let report_path = output_dir.join(format!("{agent_name}.json"));
+        match report::render_json(&report) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&report_path, &json) {
+                    eprintln!("Error writing report: {e}");
+                } else {
+                    eprintln!("Report: {}", report_path.display());
+                }
+            }
+            Err(e) => eprintln!("Error serializing report: {e}"),
+        }
+
+        // Write HTML report
+        let html_path = output_dir.join(format!("{agent_name}.html"));
+        let html = report::render_html(&report);
+        if let Err(e) = std::fs::write(&html_path, &html) {
+            eprintln!("Error writing HTML report: {e}");
+        }
+
+        all_reports.push((agent_name.to_string(), report));
+    }
+
+    // Print benchmark summary
+    eprintln!("\n{}", "=".repeat(60));
+    eprintln!("BENCHMARK RESULTS");
+    eprintln!("{}", "=".repeat(60));
+
+    println!("\n{:<20} {:>6} {:>8} {:>8} {:>8} {:>8}", "AGENT", "SCORE", "PASSED", "FAILED", "PARTIAL", "ERRORS");
+    println!("{}", "-".repeat(60));
+
+    for (name, report) in &all_reports {
+        println!(
+            "{:<20} {:>5}/100 {:>8} {:>8} {:>8} {:>8}",
+            name,
+            report.score,
+            report.summary.passed,
+            report.summary.failed,
+            report.summary.partial,
+            report.summary.errors,
+        );
+    }
+    println!();
+
+    // Per-category breakdown
+    println!("{:<20} {:>15} {:>15} {:>15}", "CATEGORY",
+        all_reports.first().map(|(n, _)| n.as_str()).unwrap_or(""),
+        all_reports.get(1).map(|(n, _)| n.as_str()).unwrap_or(""),
+        all_reports.get(2).map(|(n, _)| n.as_str()).unwrap_or(""),
+    );
+    println!("{}", "-".repeat(65));
+
+    let categories = [
+        "PromptInjection", "DataExfiltration", "PrivilegeEscalation",
+        "MaliciousExecution", "SupplyChain", "SocialEngineering",
+        "CredentialHarvesting",
+    ];
+
+    for cat_name in categories {
+        print!("{:<20}", cat_name);
+        for (_name, report) in &all_reports {
+            let cat_results: Vec<_> = report
+                .results
+                .iter()
+                .filter(|r| format!("{:?}", r.category) == cat_name)
+                .collect();
+            let passed = cat_results
+                .iter()
+                .filter(|r| matches!(r.verdict, scoring::Verdict::Pass))
+                .count();
+            let total = cat_results.len();
+            if total > 0 {
+                print!(" {:>6}/{:<8}", passed, total);
+            } else {
+                print!(" {:>15}", "-");
+            }
+        }
+        println!();
+    }
+
+    println!("\nReports saved to {}/", output_dir.display());
+    eprintln!("{}", "=".repeat(60));
+
+    // Exit with failure if any agent has failures
+    if all_reports.iter().any(|(_, r)| r.summary.failed > 0) {
+        process::exit(1);
     }
 }
 
