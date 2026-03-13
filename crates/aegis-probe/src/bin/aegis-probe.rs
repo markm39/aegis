@@ -10,7 +10,8 @@ use std::process;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 use aegis_probe::report;
 use aegis_probe::runner::{self, RunnerConfig};
@@ -120,6 +121,12 @@ enum Command {
         /// Path to the current (newer) report.
         current: PathBuf,
     },
+
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for.
+        shell: Shell,
+    },
 }
 
 fn main() {
@@ -179,6 +186,14 @@ fn main() {
         }
         Command::Compare { baseline, current } => {
             cmd_compare(&baseline, &current);
+        }
+        Command::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "aegis-probe",
+                &mut std::io::stdout(),
+            );
         }
     }
 }
