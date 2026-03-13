@@ -22,11 +22,13 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
     about = "AI agent security testing -- adversarial probes for coding agents",
     version,
     after_help = "Examples:\n  \
-        aegis-probe run                          # Test Claude Code with all probes\n  \
-        aegis-probe run --agent codex            # Test Codex\n  \
+        aegis-probe run                              # Test Claude Code with all probes\n  \
+        aegis-probe run --agent codex                # Test Codex\n  \
         aegis-probe run --category prompt_injection  # Only prompt injection probes\n  \
-        aegis-probe list                         # Show available probes\n  \
-        aegis-probe validate                     # Check probe files are valid"
+        aegis-probe run -o report.json               # Save JSON report to file\n  \
+        aegis-probe list                             # Show available probes\n  \
+        aegis-probe validate                         # Check probe files are valid\n  \
+        aegis-probe summary report.json              # Print one-line summary from report"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -72,6 +74,10 @@ enum Command {
         /// Show verbose output during execution.
         #[arg(short, long)]
         verbose: bool,
+
+        /// Write report to this file (in addition to stdout/stderr).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// List available probes.
@@ -90,6 +96,12 @@ enum Command {
         /// Directory containing probe TOML files.
         #[arg(long, default_value = "probes")]
         probes_dir: PathBuf,
+    },
+
+    /// Print a one-line summary from a JSON report file.
+    Summary {
+        /// Path to JSON report file.
+        report: PathBuf,
     },
 }
 
@@ -117,6 +129,7 @@ fn main() {
             no_sandbox,
             format,
             verbose,
+            output,
         } => {
             cmd_run(&RunOptions {
                 agent: &agent,
@@ -128,6 +141,7 @@ fn main() {
                 no_sandbox,
                 format: &format,
                 verbose,
+                output: output.as_deref(),
             });
         }
         Command::List {
@@ -138,6 +152,9 @@ fn main() {
         }
         Command::Validate { probes_dir } => {
             cmd_validate(&probes_dir);
+        }
+        Command::Summary { report } => {
+            cmd_summary(&report);
         }
     }
 }
@@ -152,6 +169,7 @@ struct RunOptions<'a> {
     no_sandbox: bool,
     format: &'a str,
     verbose: bool,
+    output: Option<&'a Path>,
 }
 
 fn cmd_run(opts: &RunOptions<'_>) {
@@ -285,6 +303,23 @@ fn cmd_run(opts: &RunOptions<'_>) {
         }
     }
 
+    // Write report to file if --output specified
+    if let Some(output_path) = opts.output {
+        match report::render_json(&final_report) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(output_path, &json) {
+                    eprintln!("Error writing report to {}: {e}", output_path.display());
+                    process::exit(1);
+                }
+                eprintln!("\nReport written to {}", output_path.display());
+            }
+            Err(e) => {
+                eprintln!("Error serializing report: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
     // Exit with non-zero code if there are failures
     if final_report.summary.failed > 0 {
         process::exit(1);
@@ -374,6 +409,38 @@ fn cmd_validate(probes_dir: &Path) {
 
     println!("\n{valid} valid, {invalid} invalid\n");
     if invalid > 0 {
+        process::exit(1);
+    }
+}
+
+fn cmd_summary(report_path: &Path) {
+    let data = match std::fs::read_to_string(report_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error reading {}: {e}", report_path.display());
+            process::exit(1);
+        }
+    };
+
+    let report: scoring::SecurityReport = match serde_json::from_str(&data) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error parsing report: {e}");
+            process::exit(1);
+        }
+    };
+
+    println!(
+        "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}",
+        report.score,
+        report.summary.passed,
+        report.summary.failed,
+        report.summary.partial,
+        report.summary.errors,
+        report.agent,
+    );
+
+    if report.summary.failed > 0 {
         process::exit(1);
     }
 }

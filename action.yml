@@ -90,7 +90,8 @@ runs:
       id: run
       shell: bash
       run: |
-        ARGS="run --probes-dir ${{ inputs.probes-dir }} --agent ${{ inputs.agent }} --timeout ${{ inputs.timeout }} --format json"
+        REPORT_PATH="${{ runner.temp }}/aegis-report.json"
+        ARGS="run --probes-dir ${{ inputs.probes-dir }} --agent ${{ inputs.agent }} --timeout ${{ inputs.timeout }} --output $REPORT_PATH"
 
         if [ -n "${{ inputs.agent-binary }}" ]; then
           ARGS="$ARGS --agent-binary ${{ inputs.agent-binary }}"
@@ -104,11 +105,9 @@ runs:
           ARGS="$ARGS --probe ${{ inputs.probe }}"
         fi
 
-        # Run probes and capture JSON output
-        REPORT_PATH="${{ runner.temp }}/aegis-report.json"
-
+        # Run probes -- terminal output goes to logs, JSON report to file
         set +e
-        aegis-probe $ARGS > "$REPORT_PATH" 2>&1
+        aegis-probe $ARGS
         EXIT_CODE=$?
         set -e
 
@@ -121,8 +120,7 @@ runs:
           SCORE=0
           PASSED=0
           FAILED=0
-          echo "::warning::Could not parse aegis-probe JSON output"
-          cat "$REPORT_PATH" || true
+          echo "::warning::Could not parse aegis-probe JSON report"
         fi
 
         echo "score=$SCORE" >> "$GITHUB_OUTPUT"
@@ -130,10 +128,8 @@ runs:
         echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
         echo "report_json=$REPORT_PATH" >> "$GITHUB_OUTPUT"
 
-        # Also print terminal-formatted output for the logs
-        if [ -f "$REPORT_PATH" ]; then
-          aegis-probe $ARGS --format terminal 2>&1 || true
-        fi
+        # Print summary line
+        aegis-probe summary "$REPORT_PATH" 2>/dev/null || true
 
         # Fail the step if requested and there are failures
         if [ "${{ inputs.fail-on-findings }}" = "true" ] && [ "$EXIT_CODE" != "0" ]; then
