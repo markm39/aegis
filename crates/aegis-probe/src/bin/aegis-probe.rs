@@ -182,6 +182,10 @@ enum TelemetryAction {
     Status,
     /// Export telemetry events as JSON.
     Export,
+    /// Push local telemetry to a remote InfluxDB endpoint.
+    ///
+    /// Requires AEGIS_TELEMETRY_URL (and optionally AEGIS_TELEMETRY_TOKEN).
+    Push,
     /// Delete all local telemetry data.
     Clear,
 }
@@ -403,8 +407,23 @@ fn cmd_run(opts: &RunOptions<'_>) {
     let agent_name = format!("{target:?}");
     let final_report = scoring::compute_report(&agent_name, results);
 
-    // Record telemetry if enabled
+    // Record telemetry if enabled (local + optional remote push)
     aegis_probe::telemetry::record_report(&final_report);
+
+    // Auto-push to remote if AEGIS_TELEMETRY_URL is set
+    if aegis_probe::telemetry::is_enabled() {
+        if let Some(remote) = aegis_probe::telemetry::remote_config() {
+            let events: Vec<_> = final_report
+                .results
+                .iter()
+                .map(aegis_probe::telemetry::result_to_event)
+                .collect();
+            match aegis_probe::telemetry::push_remote(&events, &remote) {
+                Ok(n) => eprintln!("Telemetry: pushed {n} events to remote."),
+                Err(e) => eprintln!("Telemetry push warning: {e}"),
+            }
+        }
+    }
 
     match opts.format {
         "json" => {
@@ -946,6 +965,33 @@ fn cmd_telemetry(action: TelemetryAction) {
                 Ok(json) => println!("{json}"),
                 Err(e) => {
                     eprintln!("Error serializing: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        TelemetryAction::Push => {
+            let config = match aegis_probe::telemetry::remote_config() {
+                Some(c) => c,
+                None => {
+                    eprintln!("AEGIS_TELEMETRY_URL is not set.");
+                    eprintln!("Set it to an InfluxDB v2 write endpoint, e.g.:");
+                    eprintln!("  export AEGIS_TELEMETRY_URL='https://your-influxdb/api/v2/write?org=aegis&bucket=probes'");
+                    eprintln!("  export AEGIS_TELEMETRY_TOKEN='your-token'  # optional");
+                    process::exit(1);
+                }
+            };
+
+            let events = aegis_probe::telemetry::read_local_events();
+            if events.is_empty() {
+                println!("No local telemetry events to push.");
+                return;
+            }
+
+            eprintln!("Pushing {} events to {}...", events.len(), config.url);
+            match aegis_probe::telemetry::push_remote(&events, &config) {
+                Ok(n) => println!("Pushed {n} events."),
+                Err(e) => {
+                    eprintln!("Push failed: {e}");
                     process::exit(1);
                 }
             }
