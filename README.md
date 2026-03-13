@@ -18,30 +18,42 @@ Test what AI coding agents actually DO when fed adversarial inputs. Not what the
 # Install
 cargo install --git https://github.com/markm39/aegis.git aegis-probe
 
-# Run all 52 security probes against Claude Code
+# Run all security probes against Claude Code
 aegis-probe run --probes-dir probes
 
 # Test a specific category
 aegis-probe run --category prompt_injection
+
+# Run probes in parallel (4 at a time)
+aegis-probe run -j 4
 
 # Generate an HTML report
 aegis-probe run --format html > report.html
 
 # Save JSON report for CI/CD
 aegis-probe run -o report.json
+
+# Compare reports across agent versions
+aegis-probe compare baseline.json current.json
+
+# One-line summary from a saved report
+aegis-probe summary report.json
+
+# Shell completions
+aegis-probe completions zsh >> ~/.zfunc/_aegis-probe
 ```
 
-52 adversarial probes across 7 attack categories:
+101 adversarial probes across 7 attack categories:
 
 | Category | Probes | What it tests |
 |---|---|---|
-| Prompt Injection | 9 | Code comments, READMEs, error messages, unicode tricks |
-| Data Exfiltration | 9 | .env files, SSH keys, credentials, clipboard, DNS tunneling |
-| Privilege Escalation | 7 | Sandbox escape, symlinks, SUID, Docker socket, crontab |
-| Malicious Execution | 7 | Destructive commands, reverse shells, git hooks, Makefiles |
-| Supply Chain | 8 | Lockfile manipulation, typosquatting, submodule hijack |
-| Social Engineering | 6 | Fake audits, CI impersonation, permission escalation |
-| Credential Harvesting | 6 | Token scraping, keychain access, browser stores |
+| Prompt Injection | 25 | Code comments, READMEs, YAML configs, Dockerfiles, SQL, CSV, base64 encoding |
+| Data Exfiltration | 18 | .env files, SSH keys, webhooks, git remotes, debug logs, clipboard, DNS tunneling |
+| Privilege Escalation | 15 | Sandbox escape, PATH manipulation, LaunchAgents, git hooks, shell rc, LD_PRELOAD |
+| Malicious Execution | 12 | Destructive commands, reverse shells, curl pipe bash, eval injection, obfuscation |
+| Supply Chain | 13 | Lockfile manipulation, typosquatting, dependency confusion, Docker images, Composer |
+| Social Engineering | 11 | Fake audits, authority impersonation, time pressure, CI impersonation |
+| Credential Harvesting | 7 | AWS credentials, token scraping, keychain access, browser stores |
 
 ### GitHub Action
 
@@ -649,7 +661,7 @@ Layers:
 | `aegis-tts` | Text-to-speech (OpenAI, ElevenLabs, Edge TTS) |
 | `aegis-voice` | Voice input, speech-to-text, wake word detection |
 | `aegis-harness` | PTY-based TUI integration test harness |
-| `aegis-probe` | AI agent security testing: 52 adversarial probes, scoring engine, report generation |
+| `aegis-probe` | AI agent security testing: 101 adversarial probes, scoring engine, HTML/JSON reports, parallel execution |
 | `aegis-cli` | Binary entry point: chat TUI, pilot TUI, onboard wizard, init wizard, all CLI commands |
 
 ## CLI Reference

@@ -34,6 +34,10 @@ inputs:
     description: 'Fail the action if any probe finds security issues'
     required: false
     default: 'true'
+  jobs:
+    description: 'Number of probes to run in parallel (default: 1)'
+    required: false
+    default: '1'
   aegis-version:
     description: 'Version of aegis-probe to install (default: latest)'
     required: false
@@ -91,7 +95,7 @@ runs:
       shell: bash
       run: |
         REPORT_PATH="${{ runner.temp }}/aegis-report.json"
-        ARGS="run --probes-dir ${{ inputs.probes-dir }} --agent ${{ inputs.agent }} --timeout ${{ inputs.timeout }} --output $REPORT_PATH"
+        ARGS="run --probes-dir ${{ inputs.probes-dir }} --agent ${{ inputs.agent }} --timeout ${{ inputs.timeout }} --jobs ${{ inputs.jobs }} --output $REPORT_PATH"
 
         if [ -n "${{ inputs.agent-binary }}" ]; then
           ARGS="$ARGS --agent-binary ${{ inputs.agent-binary }}"

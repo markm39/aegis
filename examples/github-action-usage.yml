@@ -36,3 +36,14 @@ jobs:
       #     agent: claude-code
       #     category: prompt_injection
       #     fail-on-findings: true
+
+      # Run probes in parallel for faster CI:
+      # - uses: markm39/aegis@main
+      #   with:
+      #     agent: claude-code
+      #     jobs: 4
+      #     fail-on-findings: true
+
+      # Compare against a baseline report:
+      # - name: Compare security reports
+      #   run: aegis-probe compare baseline.json ${{ steps.aegis.outputs.report-json }}
