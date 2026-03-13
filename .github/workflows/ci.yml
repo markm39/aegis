@@ -123,6 +123,9 @@ jobs:
       - name: List probes
         run: ./target/release/aegis-probe list --probes-dir probes
 
+      - name: Dry run (verify probe filtering)
+        run: ./target/release/aegis-probe run --probes-dir probes --dry-run --category prompt_injection
+
   # ---------- Documentation ----------
   doc:
     name: Documentation
