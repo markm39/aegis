@@ -443,6 +443,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-probe"
+version = "0.1.0"
+dependencies = [
+ "aegis-harness",
+ "aegis-ledger",
+ "aegis-observer",
+ "aegis-pilot",
+ "aegis-policy",
+ "aegis-sandbox",
+ "aegis-types",
+ "anyhow",
+ "assert_cmd",
+ "chrono",
+ "glob",
+ "hex",
+ "predicates",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "aegis-proxy"
 version = "0.1.0"
 dependencies = [

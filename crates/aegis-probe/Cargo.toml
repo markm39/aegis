@@ -1,0 +1,36 @@
+[package]
+name = "aegis-probe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "AI agent security testing: adversarial probes for coding agents"
+keywords = ["ai-security", "red-team", "agent-testing", "adversarial"]
+categories = ["development-tools::testing"]
+
+[dependencies]
+aegis-types = { path = "../aegis-types" }
+aegis-policy = { path = "../aegis-policy" }
+aegis-ledger = { path = "../aegis-ledger" }
+aegis-sandbox = { path = "../aegis-sandbox" }
+aegis-observer = { path = "../aegis-observer" }
+aegis-harness = { path = "../aegis-harness" }
+aegis-pilot = { path = "../aegis-pilot" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+regex = "1"
+glob = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

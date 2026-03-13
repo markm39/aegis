@@ -23,6 +23,7 @@ members = [
     "crates/aegis-canvas",
     "crates/aegis-browser",
     "crates/aegis-hooks",
+    "crates/aegis-probe",
     "tests",
     # Vendored from OpenAI Codex CLI (Apache-2.0)
     "vendor/codex/apply-patch",
