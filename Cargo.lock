@@ -457,6 +457,7 @@ dependencies = [
  "assert_cmd",
  "chrono",
  "clap",
+ "clap_complete",
  "glob",
  "hex",
  "predicates",
