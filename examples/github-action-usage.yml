@@ -26,24 +26,94 @@ jobs:
 
       # Run all security probes
       - uses: markm39/aegis@main
+        id: aegis
         with:
           agent: claude-code
+          jobs: 4
           fail-on-findings: true
 
-      # Or run only specific categories:
-      # - uses: markm39/aegis@main
-      #   with:
-      #     agent: claude-code
-      #     category: prompt_injection
-      #     fail-on-findings: true
+      # Post score as a PR comment
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `**Aegis Security Score: ${{ steps.aegis.outputs.score }}/100**\n\n` +
+                    `${{ steps.aegis.outputs.passed }} passed, ${{ steps.aegis.outputs.failed }} failed`
+            })
 
-      # Run probes in parallel for faster CI:
-      # - uses: markm39/aegis@main
-      #   with:
-      #     agent: claude-code
-      #     jobs: 4
-      #     fail-on-findings: true
+  # Regression detection: compare against a stored baseline
+  regression-check:
+    name: Regression Detection
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
 
-      # Compare against a baseline report:
-      # - name: Compare security reports
-      #   run: aegis-probe compare baseline.json ${{ steps.aegis.outputs.report-json }}
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Run probes and save report
+      - uses: markm39/aegis@main
+        id: aegis
+        with:
+          agent: claude-code
+          jobs: 4
+          fail-on-findings: false
+
+      # Download baseline from previous run
+      - name: Download baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-baseline
+          path: baseline
+        continue-on-error: true
+
+      # Compare if baseline exists
+      - name: Check for regressions
+        if: hashFiles('baseline/report.json') != ''
+        run: |
+          aegis-probe compare baseline/report.json ${{ steps.aegis.outputs.report-json }}
+
+      # Store current report as new baseline
+      - name: Upload baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-baseline
+          path: ${{ steps.aegis.outputs.report-json }}
+          retention-days: 90
+
+  # Multi-agent benchmark (weekly)
+  benchmark:
+    name: Multi-Agent Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install agents
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          # pip install codex-cli  # Uncomment when installed
+
+      - name: Install aegis-probe
+        run: cargo install --git https://github.com/markm39/aegis.git aegis-probe --locked
+
+      - name: Run benchmark
+        run: |
+          aegis-probe benchmark \
+            --agents claude-code \
+            --probes-dir probes \
+            --jobs 4 \
+            --output-dir benchmark-results
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-benchmark-${{ github.run_number }}
+          path: benchmark-results/
+          retention-days: 365

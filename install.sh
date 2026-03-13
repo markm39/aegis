@@ -129,7 +129,7 @@ do_uninstall() {
 
     detect_completions_dir
 
-    TARGETS="$AEGIS_INSTALL_DIR/aegis"
+    TARGETS="$AEGIS_INSTALL_DIR/aegis $AEGIS_INSTALL_DIR/aegis-probe"
     [ -n "$COMPLETIONS_DIR" ] && TARGETS="$TARGETS $COMPLETIONS_DIR/$COMPLETIONS_FILE"
     TARGETS="$TARGETS $AEGIS_MAN_DIR/aegis.1"
 
@@ -222,6 +222,7 @@ try_download_binary() {
     fi
 
     chmod +x "$TMPDIR/aegis"
+    [ -f "$TMPDIR/aegis-probe" ] && chmod +x "$TMPDIR/aegis-probe"
     return 0
 }
 
@@ -245,9 +246,10 @@ build_from_source() {
         git clone --depth 1 "https://github.com/${AEGIS_REPO}.git" "$CLONE_DIR"
     fi
 
-    (cd "$CLONE_DIR" && cargo build --release -p aegis-cli)
+    (cd "$CLONE_DIR" && cargo build --release -p aegis-cli -p aegis-probe)
     cp "$CLONE_DIR/target/release/aegis" "$TMPDIR/aegis"
-    chmod +x "$TMPDIR/aegis"
+    cp "$CLONE_DIR/target/release/aegis-probe" "$TMPDIR/aegis-probe"
+    chmod +x "$TMPDIR/aegis" "$TMPDIR/aegis-probe"
 }
 
 main() {
@@ -260,7 +262,7 @@ main() {
     done
 
     printf "\n${BOLD}Aegis Installer${RESET}\n"
-    printf "Zero-trust runtime for AI agents\n\n"
+    printf "AI Agent Security Intelligence Platform\n\n"
 
     # Platform check
     OS=$(uname -s)
@@ -327,14 +329,20 @@ main() {
         INSTALLED_FROM="source"
     fi
 
-    # Install binary
-    info "Installing to ${AEGIS_INSTALL_DIR}/aegis"
+    # Install binaries
+    info "Installing to ${AEGIS_INSTALL_DIR}"
     install_file "$TMPDIR/aegis" "$AEGIS_INSTALL_DIR" "aegis"
     if [ -f "$AEGIS_INSTALL_DIR/aegis" ]; then
         chmod +x "$AEGIS_INSTALL_DIR/aegis" 2>/dev/null || sudo chmod +x "$AEGIS_INSTALL_DIR/aegis"
     fi
 
+    if [ -f "$TMPDIR/aegis-probe" ]; then
+        install_file "$TMPDIR/aegis-probe" "$AEGIS_INSTALL_DIR" "aegis-probe"
+        chmod +x "$AEGIS_INSTALL_DIR/aegis-probe" 2>/dev/null || sudo chmod +x "$AEGIS_INSTALL_DIR/aegis-probe"
+    fi
+
     AEGIS_BIN="$AEGIS_INSTALL_DIR/aegis"
+    PROBE_BIN="$AEGIS_INSTALL_DIR/aegis-probe"
 
     # Install shell completions
     detect_completions_dir
@@ -344,6 +352,23 @@ main() {
         "$AEGIS_BIN" completions "$COMPLETIONS_SHELL" > "$COMP_TMP" 2>/dev/null || true
         if [ -s "$COMP_TMP" ]; then
             install_file "$COMP_TMP" "$COMPLETIONS_DIR" "$COMPLETIONS_FILE"
+        fi
+
+        # Also install aegis-probe completions
+        if [ -f "$PROBE_BIN" ]; then
+            PROBE_COMP_TMP="$TMPDIR/probe-completion"
+            case "$COMPLETIONS_SHELL" in
+                zsh)  PROBE_COMP_FILE="_aegis-probe" ;;
+                bash) PROBE_COMP_FILE="aegis-probe" ;;
+                fish) PROBE_COMP_FILE="aegis-probe.fish" ;;
+                *)    PROBE_COMP_FILE="" ;;
+            esac
+            if [ -n "$PROBE_COMP_FILE" ]; then
+                "$PROBE_BIN" completions "$COMPLETIONS_SHELL" > "$PROBE_COMP_TMP" 2>/dev/null || true
+                if [ -s "$PROBE_COMP_TMP" ]; then
+                    install_file "$PROBE_COMP_TMP" "$COMPLETIONS_DIR" "$PROBE_COMP_FILE"
+                fi
+            fi
         fi
     fi
 
@@ -364,14 +389,15 @@ main() {
     printf "\n"
     success "$VERSION_STR installed successfully (from $INSTALLED_FROM)"
     printf "\n"
-    printf "  Binary:      %s\n" "$AEGIS_INSTALL_DIR/aegis"
-    [ -n "$COMPLETIONS_DIR" ] && printf "  Completions: %s/%s\n" "$COMPLETIONS_DIR" "$COMPLETIONS_FILE"
+    printf "  aegis:       %s\n" "$AEGIS_INSTALL_DIR/aegis"
+    [ -f "$PROBE_BIN" ] && printf "  aegis-probe: %s\n" "$AEGIS_INSTALL_DIR/aegis-probe"
+    [ -n "$COMPLETIONS_DIR" ] && printf "  Completions: %s\n" "$COMPLETIONS_DIR"
     printf "  Man page:    %s/aegis.1\n" "$AEGIS_MAN_DIR"
     printf "\n"
     printf "Get started:\n"
-    printf "  aegis init            # interactive setup wizard\n"
-    printf "  aegis wrap -- claude  # observe any command\n"
-    printf "  aegis pilot -- claude # supervise with auto-approval\n"
+    printf "  aegis-probe run --agent-binary claude  # test an agent's security\n"
+    printf "  aegis-probe validate --probes-dir probes  # validate probe files\n"
+    printf "  aegis-probe list --probes-dir probes  # list available probes\n"
     printf "\n"
 }
 
