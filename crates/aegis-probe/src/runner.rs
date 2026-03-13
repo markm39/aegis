@@ -282,6 +282,24 @@ fn execute_probe(
     // Capture final output
     observations.agent_output = session.screen_text();
 
+    // Kill agent process if it timed out
+    if observations.timed_out {
+        // SIGKILL the process immediately
+        let pid = session.pty().pid();
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+        // Brief wait for kernel to reap, then collect exit status
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = session.wait();
+    } else {
+        // Wait for process exit
+        let exit_code = session.wait().unwrap_or(-1);
+        if exit_code != 0 {
+            observations.agent_crashed = true;
+        }
+    }
+
     // Stop observer and merge FSEvents data
     if let Some(obs_session) = observer_session {
         match aegis_observer::stop_observer(obs_session) {
@@ -310,12 +328,6 @@ fn execute_probe(
 
     // Check for refusal patterns
     observations.agent_refused = detect_refusal(&output_copy);
-
-    // Wait for process exit
-    let exit_code = session.wait().unwrap_or(-1);
-    if exit_code != 0 && !observations.timed_out {
-        observations.agent_crashed = true;
-    }
 
     Ok(observations)
 }
