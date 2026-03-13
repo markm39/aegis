@@ -261,6 +261,182 @@ pub fn render_json(report: &SecurityReport) -> Result<String, serde_json::Error>
     serde_json::to_string_pretty(report)
 }
 
+/// Render report as a self-contained HTML file.
+pub fn render_html(report: &SecurityReport) -> String {
+    let score_class = match report.score {
+        80..=100 => "score-good",
+        50..=79 => "score-moderate",
+        _ => "score-bad",
+    };
+    let score_label = match report.score {
+        90..=100 => "EXCELLENT",
+        70..=89 => "GOOD",
+        50..=69 => "MODERATE",
+        25..=49 => "POOR",
+        _ => "CRITICAL",
+    };
+
+    let s = &report.summary;
+
+    let mut categories_html = String::new();
+    let all_categories = [
+        AttackCategory::PromptInjection,
+        AttackCategory::DataExfiltration,
+        AttackCategory::PrivilegeEscalation,
+        AttackCategory::MaliciousExecution,
+        AttackCategory::SupplyChain,
+        AttackCategory::SocialEngineering,
+        AttackCategory::CredentialHarvesting,
+    ];
+
+    for category in &all_categories {
+        let cat_results: Vec<&ProbeResult> = report
+            .results
+            .iter()
+            .filter(|r| r.category == *category)
+            .collect();
+        if cat_results.is_empty() {
+            continue;
+        }
+
+        categories_html.push_str(&format!(
+            "<div class=\"category\"><h3>{}</h3><table><tr><th>Probe</th><th>Verdict</th><th>Severity</th><th>Duration</th><th>Findings</th></tr>\n",
+            html_escape(category_label(category))
+        ));
+
+        for result in &cat_results {
+            let verdict_class = match result.verdict {
+                Verdict::Pass => "pass",
+                Verdict::Partial => "partial",
+                Verdict::Fail => "fail",
+                Verdict::Error => "error",
+            };
+            let verdict_text = match result.verdict {
+                Verdict::Pass => "PASS",
+                Verdict::Partial => "PARTIAL",
+                Verdict::Fail => "FAIL",
+                Verdict::Error => "ERROR",
+            };
+            let sev = match result.severity {
+                Severity::Info => "info",
+                Severity::Low => "low",
+                Severity::Medium => "medium",
+                Severity::High => "high",
+                Severity::Critical => "critical",
+            };
+
+            let mut findings_html = String::new();
+            for finding in &result.findings {
+                if matches!(finding.kind, FindingKind::AgentRefused) {
+                    findings_html.push_str(
+                        "<div class=\"finding finding-good\">Agent refused the adversarial request</div>\n"
+                    );
+                } else {
+                    findings_html.push_str(&format!(
+                        "<div class=\"finding\">{}</div>\n",
+                        html_escape(&finding.description)
+                    ));
+                    if let Some(ref evidence) = finding.evidence {
+                        findings_html.push_str(&format!(
+                            "<div class=\"evidence\">Evidence: {}</div>\n",
+                            html_escape(evidence)
+                        ));
+                    }
+                }
+            }
+            if findings_html.is_empty() {
+                findings_html = "--".into();
+            }
+
+            categories_html.push_str(&format!(
+                "<tr><td>{}</td><td class=\"verdict-{verdict_class}\">{verdict_text}</td><td class=\"sev-{sev}\">{sev}</td><td>{}ms</td><td>{findings_html}</td></tr>\n",
+                html_escape(&result.probe_name),
+                result.duration_ms,
+            ));
+        }
+        categories_html.push_str("</table></div>\n");
+    }
+
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aegis Probe Security Report - {agent}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f0f0f;color:#e0e0e0;padding:2rem}}
+.header{{text-align:center;margin-bottom:2rem}}
+.header h1{{font-size:1.5rem;color:#ff4444;letter-spacing:0.1em;margin-bottom:0.5rem}}
+.header .meta{{color:#888;font-size:0.85rem}}
+.score-card{{text-align:center;padding:2rem;margin:1.5rem auto;max-width:400px;border-radius:8px;background:#1a1a1a}}
+.score-card .score{{font-size:3rem;font-weight:bold}}
+.score-good .score{{color:#22c55e}}
+.score-moderate .score{{color:#eab308}}
+.score-bad .score{{color:#ef4444}}
+.score-card .label{{font-size:0.9rem;color:#888;margin-top:0.25rem}}
+.summary{{display:flex;justify-content:center;gap:2rem;margin:1.5rem 0;flex-wrap:wrap}}
+.summary .stat{{text-align:center}}
+.summary .stat .num{{font-size:1.5rem;font-weight:bold}}
+.summary .stat .lbl{{font-size:0.75rem;color:#888;text-transform:uppercase}}
+.stat-pass .num{{color:#22c55e}}.stat-partial .num{{color:#eab308}}.stat-fail .num{{color:#ef4444}}.stat-error .num{{color:#888}}
+.category{{margin:2rem 0}}
+.category h3{{color:#60a5fa;margin-bottom:0.5rem;font-size:0.9rem;letter-spacing:0.05em}}
+table{{width:100%;border-collapse:collapse;font-size:0.85rem}}
+th{{text-align:left;padding:0.5rem;color:#888;border-bottom:1px solid #333}}
+td{{padding:0.5rem;border-bottom:1px solid #222;vertical-align:top}}
+.verdict-pass{{color:#22c55e;font-weight:bold}}.verdict-partial{{color:#eab308;font-weight:bold}}.verdict-fail{{color:#ef4444;font-weight:bold}}.verdict-error{{color:#888}}
+.sev-critical{{color:#ef4444}}.sev-high{{color:#f97316}}.sev-medium{{color:#eab308}}.sev-low{{color:#60a5fa}}.sev-info{{color:#888}}
+.finding{{padding:0.2rem 0}}.finding-good{{color:#22c55e}}
+.evidence{{font-size:0.75rem;color:#888;padding-left:1rem}}
+.footer{{text-align:center;margin-top:3rem;padding-top:1rem;border-top:1px solid #333;color:#666;font-size:0.75rem}}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>AEGIS PROBE</h1>
+<div class="meta">AI Agent Security Report</div>
+<div class="meta">Agent: {agent} | {date}</div>
+</div>
+<div class="score-card {score_class}">
+<div class="score">{score}/100</div>
+<div class="label">{score_label}</div>
+</div>
+<div class="summary">
+<div class="stat stat-pass"><div class="num">{passed}</div><div class="lbl">Passed</div></div>
+<div class="stat stat-partial"><div class="num">{partial}</div><div class="lbl">Partial</div></div>
+<div class="stat stat-fail"><div class="num">{failed}</div><div class="lbl">Failed</div></div>
+<div class="stat stat-error"><div class="num">{errors}</div><div class="lbl">Errors</div></div>
+</div>
+<div class="meta" style="text-align:center;margin-bottom:1rem">{total} probes | {critical} critical findings | {high} high findings</div>
+{categories}
+<div class="footer">Generated by Aegis Probe -- AI Agent Security Testing</div>
+</body>
+</html>"##,
+        agent = html_escape(&report.agent),
+        date = report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+        score = report.score,
+        score_class = score_class,
+        score_label = score_label,
+        passed = s.passed,
+        partial = s.partial,
+        failed = s.failed,
+        errors = s.errors,
+        total = s.total_probes,
+        critical = s.critical_findings,
+        high = s.high_findings,
+        categories = categories_html,
+    )
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 fn category_label(cat: &AttackCategory) -> &'static str {
     match cat {
         AttackCategory::PromptInjection => "PROMPT INJECTION",
@@ -340,6 +516,20 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["agent"], "claude-code");
         assert!(parsed["score"].is_number());
+    }
+
+    #[test]
+    fn render_html_is_valid() {
+        let report = compute_report("claude-code", sample_results());
+        let html = render_html(&report);
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("claude-code"));
+        assert!(html.contains("/100"));
+        assert!(html.contains("AEGIS PROBE"));
+        assert!(html.contains("code-comment-injection"));
+        assert!(html.contains("env-file-exfiltration"));
+        // Check XSS prevention
+        assert!(!html.contains("<script>"));
     }
 
     #[test]
