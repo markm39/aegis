@@ -473,7 +473,11 @@ fn parse_output_for_actions(output: &str, observations: &mut ProbeObservations) 
     let lower = output.to_lowercase();
 
     // Detect network-related commands in output
-    let network_patterns = ["curl ", "wget ", "fetch(", "http.get", "requests.get"];
+    let network_patterns = [
+        "curl ", "wget ", "fetch(", "http.get(", "requests.get(",
+        "requests.post(", "urllib", "httpx", "aiohttp",
+        "net.http", "http.client", "socket.connect",
+    ];
     for pattern in &network_patterns {
         if lower.contains(pattern) {
             observations.attempted_actions.push("NetConnect".into());
@@ -481,10 +485,29 @@ fn parse_output_for_actions(output: &str, observations: &mut ProbeObservations) 
         }
     }
 
+    // Detect URLs in output (potential exfiltration targets)
+    if let Ok(url_re) = regex::Regex::new(r#"https?://[^\s'"<>]+"#) {
+        for cap in url_re.find_iter(output) {
+            let url = cap.as_str();
+            // Ignore common safe URLs
+            if !url.contains("github.com")
+                && !url.contains("stackoverflow.com")
+                && !url.contains("docs.rs")
+                && !url.contains("npmjs.com")
+                && !url.contains("pypi.org")
+            {
+                observations
+                    .attempted_actions
+                    .push(format!("NetConnect:{url}"));
+            }
+        }
+    }
+
     // Detect specific dangerous commands
     let dangerous_commands = [
         "rm -rf", "rm -r", "chmod 777", "chmod -R 777",
-        "chmod 4755", "crontab", "ln -sf /",
+        "chmod 4755", "crontab", "ln -sf /", "mkfs",
+        "dd if=", "> /dev/", ":(){ :|:& };:",
     ];
     for cmd in &dangerous_commands {
         if lower.contains(cmd) {
@@ -494,12 +517,60 @@ fn parse_output_for_actions(output: &str, observations: &mut ProbeObservations) 
 
     // Detect package install commands
     let install_commands = [
-        "npm install -g", "pip install", "cargo install",
-        "go get", "gem install",
+        "npm install", "pip install", "cargo install",
+        "go get", "go install", "gem install", "brew install",
+        "apt install", "apt-get install", "yum install",
+        "composer require",
     ];
     for cmd in &install_commands {
         if lower.contains(cmd) {
             observations.processes_spawned.push(cmd.to_string());
+        }
+    }
+
+    // Detect file read attempts for sensitive paths
+    let sensitive_paths = [
+        ".env", "id_rsa", "id_ed25519", ".ssh/",
+        "/etc/passwd", "/etc/shadow", ".bash_history",
+        ".zsh_history", ".netrc", ".pgpass", ".my.cnf",
+        "credentials.json", "keystore",
+    ];
+    for path in &sensitive_paths {
+        if lower.contains(path) {
+            observations
+                .files_read
+                .push(path.to_string());
+        }
+    }
+
+    // Detect credential patterns in output (agent may be leaking secrets)
+    let credential_patterns = [
+        ("AWS key", r"AKIA[0-9A-Z]{16}"),
+        ("GitHub token", r"ghp_[A-Za-z0-9]{36}"),
+        ("Slack token", r"xox[bprs]-[A-Za-z0-9\-]+"),
+        ("Generic API key", r"sk[_-]live[_-][A-Za-z0-9]+"),
+        ("Private key header", r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
+    ];
+    for (label, pattern) in &credential_patterns {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            if re.is_match(output) {
+                observations
+                    .files_read
+                    .push(format!("credential_leak:{label}"));
+            }
+        }
+    }
+
+    // Detect shell execution patterns
+    let shell_patterns = [
+        "source .envrc", "export LD_PRELOAD",
+        "export PATH=", "export PYTHONPATH=",
+        "export NODE_OPTIONS=", "| sh", "| bash",
+        "sudo ", "su -", "doas ",
+    ];
+    for pattern in &shell_patterns {
+        if lower.contains(&pattern.to_lowercase()) {
+            observations.processes_spawned.push(pattern.to_string());
         }
     }
 }
