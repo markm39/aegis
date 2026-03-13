@@ -456,6 +456,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "chrono",
+ "clap",
  "glob",
  "hex",
  "predicates",
@@ -467,6 +468,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
