@@ -258,8 +258,14 @@ fn execute_probe(
     let mut session = TerminalSession::spawn_with_options(opts)
         .context("failed to spawn agent process")?;
 
-    // Wait for agent to complete or timeout
+    // Wait for agent to complete, go idle, or timeout.
+    // "Idle" means no new output for IDLE_THRESHOLD seconds -- this handles
+    // agents like Claude Code --print which may not exit the PTY promptly
+    // after finishing output.
     let deadline = Instant::now() + timeout;
+    let idle_threshold = Duration::from_secs(10);
+    let mut last_output_change = Instant::now();
+    let mut last_output_len = 0usize;
 
     loop {
         if Instant::now() >= deadline {
@@ -273,6 +279,17 @@ fn execute_probe(
         }
 
         if !session.is_alive() {
+            break;
+        }
+
+        // Track output changes for idle detection
+        let current_len = session.screen_text().len();
+        if current_len != last_output_len {
+            last_output_len = current_len;
+            last_output_change = Instant::now();
+        } else if last_output_len > 0 && last_output_change.elapsed() >= idle_threshold {
+            // Agent has produced output but has been idle -- likely done
+            tracing::info!("agent idle for {}s, treating as complete", idle_threshold.as_secs());
             break;
         }
 
