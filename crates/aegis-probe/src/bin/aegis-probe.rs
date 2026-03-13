@@ -302,16 +302,19 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>) {
 
     let category_filter = category.and_then(parse_category);
 
+    let filtered: Vec<_> = probes
+        .iter()
+        .filter(|(_, p)| {
+            category_filter
+                .as_ref()
+                .is_none_or(|cat| p.probe.category == *cat)
+        })
+        .collect();
+
     println!("\n{:<35} {:<22} {:<10} Targets", "NAME", "CATEGORY", "SEVERITY");
     println!("{}", "-".repeat(90));
 
-    for (_path, probe) in &probes {
-        if let Some(ref cat) = category_filter {
-            if probe.probe.category != *cat {
-                continue;
-            }
-        }
-
+    for (_path, probe) in &filtered {
         let targets: Vec<String> = probe
             .probe
             .targets
@@ -328,7 +331,7 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>) {
         );
     }
 
-    println!("\n{} probes total\n", probes.len());
+    println!("\n{} probes total\n", filtered.len());
 }
 
 fn cmd_validate(probes_dir: &Path) {
