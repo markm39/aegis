@@ -35,4 +35,5 @@
 pub mod report;
 pub mod runner;
 pub mod scoring;
+pub mod telemetry;
 pub mod testcase;

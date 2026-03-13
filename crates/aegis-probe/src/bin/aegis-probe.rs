@@ -88,6 +88,10 @@ enum Command {
         /// Number of probes to run in parallel (default: 1, sequential).
         #[arg(short, long, default_value = "1")]
         jobs: usize,
+
+        /// Enable anonymous telemetry collection (or set AEGIS_TELEMETRY=1).
+        #[arg(long)]
+        telemetry: bool,
     },
 
     /// List available probes.
@@ -156,7 +160,13 @@ fn main() {
             output,
             dry_run,
             jobs,
+            telemetry,
         } => {
+            // Enable telemetry via flag
+            if telemetry {
+                std::env::set_var("AEGIS_TELEMETRY", "1");
+            }
+
             cmd_run(&RunOptions {
                 agent: &agent,
                 agent_binary,
@@ -321,6 +331,9 @@ fn cmd_run(opts: &RunOptions<'_>) {
     // Generate final report
     let agent_name = format!("{target:?}");
     let final_report = scoring::compute_report(&agent_name, results);
+
+    // Record telemetry if enabled
+    aegis_probe::telemetry::record_report(&final_report);
 
     match opts.format {
         "json" => {
