@@ -38,12 +38,10 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --release --target ${{ matrix.target }} -p aegis-cli
           cargo build --release --target ${{ matrix.target }} -p aegis-probe
 
-      - name: Strip binaries
+      - name: Strip binary
         run: |
-          strip target/${{ matrix.target }}/release/aegis
           strip target/${{ matrix.target }}/release/aegis-probe
 
       - name: Package
@@ -52,8 +50,8 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           VERSION="${TAG_NAME#v}"
-          tar czf "aegis-${VERSION}-${TARGET}.tar.gz" \
-            -C "target/${TARGET}/release" aegis aegis-probe
+          tar czf "aegis-probe-${VERSION}-${TARGET}.tar.gz" \
+            -C "target/${TARGET}/release" aegis-probe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -86,15 +84,8 @@ jobs:
           tar xzf arm64/aegis-*-aarch64-apple-darwin.tar.gz -C extracted/arm64
           tar xzf x86_64/aegis-*-x86_64-apple-darwin.tar.gz -C extracted/x86_64
 
-      - name: Create universal binaries
+      - name: Create universal binary
         run: |
-          lipo -create \
-            extracted/arm64/aegis \
-            extracted/x86_64/aegis \
-            -output aegis
-          strip aegis
-          lipo -info aegis
-
           lipo -create \
             extracted/arm64/aegis-probe \
             extracted/x86_64/aegis-probe \
@@ -102,14 +93,10 @@ jobs:
           strip aegis-probe
           lipo -info aegis-probe
 
-      - name: Generate completions and man page
+      - name: Generate completions
         run: |
-          mkdir -p completions man
-          chmod +x aegis aegis-probe
-          ./aegis completions bash > completions/aegis.bash
-          ./aegis completions zsh > completions/_aegis
-          ./aegis completions fish > completions/aegis.fish
-          ./aegis manpage > man/aegis.1
+          mkdir -p completions
+          chmod +x aegis-probe
           ./aegis-probe completions bash > completions/aegis-probe.bash
           ./aegis-probe completions zsh > completions/_aegis-probe
           ./aegis-probe completions fish > completions/aegis-probe.fish
@@ -119,7 +106,7 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           VERSION="${TAG_NAME#v}"
-          tar czf "aegis-${VERSION}-universal-apple-darwin.tar.gz" aegis aegis-probe
+          tar czf "aegis-probe-${VERSION}-universal-apple-darwin.tar.gz" aegis-probe
 
       - name: Upload universal artifact
         uses: actions/upload-artifact@v4
@@ -145,17 +132,16 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release
-          cp artifacts/aegis-aarch64-apple-darwin/aegis-*.tar.gz release/
-          cp artifacts/aegis-x86_64-apple-darwin/aegis-*.tar.gz release/
-          cp artifacts/aegis-x86_64-unknown-linux-gnu/aegis-*.tar.gz release/
-          cp artifacts/aegis-universal/aegis-*.tar.gz release/
+          cp artifacts/aegis-aarch64-apple-darwin/aegis-probe-*.tar.gz release/
+          cp artifacts/aegis-x86_64-apple-darwin/aegis-probe-*.tar.gz release/
+          cp artifacts/aegis-x86_64-unknown-linux-gnu/aegis-probe-*.tar.gz release/
+          cp artifacts/aegis-universal/aegis-probe-*.tar.gz release/
           cp artifacts/aegis-universal/completions/* release/ || true
-          cp artifacts/aegis-universal/man/* release/ || true
 
       - name: Generate checksums
         run: |
           cd release
-          sha256sum aegis-*.tar.gz > checksums-sha256.txt
+          sha256sum aegis-probe-*.tar.gz > checksums-sha256.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -164,12 +150,11 @@ jobs:
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
           generate_release_notes: true
           files: |
-            release/aegis-*.tar.gz
+            release/aegis-probe-*.tar.gz
             release/checksums-sha256.txt
-            release/aegis.bash
-            release/_aegis
-            release/aegis.fish
-            release/aegis.1
+            release/aegis-probe.bash
+            release/_aegis-probe
+            release/aegis-probe.fish
 
   docker:
     name: Docker Image
@@ -187,19 +172,17 @@ jobs:
       - name: Extract binary and prepare Docker context
         run: |
           cd docker-build
-          tar xzf aegis-*-x86_64-unknown-linux-gnu.tar.gz
+          tar xzf aegis-probe-*-x86_64-unknown-linux-gnu.tar.gz
           cat > Dockerfile <<'DEOF'
           FROM debian:bookworm-slim
           RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
           RUN groupadd --gid 1000 aegis && useradd --uid 1000 --gid aegis --create-home aegis
-          COPY aegis /usr/local/bin/aegis
-          RUN chmod +x /usr/local/bin/aegis
+          COPY aegis-probe /usr/local/bin/aegis-probe
+          RUN chmod +x /usr/local/bin/aegis-probe
           USER aegis
           WORKDIR /home/aegis
-          EXPOSE 8080 9090
-          HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD curl -sf http://localhost:8080/v1/status || exit 1
-          ENTRYPOINT ["aegis"]
-          CMD ["daemon", "start", "--foreground"]
+          ENTRYPOINT ["aegis-probe"]
+          CMD ["--help"]
           DEOF
 
       - name: Set up Docker Buildx
@@ -247,8 +230,8 @@ jobs:
       - name: Compute SHA256 hashes
         id: hashes
         run: |
-          ARM64_SHA=$(sha256sum artifacts/aegis-aarch64-apple-darwin/aegis-*-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
-          X86_64_SHA=$(sha256sum artifacts/aegis-x86_64-apple-darwin/aegis-*-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          ARM64_SHA=$(sha256sum artifacts/aegis-aarch64-apple-darwin/aegis-probe-*-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          X86_64_SHA=$(sha256sum artifacts/aegis-x86_64-apple-darwin/aegis-probe-*-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
           echo "arm64_sha=${ARM64_SHA}" >> "$GITHUB_OUTPUT"
           echo "x86_64_sha=${X86_64_SHA}" >> "$GITHUB_OUTPUT"
 

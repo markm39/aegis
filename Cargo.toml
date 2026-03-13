@@ -6,30 +6,12 @@ members = [
     "crates/aegis-ledger",
     "crates/aegis-alert",
     "crates/aegis-sandbox",
-    "crates/aegis-proxy",
     "crates/aegis-observer",
-    "crates/aegis-monitor",
     "crates/aegis-pilot",
     "crates/aegis-control",
-    "crates/aegis-channel",
-    "crates/aegis-daemon",
-    "crates/aegis-cli",
     "crates/aegis-harness",
     "crates/aegis-toolkit",
-    "crates/aegis-tools",
-    "crates/aegis-skills",
-    "crates/aegis-tts",
-    "crates/aegis-voice",
-    "crates/aegis-canvas",
-    "crates/aegis-browser",
-    "crates/aegis-hooks",
     "crates/aegis-probe",
-    "tests",
-    # Vendored from OpenAI Codex CLI (Apache-2.0)
-    "vendor/codex/apply-patch",
-    "vendor/codex/file-search",
-    "vendor/codex/execpolicy",
-    "vendor/codex/git",
 ]
 
 [workspace.package]
@@ -37,12 +19,12 @@ version = "0.1.0"
 edition = "2021"
 authors = ["markm39 <markmiller0470@gmail.com>"]
 license = "MIT OR Apache-2.0"
-description = "Zero-trust runtime for AI agents with per-file observability and Cedar policy enforcement"
+description = "AI agent security testing: adversarial probes for coding agents"
 homepage = "https://github.com/markm39/aegis"
 repository = "https://github.com/markm39/aegis"
 readme = "README.md"
-keywords = ["ai-agents", "sandbox", "security", "audit", "cedar"]
-categories = ["command-line-utilities", "development-tools"]
+keywords = ["ai-security", "red-team", "agent-testing", "adversarial", "security"]
+categories = ["development-tools::testing"]
 rust-version = "1.75"
 
 [workspace.dependencies]
@@ -80,27 +62,17 @@ wiremock = "0.6"
 tungstenite = "0.21"
 url = "2"
 
-# Types crate (used by all)
+# Workspace crate paths
 aegis-types = { path = "crates/aegis-types" }
 aegis-policy = { path = "crates/aegis-policy" }
 aegis-alert = { path = "crates/aegis-alert" }
 aegis-ledger = { path = "crates/aegis-ledger" }
 aegis-sandbox = { path = "crates/aegis-sandbox" }
-aegis-proxy = { path = "crates/aegis-proxy" }
 aegis-observer = { path = "crates/aegis-observer" }
-aegis-monitor = { path = "crates/aegis-monitor" }
 aegis-pilot = { path = "crates/aegis-pilot" }
 aegis-control = { path = "crates/aegis-control" }
-aegis-channel = { path = "crates/aegis-channel" }
-aegis-daemon = { path = "crates/aegis-daemon" }
 aegis-toolkit = { path = "crates/aegis-toolkit" }
-aegis-tools = { path = "crates/aegis-tools" }
-aegis-skills = { path = "crates/aegis-skills" }
-aegis-tts = { path = "crates/aegis-tts" }
-aegis-voice = { path = "crates/aegis-voice" }
-aegis-canvas = { path = "crates/aegis-canvas" }
-aegis-browser = { path = "crates/aegis-browser" }
-aegis-hooks = { path = "crates/aegis-hooks" }
+aegis-harness = { path = "crates/aegis-harness" }
 
 memmap2 = "0.9"
 parking_lot = "0.12"

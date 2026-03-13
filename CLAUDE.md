@@ -3,132 +3,79 @@
 ## Build & Test
 
 - Build: `cargo build` (workspace root)
-- Clippy: `cargo clippy -p <crate> -- -D warnings`
+- Build probe CLI: `cargo build --release -p aegis-probe`
+- Clippy: `cargo clippy --workspace -- -D warnings`
 - Test single crate: `cargo test -p <crate>`
 - Test all: `cargo test --workspace`
-- The workspace has many crates under `crates/`. Always run clippy and tests for affected crates after changes.
+- Run probe validation: `./target/release/aegis-probe validate --probes-dir probes`
 
-## Product Vision: The Aegis Hub
+## Product Vision: AI Agent Security Testing
 
-The north star: running `aegis` opens a conversational chat TUI -- like running `claude`. Everything is accessible from one place.
+Aegis is an AI agent security intelligence platform. The primary binary is `aegis-probe` -- a CLI tool that tests what AI coding agents actually DO when fed adversarial inputs.
 
-- **Chat interface:** Natural language interaction with LLM, tool execution with approval workflow, `/slash` commands for common operations.
-- **Daemon integration:** The chat TUI connects to the daemon for fleet operations, tool policy enforcement, and agent lifecycle management.
-- **Remote control:** When away from the terminal, Telegram notifies you of pending approvals with inline [Approve]/[Deny] buttons. Send `/status`, `/approve`, `/stop` commands from your phone.
-- **Single binary:** Every feature is accessible from `aegis`. Standalone subcommands (`aegis pilot`, `aegis wrap`, `aegis daemon`) still work for scripting, but the chat TUI is the primary interface.
+- **Security testing:** Spawn target agents in sandboxed environments, feed adversarial inputs, monitor every action via Cedar policies + filesystem observer + audit ledger
+- **107 adversarial probes** across 7 categories: prompt injection, data exfiltration, privilege escalation, malicious execution, supply chain attacks, social engineering, credential harvesting
+- **Multiple output formats:** terminal, JSON, HTML, Markdown, JUnit XML
+- **Telemetry pipeline:** Local JSONL storage + optional remote InfluxDB push for aggregate intelligence
+- **CI/CD integration:** GitHub Action, JUnit XML for Jenkins/GitLab CI/Azure DevOps
 
 ## Architecture
 
-Crate dependency flow:
+Workspace crates (11 total):
 
 ```
 aegis-types (foundation: config, errors, shared types)
-  -> aegis-policy (Cedar policy engine)
-  -> aegis-ledger (audit store, sessions, SIEM export)
-  -> aegis-sandbox (Seatbelt/process sandbox)
-  -> aegis-observer (FSEvents filesystem monitoring)
-  -> aegis-proxy (action logging, policy evaluation bridge)
-  -> aegis-pilot (PTY supervision, prompt detection, stall detection)
+  -> aegis-policy (Cedar policy engine -- define expected/forbidden agent behavior)
+  -> aegis-ledger (tamper-evident audit log with hash chain)
+  -> aegis-sandbox (Seatbelt/Docker isolation for safe test execution)
+  -> aegis-observer (filesystem monitoring -- detect unauthorized access)
+  -> aegis-pilot (PTY supervision -- spawn agents, feed inputs, monitor actions)
   -> aegis-control (command protocol, Unix socket + HTTP servers)
   -> aegis-alert (webhook alert dispatching)
-  -> aegis-channel (bidirectional Telegram messaging)
-  -> aegis-daemon (fleet orchestration, agent lifecycle, restart policies)
-  -> aegis-monitor (audit TUI dashboard)
-  -> aegis-cli (binary: hub TUI, fleet management, all commands, wizard)
+  -> aegis-harness (PTY integration test framework)
+  -> aegis-toolkit (shared utilities)
+  -> aegis-probe (binary: security test runner CLI)
 ```
 
 Crate summary:
 
 - `aegis-types`: Shared types and config (`AegisConfig`, `IsolationConfig`, `ObserverConfig`, etc.)
-- `aegis-policy`: Cedar policy engine
-- `aegis-ledger`: SQLite audit store (`AuditStore`)
-- `aegis-sandbox`: Seatbelt/process sandbox backends
-- `aegis-observer`: Filesystem observation (FSEvents)
-- `aegis-proxy`: Action logging and policy evaluation bridge
+- `aegis-policy`: Cedar policy engine for defining expected vs. forbidden behavior
+- `aegis-ledger`: SQLite audit store with tamper-evident hash chain
+- `aegis-sandbox`: Seatbelt/process sandbox backends for test isolation
+- `aegis-observer`: Filesystem observation (FSEvents) for detecting unauthorized access
 - `aegis-pilot`: PTY-based agent supervision with prompt detection and stall nudging
 - `aegis-control`: Control plane: Unix socket + HTTP servers, command protocol
-- `aegis-alert`: Webhook alerting on audit events
-- `aegis-channel`: Bidirectional messaging (Telegram bot with inline keyboards)
-- `aegis-daemon`: Multi-agent fleet orchestration with agent drivers and lifecycle
-- `aegis-monitor`: Audit TUI dashboard (ratatui)
-- `aegis-cli`: Binary entry point: chat TUI, CLI commands, wizard
+- `aegis-alert`: Webhook alerting on security findings
+- `aegis-harness`: PTY integration test framework for test execution
+- `aegis-toolkit`: Shared utilities
+- `aegis-probe`: Binary entry point: adversarial probe runner, reporting, telemetry
 
-## Current Status
+## Shared Struct Rules
 
-### Implemented and Working
+If you add a field to a shared struct (e.g., `AegisConfig`, `AlertEvent`), you MUST update ALL construction sites across the entire workspace. Use `cargo clippy --workspace -- -D warnings` to find them all.
 
-- **Daemon fleet (aegis-daemon):** Multi-agent orchestration with agent drivers (ClaudeCode, Generic), lifecycle management, fleet state persistence, restart policies. Control protocol (`DaemonCommand`/`DaemonResponse`) fully wired over Unix socket including ApproveRequest, DenyRequest, NudgeAgent, ListPending, AddAgent, RemoveAgent, FleetGoal, and AgentContext commands.
-- **Chat TUI (aegis-cli/chat_tui):** Conversational LLM interface accessible via bare `aegis` command. Works in offline mode (auto-reconnects when daemon starts). Features: streaming LLM responses, tool execution with approval workflow (manual/auto profiles), `/slash` commands, conversation persistence, session management, model/provider switching, daemon lifecycle control (`/daemon start/stop/init`).
-- **Telegram channel (aegis-channel):** Bidirectional Telegram bot with inline keyboard buttons for approve/deny. Fleet-level `/status`, `/goal`, `/context`, `/approve`, `/deny` commands.
-- **Onboarding wizard (aegis-cli/onboard_tui):** First-run ratatui TUI wizard that configures an agent, sets up Telegram, writes daemon.toml, and seamlessly transitions to the chat TUI.
+## Before Committing
 
-### In Progress
-
-- **Packaging:** install.sh, Makefile, CI/CD (GitHub Actions), Homebrew formula, license files. Partially done.
-
-## Multi-Agent Integration Rules
-
-Multiple agents work on this codebase concurrently. Follow these rules to avoid breaking each other.
-
-### When Adding Fields to Shared Structs
-
-If you add a field to a shared struct (e.g., `AegisConfig`, `AlertEvent`, `AuditEntry`), you MUST update ALL construction sites across the entire workspace -- not just the crate you're working in. Use `cargo clippy --workspace -- -D warnings` to find them all.
-
-Common shared structs and where they're constructed:
-- **`AegisConfig`**: `aegis-cli/src/commands/run.rs`, `aegis-cli/src/commands/wrap.rs`, `aegis-cli/src/commands/config.rs` (tests), `aegis-cli/src/commands/list.rs` (tests), `aegis-types/src/config.rs` (tests), `aegis-cli/src/wizard/app.rs`
-- **`AlertEvent`**: `aegis-ledger/src/store.rs`
-- **`AegisError`**: `aegis-types/src/error.rs` (variant enum -- update match arms)
-
-### When Adding New Crates
-
-1. Add the crate to `Cargo.toml` workspace members list
-2. Run `cargo build --workspace` to verify the full workspace compiles
-3. Run `cargo test --workspace` to verify no regressions
-
-### Before Committing
-
-Always run these checks against the full workspace, not just your crate:
+Always run these checks against the full workspace:
 ```
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```
 
-If another agent's code causes compilation failures in your build, fix the immediate issue (add missing fields, fix type mismatches) rather than reverting their work. Then note what you fixed in your commit message.
-
-### Branch Discipline
-
-- Check which branch you're on before committing: `git branch --show-current`
-- Don't switch branches without stashing or committing your work first
-- If you find uncommitted changes from another agent, don't discard them -- commit your work separately
-
 ## UX Rules
-
-These rules are mandatory for all CLI and TUI work. The goal: everything must be frictionless.
 
 ### CLI Commands
 
-- **Positional arguments for required inputs.** If a user must provide a value, it should be positional -- never hidden behind a `--flag`. Example: `aegis diff UUID1 UUID2`, not `aegis diff --session1 UUID1 --session2 UUID2`.
-- **Flags only for optional/modifier behavior.** Use `--flag` for things that change behavior (e.g., `--confirm`, `--follow`, `--format csv`) or for optional context (e.g., `--config NAME` to override the default config).
-- **`config` is `#[arg(long)]` when other positionals exist.** If a command has required positional arguments, `config` must be a `--config` flag to avoid clap ambiguity. If `config` is the only argument, it stays positional as `[CONFIG]`.
-- **Sensible defaults everywhere.** Commands should work with zero flags when possible. Derive names from context (current directory, current config).
-- **No walls of required flags.** If a command needs 3+ pieces of information, consider a TUI wizard or interactive prompt instead.
-
-### TUI (ratatui)
-
-- **Full cursor support on all text inputs.** Every text input must support: Left, Right, Home, End, Backspace (at cursor), character insert (at cursor). Use `build_cursor_spans()` in `wizard/ui.rs` for consistent rendering.
-- **Consistent back-navigation.** Esc should always go to the immediately preceding step in the wizard flow, never skip steps.
-- **Tab for next field, Shift+Tab for previous** in multi-field screens.
-- **Visual feedback.** Show the cursor block (inverted colors), highlight the active field, use color to distinguish states.
-
-### General
-
-- Prefer progressive disclosure: show the simple path first, offer advanced options only when asked.
+- **Positional arguments for required inputs.** Example: `aegis-probe run`, not `aegis-probe --action run`.
+- **Flags only for optional/modifier behavior.** Use `--flag` for things that change behavior (e.g., `--dry-run`, `--format json`, `--category prompt_injection`).
+- **Sensible defaults everywhere.** Commands should work with zero flags when possible.
 - Error messages must include what went wrong AND what the user should do about it.
-- Help text should show real examples, not just flag descriptions.
 
 ## Code Conventions
 
 - Follow Rust idioms: iterators over indexing, Result/Option over panicking
 - Use `anyhow::Context` for error context in CLI commands
 - Keep functions small and focused
-- Run `cargo clippy -p <crate> -- -D warnings` before committing -- zero warnings policy
+- Run `cargo clippy --workspace -- -D warnings` before committing -- zero warnings policy
+- All serde-serialized enums use `#[serde(rename_all = "snake_case")]`

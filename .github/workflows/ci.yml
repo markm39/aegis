@@ -71,29 +71,6 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-  # ---------- Build release binary ----------
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: build-${{ matrix.os }}
-
-      - name: Build release
-        run: cargo build --release -p aegis-cli
-
-      - name: Verify binary runs
-        run: ./target/release/aegis --version
-
   # ---------- Build aegis-probe ----------
   build-probe:
     name: Build aegis-probe (${{ matrix.os }})
@@ -216,19 +193,3 @@ jobs:
         run: cargo +nightly udeps --workspace
         continue-on-error: true  # advisory only, don't block CI
 
-  # ---------- Vendored coding runtime drift check ----------
-  coding-runtime:
-    name: Coding Runtime Drift
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check coding runtime is in sync
-        run: |
-          if [ -f scripts/sync-coding-runtime.sh ]; then
-            chmod +x scripts/sync-coding-runtime.sh
-            ./scripts/sync-coding-runtime.sh --check || echo "::warning::Coding runtime may be out of sync"
-          else
-            echo "No sync script found, skipping"
-          fi
-        continue-on-error: true
