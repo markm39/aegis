@@ -30,7 +30,7 @@ pub use middleware::AuditMiddleware;
 pub use policy_snapshot::PolicySnapshot;
 pub use query::row_to_entry;
 pub use redaction::PiiRedactor;
-pub use session::{build_session_tree, Session, SessionFilter, SessionTreeNode};
+pub use session::Session;
 pub use siem_export::SiemFormat;
 pub use stats::AuditStats;
 pub use store::AuditStore;
