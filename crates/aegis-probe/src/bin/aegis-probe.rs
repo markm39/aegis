@@ -34,7 +34,8 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
         aegis-probe list                             # Show available probes\n  \
         aegis-probe validate                         # Check probe files are valid\n  \
         aegis-probe registry export report.json      # Export derived-only bundle\n  \
-        aegis-probe summary report.json              # Print one-line summary from report"
+        aegis-probe summary report.json              # Print one-line summary from report\n  \
+        aegis-probe render report.json --format sarif # Re-render a saved report"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -128,6 +129,20 @@ enum Command {
     Summary {
         /// Path to JSON report file.
         report: PathBuf,
+    },
+
+    /// Re-render a saved JSON report in another output format.
+    Render {
+        /// Path to JSON report file.
+        report: PathBuf,
+
+        /// Output format: terminal, json, html, markdown, junit, or sarif.
+        #[arg(long, default_value = "terminal")]
+        format: String,
+
+        /// Write rendered output to this file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Compare two JSON reports to show security changes.
@@ -325,6 +340,13 @@ fn main() {
         }
         Command::Summary { report } => {
             cmd_summary(&report);
+        }
+        Command::Render {
+            report,
+            format,
+            output,
+        } => {
+            cmd_render(&report, &format, output.as_deref());
         }
         Command::Compare { baseline, current } => {
             cmd_compare(&baseline, &current);
@@ -688,21 +710,7 @@ fn cmd_validate(probes_dir: &Path) {
 }
 
 fn cmd_summary(report_path: &Path) {
-    let data = match std::fs::read_to_string(report_path) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Error reading {}: {e}", report_path.display());
-            process::exit(1);
-        }
-    };
-
-    let report: scoring::SecurityReport = match serde_json::from_str(&data) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error parsing report: {e}");
-            process::exit(1);
-        }
-    };
+    let report = load_report(report_path);
 
     println!(
         "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}",
@@ -716,6 +724,35 @@ fn cmd_summary(report_path: &Path) {
 
     if report.summary.failed > 0 {
         process::exit(1);
+    }
+}
+
+fn cmd_render(report_path: &Path, format: &str, output_path: Option<&Path>) {
+    let report = load_report(report_path);
+    let rendered = match render_report_format(&report, format) {
+        Ok(rendered) => rendered,
+        Err(message) => {
+            eprintln!("{message}");
+            process::exit(1);
+        }
+    };
+
+    if let Some(path) = output_path {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("Error creating {}: {e}", parent.display());
+                process::exit(1);
+            }
+        }
+        if let Err(e) = std::fs::write(path, rendered.as_bytes()) {
+            eprintln!("Error writing {}: {e}", path.display());
+            process::exit(1);
+        }
+    } else {
+        print!("{rendered}");
     }
 }
 
@@ -852,6 +889,19 @@ fn load_report(path: &Path) -> scoring::SecurityReport {
             eprintln!("Error parsing {}: {e}", path.display());
             process::exit(1);
         }
+    }
+}
+
+fn render_report_format(report: &scoring::SecurityReport, format: &str) -> Result<String, String> {
+    match format {
+        "json" => report::render_json(report).map_err(|e| format!("Error serializing report: {e}")),
+        "html" => Ok(report::render_html(report)),
+        "markdown" | "md" => Ok(report::render_markdown(report)),
+        "junit" | "xml" => Ok(report::render_junit(report)),
+        "sarif" => {
+            report::render_sarif(report).map_err(|e| format!("Error serializing SARIF report: {e}"))
+        }
+        _ => Ok(report::render_report(report)),
     }
 }
 

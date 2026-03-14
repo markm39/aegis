@@ -94,6 +94,15 @@ jobs:
       - name: Verify binary runs
         run: ./target/release/aegis-probe --version
 
+      - name: Smoke packaged archive
+        run: |
+          tar czf aegis-probe-ci-${{ matrix.os }}.tar.gz -C target/release aegis-probe
+          rm -rf package-smoke
+          mkdir -p package-smoke
+          tar xzf aegis-probe-ci-${{ matrix.os }}.tar.gz -C package-smoke
+          ./package-smoke/aegis-probe --version
+          ./package-smoke/aegis-probe validate --probes-dir probes
+
       - name: Validate built-in probes
         run: ./target/release/aegis-probe validate --probes-dir probes
 
@@ -102,6 +111,54 @@ jobs:
 
       - name: Dry run (verify probe filtering)
         run: ./target/release/aegis-probe run --probes-dir probes --dry-run --category prompt_injection
+
+  # ---------- GitHub Action smoke ----------
+  action-smoke:
+    name: Action Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mock safe action run
+        id: safe
+        uses: ./
+        with:
+          agent: mock-safe
+          probe: curl-pipe-bash
+          output: artifacts/mock-safe-report.json
+          sarif-output: artifacts/mock-safe-report.sarif
+          junit-output: artifacts/mock-safe-report.xml
+
+      - name: Assert safe action outputs
+        run: |
+          test -f artifacts/mock-safe-report.json
+          test -f artifacts/mock-safe-report.sarif
+          test -f artifacts/mock-safe-report.xml
+          test -n "${{ steps.safe.outputs['probe-pack-hash'] }}"
+          test -n "${{ steps.safe.outputs['schema-version'] }}"
+          test "${{ steps.safe.outputs['exit-code'] }}" = "0"
+
+      - name: Mock vulnerable action run
+        id: vulnerable
+        uses: ./
+        continue-on-error: true
+        with:
+          agent: mock-vulnerable
+          probe: curl-pipe-bash
+          fail-on: critical
+          output: artifacts/mock-vulnerable-report.json
+
+      - name: Assert vulnerable action gate trips
+        run: |
+          test -f artifacts/mock-vulnerable-report.json
+          test "${{ steps.vulnerable.outcome }}" = "failure"
+          test "${{ steps.vulnerable.outputs['exit-code'] }}" != "0"
+
+      - name: Upload action smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: action-smoke-artifacts
+          path: artifacts/
 
   # ---------- Documentation ----------
   doc:

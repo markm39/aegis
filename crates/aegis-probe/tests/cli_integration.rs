@@ -643,3 +643,83 @@ fn summary_valid_report() {
         .stdout(predicate::str::contains("Score: 95/100"))
         .stdout(predicate::str::contains("9 passed"));
 }
+
+#[test]
+fn render_sarif_from_saved_report() {
+    let dir = TempDir::new().unwrap();
+    let report = json!({
+        "agent": "TestAgent",
+        "score": 100,
+        "metadata": {
+            "schema_version": 2,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "abc123",
+            "platform": { "os": "macos", "arch": "aarch64" }
+        },
+        "summary": {
+            "total_probes": 1,
+            "passed": 1,
+            "failed": 0,
+            "partial": 0,
+            "errors": 0,
+            "critical_findings": 0,
+            "high_findings": 0
+        },
+        "results": [],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let path = dir.path().join("report.json");
+    std::fs::write(&path, serde_json::to_string(&report).unwrap()).unwrap();
+
+    probe_binary()
+        .args(["render", path.to_str().unwrap(), "--format", "sarif"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"version\": \"2.1.0\""));
+}
+
+#[test]
+fn render_junit_to_output_file() {
+    let dir = TempDir::new().unwrap();
+    let report = json!({
+        "agent": "TestAgent",
+        "score": 95,
+        "metadata": {
+            "schema_version": 2,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "def456",
+            "platform": { "os": "linux", "arch": "x86_64" }
+        },
+        "summary": {
+            "total_probes": 1,
+            "passed": 0,
+            "failed": 1,
+            "partial": 0,
+            "errors": 0,
+            "critical_findings": 1,
+            "high_findings": 0
+        },
+        "results": [],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let report_path = dir.path().join("report.json");
+    let output_path = dir.path().join("report.xml");
+    std::fs::write(&report_path, serde_json::to_string(&report).unwrap()).unwrap();
+
+    probe_binary()
+        .args([
+            "render",
+            report_path.to_str().unwrap(),
+            "--format",
+            "junit",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let xml = std::fs::read_to_string(output_path).unwrap();
+    assert!(xml.contains("<testsuite"));
+}

@@ -46,6 +46,14 @@ inputs:
     description: "Path to write the JSON report"
     required: false
     default: "aegis-report.json"
+  sarif-output:
+    description: "Optional path to write a SARIF artifact rendered from the JSON report"
+    required: false
+    default: ""
+  junit-output:
+    description: "Optional path to write a JUnit artifact rendered from the JSON report"
+    required: false
+    default: ""
 
 outputs:
   report-path:
@@ -75,6 +83,12 @@ outputs:
   schema-version:
     description: "Schema version carried by the JSON report"
     value: ${{ steps.run.outputs.schema_version }}
+  sarif-path:
+    description: "Path to the rendered SARIF artifact when requested"
+    value: ${{ steps.run.outputs.sarif_path }}
+  junit-path:
+    description: "Path to the rendered JUnit artifact when requested"
+    value: ${{ steps.run.outputs.junit_path }}
 
 runs:
   using: "composite"
@@ -152,6 +166,24 @@ print(f"errors={summary.get('errors', '')}")
 print(f"probe_pack_hash={metadata.get('probe_pack_hash', '')}")
 print(f"schema_version={metadata.get('schema_version', '')}")
 PY
+
+          if [[ -n "${{ inputs.sarif-output }}" ]]; then
+            mkdir -p "$(dirname "${{ inputs.sarif-output }}")"
+            "${{ github.action_path }}/target/release/aegis-probe" \
+              render "${{ inputs.output }}" \
+              --format sarif \
+              --output "${{ inputs.sarif-output }}"
+            echo "sarif_path=${{ inputs.sarif-output }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ -n "${{ inputs.junit-output }}" ]]; then
+            mkdir -p "$(dirname "${{ inputs.junit-output }}")"
+            "${{ github.action_path }}/target/release/aegis-probe" \
+              render "${{ inputs.output }}" \
+              --format junit \
+              --output "${{ inputs.junit-output }}"
+            echo "junit_path=${{ inputs.junit-output }}" >> "$GITHUB_OUTPUT"
+          fi
         fi
 
         exit "$status"

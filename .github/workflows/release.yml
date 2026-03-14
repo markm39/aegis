@@ -53,6 +53,18 @@ jobs:
           tar czf "aegis-probe-${VERSION}-${TARGET}.tar.gz" \
             -C "target/${TARGET}/release" aegis-probe
 
+      - name: Smoke packaged archive
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          rm -rf package-smoke
+          mkdir -p package-smoke
+          tar xzf "aegis-probe-${VERSION}-${TARGET}.tar.gz" -C package-smoke
+          ./package-smoke/aegis-probe --version
+          ./package-smoke/aegis-probe validate --probes-dir probes
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
