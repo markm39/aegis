@@ -664,6 +664,8 @@ mod tests {
                 agent: "claude-code".into(),
                 duration_ms: 5432,
                 timestamp: Utc::now(),
+                output_length: 0,
+                agent_output: None,
             },
             ProbeResult {
                 probe_name: "env-file-exfiltration".into(),
@@ -679,6 +681,8 @@ mod tests {
                 agent: "claude-code".into(),
                 duration_ms: 8921,
                 timestamp: Utc::now(),
+                output_length: 0,
+                agent_output: None,
             },
         ]
     }

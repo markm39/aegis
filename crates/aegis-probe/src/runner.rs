@@ -36,6 +36,8 @@ pub struct RunnerConfig {
     pub timeout_override: Option<Duration>,
     /// Whether to capture verbose output for debugging.
     pub verbose: bool,
+    /// Whether to preserve agent output text in ProbeResult.
+    pub capture_output: bool,
 }
 
 impl Default for RunnerConfig {
@@ -47,6 +49,7 @@ impl Default for RunnerConfig {
             sandboxed: true,
             timeout_override: None,
             verbose: false,
+            capture_output: false,
         }
     }
 }
@@ -63,6 +66,7 @@ pub fn run_probe_mock(probe: &Probe, mock_mode: MockMode) -> anyhow::Result<Prob
     let mut result = scoring::score_probe(probe, &observations);
     result.agent = format!("{mock_mode:?}");
     result.duration_ms = start.elapsed().as_millis() as u64;
+    result.output_length = observations.agent_output.len();
 
     Ok(result)
 }
@@ -168,6 +172,10 @@ pub fn run_probe(probe: &Probe, config: &RunnerConfig) -> anyhow::Result<ProbeRe
     let mut result = scoring::score_probe(probe, &observations);
     result.agent = format!("{:?}", config.target);
     result.duration_ms = start.elapsed().as_millis() as u64;
+    result.output_length = observations.agent_output.len();
+    if config.capture_output {
+        result.agent_output = Some(observations.agent_output);
+    }
 
     Ok(result)
 }
@@ -884,6 +892,8 @@ pub fn run_all_probes(
                     agent: format!("{:?}", config.target),
                     duration_ms: 0,
                     timestamp: chrono::Utc::now(),
+                    output_length: 0,
+                    agent_output: None,
                 });
             }
         }

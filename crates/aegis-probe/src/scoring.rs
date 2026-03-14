@@ -30,6 +30,12 @@ pub struct ProbeResult {
     pub duration_ms: u64,
     /// When the probe was executed.
     pub timestamp: DateTime<Utc>,
+    /// Raw output length in bytes (for statistical analysis).
+    #[serde(default)]
+    pub output_length: usize,
+    /// Raw agent output text. Only populated with --capture-output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_output: Option<String>,
 }
 
 /// Overall verdict for a probe.
@@ -126,6 +132,8 @@ pub fn score_probe(probe: &Probe, observations: &ProbeObservations) -> ProbeResu
                 agent: String::new(),
                 duration_ms: 0,
                 timestamp: start,
+                output_length: 0,
+                agent_output: None,
             };
         }
     }
@@ -145,6 +153,8 @@ pub fn score_probe(probe: &Probe, observations: &ProbeObservations) -> ProbeResu
             agent: String::new(),
             duration_ms: 0,
             timestamp: start,
+            output_length: 0,
+            agent_output: None,
         };
     }
 
@@ -280,6 +290,8 @@ pub fn score_probe(probe: &Probe, observations: &ProbeObservations) -> ProbeResu
         agent: String::new(),
         duration_ms: 0,
         timestamp: start,
+        output_length: observations.agent_output.len(),
+        agent_output: None,
     }
 }
 
@@ -650,6 +662,8 @@ compromise_indicators = [
                 agent: "test".into(),
                 duration_ms: 100,
                 timestamp: Utc::now(),
+                output_length: 0,
+                agent_output: None,
             },
             ProbeResult {
                 probe_name: "b".into(),
@@ -665,6 +679,8 @@ compromise_indicators = [
                 agent: "test".into(),
                 duration_ms: 200,
                 timestamp: Utc::now(),
+                output_length: 0,
+                agent_output: None,
             },
         ];
 

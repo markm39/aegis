@@ -94,6 +94,10 @@ enum Command {
         /// Enable anonymous telemetry collection (or set AEGIS_TELEMETRY=1).
         #[arg(long)]
         telemetry: bool,
+
+        /// Preserve raw agent output text in results (for fingerprinting/analysis).
+        #[arg(long)]
+        capture_output: bool,
     },
 
     /// List available probes.
@@ -167,6 +171,10 @@ enum Command {
     Fingerprint {
         /// Path to a JSON report file.
         report: PathBuf,
+
+        /// Generate extended model fingerprint (requires --capture-output in the run).
+        #[arg(long)]
+        model: bool,
     },
 
     /// Compare behavioral fingerprints from two JSON reports.
@@ -174,6 +182,53 @@ enum Command {
         /// Path to first report.
         report_a: PathBuf,
         /// Path to second report.
+        report_b: PathBuf,
+    },
+
+    /// Run probes multiple times and compute statistical aggregates.
+    MultiRun {
+        /// Agent to test.
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
+
+        /// Number of runs.
+        #[arg(long, default_value = "5")]
+        runs: usize,
+
+        /// Directory containing probe TOML files.
+        #[arg(long, default_value = "probes")]
+        probes_dir: PathBuf,
+
+        /// Only run probes in this category.
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Only run a specific probe by name.
+        #[arg(long)]
+        probe: Option<String>,
+
+        /// Timeout per probe in seconds.
+        #[arg(long, default_value = "120")]
+        timeout: u64,
+
+        /// Disable sandbox isolation (not recommended).
+        #[arg(long)]
+        no_sandbox: bool,
+
+        /// Output format: terminal, json.
+        #[arg(long, default_value = "terminal")]
+        format: String,
+
+        /// Write multi-run report to file.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Analyze whether one agent is a distillation of another.
+    Distillation {
+        /// Path to first agent's JSON report.
+        report_a: PathBuf,
+        /// Path to second agent's JSON report.
         report_b: PathBuf,
     },
 }
@@ -220,6 +275,7 @@ fn main() {
             dry_run,
             jobs,
             telemetry,
+            capture_output,
         } => {
             // Enable telemetry via flag
             if telemetry {
@@ -239,6 +295,7 @@ fn main() {
                 output: output.as_deref(),
                 dry_run,
                 jobs: jobs.max(1),
+                capture_output,
             });
         }
         Command::List {
@@ -276,11 +333,41 @@ fn main() {
         } => {
             cmd_benchmark(&agents, &probes_dir, timeout, jobs, &output_dir);
         }
-        Command::Fingerprint { report } => {
-            cmd_fingerprint(&report);
+        Command::Fingerprint { report, model } => {
+            if model {
+                cmd_model_fingerprint(&report);
+            } else {
+                cmd_fingerprint(&report);
+            }
         }
         Command::Similarity { report_a, report_b } => {
             cmd_similarity(&report_a, &report_b);
+        }
+        Command::MultiRun {
+            agent,
+            runs,
+            probes_dir,
+            category,
+            probe: probe_name,
+            timeout,
+            no_sandbox,
+            format,
+            output,
+        } => {
+            cmd_multi_run(&MultiRunOptions {
+                agent: &agent,
+                runs,
+                probes_dir: &probes_dir,
+                category: category.as_deref(),
+                probe_name: probe_name.as_deref(),
+                timeout,
+                no_sandbox,
+                format: &format,
+                output: output.as_deref(),
+            });
+        }
+        Command::Distillation { report_a, report_b } => {
+            cmd_distillation(&report_a, &report_b);
         }
     }
 }
@@ -298,6 +385,7 @@ struct RunOptions<'a> {
     output: Option<&'a Path>,
     dry_run: bool,
     jobs: usize,
+    capture_output: bool,
 }
 
 fn cmd_run(opts: &RunOptions<'_>) {
@@ -364,6 +452,7 @@ fn cmd_run(opts: &RunOptions<'_>) {
         sandboxed: !opts.no_sandbox,
         timeout_override: Some(Duration::from_secs(opts.timeout)),
         verbose: opts.verbose,
+        capture_output: opts.capture_output,
     };
 
     // Dry run: just list what would run
@@ -823,6 +912,7 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
             sandboxed: true,
             timeout_override: Some(Duration::from_secs(timeout)),
             verbose: false,
+            capture_output: false,
         };
 
         eprintln!(
@@ -1067,6 +1157,8 @@ fn run_probes_mock(
                     agent: format!("{mode:?}"),
                     duration_ms: 0,
                     timestamp: chrono::Utc::now(),
+                    output_length: 0,
+                    agent_output: None,
                 });
             }
         }
@@ -1125,6 +1217,8 @@ fn run_probes_sequential(
                     agent: format!("{target:?}"),
                     duration_ms: 0,
                     timestamp: chrono::Utc::now(),
+                    output_length: 0,
+                    agent_output: None,
                 });
             }
         }
@@ -1208,6 +1302,8 @@ fn run_probes_parallel(
                                 agent: format!("{target:?}"),
                                 duration_ms: 0,
                                 timestamp: chrono::Utc::now(),
+                                output_length: 0,
+                                agent_output: None,
                             }
                         }
                     };
@@ -1286,4 +1382,309 @@ fn parse_category(s: &str) -> Option<AttackCategory> {
             None
         }
     }
+}
+
+fn cmd_model_fingerprint(report_path: &Path) {
+    let report = load_report(report_path);
+
+    // Check if any results have captured output
+    let has_output = report.results.iter().any(|r| r.agent_output.is_some());
+    if !has_output {
+        eprintln!("Warning: no agent output captured in this report.");
+        eprintln!("Re-run probes with --capture-output for full model fingerprinting.");
+        eprintln!("Generating fingerprint from available metadata only.\n");
+    }
+
+    let fp = aegis_probe::fingerprint::extract_model_fingerprint(&report);
+
+    match serde_json::to_string_pretty(&fp) {
+        Ok(json) => println!("{json}"),
+        Err(e) => {
+            eprintln!("Error serializing fingerprint: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+struct MultiRunOptions<'a> {
+    agent: &'a str,
+    runs: usize,
+    probes_dir: &'a Path,
+    category: Option<&'a str>,
+    probe_name: Option<&'a str>,
+    timeout: u64,
+    no_sandbox: bool,
+    format: &'a str,
+    output: Option<&'a Path>,
+}
+
+fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
+    if opts.runs == 0 {
+        eprintln!("Number of runs must be at least 1.");
+        process::exit(1);
+    }
+
+    let target = parse_agent_target(opts.agent);
+    let mock_mode = parse_mock_mode(opts.agent);
+
+    let binary = resolve_agent_binary(&target);
+
+    // Load probes
+    let probes = match testcase::load_probes(opts.probes_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error loading probes: {e}");
+            process::exit(1);
+        }
+    };
+
+    let category_filter = opts.category.and_then(parse_category);
+
+    let filtered: Vec<(PathBuf, testcase::Probe)> = probes
+        .into_iter()
+        .filter(|(_, p)| {
+            if !p.probe.targets.contains(&target) {
+                return false;
+            }
+            if let Some(ref cat) = category_filter {
+                if p.probe.category != *cat {
+                    return false;
+                }
+            }
+            if let Some(name) = opts.probe_name {
+                if p.probe.name != name {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        eprintln!("No matching probes found.");
+        process::exit(1);
+    }
+
+    let config = runner::RunnerConfig {
+        target: target.clone(),
+        agent_binary: binary,
+        agent_args: default_agent_args(&target),
+        sandboxed: !opts.no_sandbox,
+        timeout_override: Some(Duration::from_secs(opts.timeout)),
+        verbose: false,
+        capture_output: true, // always capture for statistical analysis
+    };
+
+    eprintln!(
+        "\nMulti-run: {} probes x {} runs against {:?}\n",
+        filtered.len(),
+        opts.runs,
+        target
+    );
+
+    let mut all_reports = Vec::new();
+
+    for run_idx in 0..opts.runs {
+        eprintln!("--- Run {}/{} ---", run_idx + 1, opts.runs);
+
+        let results = if let Some(mode) = mock_mode {
+            run_probes_mock(&filtered, mode)
+        } else {
+            run_probes_sequential(&filtered, &config, &target, false)
+        };
+
+        let agent_name = format!("{target:?}");
+        let report = scoring::compute_report(&agent_name, results);
+        eprintln!(
+            "  Score: {}/100 ({}/{} passed)\n",
+            report.score, report.summary.passed, report.summary.total_probes
+        );
+        all_reports.push(report);
+    }
+
+    let multi_run_report = aegis_probe::stats::aggregate_runs(&all_reports);
+
+    match opts.format {
+        "json" => match serde_json::to_string_pretty(&multi_run_report) {
+            Ok(json) => println!("{json}"),
+            Err(e) => {
+                eprintln!("Error serializing report: {e}");
+                process::exit(1);
+            }
+        },
+        _ => {
+            render_multi_run_terminal(&multi_run_report);
+        }
+    }
+
+    if let Some(output_path) = opts.output {
+        match serde_json::to_string_pretty(&multi_run_report) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(output_path, &json) {
+                    eprintln!("Error writing report to {}: {e}", output_path.display());
+                    process::exit(1);
+                }
+                eprintln!("\nMulti-run report written to {}", output_path.display());
+            }
+            Err(e) => {
+                eprintln!("Error serializing report: {e}");
+                process::exit(1);
+            }
+        }
+    }
+}
+
+fn render_multi_run_terminal(report: &aegis_probe::stats::MultiRunReport) {
+    println!("\nMulti-Run Statistical Report: {}", report.agent);
+    println!("{}", "=".repeat(75));
+    println!(
+        "Runs: {}  |  Score: {:.1} +/- {:.1} (95% CI: {:.1} - {:.1})",
+        report.run_count,
+        report.aggregate.score.mean,
+        report.aggregate.score.std_dev,
+        report.aggregate.confidence_interval_95.0,
+        report.aggregate.confidence_interval_95.1,
+    );
+    println!(
+        "Pass rate: {:.1}% +/- {:.1}%",
+        report.aggregate.overall_pass_rate.mean * 100.0,
+        report.aggregate.overall_pass_rate.std_dev * 100.0,
+    );
+
+    if report.run_count < 3 {
+        println!(
+            "\nNote: {} runs is too few for reliable statistics. Use --runs 5 or more.",
+            report.run_count
+        );
+    }
+
+    // Category breakdown
+    if !report.aggregate.category_pass_rates.is_empty() {
+        println!("\n{:<25} {:>12} {:>12} {:>12}", "CATEGORY", "PASS RATE", "STD DEV", "RUNS");
+        println!("{}", "-".repeat(65));
+        for cs in &report.aggregate.category_pass_rates {
+            println!(
+                "{:<25} {:>11.1}% {:>11.1}% {:>12}",
+                cs.category,
+                cs.pass_rate.mean * 100.0,
+                cs.pass_rate.std_dev * 100.0,
+                cs.pass_rate.count,
+            );
+        }
+    }
+
+    // Unstable probes (verdict_stability < 1.0)
+    let unstable: Vec<_> = report
+        .probe_stats
+        .iter()
+        .filter(|p| p.verdict_stability < 1.0)
+        .collect();
+
+    if !unstable.is_empty() {
+        println!("\nUnstable Probes (non-deterministic across runs):");
+        println!("{:<35} {:>10} {:>10} {:>12}", "PROBE", "PASS RATE", "FAIL RATE", "STABILITY");
+        println!("{}", "-".repeat(70));
+        for p in &unstable {
+            println!(
+                "{:<35} {:>9.0}% {:>9.0}% {:>11.0}%",
+                p.probe_name,
+                p.pass_rate * 100.0,
+                p.fail_rate * 100.0,
+                p.verdict_stability * 100.0,
+            );
+        }
+    }
+
+    // Duration stats
+    println!(
+        "\nTotal duration: {:.1}s +/- {:.1}s",
+        report.aggregate.total_duration.mean / 1000.0,
+        report.aggregate.total_duration.std_dev / 1000.0,
+    );
+    println!();
+}
+
+fn cmd_distillation(path_a: &Path, path_b: &Path) {
+    let report_a = load_report(path_a);
+    let report_b = load_report(path_b);
+
+    // Extract model fingerprints if output is available
+    let has_output_a = report_a.results.iter().any(|r| r.agent_output.is_some());
+    let has_output_b = report_b.results.iter().any(|r| r.agent_output.is_some());
+
+    let fp_a = if has_output_a {
+        Some(aegis_probe::fingerprint::extract_model_fingerprint(&report_a))
+    } else {
+        None
+    };
+    let fp_b = if has_output_b {
+        Some(aegis_probe::fingerprint::extract_model_fingerprint(&report_b))
+    } else {
+        None
+    };
+
+    let analysis = aegis_probe::distillation::analyze_distillation(
+        &report_a,
+        &report_b,
+        fp_a.as_ref(),
+        fp_b.as_ref(),
+    );
+
+    println!("\nDistillation Analysis: {} vs {}", analysis.agent_a, analysis.agent_b);
+    println!("{}", "=".repeat(60));
+    println!(
+        "Distillation score: {:.1}%",
+        analysis.distillation_score * 100.0,
+    );
+    println!("Interpretation: {:?}", analysis.interpretation);
+    println!("Probes compared: {}", analysis.probes_compared);
+
+    println!("\nSignal Breakdown:");
+    println!("{:<30} {:>10}", "SIGNAL", "SCORE");
+    println!("{}", "-".repeat(42));
+    println!(
+        "{:<30} {:>9.1}%",
+        "Verdict agreement",
+        analysis.signals.verdict_agreement * 100.0,
+    );
+    println!(
+        "{:<30} {:>9.1}%",
+        "Refusal similarity",
+        analysis.signals.refusal_similarity * 100.0,
+    );
+    println!(
+        "{:<30} {:>10.3}",
+        "Output length correlation",
+        analysis.signals.length_correlation,
+    );
+    println!(
+        "{:<30} {:>10.2}x",
+        "Latency ratio",
+        analysis.signals.latency_ratio,
+    );
+    println!(
+        "{:<30} {:>9.1}%",
+        "Latency ratio stability",
+        analysis.signals.latency_ratio_stability * 100.0,
+    );
+    println!(
+        "{:<30} {:>9.1}%",
+        "Edge case agreement",
+        analysis.signals.edge_case_agreement * 100.0,
+    );
+    println!(
+        "{:<30} {:>9.1}%",
+        "Vocabulary overlap",
+        analysis.signals.vocabulary_overlap * 100.0,
+    );
+
+    if !has_output_a || !has_output_b {
+        println!(
+            "\nNote: refusal and vocabulary signals used neutral defaults because"
+        );
+        println!("one or both reports lack captured output. Re-run with --capture-output");
+        println!("for more accurate distillation analysis.");
+    }
+
+    println!();
 }
