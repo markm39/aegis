@@ -248,7 +248,7 @@ pub fn run(
 
             // Scan each completed line through the adapter
             for line in &lines {
-                // Mirror to external consumer (daemon fleet manager)
+                // Mirror to an external consumer such as a UI or reporter.
                 if let Some(tx) = output_tx {
                     let _ = tx.send(line.clone());
                 }
@@ -291,7 +291,7 @@ pub fn run(
             }
         }
 
-        // Drain pending commands from the TUI or control plane
+        // Drain pending commands from the caller or UI.
         if let Some(rx) = command_rx {
             while let Ok(cmd) = rx.try_recv() {
                 handle_command(cmd, pty, &mut stats, &mut pending, &mut stall, update_tx)?;
@@ -506,7 +506,7 @@ fn handle_scan_result(
     Ok(())
 }
 
-/// Handle a command received from the TUI or control plane.
+/// Handle a command received from the caller or UI.
 fn handle_command(
     cmd: SupervisorCommand,
     pty: &dyn AgentSession,

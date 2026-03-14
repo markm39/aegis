@@ -1,4 +1,4 @@
-//! Actions that agents can perform, evaluated against Cedar policies.
+//! Actions that Aegis records while testing an agent.
 //!
 //! An [`Action`] pairs a principal with an [`ActionKind`] and is the primary
 //! input to policy evaluation and audit logging.
@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-/// The specific type of action being performed, evaluated against Cedar policies.
+/// The specific type of action being performed.
 ///
-/// Each variant maps to a Cedar `Action` entity (e.g., `Aegis::Action::"FileRead"`).
-/// The fields carry context used for policy evaluation and audit logging.
+/// Each variant maps to a Cedar `Action` entity (for example,
+/// `Aegis::Action::"FileRead"`). The fields carry the metadata needed for
+/// policy evaluation and audit logging.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ActionKind {
     /// Read a file at the given path.
@@ -46,7 +47,7 @@ pub enum ActionKind {
         /// TCP port number.
         port: u16,
     },
-    /// Make an HTTP request (higher-level than NetConnect).
+    /// Make an HTTP request.
     NetRequest {
         /// HTTP method (GET, POST, etc.).
         method: String,
@@ -76,351 +77,46 @@ pub enum ActionKind {
     },
     /// API usage data extracted from an AI provider's response.
     ApiUsage {
-        /// Provider name (e.g., "anthropic", "openai").
+        /// Provider name (for example, `"anthropic"` or `"openai"`).
         provider: String,
         /// Model name from the API response.
         model: String,
-        /// API endpoint path (e.g., "/v1/messages").
+        /// API endpoint path.
         endpoint: String,
-        /// Input/prompt tokens consumed.
+        /// Input or prompt tokens consumed.
         input_tokens: u64,
-        /// Output/completion tokens consumed.
+        /// Output or completion tokens consumed.
         output_tokens: u64,
-        /// Cache creation input tokens (Anthropic-specific, 0 otherwise).
+        /// Cache creation input tokens.
         cache_creation_input_tokens: u64,
-        /// Cache read input tokens (Anthropic-specific, 0 otherwise).
+        /// Cache read input tokens.
         cache_read_input_tokens: u64,
     },
     /// Security scan of a skill directory for dangerous code patterns.
     SkillScan {
         /// Path to the skill directory that was scanned.
         path: PathBuf,
-        /// Whether the scan passed (no error-severity findings).
+        /// Whether the scan passed with no error-severity findings.
         passed: bool,
         /// Number of warning-severity findings.
         warning_count: usize,
         /// Number of error-severity findings.
         error_count: usize,
     },
-    /// Automatic capture of a memory entry from agent conversation.
-    MemoryCapture {
-        /// The agent performing the capture.
-        agent_id: String,
-        /// Extraction category (e.g., "preference", "decision", "fact").
-        category: String,
-        /// The memory key being stored.
-        key: String,
-    },
-    /// Establish a connection to an ACP (Agent Communication Protocol) server.
-    AcpConnect {
-        /// The endpoint URL being connected to (must be HTTPS).
-        endpoint: String,
-    },
-    /// Send a message over an ACP connection.
-    AcpSend {
-        /// The endpoint URL the message is being sent to.
-        endpoint: String,
-        /// Size of the message payload in bytes.
-        payload_size: usize,
-    },
-    /// Process an image received through a messaging channel.
-    ImageProcess {
-        /// SHA-256 hex digest of the raw image data (for audit trail).
-        content_hash: String,
-        /// Detected image format (e.g., "png", "jpeg").
-        format: String,
-        /// Size of the raw image data in bytes.
-        size_bytes: u64,
-    },
-    /// OAuth2 token exchange (authorization code or refresh grant).
-    OAuthExchange {
-        /// Provider name (e.g., "google", "github").
-        provider: String,
-        /// OAuth2 grant type (e.g., "authorization_code", "refresh_token").
-        grant_type: String,
-    },
-    /// Receive an incoming ACP message on the server side.
-    ///
-    /// Logged when the ACP server accepts and processes an inbound message
-    /// from a remote agent. The source is the authenticated sender identity.
-    AcpServerReceive {
-        /// Authenticated sender identity (derived from the bearer token).
-        source: String,
-        /// ACP request method or message type.
-        method: String,
-        /// Size of the message payload in bytes.
-        payload_size: usize,
-    },
-    /// Synthesize text to speech via an external TTS provider.
-    TtsSynthesize {
-        /// TTS provider name (e.g., "openai", "elevenlabs").
-        provider: String,
-        /// SHA-256 hex digest of the input text (raw text is never stored).
-        text_hash: String,
-        /// Voice ID used for synthesis.
-        voice: String,
-        /// Output audio format (e.g., "mp3", "wav", "ogg").
-        format: String,
-        /// Length of the input text in characters.
-        text_length: usize,
-    },
-    /// Transcribe audio via OpenAI Whisper.
-    TranscribeAudio {
-        /// SHA-256 hex digest of the raw audio data (for audit trail).
-        content_hash: String,
-        /// Detected audio format (e.g., "mp3", "wav", "ogg").
-        format: String,
-        /// Size of the raw audio data in bytes.
-        size_bytes: u64,
-    },
-    /// Process a video file with format detection and frame extraction.
-    VideoProcess {
-        /// SHA-256 hex digest of the raw video data (for audit trail).
-        content_hash: String,
-        /// Detected video format (e.g., "mp4", "webm", "avi", "mkv", "mov").
-        format: String,
-        /// Size of the raw video data in bytes.
-        size_bytes: u64,
-    },
-    /// Translate an ACP message to/from a DaemonCommand.
-    ///
-    /// Logged when the ACP translator processes an inbound or outbound
-    /// message. The method name is recorded but message content is never
-    /// stored in the audit trail.
-    AcpTranslate {
-        /// ACP session identifier.
-        session_id: String,
-        /// ACP method being translated (e.g., "send", "status", "approve").
-        method: String,
-        /// Translation direction: "inbound" (ACP -> Daemon) or "outbound" (Daemon -> ACP).
-        direction: String,
-    },
-    /// GitHub Copilot authentication via OAuth2 device flow.
-    ///
-    /// Gated by Cedar policy. Logged when a Copilot token is obtained
-    /// or refreshed via the device flow or refresh grant.
-    CopilotAuth {
-        /// OAuth2 grant type (e.g., "device_code", "refresh_token").
-        grant_type: String,
-    },
-    /// API call to Google AI Gemini, gated by Cedar policy.
-    ///
-    /// Logged when a request is made to the Gemini generateContent or
-    /// streamGenerateContent endpoint. Token counts are extracted from
-    /// the response usage metadata.
-    GeminiApiCall {
-        /// Gemini model name (e.g., "gemini-pro", "gemini-1.5-pro").
-        model: String,
-        /// Gemini API endpoint URL.
-        endpoint: String,
-        /// Input/prompt tokens consumed.
-        input_tokens: u64,
-        /// Output/completion tokens consumed.
-        output_tokens: u64,
-    },
-    /// Process a file attachment through the attachment pipeline.
-    ///
-    /// Gated by Cedar policy. Logged when an attachment is received through
-    /// a messaging channel and processed for content extraction or validation.
-    /// MIME type is detected from magic bytes, never from file extensions.
-    ProcessAttachment {
-        /// SHA-256 hex digest of the raw attachment data (for audit trail).
-        content_hash: String,
-        /// Detected MIME type (e.g., "image/png", "audio/mpeg", "application/pdf").
-        mime_type: String,
-        /// Size of the raw attachment data in bytes.
-        size_bytes: u64,
-    },
-    /// Create a new shared canvas session.
-    ///
-    /// Gated by Cedar policy. Logged when an agent creates a new canvas
-    /// for collaborative state sharing.
-    CanvasCreate {
-        /// The canvas session UUID being created.
-        canvas_id: String,
-    },
-    /// Update an existing shared canvas session.
-    ///
-    /// Gated by Cedar policy. Logged when an agent applies patches to
-    /// a canvas session's state.
-    CanvasUpdate {
-        /// The canvas session UUID being updated.
-        canvas_id: String,
-    },
-    /// Pair a new device with the daemon (pairing flow completion).
-    ///
-    /// Gated by Cedar policy. Logged when a device completes the pairing
-    /// flow and is registered in the device registry. The device_id is the
-    /// newly assigned identifier; the device name is sanitized before storage.
-    DevicePair {
-        /// Unique device identifier assigned during pairing.
-        device_id: String,
-        /// Sanitized device name.
-        device_name: String,
-        /// Device platform (e.g., "iOS", "Android", "macOS").
-        platform: String,
-    },
-    /// Revoke a paired device, invalidating its authentication token.
-    ///
-    /// Gated by Cedar policy. Logged when a device's access is revoked.
-    /// Revocation immediately clears the auth token hash, preventing any
-    /// subsequent authentication attempts.
-    DeviceRevoke {
-        /// Device identifier being revoked.
-        device_id: String,
-    },
-    /// Authenticate a device using its auth token.
-    ///
-    /// Gated by Cedar policy. Logged on each device authentication attempt.
-    /// The token itself is never recorded; only the device_id is stored in
-    /// the audit trail.
-    DeviceAuth {
-        /// Device identifier attempting authentication.
-        device_id: String,
-    },
-    /// LLM completion request, gated by Cedar policy.
-    ///
-    /// Logged when a completion request is made through the provider
-    /// abstraction layer. Token counts are extracted from the response.
-    LlmComplete {
-        /// Provider name (e.g., "anthropic", "openai", "google").
-        provider: String,
-        /// Model name (e.g., "claude-sonnet-4-20250514", "gpt-4o").
-        model: String,
-        /// API endpoint URL.
-        endpoint: String,
-        /// Input/prompt tokens consumed.
-        input_tokens: u64,
-        /// Output/completion tokens consumed.
-        output_tokens: u64,
-    },
-    /// Render an A2UI (Agent-to-UI) component specification.
-    ///
-    /// Gated by Cedar policy. Logged when an agent submits a UiSpec
-    /// for rendering. The spec_id uniquely identifies the specification
-    /// being rendered; the component_count records how many components
-    /// it contains for audit purposes.
-    RenderA2UI {
-        /// Unique identifier for the UiSpec being rendered.
-        spec_id: String,
-        /// Number of components in the specification.
-        component_count: usize,
-    },
-    /// Generate a setup code with QR code for device pairing.
-    ///
-    /// Gated by Cedar policy. Logged when a setup code is generated for
-    /// a new device pairing flow. The endpoint is the daemon URL encoded
-    /// in the QR code.
-    GenerateSetupCode {
-        /// Daemon endpoint URL encoded in the setup code.
-        endpoint: String,
-    },
-    /// Send a command to a paired device (phone control).
-    ///
-    /// Gated by Cedar policy. Classified as ActionRisk::High because it
-    /// controls a physical device. Commands are queued (not pushed) and
-    /// the device polls for them.
-    DeviceCommand {
-        /// Target device identifier.
-        device_id: String,
-        /// Type of command (e.g., "CameraSnap", "GetLocation", "Vibrate").
-        command_type: String,
-    },
-    /// Manage a device in the gateway device registry.
-    ///
-    /// Gated by Cedar policy. Logged when a device management operation
-    /// (register, update status, remove, heartbeat, update capabilities)
-    /// is performed. The device_id is validated as a proper UUID.
-    ManageDevice {
-        /// Device UUID being managed.
-        device_id: String,
-        /// Operation being performed (e.g., "register", "update_status",
-        /// "remove", "heartbeat", "update_capabilities").
-        operation: String,
-    },
-    /// Initiate a voice call via Twilio.
-    ///
-    /// Gated by Cedar policy. Classified as ActionRisk::High because it
-    /// initiates an external telephone call with associated cost. Phone
-    /// numbers are validated for E.164 format and cost limits are enforced
-    /// before the call is placed.
-    MakeVoiceCall {
-        /// Destination phone number (E.164 format).
-        to_number: String,
-        /// Agent initiating the call.
-        agent_id: String,
-    },
-    /// Speech recognition (speech-to-text) via an external STT provider.
-    ///
-    /// Gated by Cedar policy. Classified as ActionRisk::Medium because it
-    /// sends audio data to an external API for transcription. Audio data
-    /// itself is never logged; only metadata (provider, format) is recorded.
-    SpeechRecognition {
-        /// STT provider name (e.g., "deepgram", "whisper").
-        provider: String,
-        /// Audio format (e.g., "pcm_16khz", "mp3", "wav").
-        format: String,
-    },
-    /// Voice session lifecycle operation via the voice gateway.
-    ///
-    /// Gated by Cedar policy. Classified as ActionRisk::Medium because it
-    /// manages real-time audio streaming sessions that bridge external STT/TTS
-    /// providers. No raw audio data is logged; only session metadata (agent,
-    /// operation) is recorded in the audit trail.
-    VoiceSession {
-        /// Agent associated with the voice session.
-        agent_id: String,
-        /// Operation being performed (e.g., "start", "stop", "pause", "resume", "list").
-        operation: String,
-    },
-
-    // -- Administrative actions (recorded for compliance audit trail) --
-    /// Add a new agent to the fleet.
-    AdminAgentAdd {
-        /// Name of the agent being added.
-        agent_name: String,
-    },
-    /// Remove an agent from the fleet.
-    AdminAgentRemove {
-        /// Name of the agent being removed.
-        agent_name: String,
-    },
-    /// Install or modify a hook script.
-    AdminHookInstall {
-        /// Event name the hook is registered for.
-        event: String,
-        /// Path to the hook script.
-        script_path: String,
-    },
-    /// Remove a hook script.
-    AdminHookRemove {
-        /// Event name the hook was registered for.
-        event: String,
-    },
-    /// Change a daemon configuration setting.
-    AdminConfigChange {
-        /// Name of the configuration key that changed.
-        key: String,
-    },
-    /// Purge audit log entries (data retention operation).
-    AdminAuditPurge {
-        /// Number of entries purged.
-        entries_purged: usize,
-    },
 }
 
 /// A principal performing an action at a point in time.
 ///
 /// This is the primary input to `PolicyEngine::evaluate()`. The principal
-/// identifies the agent (e.g., `"claude-agent"`), and the kind specifies
-/// what the agent is attempting to do.
+/// identifies the agent under test, and the kind specifies what it attempted
+/// to do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
     /// Unique identifier for this action instance.
     pub id: Uuid,
     /// When the action was created.
     pub timestamp: DateTime<Utc>,
-    /// The agent or entity performing the action (maps to Cedar principal).
+    /// The agent or entity performing the action.
     pub principal: String,
     /// What the agent is doing.
     pub kind: ActionKind,
@@ -441,9 +137,9 @@ impl Action {
 impl ActionKind {
     /// Parse a JSON-serialized `ActionKind` and return its human-readable display string.
     ///
-    /// Falls back to the raw JSON string if deserialization fails (e.g., for
-    /// unknown variants or malformed JSON). This keeps display logic in sync
-    /// with the `Display` impl and avoids duplicating the conversion elsewhere.
+    /// Falls back to the raw JSON string if deserialization fails. That keeps
+    /// aggregate views resilient when they encounter legacy action payloads
+    /// from older versions of Aegis.
     pub fn display_from_json(json: &str) -> String {
         serde_json::from_str::<ActionKind>(json)
             .map(|kind| kind.to_string())
@@ -490,199 +186,6 @@ impl std::fmt::Display for ActionKind {
                     "SkillScan {} {status} (warnings={warning_count}, errors={error_count})",
                     path.display()
                 )
-            }
-            ActionKind::MemoryCapture {
-                agent_id,
-                category,
-                key,
-            } => {
-                write!(f, "MemoryCapture {agent_id}/{category}:{key}")
-            }
-            ActionKind::AcpConnect { endpoint } => {
-                write!(f, "AcpConnect {endpoint}")
-            }
-            ActionKind::AcpSend {
-                endpoint,
-                payload_size,
-            } => {
-                write!(f, "AcpSend {endpoint} ({payload_size} bytes)")
-            }
-            ActionKind::ImageProcess {
-                content_hash,
-                format,
-                size_bytes,
-            } => {
-                write!(
-                    f,
-                    "ImageProcess {format} ({size_bytes} bytes, hash={content_hash})"
-                )
-            }
-            ActionKind::OAuthExchange {
-                provider,
-                grant_type,
-            } => {
-                write!(f, "OAuthExchange {provider} ({grant_type})")
-            }
-            ActionKind::AcpServerReceive {
-                source,
-                method,
-                payload_size,
-            } => {
-                write!(
-                    f,
-                    "AcpServerReceive {source} {method} ({payload_size} bytes)"
-                )
-            }
-            ActionKind::TtsSynthesize {
-                provider,
-                voice,
-                format,
-                text_length,
-                ..
-            } => {
-                write!(
-                    f,
-                    "TtsSynthesize {provider}/{voice} {format} ({text_length} chars)"
-                )
-            }
-            ActionKind::TranscribeAudio {
-                content_hash,
-                format,
-                size_bytes,
-            } => {
-                write!(
-                    f,
-                    "TranscribeAudio {format} ({size_bytes} bytes, hash={content_hash})"
-                )
-            }
-            ActionKind::VideoProcess {
-                content_hash,
-                format,
-                size_bytes,
-            } => {
-                write!(
-                    f,
-                    "VideoProcess {format} ({size_bytes} bytes, hash={content_hash})"
-                )
-            }
-            ActionKind::AcpTranslate {
-                session_id,
-                method,
-                direction,
-            } => {
-                write!(
-                    f,
-                    "AcpTranslate {direction} {method} (session={session_id})"
-                )
-            }
-            ActionKind::CopilotAuth { grant_type } => {
-                write!(f, "CopilotAuth ({grant_type})")
-            }
-            ActionKind::GeminiApiCall {
-                model,
-                endpoint,
-                input_tokens,
-                output_tokens,
-            } => {
-                write!(
-                    f,
-                    "GeminiApiCall {model} {endpoint} in={input_tokens} out={output_tokens}"
-                )
-            }
-            ActionKind::ProcessAttachment {
-                content_hash,
-                mime_type,
-                size_bytes,
-            } => {
-                write!(
-                    f,
-                    "ProcessAttachment {mime_type} ({size_bytes} bytes, hash={content_hash})"
-                )
-            }
-            ActionKind::CanvasCreate { canvas_id } => {
-                write!(f, "CanvasCreate {canvas_id}")
-            }
-            ActionKind::CanvasUpdate { canvas_id } => {
-                write!(f, "CanvasUpdate {canvas_id}")
-            }
-            ActionKind::DevicePair {
-                device_id,
-                device_name,
-                platform,
-            } => {
-                write!(f, "DevicePair {device_id} ({device_name}, {platform})")
-            }
-            ActionKind::DeviceRevoke { device_id } => {
-                write!(f, "DeviceRevoke {device_id}")
-            }
-            ActionKind::DeviceAuth { device_id } => {
-                write!(f, "DeviceAuth {device_id}")
-            }
-            ActionKind::LlmComplete {
-                provider,
-                model,
-                endpoint,
-                input_tokens,
-                output_tokens,
-            } => {
-                write!(
-                    f,
-                    "LlmComplete {provider}/{model} {endpoint} in={input_tokens} out={output_tokens}"
-                )
-            }
-            ActionKind::RenderA2UI {
-                spec_id,
-                component_count,
-            } => {
-                write!(f, "RenderA2UI {spec_id} ({component_count} components)")
-            }
-            ActionKind::GenerateSetupCode { endpoint } => {
-                write!(f, "GenerateSetupCode {endpoint}")
-            }
-            ActionKind::DeviceCommand {
-                device_id,
-                command_type,
-            } => {
-                write!(f, "DeviceCommand {device_id} ({command_type})")
-            }
-            ActionKind::ManageDevice {
-                device_id,
-                operation,
-            } => {
-                write!(f, "ManageDevice {device_id} ({operation})")
-            }
-            ActionKind::MakeVoiceCall {
-                to_number,
-                agent_id,
-            } => {
-                write!(f, "MakeVoiceCall {to_number} (agent={agent_id})")
-            }
-            ActionKind::SpeechRecognition { provider, format } => {
-                write!(f, "SpeechRecognition {provider} ({format})")
-            }
-            ActionKind::VoiceSession {
-                agent_id,
-                operation,
-            } => {
-                write!(f, "VoiceSession {agent_id} ({operation})")
-            }
-            ActionKind::AdminAgentAdd { agent_name } => {
-                write!(f, "AdminAgentAdd {agent_name}")
-            }
-            ActionKind::AdminAgentRemove { agent_name } => {
-                write!(f, "AdminAgentRemove {agent_name}")
-            }
-            ActionKind::AdminHookInstall { event, script_path } => {
-                write!(f, "AdminHookInstall {event} -> {script_path}")
-            }
-            ActionKind::AdminHookRemove { event } => {
-                write!(f, "AdminHookRemove {event}")
-            }
-            ActionKind::AdminConfigChange { key } => {
-                write!(f, "AdminConfigChange {key}")
-            }
-            ActionKind::AdminAuditPurge { entries_purged } => {
-                write!(f, "AdminAuditPurge ({entries_purged} entries)")
             }
         }
     }
@@ -759,124 +262,12 @@ mod tests {
                 warning_count: 1,
                 error_count: 0,
             },
-            ActionKind::MemoryCapture {
-                agent_id: "agent-1".into(),
-                category: "preference".into(),
-                key: "editor".into(),
-            },
-            ActionKind::AcpConnect {
-                endpoint: "https://acp.example.com".into(),
-            },
-            ActionKind::AcpSend {
-                endpoint: "https://acp.example.com".into(),
-                payload_size: 1024,
-            },
-            ActionKind::ImageProcess {
-                content_hash: "abc123".into(),
-                format: "png".into(),
-                size_bytes: 2048,
-            },
-            ActionKind::OAuthExchange {
-                provider: "google".into(),
-                grant_type: "authorization_code".into(),
-            },
-            ActionKind::AcpServerReceive {
-                source: "remote-agent".into(),
-                method: "execute".into(),
-                payload_size: 512,
-            },
-            ActionKind::TtsSynthesize {
-                provider: "openai".into(),
-                text_hash: "abc123".into(),
-                voice: "alloy".into(),
-                format: "mp3".into(),
-                text_length: 42,
-            },
-            ActionKind::VideoProcess {
-                content_hash: "deadbeef".into(),
-                format: "mp4".into(),
-                size_bytes: 4096,
-            },
-            ActionKind::CopilotAuth {
-                grant_type: "device_code".into(),
-            },
-            ActionKind::GeminiApiCall {
-                model: "gemini-pro".into(),
-                endpoint: "https://generativelanguage.googleapis.com".into(),
-                input_tokens: 100,
-                output_tokens: 50,
-            },
-            ActionKind::ProcessAttachment {
-                content_hash: "abc123".into(),
-                mime_type: "image/png".into(),
-                size_bytes: 2048,
-            },
-            ActionKind::CanvasCreate {
-                canvas_id: "00000000-0000-0000-0000-000000000001".into(),
-            },
-            ActionKind::CanvasUpdate {
-                canvas_id: "00000000-0000-0000-0000-000000000002".into(),
-            },
-            ActionKind::DevicePair {
-                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
-                device_name: "Test Phone".into(),
-                platform: "iOS".into(),
-            },
-            ActionKind::DeviceRevoke {
-                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
-            },
-            ActionKind::DeviceAuth {
-                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
-            },
-            ActionKind::LlmComplete {
-                provider: "anthropic".into(),
-                model: "claude-sonnet-4-20250514".into(),
-                endpoint: "https://api.anthropic.com".into(),
-                input_tokens: 100,
-                output_tokens: 50,
-            },
-            ActionKind::RenderA2UI {
-                spec_id: "00000000-0000-0000-0000-000000000003".into(),
-                component_count: 5,
-            },
-            ActionKind::DeviceCommand {
-                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
-                command_type: "GetBatteryStatus".into(),
-            },
-            ActionKind::ManageDevice {
-                device_id: "d1234567-abcd-1234-abcd-1234567890ab".into(),
-                operation: "register".into(),
-            },
-            ActionKind::MakeVoiceCall {
-                to_number: "+15551234567".into(),
-                agent_id: "agent-1".into(),
-            },
-            ActionKind::VoiceSession {
-                agent_id: "agent-1".into(),
-                operation: "start".into(),
-            },
-            ActionKind::AdminAgentAdd {
-                agent_name: "claude-2".into(),
-            },
-            ActionKind::AdminAgentRemove {
-                agent_name: "claude-2".into(),
-            },
-            ActionKind::AdminHookInstall {
-                event: "pre_tool_use".into(),
-                script_path: "/hooks/check.sh".into(),
-            },
-            ActionKind::AdminHookRemove {
-                event: "pre_tool_use".into(),
-            },
-            ActionKind::AdminConfigChange {
-                key: "fleet.restart_policy".into(),
-            },
-            ActionKind::AdminAuditPurge { entries_purged: 42 },
         ];
-        for v in variants {
-            let json = serde_json::to_string(&v).unwrap();
+
+        for variant in variants {
+            let json = serde_json::to_string(&variant).unwrap();
             let back: ActionKind = serde_json::from_str(&json).unwrap();
-            assert_eq!(back, v);
+            assert_eq!(back, variant);
         }
     }
 
@@ -1003,30 +394,6 @@ mod tests {
             }
             .to_string(),
             "SkillScan /tmp/skill BLOCKED (warnings=2, errors=1)"
-        );
-        assert_eq!(
-            ActionKind::MemoryCapture {
-                agent_id: "agent-1".into(),
-                category: "preference".into(),
-                key: "editor".into(),
-            }
-            .to_string(),
-            "MemoryCapture agent-1/preference:editor"
-        );
-        assert_eq!(
-            ActionKind::AcpConnect {
-                endpoint: "https://acp.example.com".into(),
-            }
-            .to_string(),
-            "AcpConnect https://acp.example.com"
-        );
-        assert_eq!(
-            ActionKind::AcpSend {
-                endpoint: "https://acp.example.com".into(),
-                payload_size: 512,
-            }
-            .to_string(),
-            "AcpSend https://acp.example.com (512 bytes)"
         );
     }
 }

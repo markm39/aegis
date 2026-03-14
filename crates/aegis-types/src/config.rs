@@ -1084,7 +1084,7 @@ impl Default for UsageProxyConfig {
 
 /// Configuration for audit log data retention (GDPR/CCPA compliance).
 ///
-/// When set, the daemon periodically purges audit entries that exceed
+/// When set, the runtime periodically purges audit entries that exceed
 /// the retention window or total entry cap.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RetentionConfig {
@@ -1176,7 +1176,7 @@ pub fn validate_config_name(name: &str) -> Result<(), AegisError> {
     }
     // Allow alphanumeric, hyphens, underscores, and dots.
     // This keeps names safe for TOML, command bar tab-completion,
-    // daemon protocol, and filesystem paths.
+    // internal config handling, and filesystem paths.
     if !name
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')

@@ -1,17 +1,9 @@
 //! Cedar schema definitions for the Aegis namespace.
 //!
-//! Defines entity types (Agent, Resource) and actions (FileRead, FileWrite, etc.)
-//! that model the Aegis security domain.
+//! Defines the agent principal, the generic resource entity, and the action
+//! types emitted by the current testing runtime.
 
 /// The Cedar schema for the Aegis namespace in Cedar schema format.
-///
-/// Entity types:
-/// - `Agent`: represents an AI agent principal
-/// - `Resource`: represents a target resource with a `path` attribute
-///
-/// Actions:
-/// - FileRead, FileWrite, FileDelete, DirCreate, DirList, NetConnect,
-///   ToolCall, ProcessSpawn, ProcessExit, ApiUsage -- each applying to principal Agent and resource Resource
 pub const AEGIS_SCHEMA: &str = r#"
 namespace Aegis {
     entity Agent = {};
@@ -59,123 +51,7 @@ namespace Aegis {
         principal: [Agent],
         resource: [Resource],
     };
-    action "SessionSend" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "SessionList" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "SessionHistory" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "SubagentSpawn" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "MemoryCapture" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "AcpConnect" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "AcpSend" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "ImageProcess" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "OAuthExchange" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "AcpServerReceive" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "TtsSynthesize" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "TranscribeAudio" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "VideoProcess" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "AcpTranslate" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "CopilotAuth" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "GeminiApiCall" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "ProcessAttachment" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "CanvasCreate" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "CanvasUpdate" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "DevicePair" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "DeviceRevoke" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "DeviceAuth" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "LlmComplete" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "RenderA2UI" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "GenerateSetupCode" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "DeviceCommand" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "ManageDevice" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "MakeVoiceCall" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "SpeechRecognition" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-    };
-    action "VoiceSession" appliesTo {
+    action "SkillScan" appliesTo {
         principal: [Agent],
         resource: [Resource],
     };
@@ -183,9 +59,6 @@ namespace Aegis {
 "#;
 
 /// Parse the default Aegis Cedar schema into a `cedar_policy::Schema`.
-///
-/// Returns `Err` if the schema text is invalid (should not happen with the
-/// built-in schema).
 pub fn default_schema() -> Result<cedar_policy::Schema, aegis_types::AegisError> {
     let (schema, warnings) =
         cedar_policy::Schema::from_cedarschema_str(AEGIS_SCHEMA).map_err(|e| {
@@ -206,7 +79,6 @@ mod tests {
     #[test]
     fn schema_parses_successfully() {
         let schema = default_schema().expect("default schema should parse");
-        // Verify we can extract action entities from the schema
         let _actions = schema
             .action_entities()
             .expect("should have action entities");
@@ -234,9 +106,6 @@ mod tests {
 
     #[test]
     fn schema_contains_all_action_types() {
-        // Every ActionKind variant must have a corresponding action in the Cedar schema.
-        // If you add a new ActionKind, add it here too -- otherwise policy evaluation
-        // will silently fail for that action type.
         let expected_actions = [
             "FileRead",
             "FileWrite",
@@ -248,32 +117,7 @@ mod tests {
             "ProcessSpawn",
             "ProcessExit",
             "ApiUsage",
-            "SessionSend",
-            "SessionList",
-            "SessionHistory",
-            "SubagentSpawn",
-            "AcpConnect",
-            "AcpSend",
-            "OAuthExchange",
-            "AcpServerReceive",
-            "TtsSynthesize",
-            "TranscribeAudio",
-            "VideoProcess",
-            "AcpTranslate",
-            "CopilotAuth",
-            "GeminiApiCall",
-            "ProcessAttachment",
-            "CanvasCreate",
-            "CanvasUpdate",
-            "DevicePair",
-            "DeviceRevoke",
-            "DeviceAuth",
-            "LlmComplete",
-            "RenderA2UI",
-            "DeviceCommand",
-            "ManageDevice",
-            "MakeVoiceCall",
-            "SpeechRecognition",
+            "SkillScan",
         ];
 
         let schema_text = AEGIS_SCHEMA;
