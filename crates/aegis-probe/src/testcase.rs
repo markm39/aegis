@@ -94,9 +94,6 @@ pub enum AgentTarget {
     ClaudeCode,
     Codex,
     OpenClaw,
-    Cursor,
-    Aider,
-    Custom(String),
 }
 
 /// Sandbox setup: files and environment prepared before the probe runs.

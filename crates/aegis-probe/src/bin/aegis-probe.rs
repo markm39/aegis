@@ -45,7 +45,7 @@ struct Cli {
 enum Command {
     /// Run security probes against an AI agent.
     Run {
-        /// Agent to test.
+        /// Agent to test: claude-code, codex, openclaw, mock-safe, or mock-vulnerable.
         #[arg(long, default_value = "claude-code")]
         agent: String,
 
@@ -152,7 +152,7 @@ enum Command {
 
     /// Run the full benchmark suite and output a standardized scorecard.
     Benchmark {
-        /// Agents to benchmark (comma-separated, e.g. "claude-code,codex").
+        /// Agents to benchmark (comma-separated, e.g. "claude-code,codex,openclaw").
         #[arg(long, default_value = "claude-code")]
         agents: String,
 
@@ -193,7 +193,7 @@ enum Command {
 
     /// Run probes multiple times and compute statistical aggregates.
     MultiRun {
-        /// Agent to test.
+        /// Agent to test: claude-code, codex, openclaw, mock-safe, or mock-vulnerable.
         #[arg(long, default_value = "claude-code")]
         agent: String,
 
@@ -413,7 +413,7 @@ fn cmd_run(opts: &RunOptions<'_>) {
     }
 
     // Parse agent target
-    let target = parse_agent_target(opts.agent);
+    let target = parse_agent_target_or_exit(opts.agent);
 
     // Resolve agent binary
     let binary = opts
@@ -965,7 +965,7 @@ fn cmd_benchmark(
     let mut all_reports = Vec::new();
 
     for agent_name in &agent_names {
-        let target = parse_agent_target(agent_name);
+        let target = parse_agent_target_or_exit(agent_name);
         let binary = resolve_agent_binary(&target);
 
         // Filter probes that target this agent
@@ -1387,16 +1387,28 @@ fn run_probes_parallel(
     indexed.into_iter().map(|(_, r)| r).collect()
 }
 
-fn parse_agent_target(s: &str) -> AgentTarget {
+fn parse_agent_target(s: &str) -> Result<AgentTarget, String> {
     match s.to_lowercase().as_str() {
-        "claude-code" | "claude" => AgentTarget::ClaudeCode,
-        "codex" => AgentTarget::Codex,
-        "openclaw" => AgentTarget::OpenClaw,
-        "cursor" => AgentTarget::Cursor,
-        "aider" => AgentTarget::Aider,
+        "claude-code" | "claude" => Ok(AgentTarget::ClaudeCode),
+        "codex" => Ok(AgentTarget::Codex),
+        "openclaw" => Ok(AgentTarget::OpenClaw),
         // Mock modes still need a target for filtering -- use all-targets
-        "mock-vulnerable" | "mock-safe" => AgentTarget::ClaudeCode,
-        other => AgentTarget::Custom(other.to_string()),
+        "mock-vulnerable" | "mock-safe" | "mock-fail" | "mock-pass" => {
+            Ok(AgentTarget::ClaudeCode)
+        }
+        _ => Err(format!(
+            "Unsupported agent '{s}'. Supported agents: claude-code, codex, openclaw, mock-safe, mock-vulnerable."
+        )),
+    }
+}
+
+fn parse_agent_target_or_exit(s: &str) -> AgentTarget {
+    match parse_agent_target(s) {
+        Ok(target) => target,
+        Err(message) => {
+            eprintln!("{message}");
+            process::exit(1);
+        }
     }
 }
 
@@ -1413,9 +1425,6 @@ fn resolve_agent_binary(target: &AgentTarget) -> PathBuf {
         AgentTarget::ClaudeCode => PathBuf::from("claude"),
         AgentTarget::Codex => PathBuf::from("codex"),
         AgentTarget::OpenClaw => PathBuf::from("openclaw"),
-        AgentTarget::Cursor => PathBuf::from("cursor"),
-        AgentTarget::Aider => PathBuf::from("aider"),
-        AgentTarget::Custom(name) => PathBuf::from(name),
     }
 }
 
@@ -1491,7 +1500,7 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
         process::exit(1);
     }
 
-    let target = parse_agent_target(opts.agent);
+    let target = parse_agent_target_or_exit(opts.agent);
     let mock_mode = parse_mock_mode(opts.agent);
 
     let binary = resolve_agent_binary(&target);

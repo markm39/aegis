@@ -10,7 +10,7 @@ Security testing for AI agents and models.
 
 ## What It Does
 
-- Runs adversarial probes against agents such as Claude Code, Codex, OpenClaw, Cursor, Aider, or custom CLIs
+- Runs adversarial probes against first-class agents such as Claude Code, Codex, and OpenClaw, plus local mock modes for CI smoke testing
 - Scores outcomes as `pass`, `partial`, `fail`, or `error`
 - Emits terminal, JSON, HTML, Markdown, JUnit, and SARIF reports
 - Computes behavioral fingerprints, similarity metrics, multi-run statistics, and distillation signals

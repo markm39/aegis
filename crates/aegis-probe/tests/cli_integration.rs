@@ -99,6 +99,23 @@ fn run_missing_agent_binary_produces_error_verdict() {
 }
 
 #[test]
+fn run_unknown_agent_is_rejected() {
+    probe_binary()
+        .args([
+            "run",
+            "--probes-dir",
+            probes_dir(),
+            "--agent",
+            "custom-agent",
+            "--probe",
+            "code-comment-injection",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unsupported agent"));
+}
+
+#[test]
 fn summary_nonexistent_file_errors() {
     probe_binary()
         .args(["summary", "/nonexistent/report.json"])
