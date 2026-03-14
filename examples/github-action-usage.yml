@@ -1,119 +1,44 @@
-# Example: Run Aegis Probe security tests against your AI agent.
+# Example: run Aegis Probe against an agent in GitHub Actions.
 #
-# Copy this file to .github/workflows/security-test.yml in your repo.
-# Requires the agent binary to be available in the runner's PATH.
+# Copy to .github/workflows/agent-security.yml in the repo you want to test.
+# The target agent binary must be installed on the runner.
 
-name: AI Agent Security Test
+name: Agent Security
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-  schedule:
-    # Run weekly to catch regressions from agent updates
-    - cron: '0 9 * * 1'
 
 jobs:
-  security-test:
-    name: Aegis Probe
+  security-probes:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Install your agent (example: Claude Code)
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      # Run all security probes
-      - uses: markm39/aegis@main
-        id: aegis
-        with:
-          agent: claude-code
-          jobs: 4
-          fail-on-findings: true
-
-      # Post score as a PR comment
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `**Aegis Security Score: ${{ steps.aegis.outputs.score }}/100**\n\n` +
-                    `${{ steps.aegis.outputs.passed }} passed, ${{ steps.aegis.outputs.failed }} failed`
-            })
-
-  # Regression detection: compare against a stored baseline
-  regression-check:
-    name: Regression Detection
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      # Run probes and save report
-      - uses: markm39/aegis@main
+      - name: Run Aegis Probe
         id: aegis
+        uses: markm39/aegis@main
         with:
           agent: claude-code
+          agent-binary: claude
           jobs: 4
-          fail-on-findings: false
+          fail-on: fail
+          output: aegis-report.json
 
-      # Download baseline from previous run
-      - name: Download baseline
-        uses: actions/download-artifact@v4
-        with:
-          name: aegis-baseline
-          path: baseline
-        continue-on-error: true
-
-      # Compare if baseline exists
-      - name: Check for regressions
-        if: hashFiles('baseline/report.json') != ''
+      - name: Print security score
+        if: always()
         run: |
-          aegis-probe compare baseline/report.json ${{ steps.aegis.outputs.report-json }}
+          echo "Score: ${{ steps.aegis.outputs.score }}"
+          echo "Failed probes: ${{ steps.aegis.outputs.failed }}"
+          echo "Probe pack: ${{ steps.aegis.outputs.probe-pack-hash }}"
 
-      # Store current report as new baseline
-      - name: Upload baseline
+      - name: Upload JSON report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: aegis-baseline
-          path: ${{ steps.aegis.outputs.report-json }}
-          retention-days: 90
-
-  # Multi-agent benchmark (weekly)
-  benchmark:
-    name: Multi-Agent Benchmark
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install agents
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          # pip install codex-cli  # Uncomment when installed
-
-      - name: Install aegis-probe
-        run: cargo install --git https://github.com/markm39/aegis.git aegis-probe --locked
-
-      - name: Run benchmark
-        run: |
-          aegis-probe benchmark \
-            --agents claude-code \
-            --probes-dir probes \
-            --jobs 4 \
-            --output-dir benchmark-results
-
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
-        with:
-          name: aegis-benchmark-${{ github.run_number }}
-          path: benchmark-results/
-          retention-days: 365
+          name: aegis-report
+          path: ${{ steps.aegis.outputs.report-path }}

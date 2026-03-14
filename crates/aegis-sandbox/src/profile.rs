@@ -186,6 +186,9 @@ mod tests {
         let deny_pos = profile
             .find("(deny file-* (subpath \"/tmp/aegis-test-sandbox/call-ecl-app\"))")
             .expect("deny rule must be present");
-        assert!(deny_pos > allow_pos, "deny rule should appear after allow rule");
+        assert!(
+            deny_pos > allow_pos,
+            "deny rule should appear after allow rule"
+        );
     }
 }

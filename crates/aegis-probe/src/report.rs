@@ -25,11 +25,16 @@ pub fn render_report(report: &SecurityReport) -> String {
     // Header
     out.push_str(&format!(
         "\n{}{}  AEGIS PROBE  {}  AI Agent Security Report  {}\n",
-        color::BOLD, color::BG_RED, color::RESET, color::RESET
+        color::BOLD,
+        color::BG_RED,
+        color::RESET,
+        color::RESET
     ));
     out.push_str(&format!(
         "{}Agent:{} {}\n",
-        color::DIM, color::RESET, report.agent
+        color::DIM,
+        color::RESET,
+        report.agent
     ));
     out.push_str(&format!(
         "{}Date:{} {}\n",
@@ -56,7 +61,11 @@ pub fn render_report(report: &SecurityReport) -> String {
     };
     out.push_str(&format!(
         "\n  {}{}Security Score: {}/100  [{}]{}\n\n",
-        color::BOLD, score_color, report.score, score_label, color::RESET
+        color::BOLD,
+        score_color,
+        report.score,
+        score_label,
+        color::RESET
     ));
 
     // Summary bar
@@ -151,12 +160,18 @@ pub fn render_report(report: &SecurityReport) -> String {
                     };
                     out.push_str(&format!(
                         "    {}{}{} {}{}\n",
-                        color::RED, finding_icon, color::RESET, finding.description, color::RESET,
+                        color::RED,
+                        finding_icon,
+                        color::RESET,
+                        finding.description,
+                        color::RESET,
                     ));
                     if let Some(ref evidence) = finding.evidence {
                         out.push_str(&format!(
                             "      {}Evidence: {}{}\n",
-                            color::DIM, evidence, color::RESET
+                            color::DIM,
+                            evidence,
+                            color::RESET
                         ));
                     }
                 }
@@ -170,20 +185,24 @@ pub fn render_report(report: &SecurityReport) -> String {
     if report.summary.failed > 0 || report.summary.critical_findings > 0 {
         out.push_str(&format!(
             "\n{}{}Recommendations:{}\n",
-            color::BOLD, color::YELLOW, color::RESET
+            color::BOLD,
+            color::YELLOW,
+            color::RESET
         ));
 
-        let has_injection_fail = report.results.iter().any(|r| {
-            r.category == AttackCategory::PromptInjection && r.verdict == Verdict::Fail
-        });
+        let has_injection_fail = report
+            .results
+            .iter()
+            .any(|r| r.category == AttackCategory::PromptInjection && r.verdict == Verdict::Fail);
         if has_injection_fail {
             out.push_str("  - Agent is vulnerable to prompt injection via code artifacts.\n");
             out.push_str("    Consider adding instruction hierarchy enforcement.\n");
         }
 
-        let has_exfil_fail = report.results.iter().any(|r| {
-            r.category == AttackCategory::DataExfiltration && r.verdict == Verdict::Fail
-        });
+        let has_exfil_fail = report
+            .results
+            .iter()
+            .any(|r| r.category == AttackCategory::DataExfiltration && r.verdict == Verdict::Fail);
         if has_exfil_fail {
             out.push_str("  - Agent may leak sensitive files (.env, credentials).\n");
             out.push_str("    Configure file access policies to restrict sensitive paths.\n");
@@ -205,9 +224,10 @@ pub fn render_report(report: &SecurityReport) -> String {
             out.push_str("    Implement command allowlisting and user confirmation.\n");
         }
 
-        let has_supply_fail = report.results.iter().any(|r| {
-            r.category == AttackCategory::SupplyChain && r.verdict == Verdict::Fail
-        });
+        let has_supply_fail = report
+            .results
+            .iter()
+            .any(|r| r.category == AttackCategory::SupplyChain && r.verdict == Verdict::Fail);
         if has_supply_fail {
             out.push_str("  - Agent installs unverified packages from project files.\n");
             out.push_str("    Add package verification and registry allowlisting.\n");
@@ -243,12 +263,15 @@ pub fn render_probe_result(result: &ProbeResult) -> String {
         if matches!(finding.kind, FindingKind::AgentRefused) {
             out.push_str(&format!(
                 "  {}+ Agent refused the adversarial request{}\n",
-                color::GREEN, color::RESET
+                color::GREEN,
+                color::RESET
             ));
         } else {
             out.push_str(&format!(
                 "  {}! {}{}\n",
-                color::RED, finding.description, color::RESET
+                color::RED,
+                finding.description,
+                color::RESET
             ));
         }
     }
@@ -259,6 +282,94 @@ pub fn render_probe_result(result: &ProbeResult) -> String {
 /// Render report as JSON for CI/CD integration.
 pub fn render_json(report: &SecurityReport) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(report)
+}
+
+/// Render report as SARIF for GitHub code scanning and security tooling.
+pub fn render_sarif(report: &SecurityReport) -> Result<String, serde_json::Error> {
+    let rules: Vec<serde_json::Value> = report
+        .results
+        .iter()
+        .map(|result| {
+            serde_json::json!({
+                "id": result.probe_name,
+                "name": result.probe_name,
+                "shortDescription": {
+                    "text": format!("{:?} / {:?}", result.category, result.severity)
+                },
+                "properties": {
+                    "category": format!("{:?}", result.category),
+                    "severity": format!("{:?}", result.severity),
+                }
+            })
+        })
+        .collect();
+
+    let results: Vec<serde_json::Value> = report
+        .results
+        .iter()
+        .filter(|result| result.verdict != Verdict::Pass)
+        .map(|result| {
+            let level = match result.verdict {
+                Verdict::Fail => "error",
+                Verdict::Partial => "warning",
+                Verdict::Error => "note",
+                Verdict::Pass => "none",
+            };
+            let message = if result.findings.is_empty() {
+                format!("{} ended with {:?}", result.probe_name, result.verdict)
+            } else {
+                result
+                    .findings
+                    .iter()
+                    .map(|finding| finding.description.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+
+            serde_json::json!({
+                "ruleId": result.probe_name,
+                "level": level,
+                "message": { "text": message },
+                "properties": {
+                    "agent": report.agent,
+                    "category": format!("{:?}", result.category),
+                    "severity": format!("{:?}", result.severity),
+                    "verdict": format!("{:?}", result.verdict),
+                    "duration_ms": result.duration_ms,
+                    "finding_count": result.findings.len(),
+                    "probe_pack_hash": report.metadata.probe_pack_hash,
+                }
+            })
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "aegis-probe",
+                    "version": report.metadata.runner_version,
+                    "informationUri": "https://github.com/markm39/aegis",
+                    "rules": rules,
+                }
+            },
+            "automationDetails": {
+                "id": report.metadata.probe_pack_hash,
+            },
+            "properties": {
+                "agent": report.agent,
+                "score": report.score,
+                "schema_version": report.metadata.schema_version,
+                "platform": {
+                    "os": report.metadata.platform.os,
+                    "arch": report.metadata.platform.arch,
+                }
+            },
+            "results": results,
+        }]
+    }))
 }
 
 /// Render report as Markdown (for GitHub PR comments, READMEs, blog posts).
@@ -276,15 +387,25 @@ pub fn render_markdown(report: &SecurityReport) -> String {
     let s = &report.summary;
 
     out.push_str("# Aegis Probe Security Report\n\n");
-    out.push_str(&format!("**Agent:** {} | **Date:** {}\n\n", report.agent, report.timestamp.format("%Y-%m-%d %H:%M UTC")));
-    out.push_str(&format!("## Score: {}/100 ({})\n\n", report.score, score_label));
+    out.push_str(&format!(
+        "**Agent:** {} | **Date:** {}\n\n",
+        report.agent,
+        report.timestamp.format("%Y-%m-%d %H:%M UTC")
+    ));
+    out.push_str(&format!(
+        "## Score: {}/100 ({})\n\n",
+        report.score, score_label
+    ));
     out.push_str("| Metric | Count |\n|---|---|\n");
     out.push_str(&format!("| Passed | {} |\n", s.passed));
     out.push_str(&format!("| Failed | {} |\n", s.failed));
     out.push_str(&format!("| Partial | {} |\n", s.partial));
     out.push_str(&format!("| Errors | {} |\n", s.errors));
     out.push_str(&format!("| Total | {} |\n", s.total_probes));
-    out.push_str(&format!("| Critical findings | {} |\n", s.critical_findings));
+    out.push_str(&format!(
+        "| Critical findings | {} |\n",
+        s.critical_findings
+    ));
     out.push_str(&format!("| High findings | {} |\n\n", s.high_findings));
 
     // Results by category
@@ -309,10 +430,18 @@ pub fn render_markdown(report: &SecurityReport) -> String {
             continue;
         }
 
-        let passed = cat_results.iter().filter(|r| r.verdict == Verdict::Pass).count();
+        let passed = cat_results
+            .iter()
+            .filter(|r| r.verdict == Verdict::Pass)
+            .count();
         let total = cat_results.len();
 
-        out.push_str(&format!("### {} ({}/{})\n\n", category_label(category), passed, total));
+        out.push_str(&format!(
+            "### {} ({}/{})\n\n",
+            category_label(category),
+            passed,
+            total
+        ));
         out.push_str("| Probe | Verdict | Severity | Duration |\n|---|---|---|---|\n");
 
         for result in &cat_results {
@@ -546,9 +675,18 @@ pub fn render_junit(report: &SecurityReport) -> String {
             continue;
         }
 
-        let cat_failures = cat_results.iter().filter(|r| r.verdict == Verdict::Fail).count();
-        let cat_errors = cat_results.iter().filter(|r| r.verdict == Verdict::Error).count();
-        let cat_time: f64 = cat_results.iter().map(|r| r.duration_ms as f64 / 1000.0).sum();
+        let cat_failures = cat_results
+            .iter()
+            .filter(|r| r.verdict == Verdict::Fail)
+            .count();
+        let cat_errors = cat_results
+            .iter()
+            .filter(|r| r.verdict == Verdict::Error)
+            .count();
+        let cat_time: f64 = cat_results
+            .iter()
+            .map(|r| r.duration_ms as f64 / 1000.0)
+            .sum();
 
         out.push_str(&format!(
             "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
@@ -574,7 +712,11 @@ pub fn render_junit(report: &SecurityReport) -> String {
                 }
                 Verdict::Fail => {
                     out.push_str(">\n");
-                    let msg: Vec<String> = result.findings.iter().map(|f| f.description.clone()).collect();
+                    let msg: Vec<String> = result
+                        .findings
+                        .iter()
+                        .map(|f| f.description.clone())
+                        .collect();
                     out.push_str(&format!(
                         "      <failure message=\"{}\" type=\"SecurityFailure\">{}</failure>\n",
                         xml_escape(&format!("{:?} severity security failure", result.severity)),
@@ -584,7 +726,11 @@ pub fn render_junit(report: &SecurityReport) -> String {
                 }
                 Verdict::Error => {
                     out.push_str(">\n");
-                    let msg: Vec<String> = result.findings.iter().map(|f| f.description.clone()).collect();
+                    let msg: Vec<String> = result
+                        .findings
+                        .iter()
+                        .map(|f| f.description.clone())
+                        .collect();
                     out.push_str(&format!(
                         "      <error message=\"Probe error\" type=\"ProbeError\">{}</error>\n",
                         xml_escape(&msg.join("\n")),
@@ -593,7 +739,11 @@ pub fn render_junit(report: &SecurityReport) -> String {
                 }
                 Verdict::Partial => {
                     out.push_str(">\n");
-                    let msg: Vec<String> = result.findings.iter().map(|f| f.description.clone()).collect();
+                    let msg: Vec<String> = result
+                        .findings
+                        .iter()
+                        .map(|f| f.description.clone())
+                        .collect();
                     out.push_str(&format!(
                         "      <failure message=\"Partial resistance\" type=\"PartialFailure\">{}</failure>\n",
                         xml_escape(&msg.join("\n")),
@@ -722,6 +872,17 @@ mod tests {
         assert!(html.contains("env-file-exfiltration"));
         // Check XSS prevention
         assert!(!html.contains("<script>"));
+    }
+
+    #[test]
+    fn render_sarif_is_valid() {
+        let report = compute_report("claude-code", sample_results());
+        let sarif = render_sarif(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(parsed["version"], "2.1.0");
+        assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "aegis-probe");
+        assert_eq!(parsed["runs"][0]["properties"]["agent"], "claude-code");
+        assert!(parsed["runs"][0]["results"].is_array());
     }
 
     #[test]

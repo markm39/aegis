@@ -115,7 +115,6 @@ jobs:
           path: |
             aegis-*-universal-apple-darwin.tar.gz
             completions/
-            man/
 
   release:
     name: Create Release

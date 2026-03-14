@@ -186,8 +186,15 @@ fn t_critical(df: usize, confidence: f64) -> f64 {
             _ if df > 100 => 1.960, // z-approximation
             _ => {
                 // Interpolate between nearest known values
-                let lower = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30, 40, 50, 60, 80, 100];
-                let values = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.086, 2.060, 2.042, 2.021, 2.009, 2.000, 1.990, 1.984];
+                let lower = [
+                    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30, 40, 50, 60, 80,
+                    100,
+                ];
+                let values = [
+                    12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201,
+                    2.179, 2.160, 2.145, 2.131, 2.086, 2.060, 2.042, 2.021, 2.009, 2.000, 1.990,
+                    1.984,
+                ];
                 interpolate_lookup(&lower, &values, df)
             }
         }
@@ -367,7 +374,9 @@ fn standard_normal_cdf(z: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.2316419 * z.abs());
     let d = 0.3989422804014327; // 1/sqrt(2*pi)
     let p = d * (-z * z / 2.0).exp();
-    let c = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    let c = t
+        * (0.319381530
+            + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
 
     if z >= 0.0 {
         1.0 - p * c
@@ -490,11 +499,8 @@ pub fn aggregate_runs(runs: &[SecurityReport]) -> MultiRunReport {
         let per_run_rates: Vec<f64> = runs
             .iter()
             .map(|run| {
-                let cat_results: Vec<_> = run
-                    .results
-                    .iter()
-                    .filter(|r| r.category == *cat)
-                    .collect();
+                let cat_results: Vec<_> =
+                    run.results.iter().filter(|r| r.category == *cat).collect();
                 if cat_results.is_empty() {
                     return f64::NAN; // skip this run for this category
                 }

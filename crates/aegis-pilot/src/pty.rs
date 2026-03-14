@@ -7,6 +7,7 @@
 use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
+use std::sync::Mutex;
 
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::poll::{PollFd, PollFlags, PollTimeout};
@@ -21,6 +22,7 @@ use aegis_types::AegisError;
 pub struct PtySession {
     master: OwnedFd,
     child_pid: Pid,
+    exit_status: Mutex<Option<i32>>,
 }
 
 impl PtySession {
@@ -118,6 +120,7 @@ impl PtySession {
                 Ok(Self {
                     master: pty.master,
                     child_pid: child,
+                    exit_status: Mutex::new(None),
                 })
             }
             Err(e) => Err(AegisError::PilotError(format!("fork failed: {e}"))),
@@ -229,13 +232,37 @@ impl PtySession {
     /// the child -- reaping discards the exit status, which would cause the
     /// subsequent `wait()` call to return ECHILD and default to exit code 0.
     pub fn is_alive(&self) -> bool {
-        signal::kill(self.child_pid, None).is_ok()
+        if self.exit_status.lock().unwrap().is_some() {
+            return false;
+        }
+
+        match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::StillAlive) => signal::kill(self.child_pid, None).is_ok(),
+            Ok(WaitStatus::Exited(_, code)) => {
+                *self.exit_status.lock().unwrap() = Some(code);
+                false
+            }
+            Ok(WaitStatus::Signaled(_, sig, _)) => {
+                *self.exit_status.lock().unwrap() = Some(-(sig as i32));
+                false
+            }
+            Ok(_) => true,
+            Err(nix::errno::Errno::ECHILD) => {
+                *self.exit_status.lock().unwrap() = Some(0);
+                false
+            }
+            Err(_) => false,
+        }
     }
 
     /// Wait for the child to exit and return its exit code.
     ///
     /// Returns negative values for signal termination (-signum).
     pub fn wait(&self) -> Result<i32, AegisError> {
+        if let Some(code) = *self.exit_status.lock().unwrap() {
+            return Ok(code);
+        }
+
         loop {
             match waitpid(self.child_pid, None) {
                 Ok(WaitStatus::Exited(_, code)) => return Ok(code),
@@ -364,6 +391,7 @@ pub unsafe fn from_raw_parts(master_fd: RawFd, child_pid: i32) -> PtySession {
     PtySession {
         master: unsafe { OwnedFd::from_raw_fd(master_fd) },
         child_pid: Pid::from_raw(child_pid),
+        exit_status: Mutex::new(None),
     }
 }
 

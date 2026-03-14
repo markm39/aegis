@@ -41,10 +41,7 @@ impl NdjsonWriter {
     /// Open or create the NDJSON log file for appending.
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(Self {
             writer: BufWriter::new(file),
             path,
@@ -56,8 +53,7 @@ impl NdjsonWriter {
     /// Serializes `value` to JSON, writes a trailing `\n`, and flushes the
     /// buffer so the data is immediately visible to a reader that remaps.
     pub fn append<T: serde::Serialize>(&mut self, value: &T) -> std::io::Result<()> {
-        serde_json::to_writer(&mut self.writer, value)
-            .map_err(std::io::Error::other)?;
+        serde_json::to_writer(&mut self.writer, value).map_err(std::io::Error::other)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()
     }

@@ -167,31 +167,27 @@ pub fn analyze_distillation(
     };
 
     // Refusal similarity and vocabulary overlap from model fingerprints
-    let (refusal_similarity, vocabulary_overlap) =
-        match (fingerprint_a, fingerprint_b) {
-            (Some(fp_a), Some(fp_b)) => {
-                let refusal_sim = cosine_similarity_refusal(
-                    &fp_a.refusal_style,
-                    &fp_b.refusal_style,
-                );
-                let vocab_overlap = jaccard_similarity(
-                    &fp_a
-                        .vocabulary_signature
-                        .distinctive_tokens
-                        .iter()
-                        .map(|(t, _)| t.as_str())
-                        .collect::<Vec<_>>(),
-                    &fp_b
-                        .vocabulary_signature
-                        .distinctive_tokens
-                        .iter()
-                        .map(|(t, _)| t.as_str())
-                        .collect::<Vec<_>>(),
-                );
-                (refusal_sim, vocab_overlap)
-            }
-            _ => (0.5, 0.5), // neutral when fingerprints unavailable
-        };
+    let (refusal_similarity, vocabulary_overlap) = match (fingerprint_a, fingerprint_b) {
+        (Some(fp_a), Some(fp_b)) => {
+            let refusal_sim = cosine_similarity_refusal(&fp_a.refusal_style, &fp_b.refusal_style);
+            let vocab_overlap = jaccard_similarity(
+                &fp_a
+                    .vocabulary_signature
+                    .distinctive_tokens
+                    .iter()
+                    .map(|(t, _)| t.as_str())
+                    .collect::<Vec<_>>(),
+                &fp_b
+                    .vocabulary_signature
+                    .distinctive_tokens
+                    .iter()
+                    .map(|(t, _)| t.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            (refusal_sim, vocab_overlap)
+        }
+        _ => (0.5, 0.5), // neutral when fingerprints unavailable
+    };
 
     let signals = DistillationSignals {
         verdict_agreement,

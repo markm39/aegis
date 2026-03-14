@@ -167,9 +167,15 @@ pub fn extract_model_fingerprint(report: &SecurityReport) -> ModelFingerprint {
         .results
         .iter()
         .filter_map(|r| {
-            r.agent_output
-                .as_deref()
-                .map(|output| (output, r.verdict, r.duration_ms, r.output_length, &r.findings))
+            r.agent_output.as_deref().map(|output| {
+                (
+                    output,
+                    r.verdict,
+                    r.duration_ms,
+                    r.output_length,
+                    &r.findings,
+                )
+            })
         })
         .collect();
 
@@ -221,19 +227,31 @@ fn analyze_refusal_style(
     }
 
     let direct_patterns = [
-        "i cannot", "i can't", "i won't", "i will not", "i'm unable",
-        "i am unable", "cannot do that", "not able to",
+        "i cannot",
+        "i can't",
+        "i won't",
+        "i will not",
+        "i'm unable",
+        "i am unable",
+        "cannot do that",
+        "not able to",
     ];
     let redirect_patterns = [
-        "instead", "let me", "how about", "alternatively",
+        "instead",
+        "let me",
+        "how about",
+        "alternatively",
         "i can help you with",
     ];
-    let apology_patterns = [
-        "i apologize", "i'm sorry", "sorry,", "apologies",
-    ];
+    let apology_patterns = ["i apologize", "i'm sorry", "sorry,", "apologies"];
     let policy_patterns = [
-        "guidelines", "policy", "terms of service", "not allowed",
-        "against my", "programmed to", "designed to",
+        "guidelines",
+        "policy",
+        "terms of service",
+        "not allowed",
+        "against my",
+        "programmed to",
+        "designed to",
     ];
 
     let mut direct = 0;
@@ -362,7 +380,10 @@ fn compute_vocabulary_signature(outputs: &[&str]) -> VocabularySignature {
         }
 
         // Simple sentence splitting
-        let sentences: Vec<_> = output.split(['.', '!', '?']).filter(|s| !s.trim().is_empty()).collect();
+        let sentences: Vec<_> = output
+            .split(['.', '!', '?'])
+            .filter(|s| !s.trim().is_empty())
+            .collect();
         total_sentences += sentences.len();
 
         // Tokenize by whitespace
@@ -451,10 +472,7 @@ fn analyze_indicators(report: &SecurityReport) -> IndicatorPattern {
 }
 
 /// Compare two model fingerprints across all dimensions.
-pub fn compare_model_fingerprints(
-    a: &ModelFingerprint,
-    b: &ModelFingerprint,
-) -> ModelSimilarity {
+pub fn compare_model_fingerprints(a: &ModelFingerprint, b: &ModelFingerprint) -> ModelSimilarity {
     let behavioral_similarity = compare_fingerprints(&a.behavioral, &b.behavioral).similarity;
 
     // Refusal style cosine similarity
@@ -483,7 +501,11 @@ pub fn compare_model_fingerprints(
 
     // Latency similarity (1 - normalized difference in means)
     let latency_similarity = {
-        let max_lat = a.latency_profile.stats.mean.max(b.latency_profile.stats.mean);
+        let max_lat = a
+            .latency_profile
+            .stats
+            .mean
+            .max(b.latency_profile.stats.mean);
         if max_lat < f64::EPSILON {
             1.0
         } else {
@@ -588,7 +610,11 @@ pub fn extract_fingerprint(report: &SecurityReport) -> BehavioralFingerprint {
     let avg_duration_ms = if report.results.is_empty() {
         0.0
     } else {
-        report.results.iter().map(|r| r.duration_ms as f64).sum::<f64>()
+        report
+            .results
+            .iter()
+            .map(|r| r.duration_ms as f64)
+            .sum::<f64>()
             / report.results.len() as f64
     };
 
@@ -622,7 +648,10 @@ pub fn extract_fingerprint(report: &SecurityReport) -> BehavioralFingerprint {
 }
 
 /// Compare two behavioral fingerprints and compute similarity.
-pub fn compare_fingerprints(a: &BehavioralFingerprint, b: &BehavioralFingerprint) -> SimilarityResult {
+pub fn compare_fingerprints(
+    a: &BehavioralFingerprint,
+    b: &BehavioralFingerprint,
+) -> SimilarityResult {
     let exact_match = a.behavioral_hash == b.behavioral_hash;
 
     // Per-category similarity
@@ -631,7 +660,11 @@ pub fn compare_fingerprints(a: &BehavioralFingerprint, b: &BehavioralFingerprint
     let mut category_count = 0;
 
     for cat_a in &a.category_pass_rates {
-        if let Some(cat_b) = b.category_pass_rates.iter().find(|c| c.category == cat_a.category) {
+        if let Some(cat_b) = b
+            .category_pass_rates
+            .iter()
+            .find(|c| c.category == cat_a.category)
+        {
             let delta = (cat_a.rate - cat_b.rate).abs();
             category_similarity.push(CategorySimilarity {
                 category: cat_a.category.clone(),
@@ -672,7 +705,11 @@ mod tests {
                 probe_name: "test-probe-1".into(),
                 category: AttackCategory::PromptInjection,
                 severity: Severity::High,
-                verdict: if pass_all { Verdict::Pass } else { Verdict::Fail },
+                verdict: if pass_all {
+                    Verdict::Pass
+                } else {
+                    Verdict::Fail
+                },
                 findings: vec![],
                 agent: agent.into(),
                 duration_ms: 5000,

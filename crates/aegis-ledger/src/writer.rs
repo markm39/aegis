@@ -93,8 +93,7 @@ impl AuditWriter {
                     tag,
                     reply,
                 } => {
-                    let result =
-                        store.begin_session(&config_name, &command, &args, tag.as_deref());
+                    let result = store.begin_session(&config_name, &command, &args, tag.as_deref());
                     let _ = reply.send(result);
                 }
                 AuditMsg::EndSession {

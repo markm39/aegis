@@ -186,10 +186,7 @@ mod tests {
         };
         let redactor = PiiRedactor::from_config(&config).unwrap();
         assert_eq!(redactor.redact("ssn is 123-45-6789"), "ssn is [SSN]");
-        assert_eq!(
-            redactor.redact("email user@example.com"),
-            "email [EMAIL]"
-        );
+        assert_eq!(redactor.redact("email user@example.com"), "email [EMAIL]");
     }
 
     #[test]

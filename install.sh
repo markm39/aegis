@@ -1,26 +1,16 @@
 #!/bin/sh
-# Aegis installer
+# Aegis Probe installer
 #
 # Usage:
 #   curl -sSf https://raw.githubusercontent.com/markm39/aegis/main/install.sh | sh
-#
-# Environment variables:
-#   AEGIS_INSTALL_DIR   Where to install the binary (default: /usr/local/bin)
-#   AEGIS_VERSION       Version to install (default: latest release)
-#   AEGIS_NO_MODIFY_PATH  Set to 1 to skip PATH modification hints
-#
-# Flags:
-#   --uninstall         Remove aegis and its completions/man page
-#   --help              Show this help
 
 set -eu
 
 AEGIS_REPO="markm39/aegis"
 AEGIS_INSTALL_DIR="${AEGIS_INSTALL_DIR:-/usr/local/bin}"
-AEGIS_MAN_DIR="${AEGIS_MAN_DIR:-/usr/local/share/man/man1}"
 AEGIS_VERSION="${AEGIS_VERSION:-}"
+AEGIS_NO_MODIFY_PATH="${AEGIS_NO_MODIFY_PATH:-0}"
 
-# Colors (only when stdout is a terminal)
 if [ -t 1 ]; then
     BOLD='\033[1m'
     GREEN='\033[0;32m'
@@ -54,67 +44,60 @@ error() {
 
 usage() {
     cat <<EOF
-Aegis installer
+Aegis Probe installer
 
 Usage:
   curl -sSf https://raw.githubusercontent.com/markm39/aegis/main/install.sh | sh
 
 Options:
-  --uninstall    Remove aegis and its completions/man page
+  --uninstall    Remove aegis-probe and any generated shell completions
   --help         Show this help
 
 Environment variables:
-  AEGIS_INSTALL_DIR   Install directory (default: /usr/local/bin)
-  AEGIS_VERSION       Version to install (default: latest)
+  AEGIS_INSTALL_DIR    Install directory (default: /usr/local/bin)
+  AEGIS_VERSION        Release version to install (default: latest)
+  AEGIS_NO_MODIFY_PATH Set to 1 to suppress PATH hints
 EOF
     exit 0
 }
 
-# Detect shell completions directory
-detect_completions_dir() {
+detect_completion_target() {
     SHELL_NAME=$(basename "${SHELL:-/bin/zsh}")
     case "$SHELL_NAME" in
         zsh)
-            COMPLETIONS_DIR="/usr/local/share/zsh/site-functions"
-            COMPLETIONS_FILE="_aegis"
-            COMPLETIONS_SHELL="zsh"
+            COMPLETION_DIR="/usr/local/share/zsh/site-functions"
+            COMPLETION_FILE="_aegis-probe"
+            COMPLETION_SHELL="zsh"
             ;;
         bash)
-            COMPLETIONS_DIR="/usr/local/etc/bash_completion.d"
-            COMPLETIONS_FILE="aegis"
-            COMPLETIONS_SHELL="bash"
+            COMPLETION_DIR="/usr/local/etc/bash_completion.d"
+            COMPLETION_FILE="aegis-probe"
+            COMPLETION_SHELL="bash"
             ;;
         fish)
-            COMPLETIONS_DIR="${HOME}/.config/fish/completions"
-            COMPLETIONS_FILE="aegis.fish"
-            COMPLETIONS_SHELL="fish"
+            COMPLETION_DIR="${HOME}/.config/fish/completions"
+            COMPLETION_FILE="aegis-probe.fish"
+            COMPLETION_SHELL="fish"
             ;;
         *)
-            COMPLETIONS_DIR=""
-            COMPLETIONS_FILE=""
-            COMPLETIONS_SHELL=""
+            COMPLETION_DIR=""
+            COMPLETION_FILE=""
+            COMPLETION_SHELL=""
             ;;
     esac
 }
 
-# Run a command, using sudo if needed for the target directory
-maybe_sudo() {
-    if [ -w "$(dirname "$1")" ] 2>/dev/null; then
-        "$@"
-    else
-        info "Need permissions for $(dirname "$1") -- requesting sudo"
-        sudo "$@"
-    fi
+run_or_sudo() {
+    "$@" 2>/dev/null || sudo "$@"
 }
 
-# Install a file to a directory, creating it if needed
 install_file() {
     SRC="$1"
     DEST_DIR="$2"
     DEST_FILE="$3"
 
     if [ ! -d "$DEST_DIR" ]; then
-        maybe_sudo mkdir -p "$DEST_DIR"
+        run_or_sudo mkdir -p "$DEST_DIR"
     fi
 
     if [ -w "$DEST_DIR" ]; then
@@ -125,104 +108,126 @@ install_file() {
 }
 
 do_uninstall() {
-    info "Uninstalling aegis"
+    detect_completion_target
+    info "Uninstalling aegis-probe"
 
-    detect_completions_dir
-
-    TARGETS="$AEGIS_INSTALL_DIR/aegis $AEGIS_INSTALL_DIR/aegis-probe"
-    [ -n "$COMPLETIONS_DIR" ] && TARGETS="$TARGETS $COMPLETIONS_DIR/$COMPLETIONS_FILE"
-    TARGETS="$TARGETS $AEGIS_MAN_DIR/aegis.1"
-
-    FOUND=0
-    for f in $TARGETS; do
-        if [ -f "$f" ]; then
-            FOUND=1
-            maybe_sudo rm -f "$f"
-            printf "  Removed %s\n" "$f"
+    for path in \
+        "$AEGIS_INSTALL_DIR/aegis-probe" \
+        "/usr/local/share/zsh/site-functions/_aegis-probe" \
+        "/usr/local/etc/bash_completion.d/aegis-probe" \
+        "${HOME}/.config/fish/completions/aegis-probe.fish"; do
+        if [ -f "$path" ]; then
+            run_or_sudo rm -f "$path"
+            printf "  Removed %s\n" "$path"
         fi
     done
 
-    # Also try removing completions for other shells
-    for f in \
-        /usr/local/share/zsh/site-functions/_aegis \
-        /usr/local/etc/bash_completion.d/aegis \
-        "${HOME}/.config/fish/completions/aegis.fish"; do
-        if [ -f "$f" ]; then
-            FOUND=1
-            maybe_sudo rm -f "$f"
-            printf "  Removed %s\n" "$f"
-        fi
-    done
-
-    if [ "$FOUND" -eq 0 ]; then
-        warn "No aegis installation found"
-    else
-        success "Aegis uninstalled"
-    fi
+    success "Aegis Probe removed"
     exit 0
-}
-
-get_latest_version() {
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "https://api.github.com/repos/${AEGIS_REPO}/releases/latest" 2>/dev/null | \
-            grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/' || true
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "https://api.github.com/repos/${AEGIS_REPO}/releases/latest" 2>/dev/null | \
-            grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/' || true
-    fi
 }
 
 download() {
     URL="$1"
     DEST="$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$URL" -o "$DEST" 2>/dev/null
+        curl -fsSL "$URL" -o "$DEST"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$DEST" "$URL" 2>/dev/null
+        wget -qO "$DEST" "$URL"
     else
-        error "Neither curl nor wget found. Install one and try again."
+        error "Neither curl nor wget is available."
     fi
 }
 
-try_download_binary() {
+get_latest_version() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "https://api.github.com/repos/${AEGIS_REPO}/releases/latest" | \
+            grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/' || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "https://api.github.com/repos/${AEGIS_REPO}/releases/latest" | \
+            grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/' || true
+    fi
+}
+
+resolve_target() {
+    OS=$(uname -s)
+    ARCH=$(uname -m)
+
+    case "$OS/$ARCH" in
+        Darwin/arm64)
+            TARGET="universal-apple-darwin"
+            FALLBACK_TARGET="aarch64-apple-darwin"
+            ;;
+        Darwin/x86_64)
+            TARGET="universal-apple-darwin"
+            FALLBACK_TARGET="x86_64-apple-darwin"
+            ;;
+        Linux/x86_64)
+            TARGET="x86_64-unknown-linux-gnu"
+            FALLBACK_TARGET=""
+            ;;
+        *)
+            TARGET=""
+            FALLBACK_TARGET=""
+            ;;
+    esac
+}
+
+verify_checksum() {
+    ARCHIVE="$1"
+    ASSET_NAME="$2"
+    VERSION="$3"
+    TMPDIR="$4"
+    CHECKSUMS_URL="https://github.com/${AEGIS_REPO}/releases/download/v${VERSION}/checksums-sha256.txt"
+    CHECKSUMS_FILE="$TMPDIR/checksums.txt"
+
+    if ! download "$CHECKSUMS_URL" "$CHECKSUMS_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    EXPECTED_HASH=$(grep "$ASSET_NAME" "$CHECKSUMS_FILE" | cut -d' ' -f1 || true)
+    if [ -z "$EXPECTED_HASH" ]; then
+        return 0
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        ACTUAL_HASH=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)
+    else
+        ACTUAL_HASH=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+    fi
+    [ "$EXPECTED_HASH" = "$ACTUAL_HASH" ] || error "Checksum mismatch for $(basename "$ARCHIVE")"
+}
+
+download_release() {
     VERSION="$1"
     TMPDIR="$2"
+    resolve_target
 
-    # Try universal binary first, then arch-specific
-    UNIVERSAL_URL="https://github.com/${AEGIS_REPO}/releases/download/v${VERSION}/aegis-${VERSION}-universal-apple-darwin.tar.gz"
-    ARCH_URL="https://github.com/${AEGIS_REPO}/releases/download/v${VERSION}/aegis-${VERSION}-${TARGET}.tar.gz"
-    CHECKSUMS_URL="https://github.com/${AEGIS_REPO}/releases/download/v${VERSION}/checksums-sha256.txt"
+    if [ -z "$TARGET" ]; then
+        return 1
+    fi
 
-    TARBALL="$TMPDIR/aegis.tar.gz"
+    ARCHIVE="$TMPDIR/aegis-probe.tar.gz"
+    PRIMARY_ASSET="aegis-probe-${VERSION}-${TARGET}.tar.gz"
+    PRIMARY_URL="https://github.com/${AEGIS_REPO}/releases/download/v${VERSION}/${PRIMARY_ASSET}"
+    FALLBACK_URL=""
+    FALLBACK_ASSET=""
+    if [ -n "$FALLBACK_TARGET" ]; then
+        FALLBACK_ASSET="aegis-probe-${VERSION}-${FALLBACK_TARGET}.tar.gz"
+        FALLBACK_URL="https://github.com/${AEGIS_REPO}/releases/download/v${VERSION}/${FALLBACK_ASSET}"
+    fi
 
-    # Try universal first
-    if download "$UNIVERSAL_URL" "$TARBALL"; then
-        DOWNLOAD_URL="$UNIVERSAL_URL"
-    elif download "$ARCH_URL" "$TARBALL"; then
-        DOWNLOAD_URL="$ARCH_URL"
+    if download "$PRIMARY_URL" "$ARCHIVE" 2>/dev/null; then
+        ASSET_NAME="$PRIMARY_ASSET"
+    elif [ -n "$FALLBACK_URL" ] && download "$FALLBACK_URL" "$ARCHIVE" 2>/dev/null; then
+        ASSET_NAME="$FALLBACK_ASSET"
     else
         return 1
     fi
 
-    # Verify checksum if available
-    CHECKSUMS_FILE="$TMPDIR/checksums.txt"
-    if download "$CHECKSUMS_URL" "$CHECKSUMS_FILE" 2>/dev/null; then
-        EXPECTED_HASH=$(grep "$(basename "$DOWNLOAD_URL")" "$CHECKSUMS_FILE" | cut -d' ' -f1)
-        if [ -n "$EXPECTED_HASH" ]; then
-            ACTUAL_HASH=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)
-            if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
-                error "Checksum mismatch. Expected: $EXPECTED_HASH Got: $ACTUAL_HASH"
-            fi
-        fi
-    fi
-
-    tar xzf "$TARBALL" -C "$TMPDIR"
-    if [ ! -f "$TMPDIR/aegis" ]; then
-        return 1
-    fi
-
-    chmod +x "$TMPDIR/aegis"
-    [ -f "$TMPDIR/aegis-probe" ] && chmod +x "$TMPDIR/aegis-probe"
+    verify_checksum "$ARCHIVE" "$ASSET_NAME" "$VERSION" "$TMPDIR"
+    tar xzf "$ARCHIVE" -C "$TMPDIR"
+    [ -f "$TMPDIR/aegis-probe" ] || return 1
+    chmod +x "$TMPDIR/aegis-probe"
     return 0
 }
 
@@ -230,30 +235,38 @@ build_from_source() {
     TMPDIR="$1"
 
     if ! command -v cargo >/dev/null 2>&1; then
-        warn "Rust toolchain not found."
-        printf "  Install it with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n"
-        printf "  Then re-run this installer.\n"
-        error "Cannot install without pre-built binary or Rust toolchain."
+        error "No compatible release archive found and cargo is unavailable."
     fi
 
-    info "Building from source (this may take a few minutes)"
-    CLONE_DIR="$TMPDIR/aegis-src"
-
+    info "Building aegis-probe from source"
     if [ -n "$AEGIS_VERSION" ]; then
-        git clone --depth 1 --branch "v${AEGIS_VERSION}" "https://github.com/${AEGIS_REPO}.git" "$CLONE_DIR" 2>/dev/null || \
-            git clone --depth 1 "https://github.com/${AEGIS_REPO}.git" "$CLONE_DIR"
+        cargo install --locked --git "https://github.com/${AEGIS_REPO}.git" \
+            --tag "v${AEGIS_VERSION}" \
+            --root "$TMPDIR/root" aegis-probe
     else
-        git clone --depth 1 "https://github.com/${AEGIS_REPO}.git" "$CLONE_DIR"
+        cargo install --locked --git "https://github.com/${AEGIS_REPO}.git" \
+            --root "$TMPDIR/root" aegis-probe
+    fi
+    cp "$TMPDIR/root/bin/aegis-probe" "$TMPDIR/aegis-probe"
+}
+
+install_completions() {
+    BIN="$1"
+    detect_completion_target
+
+    if [ -z "$COMPLETION_SHELL" ]; then
+        return 0
     fi
 
-    (cd "$CLONE_DIR" && cargo build --release -p aegis-cli -p aegis-probe)
-    cp "$CLONE_DIR/target/release/aegis" "$TMPDIR/aegis"
-    cp "$CLONE_DIR/target/release/aegis-probe" "$TMPDIR/aegis-probe"
-    chmod +x "$TMPDIR/aegis" "$TMPDIR/aegis-probe"
+    TMP_COMPLETION=$(mktemp)
+    "$BIN" completions "$COMPLETION_SHELL" > "$TMP_COMPLETION"
+    if [ -s "$TMP_COMPLETION" ]; then
+        install_file "$TMP_COMPLETION" "$COMPLETION_DIR" "$COMPLETION_FILE"
+    fi
+    rm -f "$TMP_COMPLETION"
 }
 
 main() {
-    # Parse flags
     for arg in "$@"; do
         case "$arg" in
             --uninstall) do_uninstall ;;
@@ -261,144 +274,47 @@ main() {
         esac
     done
 
-    printf "\n${BOLD}Aegis Installer${RESET}\n"
-    printf "AI Agent Security Intelligence Platform\n\n"
+    printf "\n${BOLD}Aegis Probe Installer${RESET}\n"
+    printf "Security testing for AI agents and models\n\n"
 
-    # Platform check
-    OS=$(uname -s)
-    if [ "$OS" != "Darwin" ]; then
-        warn "Aegis is designed for macOS (Seatbelt sandbox features require macOS)."
-        printf "  On other platforms, use: cargo install aegis-cli\n"
-        printf "  Core features (policy, audit, observation) will work.\n"
-        printf "  Kernel-level sandboxing will not be available.\n\n"
-
-        if ! command -v cargo >/dev/null 2>&1; then
-            error "Rust toolchain required on non-macOS. Install from https://rustup.rs"
-        fi
-
-        info "Installing via cargo"
-        cargo install aegis-cli
-        success "Aegis installed via cargo"
-        exit 0
-    fi
-
-    # Architecture detection
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        arm64)  TARGET="aarch64-apple-darwin" ;;
-        x86_64) TARGET="x86_64-apple-darwin" ;;
-        *)      error "Unsupported architecture: $ARCH" ;;
-    esac
-
-    info "Detected macOS $ARCH"
-
-    # Version resolution
     if [ -z "$AEGIS_VERSION" ]; then
-        info "Checking for latest release"
+        info "Resolving latest release"
         AEGIS_VERSION=$(get_latest_version)
     fi
 
-    # Check for existing installation
-    if command -v aegis >/dev/null 2>&1; then
-        EXISTING=$(aegis --version 2>/dev/null | head -1 || echo "unknown")
-        if [ -n "$AEGIS_VERSION" ]; then
-            printf "  Existing: %s\n" "$EXISTING"
-            printf "  Installing: v%s\n" "$AEGIS_VERSION"
-        else
-            printf "  Existing: %s\n" "$EXISTING"
-            printf "  Installing: latest from source\n"
-        fi
-    fi
-
-    # Create temp directory
     TMPDIR=$(mktemp -d)
-    trap 'rm -rf "$TMPDIR"' EXIT
+    trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
-    # Try downloading pre-built binary
-    INSTALLED_FROM="binary"
     if [ -n "$AEGIS_VERSION" ]; then
-        info "Downloading aegis v${AEGIS_VERSION}"
-        if ! try_download_binary "$AEGIS_VERSION" "$TMPDIR"; then
-            warn "No pre-built binary available for v${AEGIS_VERSION}"
+        info "Downloading aegis-probe v${AEGIS_VERSION}"
+        if ! download_release "$AEGIS_VERSION" "$TMPDIR"; then
+            warn "No compatible release archive found for this platform"
             build_from_source "$TMPDIR"
-            INSTALLED_FROM="source"
         fi
     else
-        warn "No releases found"
+        warn "Could not resolve a release version"
         build_from_source "$TMPDIR"
-        INSTALLED_FROM="source"
     fi
 
-    # Install binaries
-    info "Installing to ${AEGIS_INSTALL_DIR}"
-    install_file "$TMPDIR/aegis" "$AEGIS_INSTALL_DIR" "aegis"
-    if [ -f "$AEGIS_INSTALL_DIR/aegis" ]; then
-        chmod +x "$AEGIS_INSTALL_DIR/aegis" 2>/dev/null || sudo chmod +x "$AEGIS_INSTALL_DIR/aegis"
-    fi
+    info "Installing aegis-probe to ${AEGIS_INSTALL_DIR}"
+    install_file "$TMPDIR/aegis-probe" "$AEGIS_INSTALL_DIR" "aegis-probe"
+    run_or_sudo chmod 755 "$AEGIS_INSTALL_DIR/aegis-probe"
 
-    if [ -f "$TMPDIR/aegis-probe" ]; then
-        install_file "$TMPDIR/aegis-probe" "$AEGIS_INSTALL_DIR" "aegis-probe"
-        chmod +x "$AEGIS_INSTALL_DIR/aegis-probe" 2>/dev/null || sudo chmod +x "$AEGIS_INSTALL_DIR/aegis-probe"
-    fi
+    install_completions "$AEGIS_INSTALL_DIR/aegis-probe"
 
-    AEGIS_BIN="$AEGIS_INSTALL_DIR/aegis"
-    PROBE_BIN="$AEGIS_INSTALL_DIR/aegis-probe"
-
-    # Install shell completions
-    detect_completions_dir
-    if [ -n "$COMPLETIONS_DIR" ] && [ -n "$COMPLETIONS_SHELL" ]; then
-        info "Installing ${COMPLETIONS_SHELL} completions"
-        COMP_TMP="$TMPDIR/completion"
-        "$AEGIS_BIN" completions "$COMPLETIONS_SHELL" > "$COMP_TMP" 2>/dev/null || true
-        if [ -s "$COMP_TMP" ]; then
-            install_file "$COMP_TMP" "$COMPLETIONS_DIR" "$COMPLETIONS_FILE"
-        fi
-
-        # Also install aegis-probe completions
-        if [ -f "$PROBE_BIN" ]; then
-            PROBE_COMP_TMP="$TMPDIR/probe-completion"
-            case "$COMPLETIONS_SHELL" in
-                zsh)  PROBE_COMP_FILE="_aegis-probe" ;;
-                bash) PROBE_COMP_FILE="aegis-probe" ;;
-                fish) PROBE_COMP_FILE="aegis-probe.fish" ;;
-                *)    PROBE_COMP_FILE="" ;;
-            esac
-            if [ -n "$PROBE_COMP_FILE" ]; then
-                "$PROBE_BIN" completions "$COMPLETIONS_SHELL" > "$PROBE_COMP_TMP" 2>/dev/null || true
-                if [ -s "$PROBE_COMP_TMP" ]; then
-                    install_file "$PROBE_COMP_TMP" "$COMPLETIONS_DIR" "$PROBE_COMP_FILE"
-                fi
-            fi
-        fi
-    fi
-
-    # Install man page
-    info "Installing man page"
-    MAN_TMP="$TMPDIR/aegis.1"
-    "$AEGIS_BIN" manpage > "$MAN_TMP" 2>/dev/null || true
-    if [ -s "$MAN_TMP" ]; then
-        install_file "$MAN_TMP" "$AEGIS_MAN_DIR" "aegis.1"
-    fi
-
-    # Run setup
-    info "Running aegis setup"
-    "$AEGIS_BIN" setup 2>/dev/null || true
-
-    # Summary
-    VERSION_STR=$("$AEGIS_BIN" --version 2>/dev/null | head -1 || echo "aegis")
+    success "aegis-probe installed"
     printf "\n"
-    success "$VERSION_STR installed successfully (from $INSTALLED_FROM)"
-    printf "\n"
-    printf "  aegis:       %s\n" "$AEGIS_INSTALL_DIR/aegis"
-    [ -f "$PROBE_BIN" ] && printf "  aegis-probe: %s\n" "$AEGIS_INSTALL_DIR/aegis-probe"
-    [ -n "$COMPLETIONS_DIR" ] && printf "  Completions: %s\n" "$COMPLETIONS_DIR"
-    printf "  Man page:    %s/aegis.1\n" "$AEGIS_MAN_DIR"
+    printf "  Binary: %s/aegis-probe\n" "$AEGIS_INSTALL_DIR"
+    printf "  Version: %s\n" "$("$AEGIS_INSTALL_DIR/aegis-probe" --version | head -1)"
     printf "\n"
     printf "Get started:\n"
-    printf "  aegis-probe run --agent-binary claude  # test an agent's security\n"
-    printf "  aegis-probe validate --probes-dir probes  # validate probe files\n"
-    printf "  aegis-probe list --probes-dir probes  # list available probes\n"
-    printf "\n"
+    printf "  aegis-probe list --probes-dir probes\n"
+    printf "  aegis-probe run --agent-binary claude --category prompt_injection\n"
+    printf "  aegis-probe registry status\n"
+    if [ "$AEGIS_NO_MODIFY_PATH" != "1" ]; then
+        printf "\n"
+        printf "If %s is not on your PATH, add it before running aegis-probe.\n" "$AEGIS_INSTALL_DIR"
+    fi
 }
 
 main "$@"

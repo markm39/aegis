@@ -8,9 +8,7 @@ members = [
     "crates/aegis-sandbox",
     "crates/aegis-observer",
     "crates/aegis-pilot",
-    "crates/aegis-control",
     "crates/aegis-harness",
-    "crates/aegis-toolkit",
     "crates/aegis-probe",
 ]
 
@@ -61,13 +59,9 @@ aegis-ledger = { path = "crates/aegis-ledger" }
 aegis-sandbox = { path = "crates/aegis-sandbox" }
 aegis-observer = { path = "crates/aegis-observer" }
 aegis-pilot = { path = "crates/aegis-pilot" }
-aegis-control = { path = "crates/aegis-control" }
-aegis-toolkit = { path = "crates/aegis-toolkit" }
 aegis-harness = { path = "crates/aegis-harness" }
 
 memmap2 = "0.9"
-futures-util = "0.3"
-axum = { version = "0.8", features = ["json", "ws"] }
 nix = { version = "0.29", features = ["fs", "process", "term", "poll", "signal"] }
 libc = "0.2"
 regex = "1"

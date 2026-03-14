@@ -5,13 +5,13 @@
 //! sessions, filtered queries, policy snapshots, and compliance statistics.
 
 pub mod async_pipeline;
-pub mod ndjson_log;
 pub mod channel_audit;
 pub mod entry;
 pub mod filter;
 pub mod fs_audit;
 pub mod integrity;
 pub mod middleware;
+pub mod ndjson_log;
 pub(crate) mod parse_helpers;
 pub mod policy_snapshot;
 pub mod query;

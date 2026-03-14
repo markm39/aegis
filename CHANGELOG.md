@@ -29,22 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-agent benchmarking (`benchmark` subcommand)
 - Behavioral fingerprinting: SHA-256 hash of verdict vectors for cross-model comparison (`fingerprint` subcommand)
 - Similarity analysis between agent fingerprints with per-category deltas (`similarity` subcommand)
+- Distillation analysis between two reports (`distillation` subcommand)
 - Shell completions for bash, zsh, fish, elvish, PowerShell
-- Opt-in anonymized telemetry with local management (`telemetry` subcommand)
 - GitHub Actions composite action for CI/CD integration
 - Dry-run mode for validating probe selection without execution
 - Custom probe authoring via TOML format
+- SARIF report output for GitHub code scanning and enterprise security tooling
+- CI gating controls via `--fail-on` and `--min-score`
+- Stable report metadata including `schema_version`, `runner_version`, `probe_pack_hash`, platform metadata, and detected CI context
+- Derived-only registry bundle export and upload via `registry status|export|upload`
 
-#### Core Platform
-- Chat TUI with streaming LLM responses and tool execution
-- Cedar policy engine for tool call authorization
-- PTY-based agent supervision with prompt detection and stall nudging
-- Seatbelt kernel-level sandboxing on macOS
-- FSEvents filesystem monitoring with snapshot diffing
-- Tamper-evident SHA-256 hash-chained audit ledger
-- Multi-agent fleet orchestration with crash recovery
-- Bidirectional Telegram bot for remote control
-- 64 bundled skill plugins
-- MCP server integration
+### Changed
+
+- Aegis now ships one public product surface: `aegis-probe`
+- Compare, similarity, and distillation workflows now reject mismatched probe packs when both reports carry compatibility metadata
+- Hosted aggregation is positioned around derived-only registry bundles rather than raw transcript collection
+- The default product workspace excludes the older control-plane and toolkit crates
+
+### Removed
+
+- Public `telemetry` branding in favor of the explicit `registry` workflow
+- Separate runtime/install surface for a non-probe `aegis` binary
 
 [0.1.0]: https://github.com/markm39/aegis/releases/tag/v0.1.0

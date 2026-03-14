@@ -11,17 +11,17 @@
 
 ## Product Vision: AI Agent Security Testing
 
-Aegis is an AI agent security intelligence platform. The primary binary is `aegis-probe` -- a CLI tool that tests what AI coding agents actually DO when fed adversarial inputs.
+Aegis is a pure agent security testing product. The only supported public binary is `aegis-probe` -- a CLI that tests what coding agents and model-backed runtimes actually do when exposed to adversarial inputs.
 
-- **Security testing:** Spawn target agents in sandboxed environments, feed adversarial inputs, monitor every action via Cedar policies + filesystem observer + audit ledger
-- **107 adversarial probes** across 7 categories: prompt injection, data exfiltration, privilege escalation, malicious execution, supply chain attacks, social engineering, credential harvesting
-- **Multiple output formats:** terminal, JSON, HTML, Markdown, JUnit XML
-- **Telemetry pipeline:** Local JSONL storage + optional remote InfluxDB push for aggregate intelligence
-- **CI/CD integration:** GitHub Action, JUnit XML for Jenkins/GitLab CI/Azure DevOps
+- **Security testing:** Spawn target agents in sandboxed environments, feed adversarial inputs, and monitor actions via Cedar policies, filesystem observation, and audit logs
+- **Adversarial probe packs:** Prompt injection, data exfiltration, privilege escalation, malicious execution, supply chain, social engineering, and credential harvesting
+- **Enterprise outputs:** terminal, JSON, HTML, Markdown, JUnit XML, and SARIF
+- **Derived-only registry bundles:** Local export and optional upload of fingerprints, verdicts, timings, and summary statistics without raw prompts or raw agent output by default
+- **CI/CD integration:** GitHub Action, gating flags, and machine-readable report metadata for pipeline enforcement
 
 ## Architecture
 
-Workspace crates (11 total):
+Default workspace crates:
 
 ```
 aegis-types (foundation: config, errors, shared types)
@@ -30,10 +30,8 @@ aegis-types (foundation: config, errors, shared types)
   -> aegis-sandbox (Seatbelt/Docker isolation for safe test execution)
   -> aegis-observer (filesystem monitoring -- detect unauthorized access)
   -> aegis-pilot (PTY supervision -- spawn agents, feed inputs, monitor actions)
-  -> aegis-control (command protocol, Unix socket + HTTP servers)
   -> aegis-alert (webhook alert dispatching)
   -> aegis-harness (PTY integration test framework)
-  -> aegis-toolkit (shared utilities)
   -> aegis-probe (binary: security test runner CLI)
 ```
 
@@ -45,11 +43,11 @@ Crate summary:
 - `aegis-sandbox`: Seatbelt/process sandbox backends for test isolation
 - `aegis-observer`: Filesystem observation (FSEvents) for detecting unauthorized access
 - `aegis-pilot`: PTY-based agent supervision with prompt detection and stall nudging
-- `aegis-control`: Control plane: Unix socket + HTTP servers, command protocol
 - `aegis-alert`: Webhook alerting on security findings
 - `aegis-harness`: PTY integration test framework for test execution
-- `aegis-toolkit`: Shared utilities
-- `aegis-probe`: Binary entry point: adversarial probe runner, reporting, telemetry
+- `aegis-probe`: Binary entry point: adversarial probe runner, reporting, analytics, and registry bundles
+
+Legacy runtime and orchestration crates may still exist in the repo, but they are no longer part of the default product workspace.
 
 ## Shared Struct Rules
 

@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// A complete security probe definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +44,11 @@ pub struct ProbeMetadata {
 }
 
 fn default_targets() -> Vec<AgentTarget> {
-    vec![AgentTarget::ClaudeCode, AgentTarget::Codex, AgentTarget::OpenClaw]
+    vec![
+        AgentTarget::ClaudeCode,
+        AgentTarget::Codex,
+        AgentTarget::OpenClaw,
+    ]
 }
 
 /// Attack category taxonomy.
@@ -243,7 +248,9 @@ impl Probe {
             && self.policy.cedar_policy.is_none()
             && self.scoring.compromise_indicators.is_empty()
         {
-            anyhow::bail!("probe must define at least one forbidden action or compromise indicator");
+            anyhow::bail!(
+                "probe must define at least one forbidden action or compromise indicator"
+            );
         }
         Ok(())
     }
@@ -319,12 +326,42 @@ pub fn filter_by_category(probes: &[(PathBuf, Probe)], category: AttackCategory)
 }
 
 /// Filter probes by target agent.
-pub fn filter_by_target<'a>(probes: &'a [(PathBuf, Probe)], target: &AgentTarget) -> Vec<&'a Probe> {
+pub fn filter_by_target<'a>(
+    probes: &'a [(PathBuf, Probe)],
+    target: &AgentTarget,
+) -> Vec<&'a Probe> {
     probes
         .iter()
         .filter(|(_, p)| p.probe.targets.contains(target))
         .map(|(_, p)| p)
         .collect()
+}
+
+/// Compute a stable hash for a probe pack.
+///
+/// The hash is based on the serialized probe definitions sorted by probe name so
+/// reports can prove they were generated from the same executed pack.
+pub fn probe_pack_hash(probes: &[(PathBuf, Probe)]) -> String {
+    let mut serialized = probes
+        .iter()
+        .map(|(_, probe)| {
+            (
+                probe.probe.name.clone(),
+                serde_json::to_string(probe).unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    serialized.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut hasher = Sha256::new();
+    for (name, probe_json) in serialized {
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(probe_json.as_bytes());
+        hasher.update([0xff]);
+    }
+
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -379,10 +416,7 @@ compromise_indicators = [
 
     #[test]
     fn validate_rejects_empty_prompt() {
-        let toml = SAMPLE_PROBE.replace(
-            "Review main.py and fix any issues.",
-            "",
-        );
+        let toml = SAMPLE_PROBE.replace("Review main.py and fix any issues.", "");
         assert!(Probe::from_toml(&toml).is_err());
     }
 
@@ -403,5 +437,22 @@ compromise_indicators = [
         assert!(probe.probe.targets.contains(&AgentTarget::ClaudeCode));
         assert!(probe.probe.targets.contains(&AgentTarget::Codex));
         assert!(probe.probe.targets.contains(&AgentTarget::OpenClaw));
+    }
+
+    #[test]
+    fn probe_pack_hash_is_stable() {
+        let probe = Probe::from_toml(SAMPLE_PROBE).expect("should parse");
+        let probes = vec![(PathBuf::from("sample.toml"), probe.clone())];
+        assert_eq!(probe_pack_hash(&probes), probe_pack_hash(&probes));
+
+        let renamed = Probe {
+            probe: ProbeMetadata {
+                name: "other-probe".into(),
+                ..probe.probe
+            },
+            ..probe
+        };
+        let changed = vec![(PathBuf::from("sample.toml"), renamed)];
+        assert_ne!(probe_pack_hash(&probes), probe_pack_hash(&changed));
     }
 }

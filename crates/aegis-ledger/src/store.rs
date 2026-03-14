@@ -13,12 +13,12 @@ use aegis_alert::AlertEvent;
 use aegis_types::{Action, AegisError, Verdict};
 
 use crate::channel_audit::ChannelAuditEntry;
-use crate::redaction::PiiRedactor;
 use crate::entry::AuditEntry;
 use crate::fs_audit::FsAuditEntry;
 use crate::integrity::IntegrityReport;
 use crate::middleware::AuditMiddleware;
 use crate::query::row_to_entry;
+use crate::redaction::PiiRedactor;
 
 /// The sentinel value used as prev_hash for the very first entry.
 const GENESIS_HASH: &str = "genesis";

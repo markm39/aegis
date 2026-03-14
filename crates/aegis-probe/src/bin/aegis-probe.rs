@@ -10,18 +10,18 @@ use std::process;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 use aegis_probe::report;
 use aegis_probe::runner::{self, MockMode, RunnerConfig};
-use aegis_probe::scoring;
+use aegis_probe::scoring::{self, ReportContext};
 use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
 
 #[derive(Parser)]
 #[command(
     name = "aegis-probe",
-    about = "AI agent security testing -- adversarial probes for coding agents",
+    about = "Security testing for AI agents and models",
     version,
     after_help = "Examples:\n  \
         aegis-probe run                              # Test Claude Code with all probes\n  \
@@ -29,9 +29,11 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
         aegis-probe run --agent mock-vulnerable      # Simulate a vulnerable agent (no API needed)\n  \
         aegis-probe run --agent mock-safe            # Simulate a safe agent (no API needed)\n  \
         aegis-probe run --category prompt_injection  # Only prompt injection probes\n  \
+        aegis-probe run --format sarif > report.sarif # Emit SARIF\n  \
         aegis-probe run -o report.json               # Save JSON report to file\n  \
         aegis-probe list                             # Show available probes\n  \
         aegis-probe validate                         # Check probe files are valid\n  \
+        aegis-probe registry export report.json      # Export derived-only bundle\n  \
         aegis-probe summary report.json              # Print one-line summary from report"
 )]
 struct Cli {
@@ -71,7 +73,7 @@ enum Command {
         #[arg(long)]
         no_sandbox: bool,
 
-        /// Output format: terminal, json, html, markdown, or junit.
+        /// Output format: terminal, json, html, markdown, junit, or sarif.
         #[arg(long, default_value = "terminal")]
         format: String,
 
@@ -91,13 +93,17 @@ enum Command {
         #[arg(short, long, default_value = "1")]
         jobs: usize,
 
-        /// Enable anonymous telemetry collection (or set AEGIS_TELEMETRY=1).
-        #[arg(long)]
-        telemetry: bool,
-
         /// Preserve raw agent output text in results (for fingerprinting/analysis).
         #[arg(long)]
         capture_output: bool,
+
+        /// Exit non-zero when this severity gate is violated.
+        #[arg(long, value_enum)]
+        fail_on: Option<FailOn>,
+
+        /// Exit non-zero when the final score is below this threshold.
+        #[arg(long)]
+        min_score: Option<u32>,
     },
 
     /// List available probes.
@@ -138,10 +144,10 @@ enum Command {
         shell: Shell,
     },
 
-    /// View or manage local telemetry data.
-    Telemetry {
+    /// Export or upload derived-only registry bundles.
+    Registry {
         #[command(subcommand)]
-        action: TelemetryAction,
+        action: RegistryAction,
     },
 
     /// Run the full benchmark suite and output a standardized scorecard.
@@ -234,17 +240,29 @@ enum Command {
 }
 
 #[derive(Subcommand)]
-enum TelemetryAction {
-    /// Show telemetry status and event count.
+enum RegistryAction {
+    /// Show registry configuration and compatibility state.
     Status,
-    /// Export telemetry events as JSON.
-    Export,
-    /// Push local telemetry to a remote InfluxDB endpoint.
-    ///
-    /// Requires AEGIS_TELEMETRY_URL (and optionally AEGIS_TELEMETRY_TOKEN).
-    Push,
-    /// Delete all local telemetry data.
-    Clear,
+    /// Export a derived-only bundle from a local report.
+    Export {
+        /// Path to a local JSON report.
+        report: PathBuf,
+        /// Write the bundle to a file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Upload a derived-only bundle from a local report.
+    Upload {
+        /// Path to a local JSON report.
+        report: PathBuf,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum FailOn {
+    Fail,
+    Partial,
+    Critical,
 }
 
 fn main() {
@@ -274,14 +292,10 @@ fn main() {
             output,
             dry_run,
             jobs,
-            telemetry,
             capture_output,
+            fail_on,
+            min_score,
         } => {
-            // Enable telemetry via flag
-            if telemetry {
-                std::env::set_var("AEGIS_TELEMETRY", "1");
-            }
-
             cmd_run(&RunOptions {
                 agent: &agent,
                 agent_binary,
@@ -296,6 +310,8 @@ fn main() {
                 dry_run,
                 jobs: jobs.max(1),
                 capture_output,
+                fail_on,
+                min_score,
             });
         }
         Command::List {
@@ -321,8 +337,8 @@ fn main() {
                 &mut std::io::stdout(),
             );
         }
-        Command::Telemetry { action } => {
-            cmd_telemetry(action);
+        Command::Registry { action } => {
+            cmd_registry(action);
         }
         Command::Benchmark {
             agents,
@@ -386,9 +402,16 @@ struct RunOptions<'a> {
     dry_run: bool,
     jobs: usize,
     capture_output: bool,
+    fail_on: Option<FailOn>,
+    min_score: Option<u32>,
 }
 
 fn cmd_run(opts: &RunOptions<'_>) {
+    if opts.min_score.is_some_and(|score| score > 100) {
+        eprintln!("--min-score must be between 0 and 100.");
+        process::exit(1);
+    }
+
     // Parse agent target
     let target = parse_agent_target(opts.agent);
 
@@ -402,7 +425,10 @@ fn cmd_run(opts: &RunOptions<'_>) {
     let probes = match testcase::load_probes(opts.probes_dir) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("Error loading probes from {}: {e}", opts.probes_dir.display());
+            eprintln!(
+                "Error loading probes from {}: {e}",
+                opts.probes_dir.display()
+            );
             process::exit(1);
         }
     };
@@ -444,6 +470,10 @@ fn cmd_run(opts: &RunOptions<'_>) {
         process::exit(1);
     }
 
+    let report_context = ReportContext {
+        probe_pack_hash: testcase::probe_pack_hash(&filtered),
+    };
+
     // Build runner config
     let config = RunnerConfig {
         target: target.clone(),
@@ -481,7 +511,11 @@ fn cmd_run(opts: &RunOptions<'_>) {
     eprintln!(
         "\nRunning {} probes against {}{}...\n",
         filtered.len(),
-        if mock_mode.is_some() { opts.agent } else { &format!("{target:?}") },
+        if mock_mode.is_some() {
+            opts.agent
+        } else {
+            &format!("{target:?}")
+        },
         if jobs > 1 {
             format!(" ({jobs} parallel)")
         } else {
@@ -500,36 +534,16 @@ fn cmd_run(opts: &RunOptions<'_>) {
 
     // Generate final report
     let agent_name = format!("{target:?}");
-    let final_report = scoring::compute_report(&agent_name, results);
-
-    // Record telemetry if enabled (local + optional remote push)
-    aegis_probe::telemetry::record_report(&final_report);
-
-    // Auto-push to remote if AEGIS_TELEMETRY_URL is set
-    if aegis_probe::telemetry::is_enabled() {
-        if let Some(remote) = aegis_probe::telemetry::remote_config() {
-            let events: Vec<_> = final_report
-                .results
-                .iter()
-                .map(aegis_probe::telemetry::result_to_event)
-                .collect();
-            match aegis_probe::telemetry::push_remote(&events, &remote) {
-                Ok(n) => eprintln!("Telemetry: pushed {n} events to remote."),
-                Err(e) => eprintln!("Telemetry push warning: {e}"),
-            }
-        }
-    }
+    let final_report = scoring::compute_report_with_context(&agent_name, results, &report_context);
 
     match opts.format {
-        "json" => {
-            match report::render_json(&final_report) {
-                Ok(json) => println!("{json}"),
-                Err(e) => {
-                    eprintln!("Error serializing report: {e}");
-                    process::exit(1);
-                }
+        "json" => match report::render_json(&final_report) {
+            Ok(json) => println!("{json}"),
+            Err(e) => {
+                eprintln!("Error serializing report: {e}");
+                process::exit(1);
             }
-        }
+        },
         "html" => {
             print!("{}", report::render_html(&final_report));
         }
@@ -539,6 +553,13 @@ fn cmd_run(opts: &RunOptions<'_>) {
         "junit" | "xml" => {
             print!("{}", report::render_junit(&final_report));
         }
+        "sarif" => match report::render_sarif(&final_report) {
+            Ok(sarif) => println!("{sarif}"),
+            Err(e) => {
+                eprintln!("Error serializing SARIF report: {e}");
+                process::exit(1);
+            }
+        },
         _ => {
             print!("{}", report::render_report(&final_report));
         }
@@ -561,8 +582,17 @@ fn cmd_run(opts: &RunOptions<'_>) {
         }
     }
 
-    // Exit with non-zero code if there are failures
-    if final_report.summary.failed > 0 {
+    if let Some(min_score) = opts.min_score {
+        if final_report.score < min_score {
+            eprintln!(
+                "Score gate failed: report score {} is below required minimum {}.",
+                final_report.score, min_score
+            );
+            process::exit(1);
+        }
+    }
+
+    if should_fail_run(&final_report, opts.fail_on) {
         process::exit(1);
     }
 }
@@ -587,7 +617,10 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>) {
         })
         .collect();
 
-    println!("\n{:<35} {:<22} {:<10} Targets", "NAME", "CATEGORY", "SEVERITY");
+    println!(
+        "\n{:<35} {:<22} {:<10} Targets",
+        "NAME", "CATEGORY", "SEVERITY"
+    );
     println!("{}", "-".repeat(90));
 
     for (_path, probe) in &filtered {
@@ -689,6 +722,7 @@ fn cmd_summary(report_path: &Path) {
 fn cmd_compare(baseline_path: &Path, current_path: &Path) {
     let baseline = load_report(baseline_path);
     let current = load_report(current_path);
+    ensure_compatible_reports(&baseline, &current);
 
     // Score delta
     let score_delta = current.score as i32 - baseline.score as i32;
@@ -701,10 +735,13 @@ fn cmd_compare(baseline_path: &Path, current_path: &Path) {
         "\nScore: {} -> {} ({})",
         baseline.score, current.score, delta_str,
     );
-    println!(
-        "Agent: {} -> {}",
-        baseline.agent, current.agent
-    );
+    println!("Agent: {} -> {}", baseline.agent, current.agent);
+    if !current.metadata.probe_pack_hash.is_empty() {
+        println!(
+            "Probe pack: {}",
+            &current.metadata.probe_pack_hash[..current.metadata.probe_pack_hash.len().min(16)]
+        );
+    }
 
     // Build probe result maps
     let baseline_map: std::collections::HashMap<&str, &scoring::ProbeResult> = baseline
@@ -776,7 +813,11 @@ fn cmd_compare(baseline_path: &Path, current_path: &Path) {
         }
     }
 
-    if regressions.is_empty() && improvements.is_empty() && new_probes.is_empty() && removed_probes.is_empty() {
+    if regressions.is_empty()
+        && improvements.is_empty()
+        && new_probes.is_empty()
+        && removed_probes.is_empty()
+    {
         println!("\nNo changes between reports.");
     }
 
@@ -814,6 +855,27 @@ fn load_report(path: &Path) -> scoring::SecurityReport {
     }
 }
 
+fn ensure_compatible_reports(a: &scoring::SecurityReport, b: &scoring::SecurityReport) {
+    let hash_a = a.metadata.probe_pack_hash.trim();
+    let hash_b = b.metadata.probe_pack_hash.trim();
+    if !hash_a.is_empty() && !hash_b.is_empty() && hash_a != hash_b {
+        eprintln!("Reports were generated from different probe packs.");
+        eprintln!("A: {hash_a}");
+        eprintln!("B: {hash_b}");
+        process::exit(1);
+    }
+}
+
+fn should_fail_run(report: &scoring::SecurityReport, fail_on: Option<FailOn>) -> bool {
+    match fail_on.unwrap_or(FailOn::Fail) {
+        FailOn::Fail => report.summary.failed > 0 || report.summary.errors > 0,
+        FailOn::Partial => {
+            report.summary.partial > 0 || report.summary.failed > 0 || report.summary.errors > 0
+        }
+        FailOn::Critical => report.summary.critical_findings > 0 || report.summary.errors > 0,
+    }
+}
+
 fn cmd_fingerprint(report_path: &Path) {
     let report = load_report(report_path);
     let fp = aegis_probe::fingerprint::extract_fingerprint(&report);
@@ -830,17 +892,24 @@ fn cmd_fingerprint(report_path: &Path) {
 fn cmd_similarity(path_a: &Path, path_b: &Path) {
     let report_a = load_report(path_a);
     let report_b = load_report(path_b);
+    ensure_compatible_reports(&report_a, &report_b);
 
     let fp_a = aegis_probe::fingerprint::extract_fingerprint(&report_a);
     let fp_b = aegis_probe::fingerprint::extract_fingerprint(&report_b);
     let result = aegis_probe::fingerprint::compare_fingerprints(&fp_a, &fp_b);
 
-    println!("\nBehavioral Similarity: {} vs {}", result.agent_a, result.agent_b);
+    println!(
+        "\nBehavioral Similarity: {} vs {}",
+        result.agent_a, result.agent_b
+    );
     println!("{}", "=".repeat(55));
     println!("Overall similarity: {:.1}%", result.similarity * 100.0);
     println!("Exact behavioral match: {}", result.exact_match);
 
-    println!("\n{:<25} {:>10} {:>10} {:>10}", "CATEGORY", &result.agent_a, &result.agent_b, "DELTA");
+    println!(
+        "\n{:<25} {:>10} {:>10} {:>10}",
+        "CATEGORY", &result.agent_a, &result.agent_b, "DELTA"
+    );
     println!("{}", "-".repeat(55));
 
     for cs in &result.category_similarity {
@@ -859,7 +928,13 @@ fn cmd_similarity(path_a: &Path, path_b: &Path) {
     println!();
 }
 
-fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize, output_dir: &Path) {
+fn cmd_benchmark(
+    agents_str: &str,
+    probes_dir: &Path,
+    timeout: u64,
+    jobs: usize,
+    output_dir: &Path,
+) {
     let agent_names: Vec<&str> = agents_str.split(',').map(|s| s.trim()).collect();
 
     if agent_names.is_empty() {
@@ -905,6 +980,10 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
             continue;
         }
 
+        let report_context = ReportContext {
+            probe_pack_hash: testcase::probe_pack_hash(&filtered),
+        };
+
         let config = RunnerConfig {
             target: target.clone(),
             agent_binary: binary,
@@ -927,7 +1006,7 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
         };
 
         let agent_label = format!("{target:?}");
-        let report = scoring::compute_report(&agent_label, results);
+        let report = scoring::compute_report_with_context(&agent_label, results, &report_context);
 
         // Write individual report
         let report_path = output_dir.join(format!("{agent_name}.json"));
@@ -957,7 +1036,10 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
     eprintln!("BENCHMARK RESULTS");
     eprintln!("{}", "=".repeat(60));
 
-    println!("\n{:<20} {:>6} {:>8} {:>8} {:>8} {:>8}", "AGENT", "SCORE", "PASSED", "FAILED", "PARTIAL", "ERRORS");
+    println!(
+        "\n{:<20} {:>6} {:>8} {:>8} {:>8} {:>8}",
+        "AGENT", "SCORE", "PASSED", "FAILED", "PARTIAL", "ERRORS"
+    );
     println!("{}", "-".repeat(60));
 
     for (name, report) in &all_reports {
@@ -974,7 +1056,9 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
     println!();
 
     // Per-category breakdown
-    println!("{:<20} {:>15} {:>15} {:>15}", "CATEGORY",
+    println!(
+        "{:<20} {:>15} {:>15} {:>15}",
+        "CATEGORY",
         all_reports.first().map(|(n, _)| n.as_str()).unwrap_or(""),
         all_reports.get(1).map(|(n, _)| n.as_str()).unwrap_or(""),
         all_reports.get(2).map(|(n, _)| n.as_str()).unwrap_or(""),
@@ -982,8 +1066,12 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
     println!("{}", "-".repeat(65));
 
     let categories = [
-        "PromptInjection", "DataExfiltration", "PrivilegeEscalation",
-        "MaliciousExecution", "SupplyChain", "SocialEngineering",
+        "PromptInjection",
+        "DataExfiltration",
+        "PrivilegeEscalation",
+        "MaliciousExecution",
+        "SupplyChain",
+        "SocialEngineering",
         "CredentialHarvesting",
     ];
 
@@ -1018,97 +1106,82 @@ fn cmd_benchmark(agents_str: &str, probes_dir: &Path, timeout: u64, jobs: usize,
     }
 }
 
-fn cmd_telemetry(action: TelemetryAction) {
-    let path = aegis_probe::telemetry::default_telemetry_path();
-
+fn cmd_registry(action: RegistryAction) {
     match action {
-        TelemetryAction::Status => {
-            let enabled = aegis_probe::telemetry::is_enabled();
-            println!("Telemetry: {}", if enabled { "enabled" } else { "disabled" });
-            println!("Data file: {}", path.display());
-
-            if path.exists() {
-                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                let count = content.lines().filter(|l| !l.is_empty()).count();
-                let size = std::fs::metadata(&path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                println!("Events: {count}");
-                println!("Size: {:.1} KB", size as f64 / 1024.0);
-            } else {
-                println!("Events: 0 (no data file)");
-            }
-
-            println!("\nTo enable: aegis-probe run --telemetry");
-            println!("Or set:    AEGIS_TELEMETRY=1");
-        }
-        TelemetryAction::Export => {
-            if !path.exists() {
-                eprintln!("No telemetry data found at {}", path.display());
-                process::exit(1);
-            }
-
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error reading {}: {e}", path.display());
-                    process::exit(1);
-                }
-            };
-
-            // Parse JSONL into JSON array
-            let events: Vec<serde_json::Value> = content
-                .lines()
-                .filter(|l| !l.is_empty())
-                .filter_map(|l| serde_json::from_str(l).ok())
-                .collect();
-
-            match serde_json::to_string_pretty(&events) {
-                Ok(json) => println!("{json}"),
-                Err(e) => {
-                    eprintln!("Error serializing: {e}");
-                    process::exit(1);
-                }
-            }
-        }
-        TelemetryAction::Push => {
-            let config = match aegis_probe::telemetry::remote_config() {
-                Some(c) => c,
-                None => {
-                    eprintln!("AEGIS_TELEMETRY_URL is not set.");
-                    eprintln!("Set it to an InfluxDB v2 write endpoint, e.g.:");
-                    eprintln!("  export AEGIS_TELEMETRY_URL='https://your-influxdb/api/v2/write?org=aegis&bucket=probes'");
-                    eprintln!("  export AEGIS_TELEMETRY_TOKEN='your-token'  # optional");
-                    process::exit(1);
-                }
-            };
-
-            let events = aegis_probe::telemetry::read_local_events();
-            if events.is_empty() {
-                println!("No local telemetry events to push.");
-                return;
-            }
-
-            eprintln!("Pushing {} events to {}...", events.len(), config.url);
-            match aegis_probe::telemetry::push_remote(&events, &config) {
-                Ok(n) => println!("Pushed {n} events."),
-                Err(e) => {
-                    eprintln!("Push failed: {e}");
-                    process::exit(1);
-                }
-            }
-        }
-        TelemetryAction::Clear => {
-            if path.exists() {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => println!("Telemetry data cleared: {}", path.display()),
-                    Err(e) => {
-                        eprintln!("Error deleting {}: {e}", path.display());
-                        process::exit(1);
+        RegistryAction::Status => match aegis_probe::registry::registry_config() {
+            Some(config) => {
+                println!("Registry: configured");
+                println!("URL: {}", config.url);
+                println!(
+                    "Auth token: {}",
+                    if config.token.is_some() {
+                        "present"
+                    } else {
+                        "not set"
                     }
+                );
+                println!(
+                    "Env mode: {}",
+                    if config.using_legacy_aliases {
+                        "legacy telemetry aliases"
+                    } else {
+                        "registry env vars"
+                    }
+                );
+            }
+            None => {
+                println!("Registry: unconfigured");
+                println!("Set AEGIS_REGISTRY_URL to enable uploads.");
+                println!("Optional: set AEGIS_REGISTRY_TOKEN for bearer auth.");
+                println!("Deprecated aliases still accepted: AEGIS_TELEMETRY_URL/TOKEN");
+            }
+        },
+        RegistryAction::Export { report, output } => {
+            let report = load_report(&report);
+            let bundle = aegis_probe::registry::bundle_from_report(&report);
+            let json = match serde_json::to_string_pretty(&bundle) {
+                Ok(json) => json,
+                Err(e) => {
+                    eprintln!("Error serializing registry bundle: {e}");
+                    process::exit(1);
                 }
+            };
+
+            if let Some(output_path) = output {
+                if let Err(e) = std::fs::write(&output_path, &json) {
+                    eprintln!("Error writing {}: {e}", output_path.display());
+                    process::exit(1);
+                }
+                println!("Registry bundle written to {}", output_path.display());
             } else {
-                println!("No telemetry data to clear.");
+                println!("{json}");
+            }
+        }
+        RegistryAction::Upload { report } => {
+            let config = match aegis_probe::registry::registry_config() {
+                Some(config) => config,
+                None => {
+                    eprintln!("Registry is not configured.");
+                    eprintln!("Set AEGIS_REGISTRY_URL and optionally AEGIS_REGISTRY_TOKEN.");
+                    process::exit(1);
+                }
+            };
+
+            let report = load_report(&report);
+            let bundle = aegis_probe::registry::bundle_from_report(&report);
+
+            if config.using_legacy_aliases {
+                eprintln!(
+                    "Warning: using deprecated telemetry env aliases. Switch to AEGIS_REGISTRY_URL/TOKEN."
+                );
+            }
+
+            match aegis_probe::registry::upload_bundle(&bundle, &config) {
+                Ok(()) => println!("Registry upload complete."),
+                Err(e) => {
+                    eprintln!("Registry upload failed: {e}");
+                    process::exit(1);
+                }
             }
         }
     }
@@ -1246,70 +1319,64 @@ fn run_probes_parallel(
             let counter = Arc::clone(&counter);
             let results = Arc::clone(&results);
 
-            scope.spawn(move || {
-                loop {
-                    let idx = {
-                        let mut wi = work_index.lock().unwrap();
-                        let i = *wi;
-                        if i >= total {
-                            return;
+            scope.spawn(move || loop {
+                let idx = {
+                    let mut wi = work_index.lock().unwrap();
+                    let i = *wi;
+                    if i >= total {
+                        return;
+                    }
+                    *wi += 1;
+                    i
+                };
+
+                let (_path, probe) = &probes[idx];
+
+                let seq = {
+                    let mut c = counter.lock().unwrap();
+                    *c += 1;
+                    *c
+                };
+
+                eprintln!(
+                    "[{}/{}] {} ({:?}, {:?})",
+                    seq, total, probe.probe.name, probe.probe.category, probe.probe.severity,
+                );
+
+                let result = match runner::run_probe(probe, config) {
+                    Ok(r) => {
+                        let icon = match r.verdict {
+                            scoring::Verdict::Pass => "PASS",
+                            scoring::Verdict::Partial => "PARTIAL",
+                            scoring::Verdict::Error => "ERROR",
+                            scoring::Verdict::Fail => "FAIL",
+                        };
+                        eprintln!("        -> {icon} ({})", probe.probe.name);
+                        r
+                    }
+                    Err(e) => {
+                        eprintln!("        -> ERROR ({}): {e}", probe.probe.name);
+                        scoring::ProbeResult {
+                            probe_name: probe.probe.name.clone(),
+                            category: probe.probe.category,
+                            severity: probe.probe.severity,
+                            verdict: scoring::Verdict::Error,
+                            findings: vec![scoring::Finding {
+                                description: format!("Runner error: {e}"),
+                                kind: scoring::FindingKind::ForbiddenAction,
+                                severity: testcase::Severity::Critical,
+                                evidence: None,
+                            }],
+                            agent: format!("{target:?}"),
+                            duration_ms: 0,
+                            timestamp: chrono::Utc::now(),
+                            output_length: 0,
+                            agent_output: None,
                         }
-                        *wi += 1;
-                        i
-                    };
+                    }
+                };
 
-                    let (_path, probe) = &probes[idx];
-
-                    let seq = {
-                        let mut c = counter.lock().unwrap();
-                        *c += 1;
-                        *c
-                    };
-
-                    eprintln!(
-                        "[{}/{}] {} ({:?}, {:?})",
-                        seq,
-                        total,
-                        probe.probe.name,
-                        probe.probe.category,
-                        probe.probe.severity,
-                    );
-
-                    let result = match runner::run_probe(probe, config) {
-                        Ok(r) => {
-                            let icon = match r.verdict {
-                                scoring::Verdict::Pass => "PASS",
-                                scoring::Verdict::Partial => "PARTIAL",
-                                scoring::Verdict::Error => "ERROR",
-                                scoring::Verdict::Fail => "FAIL",
-                            };
-                            eprintln!("        -> {icon} ({})", probe.probe.name);
-                            r
-                        }
-                        Err(e) => {
-                            eprintln!("        -> ERROR ({}): {e}", probe.probe.name);
-                            scoring::ProbeResult {
-                                probe_name: probe.probe.name.clone(),
-                                category: probe.probe.category,
-                                severity: probe.probe.severity,
-                                verdict: scoring::Verdict::Error,
-                                findings: vec![scoring::Finding {
-                                    description: format!("Runner error: {e}"),
-                                    kind: scoring::FindingKind::ForbiddenAction,
-                                    severity: testcase::Severity::Critical,
-                                    evidence: None,
-                                }],
-                                agent: format!("{target:?}"),
-                                duration_ms: 0,
-                                timestamp: chrono::Utc::now(),
-                                output_length: 0,
-                                agent_output: None,
-                            }
-                        }
-                    };
-
-                    results.lock().unwrap().push((idx, result));
-                }
+                results.lock().unwrap().push((idx, result));
             });
         }
     });
@@ -1465,6 +1532,10 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
         process::exit(1);
     }
 
+    let report_context = ReportContext {
+        probe_pack_hash: testcase::probe_pack_hash(&filtered),
+    };
+
     let config = runner::RunnerConfig {
         target: target.clone(),
         agent_binary: binary,
@@ -1494,7 +1565,7 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
         };
 
         let agent_name = format!("{target:?}");
-        let report = scoring::compute_report(&agent_name, results);
+        let report = scoring::compute_report_with_context(&agent_name, results, &report_context);
         eprintln!(
             "  Score: {}/100 ({}/{} passed)\n",
             report.score, report.summary.passed, report.summary.total_probes
@@ -1560,7 +1631,10 @@ fn render_multi_run_terminal(report: &aegis_probe::stats::MultiRunReport) {
 
     // Category breakdown
     if !report.aggregate.category_pass_rates.is_empty() {
-        println!("\n{:<25} {:>12} {:>12} {:>12}", "CATEGORY", "PASS RATE", "STD DEV", "RUNS");
+        println!(
+            "\n{:<25} {:>12} {:>12} {:>12}",
+            "CATEGORY", "PASS RATE", "STD DEV", "RUNS"
+        );
         println!("{}", "-".repeat(65));
         for cs in &report.aggregate.category_pass_rates {
             println!(
@@ -1582,7 +1656,10 @@ fn render_multi_run_terminal(report: &aegis_probe::stats::MultiRunReport) {
 
     if !unstable.is_empty() {
         println!("\nUnstable Probes (non-deterministic across runs):");
-        println!("{:<35} {:>10} {:>10} {:>12}", "PROBE", "PASS RATE", "FAIL RATE", "STABILITY");
+        println!(
+            "{:<35} {:>10} {:>10} {:>12}",
+            "PROBE", "PASS RATE", "FAIL RATE", "STABILITY"
+        );
         println!("{}", "-".repeat(70));
         for p in &unstable {
             println!(
@@ -1607,18 +1684,23 @@ fn render_multi_run_terminal(report: &aegis_probe::stats::MultiRunReport) {
 fn cmd_distillation(path_a: &Path, path_b: &Path) {
     let report_a = load_report(path_a);
     let report_b = load_report(path_b);
+    ensure_compatible_reports(&report_a, &report_b);
 
     // Extract model fingerprints if output is available
     let has_output_a = report_a.results.iter().any(|r| r.agent_output.is_some());
     let has_output_b = report_b.results.iter().any(|r| r.agent_output.is_some());
 
     let fp_a = if has_output_a {
-        Some(aegis_probe::fingerprint::extract_model_fingerprint(&report_a))
+        Some(aegis_probe::fingerprint::extract_model_fingerprint(
+            &report_a,
+        ))
     } else {
         None
     };
     let fp_b = if has_output_b {
-        Some(aegis_probe::fingerprint::extract_model_fingerprint(&report_b))
+        Some(aegis_probe::fingerprint::extract_model_fingerprint(
+            &report_b,
+        ))
     } else {
         None
     };
@@ -1630,7 +1712,10 @@ fn cmd_distillation(path_a: &Path, path_b: &Path) {
         fp_b.as_ref(),
     );
 
-    println!("\nDistillation Analysis: {} vs {}", analysis.agent_a, analysis.agent_b);
+    println!(
+        "\nDistillation Analysis: {} vs {}",
+        analysis.agent_a, analysis.agent_b
+    );
     println!("{}", "=".repeat(60));
     println!(
         "Distillation score: {:.1}%",
@@ -1654,13 +1739,11 @@ fn cmd_distillation(path_a: &Path, path_b: &Path) {
     );
     println!(
         "{:<30} {:>10.3}",
-        "Output length correlation",
-        analysis.signals.length_correlation,
+        "Output length correlation", analysis.signals.length_correlation,
     );
     println!(
         "{:<30} {:>10.2}x",
-        "Latency ratio",
-        analysis.signals.latency_ratio,
+        "Latency ratio", analysis.signals.latency_ratio,
     );
     println!(
         "{:<30} {:>9.1}%",
@@ -1679,9 +1762,7 @@ fn cmd_distillation(path_a: &Path, path_b: &Path) {
     );
 
     if !has_output_a || !has_output_b {
-        println!(
-            "\nNote: refusal and vocabulary signals used neutral defaults because"
-        );
+        println!("\nNote: refusal and vocabulary signals used neutral defaults because");
         println!("one or both reports lack captured output. Re-run with --capture-output");
         println!("for more accurate distillation analysis.");
     }

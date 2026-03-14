@@ -1,0 +1,157 @@
+name: "Aegis Probe"
+description: "Run AI agent security probes in CI with aegis-probe"
+
+inputs:
+  agent:
+    description: "Agent target to test"
+    required: false
+    default: "claude-code"
+  agent-binary:
+    description: "Path to the agent binary if auto-detection should be bypassed"
+    required: false
+    default: ""
+  probes-dir:
+    description: "Directory containing probe TOML files"
+    required: false
+    default: "probes"
+  category:
+    description: "Optional category filter"
+    required: false
+    default: ""
+  probe:
+    description: "Optional single-probe filter"
+    required: false
+    default: ""
+  timeout:
+    description: "Timeout per probe in seconds"
+    required: false
+    default: "120"
+  jobs:
+    description: "Number of probes to execute in parallel"
+    required: false
+    default: "1"
+  fail-on:
+    description: "Gate severity: fail, partial, or critical"
+    required: false
+    default: "fail"
+  min-score:
+    description: "Optional minimum score gate"
+    required: false
+    default: ""
+  capture-output:
+    description: "Preserve raw agent output in the local JSON report"
+    required: false
+    default: "false"
+  output:
+    description: "Path to write the JSON report"
+    required: false
+    default: "aegis-report.json"
+
+outputs:
+  report-path:
+    description: "Path to the generated JSON report"
+    value: ${{ steps.run.outputs.report_path }}
+  exit-code:
+    description: "Exit code returned by aegis-probe after applying gates"
+    value: ${{ steps.run.outputs.exit_code }}
+  score:
+    description: "Aggregate security score from the JSON report"
+    value: ${{ steps.run.outputs.score }}
+  passed:
+    description: "Number of passing probes"
+    value: ${{ steps.run.outputs.passed }}
+  partial:
+    description: "Number of partial probes"
+    value: ${{ steps.run.outputs.partial }}
+  failed:
+    description: "Number of failed probes"
+    value: ${{ steps.run.outputs.failed }}
+  errors:
+    description: "Number of errored probes"
+    value: ${{ steps.run.outputs.errors }}
+  probe-pack-hash:
+    description: "Stable hash of the executed probe pack"
+    value: ${{ steps.run.outputs.probe_pack_hash }}
+  schema-version:
+    description: "Schema version carried by the JSON report"
+    value: ${{ steps.run.outputs.schema_version }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: aegis-probe-action
+
+    - name: Build aegis-probe
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: cargo build --release -p aegis-probe
+
+    - name: Run probes
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        args=(
+          run
+          --agent "${{ inputs.agent }}"
+          --probes-dir "${{ inputs.probes-dir }}"
+          --timeout "${{ inputs.timeout }}"
+          --jobs "${{ inputs.jobs }}"
+          --output "${{ inputs.output }}"
+          --format json
+          --fail-on "${{ inputs.fail-on }}"
+        )
+
+        if [[ -n "${{ inputs.agent-binary }}" ]]; then
+          args+=(--agent-binary "${{ inputs.agent-binary }}")
+        fi
+
+        if [[ -n "${{ inputs.category }}" ]]; then
+          args+=(--category "${{ inputs.category }}")
+        fi
+
+        if [[ -n "${{ inputs.probe }}" ]]; then
+          args+=(--probe "${{ inputs.probe }}")
+        fi
+
+        if [[ "${{ inputs.capture-output }}" == "true" ]]; then
+          args+=(--capture-output)
+        fi
+
+        if [[ -n "${{ inputs.min-score }}" ]]; then
+          args+=(--min-score "${{ inputs.min-score }}")
+        fi
+
+        echo "report_path=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
+        status=0
+        "${{ github.action_path }}/target/release/aegis-probe" "${args[@]}" || status=$?
+        echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+
+        if [[ -f "${{ inputs.output }}" ]]; then
+          REPORT_PATH="${{ inputs.output }}" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+import json
+import os
+
+report_path = os.environ["REPORT_PATH"]
+with open(report_path, "r", encoding="utf-8") as handle:
+    report = json.load(handle)
+
+summary = report.get("summary", {})
+metadata = report.get("metadata", {})
+
+print(f"score={report.get('score', '')}")
+print(f"passed={summary.get('passed', '')}")
+print(f"partial={summary.get('partial', '')}")
+print(f"failed={summary.get('failed', '')}")
+print(f"errors={summary.get('errors', '')}")
+print(f"probe_pack_hash={metadata.get('probe_pack_hash', '')}")
+print(f"schema_version={metadata.get('schema_version', '')}")
+PY
+        fi
+
+        exit "$status"

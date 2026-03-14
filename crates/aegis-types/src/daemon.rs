@@ -1226,10 +1226,7 @@ mod tests {
         );
         assert_eq!(AgentStatus::Disabled.to_string(), "Disabled");
         assert_eq!(
-            AgentStatus::Queued {
-                lane: "gpu".into()
-            }
-            .to_string(),
+            AgentStatus::Queued { lane: "gpu".into() }.to_string(),
             "Queued (lane gpu)"
         );
     }

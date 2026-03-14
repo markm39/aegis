@@ -262,8 +262,7 @@ mod tests {
 
     #[test]
     fn system_compact_boundary() {
-        let json =
-            r#"{"type":"system","subtype":"compact_boundary","uuid":"a","session_id":"b"}"#;
+        let json = r#"{"type":"system","subtype":"compact_boundary","uuid":"a","session_id":"b"}"#;
         let result = format_ndjson_line(json);
         assert_eq!(result, vec!["--- context compacted ---"]);
     }
