@@ -5,7 +5,6 @@
 //! sessions, filtered queries, policy snapshots, and compliance statistics.
 
 pub mod async_pipeline;
-pub mod channel_audit;
 pub mod entry;
 pub mod filter;
 pub mod fs_audit;
@@ -23,7 +22,6 @@ pub mod store;
 pub mod writer;
 
 pub use async_pipeline::{AsyncAuditConfig, AsyncAuditWriter, AuditCommand};
-pub use channel_audit::{ChannelAuditEntry, ChannelDirection};
 pub use entry::AuditEntry;
 pub use filter::AuditFilter;
 pub use fs_audit::{FsAuditEntry, FsOperation};

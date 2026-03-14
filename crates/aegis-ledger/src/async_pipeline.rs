@@ -27,7 +27,6 @@ use tracing::{error, info};
 
 use aegis_types::{Action, AegisError, Verdict};
 
-use crate::channel_audit::ChannelDirection;
 use crate::fs_audit::FsOperation;
 use crate::store::AuditStore;
 
@@ -49,19 +48,6 @@ pub enum AuditCommand {
         action: Action,
         /// The policy verdict for the action.
         verdict: Verdict,
-    },
-    /// Insert a channel audit entry (e.g., Telegram message metadata).
-    InsertChannelAudit {
-        /// Channel name (e.g., "telegram").
-        channel_name: String,
-        /// Message direction.
-        direction: ChannelDirection,
-        /// SHA-256 hex digest of the message content.
-        message_hash: String,
-        /// Number of recipients.
-        recipient_count: u32,
-        /// Whether the message had interactive buttons.
-        has_buttons: bool,
     },
     /// Insert a filesystem audit entry.
     InsertFsAudit {
@@ -291,21 +277,6 @@ fn execute_command(store: &mut AuditStore, cmd: AuditCommand) -> Result<(), Aegi
     match cmd {
         AuditCommand::InsertEntry { action, verdict } => {
             store.append(&action, &verdict)?;
-        }
-        AuditCommand::InsertChannelAudit {
-            channel_name,
-            direction,
-            message_hash,
-            recipient_count,
-            has_buttons,
-        } => {
-            store.insert_channel_audit(
-                &channel_name,
-                direction,
-                &message_hash,
-                recipient_count,
-                has_buttons,
-            )?;
         }
         AuditCommand::InsertFsAudit {
             path,
@@ -558,29 +529,6 @@ mod tests {
             "SECURITY: audit hash chain is broken after shutdown drain: {}",
             report.message
         );
-    }
-
-    #[tokio::test]
-    async fn async_pipeline_channel_audit() {
-        let tmp = tmp_db();
-        let writer = AsyncAuditWriter::start(tmp.path(), AsyncAuditConfig::default()).unwrap();
-
-        writer
-            .send(AuditCommand::InsertChannelAudit {
-                channel_name: "telegram".to_string(),
-                direction: ChannelDirection::Outbound,
-                message_hash: "abc123def456".to_string(),
-                recipient_count: 1,
-                has_buttons: true,
-            })
-            .unwrap();
-
-        writer.shutdown().await.unwrap();
-
-        let store = AuditStore::open(tmp.path()).unwrap();
-        let entries = store.query_channel_audit_last(10).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].channel_name, "telegram");
     }
 
     #[tokio::test]

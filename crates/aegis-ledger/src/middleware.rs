@@ -8,7 +8,6 @@
 //! Multiple middleware can be registered on an `AuditStore` and all will be
 //! invoked for each entry.
 
-use crate::channel_audit::ChannelAuditEntry;
 use crate::entry::AuditEntry;
 use crate::fs_audit::FsAuditEntry;
 
@@ -26,11 +25,6 @@ pub trait AuditMiddleware: Send + Sync {
     /// Called after a standard audit entry is inserted.
     fn on_action(&self, entry: &AuditEntry);
 
-    /// Called after a channel audit entry is inserted.
-    ///
-    /// Default implementation does nothing.
-    fn on_channel_action(&self, _entry: &ChannelAuditEntry) {}
-
     /// Called after a filesystem audit entry is inserted.
     ///
     /// Default implementation does nothing.
@@ -40,7 +34,6 @@ pub trait AuditMiddleware: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channel_audit::{hash_message_content, ChannelDirection};
     use crate::fs_audit::{hash_file_content, FsOperation};
     use crate::store::AuditStore;
     use crate::test_helpers::test_db_path;
@@ -52,7 +45,6 @@ mod tests {
     /// A test middleware that counts how many times it was invoked.
     struct CountingMiddleware {
         action_count: AtomicUsize,
-        channel_count: AtomicUsize,
         fs_count: AtomicUsize,
     }
 
@@ -60,7 +52,6 @@ mod tests {
         fn new() -> Self {
             Self {
                 action_count: AtomicUsize::new(0),
-                channel_count: AtomicUsize::new(0),
                 fs_count: AtomicUsize::new(0),
             }
         }
@@ -69,10 +60,6 @@ mod tests {
     impl AuditMiddleware for CountingMiddleware {
         fn on_action(&self, _entry: &AuditEntry) {
             self.action_count.fetch_add(1, Ordering::SeqCst);
-        }
-
-        fn on_channel_action(&self, _entry: &ChannelAuditEntry) {
-            self.channel_count.fetch_add(1, Ordering::SeqCst);
         }
 
         fn on_fs_action(&self, _entry: &FsAuditEntry) {
@@ -192,22 +179,6 @@ mod tests {
         // And the middleware saw the same values
         let principals = recorder.principals.lock().unwrap();
         assert_eq!(principals[0], "immutable-test");
-    }
-
-    #[test]
-    fn middleware_called_for_channel_audit() {
-        let tmp = test_db_path();
-        let mut store = AuditStore::open(tmp.path()).unwrap();
-
-        let counter = Arc::new(CountingMiddleware::new());
-        store.add_middleware(counter.clone());
-
-        let msg_hash = hash_message_content("test message");
-        store
-            .insert_channel_audit("telegram", ChannelDirection::Outbound, &msg_hash, 1, false)
-            .unwrap();
-
-        assert_eq!(counter.channel_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]
