@@ -139,7 +139,7 @@ pub fn run_probe(probe: &Probe, config: &RunnerConfig) -> anyhow::Result<ProbeRe
     let sandbox_path = sandbox_dir.path();
 
     // 2. Set up files in the sandbox
-    setup_sandbox(sandbox_path, probe)?;
+    setup_sandbox(sandbox_path, probe, &config.target)?;
 
     // 3. Generate Seatbelt profile if sandboxing is enabled
     #[cfg(target_os = "macos")]
@@ -173,7 +173,22 @@ pub fn run_probe(probe: &Probe, config: &RunnerConfig) -> anyhow::Result<ProbeRe
 }
 
 /// Set up the sandbox directory with probe files.
-fn setup_sandbox(sandbox_path: &Path, probe: &Probe) -> anyhow::Result<()> {
+fn setup_sandbox(sandbox_path: &Path, probe: &Probe, target: &AgentTarget) -> anyhow::Result<()> {
+    // Initialize a git repo if the agent requires one (e.g., Codex)
+    if target == &AgentTarget::Codex {
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(sandbox_path)
+            .output()
+            .context("failed to initialize git repo in sandbox")?;
+        // Create an initial commit so the repo is valid
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init", "--quiet"])
+            .current_dir(sandbox_path)
+            .output()
+            .context("failed to create initial commit in sandbox")?;
+    }
+
     // Create directories
     for dir in &probe.setup.directories {
         let full_path = sandbox_path.join(dir);
@@ -347,6 +362,7 @@ fn execute_probe(
     let idle_threshold = Duration::from_secs(10);
     let mut last_output_change = Instant::now();
     let mut last_output_len = 0usize;
+    let mut exited_naturally = false;
 
     loop {
         if Instant::now() >= deadline {
@@ -356,10 +372,14 @@ fn execute_probe(
 
         match session.pump() {
             Ok(_) => {}
-            Err(_) => break,
+            Err(_) => {
+                exited_naturally = true;
+                break;
+            }
         }
 
         if !session.is_alive() {
+            exited_naturally = true;
             break;
         }
 
@@ -394,22 +414,20 @@ fn execute_probe(
         tracing::debug!("agent output:\n{preview}");
     }
 
-    // Kill agent process if it timed out
-    if observations.timed_out {
-        // SIGKILL the process immediately
-        let pid = session.pty().pid();
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output();
-        // Brief wait for kernel to reap, then collect exit status
-        std::thread::sleep(Duration::from_millis(200));
-        let _ = session.wait();
-    } else {
-        // Wait for process exit
+    if exited_naturally {
+        // Process already exited -- collect exit status
         let exit_code = session.wait().unwrap_or(-1);
         if exit_code != 0 {
             observations.agent_crashed = true;
         }
+    } else {
+        // Process still running (timed out or went idle) -- kill it
+        let pid = session.pty().pid();
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = session.wait();
     }
 
     // Stop observer and merge FSEvents data
@@ -459,7 +477,17 @@ fn build_agent_command(
     #[cfg(target_os = "macos")] seatbelt_profile: Option<&Path>,
 ) -> (String, Vec<String>) {
     let mut agent_args = config.agent_args.clone();
-    agent_args.push("--print".into());
+
+    // Add the prompt flag/argument based on agent type
+    match config.target {
+        AgentTarget::ClaudeCode => {
+            // claude --print "prompt"
+            agent_args.push("--print".into());
+        }
+        _ => {
+            // Most agents take the prompt as a positional argument
+        }
+    }
     agent_args.push(probe.attack.prompt.clone());
 
     #[cfg(target_os = "macos")]
@@ -899,7 +927,7 @@ pass_if = "no_forbidden_actions"
         .unwrap();
 
         let dir = TempDir::new().unwrap();
-        setup_sandbox(dir.path(), &probe).unwrap();
+        setup_sandbox(dir.path(), &probe, &AgentTarget::ClaudeCode).unwrap();
 
         assert!(dir.path().join("main.py").exists());
         assert!(dir.path().join("src/lib.rs").exists());

@@ -1262,7 +1262,8 @@ fn default_agent_args(target: &AgentTarget) -> Vec<String> {
             vec!["--dangerously-skip-permissions".into()]
         }
         AgentTarget::Codex => {
-            vec!["--approval-mode".into(), "full-auto".into()]
+            // Codex uses `codex exec --full-auto "prompt"` for non-interactive mode
+            vec!["exec".into(), "--full-auto".into()]
         }
         _ => vec![],
     }
