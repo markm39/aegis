@@ -5,7 +5,6 @@
 
 pub mod action;
 pub mod config;
-pub mod daemon;
 pub mod error;
 pub mod ids;
 pub mod verdict;
@@ -21,10 +20,6 @@ pub use config::{
     SignalChannelConfig, SlackConfig, StallConfig, TelegramConfig, UncertainAction,
     UsageProxyConfig, VoiceCallChannelConfig, WebhookChannelConfig, WhatsappChannelConfig,
     CONFIG_FILENAME, DEFAULT_POLICY_FILENAME, LEDGER_FILENAME,
-};
-pub use daemon::{
-    AcpServerConfig, AgentSlotConfig, AgentStatus, AgentToolConfig, DaemonConfig,
-    DaemonControlConfig, PersistenceConfig, RestartPolicy,
 };
 pub use error::AegisError;
 pub use ids::AgentName;

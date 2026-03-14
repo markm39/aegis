@@ -1,9 +1,8 @@
-//! PTY-based supervisor for autonomous AI agent operation.
+//! PTY-based supervision primitives for probe execution.
 //!
-//! Spawns an AI agent (Claude Code, Codex, etc.) in a pseudo-terminal,
-//! monitors output for permission prompts, and auto-approves or denies
-//! them based on Cedar policy evaluation. Detects stalls and nudges the
-//! agent to keep working.
+//! Spawns a target agent in a pseudo-terminal, monitors output for
+//! permission prompts, and applies Cedar policy decisions during tests.
+//! Detects stalls and provides session-level supervision utilities.
 //!
 //! # Architecture
 //!
@@ -19,8 +18,6 @@ pub mod adapter;
 pub mod adapters;
 pub mod ansi;
 pub mod compaction;
-pub mod driver;
-pub mod drivers;
 pub mod json_events;
 pub mod json_stream;
 pub mod jsonl;

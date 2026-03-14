@@ -100,7 +100,7 @@ pub enum PilotUpdate {
     },
 }
 
-/// Commands sent to the supervisor from the TUI or control plane.
+/// Commands sent to the supervisor from an external controller.
 #[derive(Debug)]
 pub enum SupervisorCommand {
     /// Approve a pending permission request.
@@ -142,9 +142,9 @@ pub struct SupervisorConfig {
 /// - `config`: supervisor configuration
 /// - `event_tx`: optional channel for emitting pilot events (webhooks, logging)
 /// - `output_tx`: optional channel for mirroring completed output lines
-///   (used by the daemon to expose agent output without sharing the buffer)
+///   to another consumer without sharing the ring buffer
 /// - `update_tx`: optional channel for richer TUI updates
-/// - `command_rx`: optional channel for receiving commands from TUI/control plane
+/// - `command_rx`: optional channel for receiving commands from a caller
 ///
 /// Returns the child's exit code and session statistics.
 #[allow(clippy::too_many_arguments)]

@@ -248,7 +248,7 @@ Each JSON report includes:
 - [`crates/aegis-pilot`](crates/aegis-pilot): PTY primitives and driver adapters used by the runner
 - [`crates/aegis-harness`](crates/aegis-harness): PTY/session helpers used by probe execution
 
-Older runtime and orchestration crates are no longer part of the default workspace path for the product.
+The legacy runtime and orchestration crates have been removed from the product repo.
 
 ## Build and Test
 

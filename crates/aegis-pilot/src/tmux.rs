@@ -360,7 +360,7 @@ impl Drop for TmuxSession {
     fn drop(&mut self) {
         // Clean up the pipe file.
         let _ = std::fs::remove_file(&self.pipe_path);
-        // Don't kill the tmux session here -- the fleet manager handles lifecycle.
+        // Leave the tmux session alone here; callers own its lifecycle.
     }
 }
 

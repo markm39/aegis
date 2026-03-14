@@ -47,7 +47,7 @@ Crate summary:
 - `aegis-harness`: PTY integration test framework for test execution
 - `aegis-probe`: Binary entry point: adversarial probe runner, reporting, analytics, and registry bundles
 
-Legacy runtime and orchestration crates may still exist in the repo, but they are no longer part of the default product workspace.
+Legacy runtime and orchestration crates have been removed from the repo.
 
 ## Shared Struct Rules
 

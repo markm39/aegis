@@ -1,6 +1,6 @@
 //! Error types shared across all Aegis crates.
 
-/// Errors that can occur across the Aegis runtime.
+/// Errors that can occur across Aegis testing components.
 ///
 /// Each variant corresponds to a different subsystem: policy engine,
 /// audit ledger, sandbox, filesystem, or configuration.
@@ -29,10 +29,6 @@ pub enum AegisError {
     /// PTY supervisor error.
     #[error("pilot error: {0}")]
     PilotError(String),
-
-    /// Daemon lifecycle or fleet management error.
-    #[error("daemon error: {0}")]
-    DaemonError(String),
 }
 
 #[cfg(test)]
@@ -64,10 +60,6 @@ mod tests {
         assert_eq!(
             AegisError::PilotError("pty failed".into()).to_string(),
             "pilot error: pty failed"
-        );
-        assert_eq!(
-            AegisError::DaemonError("fleet failure".into()).to_string(),
-            "daemon error: fleet failure"
         );
     }
 }

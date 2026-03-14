@@ -6,9 +6,8 @@
 //! may bypass human review.
 //!
 //! This module lives in `aegis-types` (the foundation crate) so every
-//! downstream crate can classify actions without pulling in `aegis-toolkit`.
-//! The [`ActionRisk`] enum mirrors `aegis_toolkit::RiskTag` conceptually but
-//! is intentionally independent to avoid circular dependencies.
+//! downstream crate can classify actions without pulling in deprecated
+//! browser or orchestration code.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
