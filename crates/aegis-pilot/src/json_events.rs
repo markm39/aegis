@@ -174,7 +174,7 @@ fn format_codex_json_line(raw: &str) -> Vec<String> {
                 .get("thread_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            vec![format!("Session started (thread_id: {id})")]
+            vec![format!("Session started ({id})")]
         }
         "turn.completed" => {
             let input = obj

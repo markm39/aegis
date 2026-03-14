@@ -28,6 +28,11 @@ pub enum AegisError {
 
     /// PTY session supervision error.
     #[error("session error: {0}")]
+    SessionError(String),
+
+    /// Deprecated alias for session supervision errors.
+    #[doc(hidden)]
+    #[error("session error: {0}")]
     PilotError(String),
 }
 
@@ -58,7 +63,7 @@ mod tests {
             "configuration error: missing field"
         );
         assert_eq!(
-            AegisError::PilotError("pty failed".into()).to_string(),
+            AegisError::SessionError("pty failed".into()).to_string(),
             "session error: pty failed"
         );
     }

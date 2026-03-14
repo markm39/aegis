@@ -92,10 +92,10 @@ impl TmuxSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .status()
-            .map_err(|e| AegisError::PilotError(format!("tmux new-session failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux new-session failed: {e}")))?;
 
         if !status.success() {
-            return Err(AegisError::PilotError(format!(
+            return Err(AegisError::SessionError(format!(
                 "tmux new-session exited with {status}"
             )));
         }
@@ -104,14 +104,14 @@ impl TmuxSession {
         let pid_output = Command::new("tmux")
             .args(["list-panes", "-t", &session_name, "-F", "#{pane_pid}"])
             .output()
-            .map_err(|e| AegisError::PilotError(format!("tmux list-panes failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux list-panes failed: {e}")))?;
 
         let pid_str = String::from_utf8_lossy(&pid_output.stdout)
             .trim()
             .to_string();
         let child_pid: u32 = pid_str
             .parse()
-            .map_err(|e| AegisError::PilotError(format!("bad pane pid {pid_str:?}: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("bad pane pid {pid_str:?}: {e}")))?;
 
         // Create a named pipe for output capture
         let pipe_dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
@@ -122,7 +122,7 @@ impl TmuxSession {
 
         // Create the FIFO
         nix::unistd::mkfifo(&pipe_path, nix::sys::stat::Mode::from_bits_truncate(0o600))
-            .map_err(|e| AegisError::PilotError(format!("mkfifo failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("mkfifo failed: {e}")))?;
 
         // Start pipe-pane to forward output to our FIFO.
         // The -o flag means output-only (don't capture input).
@@ -137,11 +137,11 @@ impl TmuxSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|e| AegisError::PilotError(format!("tmux pipe-pane failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux pipe-pane failed: {e}")))?;
 
         if !status.success() {
             let _ = std::fs::remove_file(&pipe_path);
-            return Err(AegisError::PilotError(format!(
+            return Err(AegisError::SessionError(format!(
                 "tmux pipe-pane exited with {status}"
             )));
         }
@@ -153,7 +153,7 @@ impl TmuxSession {
             nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NONBLOCK,
             nix::sys::stat::Mode::empty(),
         )
-        .map_err(|e| AegisError::PilotError(format!("open pipe failed: {e}")))?;
+        .map_err(|e| AegisError::SessionError(format!("open pipe failed: {e}")))?;
 
         let pipe_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
@@ -177,10 +177,10 @@ impl TmuxSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|e| AegisError::PilotError(format!("tmux send-keys failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux send-keys failed: {e}")))?;
 
         if !status.success() {
-            return Err(AegisError::PilotError(format!(
+            return Err(AegisError::SessionError(format!(
                 "tmux send-keys exited with {status}"
             )));
         }
@@ -194,10 +194,10 @@ impl TmuxSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|e| AegisError::PilotError(format!("tmux send-keys special failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux send-keys special failed: {e}")))?;
 
         if !status.success() {
-            return Err(AegisError::PilotError(format!(
+            return Err(AegisError::SessionError(format!(
                 "tmux send-keys special exited with {status}"
             )));
         }
@@ -224,7 +224,7 @@ impl AgentSession for TmuxSession {
             Ok(n) => Ok(n),
             Err(nix::errno::Errno::EAGAIN) => Ok(0),
             Err(nix::errno::Errno::EIO) => Ok(0),
-            Err(e) => Err(AegisError::PilotError(format!("pipe read: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("pipe read: {e}"))),
         }
     }
 
@@ -247,10 +247,10 @@ impl AgentSession for TmuxSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|e| AegisError::PilotError(format!("tmux set-buffer failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux set-buffer failed: {e}")))?;
 
         if !status.success() {
-            return Err(AegisError::PilotError("tmux set-buffer failed".into()));
+            return Err(AegisError::SessionError("tmux set-buffer failed".into()));
         }
 
         let status = Command::new("tmux")
@@ -265,10 +265,10 @@ impl AgentSession for TmuxSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|e| AegisError::PilotError(format!("tmux paste-buffer failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("tmux paste-buffer failed: {e}")))?;
 
         if !status.success() {
-            return Err(AegisError::PilotError("tmux paste-buffer failed".into()));
+            return Err(AegisError::SessionError("tmux paste-buffer failed".into()));
         }
 
         // Give the TUI time to process the pasted text before pressing Enter.
@@ -296,7 +296,7 @@ impl AgentSession for TmuxSession {
                 Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false),
-            Err(e) => Err(AegisError::PilotError(format!("poll pipe: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("poll pipe: {e}"))),
         }
     }
 
@@ -339,7 +339,7 @@ impl AgentSession for TmuxSession {
     fn terminate(&self) -> Result<(), AegisError> {
         // Send SIGTERM to the pane's process.
         signal::kill(Pid::from_raw(self.child_pid as i32), Signal::SIGTERM)
-            .map_err(|e| AegisError::PilotError(format!("kill SIGTERM: {e}")))
+            .map_err(|e| AegisError::SessionError(format!("kill SIGTERM: {e}")))
     }
 
     fn pid(&self) -> u32 {

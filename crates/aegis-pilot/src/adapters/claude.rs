@@ -335,7 +335,7 @@ mod tests {
     fn ignores_normal_output() {
         let mut adapter = ClaudeCodeAdapter::new();
         assert_eq!(
-            adapter.scan_line("Compiling aegis-pilot v0.1.0"),
+            adapter.scan_line("Compiling workspace runtime v0.1.0"),
             ScanResult::None
         );
         assert_eq!(

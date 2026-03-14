@@ -101,19 +101,19 @@ impl<P: JsonlProtocol> JsonlSession<P> {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| AegisError::PilotError(format!("failed to spawn {command}: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("failed to spawn {command}: {e}")))?;
 
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| AegisError::PilotError("child stdout not captured".into()))?;
+            .ok_or_else(|| AegisError::SessionError("child stdout not captured".into()))?;
 
         let raw_fd = stdout.as_raw_fd();
         let flags = fcntl(raw_fd, FcntlArg::F_GETFL)
-            .map_err(|e| AegisError::PilotError(format!("fcntl F_GETFL: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("fcntl F_GETFL: {e}")))?;
         let flags = OFlag::from_bits_truncate(flags);
         fcntl(raw_fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))
-            .map_err(|e| AegisError::PilotError(format!("fcntl F_SETFL: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("fcntl F_SETFL: {e}")))?;
 
         use std::os::fd::FromRawFd;
         let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw_fd) };
@@ -165,19 +165,19 @@ impl<P: JsonlProtocol> JsonlSession<P> {
             use std::io::Write;
             stdin
                 .write_all(text.as_bytes())
-                .map_err(|e| AegisError::PilotError(format!("stdin write failed: {e}")))?;
+                .map_err(|e| AegisError::SessionError(format!("stdin write failed: {e}")))?;
             stdin
                 .write_all(b"\n")
-                .map_err(|e| AegisError::PilotError(format!("stdin write failed: {e}")))?;
+                .map_err(|e| AegisError::SessionError(format!("stdin write failed: {e}")))?;
             Ok(())
         } else {
-            Err(AegisError::PilotError("stdin not available".into()))
+            Err(AegisError::SessionError("stdin not available".into()))
         }
     }
 
     fn send_resume(&self, text: &str) -> Result<(), AegisError> {
         let session_id = self.session_id().ok_or_else(|| {
-            AegisError::PilotError("cannot resume: session_id not yet available".into())
+            AegisError::SessionError("cannot resume: session_id not yet available".into())
         })?;
 
         let resume_args = self
@@ -189,7 +189,7 @@ impl<P: JsonlProtocol> JsonlSession<P> {
         let mut guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
         *guard = new_inner;
         Ok(())
     }
@@ -200,7 +200,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
         let guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
 
         let fd = guard.stdout_fd.as_raw_fd();
         match nix::unistd::read(fd, buf) {
@@ -213,7 +213,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
             }
             Err(nix::errno::Errno::EAGAIN) => Ok(0),
             Err(nix::errno::Errno::EIO) => Ok(0),
-            Err(e) => Err(AegisError::PilotError(format!("stdout read: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("stdout read: {e}"))),
         }
     }
 
@@ -222,7 +222,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
         let mut guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
         Self::send_via_stdin(&mut guard, &text)
     }
 
@@ -230,7 +230,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
         let mut guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
 
         match guard.child.try_wait() {
             Ok(Some(_)) => {
@@ -238,7 +238,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
                 self.send_resume(text)
             }
             Ok(None) => Self::send_via_stdin(&mut guard, text),
-            Err(e) => Err(AegisError::PilotError(format!("try_wait failed: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("try_wait failed: {e}"))),
         }
     }
 
@@ -250,7 +250,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
         let guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
 
         let borrowed = guard.stdout_fd.as_fd();
         let mut poll_fd = [PollFd::new(borrowed, PollFlags::POLLIN)];
@@ -267,7 +267,7 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
                 Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false),
-            Err(e) => Err(AegisError::PilotError(format!("poll stdout: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("poll stdout: {e}"))),
         }
     }
 
@@ -298,12 +298,12 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
         let mut guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
 
         let status = guard
             .child
             .wait()
-            .map_err(|e| AegisError::PilotError(format!("wait failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("wait failed: {e}")))?;
 
         Ok(status.code().unwrap_or(-1))
     }
@@ -312,10 +312,10 @@ impl<P: JsonlProtocol> AgentSession for JsonlSession<P> {
         let guard = self
             .inner
             .lock()
-            .map_err(|e| AegisError::PilotError(format!("session lock poisoned: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("session lock poisoned: {e}")))?;
 
         signal::kill(Pid::from_raw(guard.child.id() as i32), Signal::SIGTERM)
-            .map_err(|e| AegisError::PilotError(format!("kill SIGTERM: {e}")))
+            .map_err(|e| AegisError::SessionError(format!("kill SIGTERM: {e}")))
     }
 
     fn pid(&self) -> u32 {

@@ -39,14 +39,14 @@ impl PtySession {
         env: &[(String, String)],
     ) -> Result<Self, AegisError> {
         let pty = openpty(None, None)
-            .map_err(|e| AegisError::PilotError(format!("openpty failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("openpty failed: {e}")))?;
         let slave_fd = pty.slave.as_raw_fd();
         let stdin_fd = unistd::dup(pty.slave.as_raw_fd())
-            .map_err(|e| AegisError::PilotError(format!("dup stdin failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("dup stdin failed: {e}")))?;
         let stdout_fd = unistd::dup(pty.slave.as_raw_fd())
-            .map_err(|e| AegisError::PilotError(format!("dup stdout failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("dup stdout failed: {e}")))?;
         let stderr_fd = unistd::dup(pty.slave.as_raw_fd())
-            .map_err(|e| AegisError::PilotError(format!("dup stderr failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("dup stderr failed: {e}")))?;
 
         let mut child = Command::new(command);
         child
@@ -80,23 +80,23 @@ impl PtySession {
 
         let child = child
             .spawn()
-            .map_err(|e| AegisError::PilotError(format!("spawn failed: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("spawn failed: {e}")))?;
 
         // Parent: close the extra slave handle, keep the master.
         drop(pty.slave);
 
         // Set master to non-blocking.
         let flags = fcntl(pty.master.as_raw_fd(), FcntlArg::F_GETFL)
-            .map_err(|e| AegisError::PilotError(format!("fcntl F_GETFL: {e}")))?;
+            .map_err(|e| AegisError::SessionError(format!("fcntl F_GETFL: {e}")))?;
         let flags = OFlag::from_bits_truncate(flags);
         fcntl(
             pty.master.as_raw_fd(),
             FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK),
         )
-        .map_err(|e| AegisError::PilotError(format!("fcntl F_SETFL: {e}")))?;
+        .map_err(|e| AegisError::SessionError(format!("fcntl F_SETFL: {e}")))?;
 
         let child_pid = i32::try_from(child.id())
-            .map_err(|_| AegisError::PilotError("child pid exceeded i32".into()))?;
+            .map_err(|_| AegisError::SessionError("child pid exceeded i32".into()))?;
 
         Ok(Self {
             master: pty.master,
@@ -117,7 +117,7 @@ impl PtySession {
                 // EIO on master means child closed the slave (exited)
                 Ok(0)
             }
-            Err(e) => Err(AegisError::PilotError(format!("pty read: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("pty read: {e}"))),
         }
     }
 
@@ -138,20 +138,20 @@ impl PtySession {
                 Err(nix::errno::Errno::EAGAIN) => {
                     retries += 1;
                     if retries > 5000 {
-                        return Err(AegisError::PilotError(
+                        return Err(AegisError::SessionError(
                             "pty write: buffer full after 5s of retries".into(),
                         ));
                     }
                     // Bail early if child exited (no point retrying a dead process)
                     if retries.is_multiple_of(100) && !self.is_alive() {
-                        return Err(AegisError::PilotError(
+                        return Err(AegisError::SessionError(
                             "pty write: child exited during write".into(),
                         ));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 Err(e) => {
-                    return Err(AegisError::PilotError(format!("pty write: {e}")));
+                    return Err(AegisError::SessionError(format!("pty write: {e}")));
                 }
             }
         }
@@ -259,7 +259,7 @@ impl PtySession {
                     return Ok(0);
                 }
                 Err(e) => {
-                    return Err(AegisError::PilotError(format!("waitpid: {e}")));
+                    return Err(AegisError::SessionError(format!("waitpid: {e}")));
                 }
             }
         }
@@ -295,7 +295,7 @@ impl PtySession {
                 Ok(revents.contains(PollFlags::POLLIN) || revents.contains(PollFlags::POLLHUP))
             }
             Err(nix::errno::Errno::EINTR) => Ok(false), // Interrupted, treat as timeout
-            Err(e) => Err(AegisError::PilotError(format!("poll: {e}"))),
+            Err(e) => Err(AegisError::SessionError(format!("poll: {e}"))),
         }
     }
 
@@ -392,7 +392,7 @@ mod tests {
     fn spawn_echo_and_read_output() {
         let session = PtySession::spawn(
             "/bin/echo",
-            &["hello pilot".to_string()],
+            &["hello session".to_string()],
             &PathBuf::from("/tmp"),
             &[],
         )
@@ -415,8 +415,8 @@ mod tests {
 
         let text = String::from_utf8_lossy(&output);
         assert!(
-            text.contains("hello pilot"),
-            "expected 'hello pilot' in output: {text:?}"
+            text.contains("hello session"),
+            "expected 'hello session' in output: {text:?}"
         );
 
         let code = session.wait().expect("wait failed");

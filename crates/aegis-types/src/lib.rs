@@ -10,8 +10,6 @@ pub mod ids;
 pub mod verdict;
 
 pub use action::{Action, ActionKind};
-#[doc(hidden)]
-pub use config::PilotConfig;
 pub use config::{
     validate_config_name, AdapterConfig, AegisConfig, AlertRule, DockerSandboxConfig,
     IsolationConfig, NetworkRule, ObserverConfig, PromptPatternConfig, Protocol, SessionConfig,

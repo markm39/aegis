@@ -6,8 +6,8 @@
 //!
 //! The supervisor communicates with external consumers through three optional
 //! channels:
-//! - `event_tx`: lightweight [`PilotEvent`] for webhooks and logging
-//! - `update_tx`: richer [`PilotUpdate`] for the TUI (includes output lines)
+//! - `event_tx`: lightweight [`SessionEvent`] for webhooks and logging
+//! - `update_tx`: richer [`SessionUpdate`] for the TUI (includes output lines)
 //! - `command_rx`: [`SupervisorCommand`] for receiving approve/deny/input/nudge
 
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use aegis_policy::PolicyEngine;
-use aegis_types::{Action, AegisError, Decision, PilotConfig, UncertainAction};
+use aegis_types::{Action, AegisError, Decision, SessionConfig, UncertainAction};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ use crate::stall::{StallAction, StallDetector};
 
 /// Statistics collected during an interactive probe session.
 #[derive(Debug, Clone, Default)]
-pub struct PilotStats {
+pub struct SessionStats {
     /// Number of prompts auto-approved.
     pub approved: u64,
     /// Number of prompts auto-denied.
@@ -40,9 +40,13 @@ pub struct PilotStats {
     pub lines_processed: u64,
 }
 
+/// Deprecated alias for older integrations.
+#[doc(hidden)]
+pub type PilotStats = SessionStats;
+
 /// Events emitted by the supervisor for external consumers (webhooks, logging).
 #[derive(Debug, Clone)]
-pub enum PilotEvent {
+pub enum SessionEvent {
     /// A permission prompt was detected and auto-decided.
     PromptDecided {
         action: String,
@@ -59,12 +63,16 @@ pub enum PilotEvent {
     ChildExited { exit_code: i32 },
 }
 
+/// Deprecated alias for older integrations.
+#[doc(hidden)]
+pub type PilotEvent = SessionEvent;
+
 /// Richer event type for the TUI, including output lines and pending prompts.
 ///
-/// Unlike [`PilotEvent`] (which is for external logging), `PilotUpdate` carries
+/// Unlike [`SessionEvent`] (which is for external logging), `SessionUpdate` carries
 /// all the information the TUI needs to render the live session.
 #[derive(Debug, Clone)]
-pub enum PilotUpdate {
+pub enum SessionUpdate {
     /// A completed output line from the agent (ANSI-stripped).
     OutputLine(String),
     /// A permission prompt was detected and auto-decided.
@@ -89,7 +97,7 @@ pub enum PilotUpdate {
     /// The child process exited.
     ChildExited { exit_code: i32 },
     /// Periodic stats snapshot.
-    Stats(PilotStats),
+    Stats(SessionStats),
     /// The session supports external attach (e.g., tmux, or `claude --resume`).
     /// Contains the command components to attach (e.g., `["claude", "--resume", "<id>"]`).
     AttachCommand(Vec<String>),
@@ -99,6 +107,10 @@ pub enum PilotUpdate {
         session_id: Option<String>,
     },
 }
+
+/// Deprecated alias for older integrations.
+#[doc(hidden)]
+pub type PilotUpdate = SessionUpdate;
 
 /// Commands sent to the supervisor from an external controller.
 #[derive(Debug)]
@@ -124,7 +136,7 @@ struct PendingInfo {
 /// Configuration for the supervisor run loop.
 pub struct SupervisorConfig {
     /// Session configuration (adapter, stall, control settings).
-    pub session_config: PilotConfig,
+    pub session_config: SessionConfig,
     /// The agent principal name (for Cedar policy evaluation).
     pub principal: String,
     /// Whether to pass raw PTY output to stdout (interactive mode).
@@ -153,14 +165,14 @@ pub fn run(
     adapter: &mut dyn AgentAdapter,
     engine: &PolicyEngine,
     config: &SupervisorConfig,
-    event_tx: Option<&mpsc::Sender<PilotEvent>>,
+    event_tx: Option<&mpsc::Sender<SessionEvent>>,
     output_tx: Option<&mpsc::SyncSender<String>>,
-    update_tx: Option<&mpsc::Sender<PilotUpdate>>,
+    update_tx: Option<&mpsc::Sender<SessionUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
-) -> Result<(i32, PilotStats), AegisError> {
+) -> Result<(i32, SessionStats), AegisError> {
     let mut output_buf = OutputBuffer::new(config.session_config.output_buffer_lines);
     let mut stall = StallDetector::new(&config.session_config.stall);
-    let mut stats = PilotStats::default();
+    let mut stats = SessionStats::default();
     let mut read_buf = [0u8; 8192];
     let mut pending: HashMap<Uuid, PendingInfo> = HashMap::new();
     let mut last_session_id: Option<String> = None;
@@ -193,7 +205,7 @@ pub fn run(
 
     // Publish stream kind/session id if available at start.
     if let Some(tx) = update_tx {
-        let info = PilotUpdate::SessionInfo {
+        let info = SessionUpdate::SessionInfo {
             kind: pty.stream_kind(),
             session_id: pty.session_id(),
         };
@@ -205,7 +217,7 @@ pub fn run(
             // Attach command may become available later (e.g., after session id is known).
             if !attach_sent {
                 if let Some(cmd) = pty.attach_command() {
-                    let _ = tx.send(PilotUpdate::AttachCommand(cmd));
+                    let _ = tx.send(SessionUpdate::AttachCommand(cmd));
                     attach_sent = true;
                 }
             }
@@ -213,7 +225,7 @@ pub fn run(
             let current_id = pty.session_id();
             if current_id.is_some() && current_id != last_session_id {
                 last_session_id = current_id.clone();
-                let _ = tx.send(PilotUpdate::SessionInfo {
+                let _ = tx.send(SessionUpdate::SessionInfo {
                     kind: pty.stream_kind(),
                     session_id: current_id,
                 });
@@ -243,7 +255,7 @@ pub fn run(
             let was_stalled = stall.nudge_count() > 0;
             stall.activity();
             if was_stalled {
-                send_update(update_tx, PilotUpdate::StallResolved);
+                send_update(update_tx, SessionUpdate::StallResolved);
             }
 
             // Feed into output buffer, get completed lines
@@ -258,7 +270,7 @@ pub fn run(
                 }
 
                 // Mirror to TUI
-                send_update(update_tx, PilotUpdate::OutputLine(line.clone()));
+                send_update(update_tx, SessionUpdate::OutputLine(line.clone()));
 
                 let result = adapter.scan_line(line);
                 handle_scan_result(
@@ -314,14 +326,14 @@ pub fn run(
                 stats.nudges += 1;
                 emit(
                     event_tx,
-                    PilotEvent::StallNudge {
+                    SessionEvent::StallNudge {
                         nudge_count: stall.nudge_count(),
                         idle_secs: stall.timeout().as_secs(),
                     },
                 );
                 send_update(
                     update_tx,
-                    PilotUpdate::StallNudge {
+                    SessionUpdate::StallNudge {
                         nudge_count: stall.nudge_count(),
                     },
                 );
@@ -333,13 +345,13 @@ pub fn run(
                 );
                 emit(
                     event_tx,
-                    PilotEvent::AttentionNeeded {
+                    SessionEvent::AttentionNeeded {
                         nudge_count: stall.nudge_count(),
                     },
                 );
                 send_update(
                     update_tx,
-                    PilotUpdate::AttentionNeeded {
+                    SessionUpdate::AttentionNeeded {
                         nudge_count: stall.nudge_count(),
                     },
                 );
@@ -362,7 +374,7 @@ pub fn run(
                     if let Some(tx) = output_tx {
                         let _ = tx.send(line.clone());
                     }
-                    send_update(update_tx, PilotUpdate::OutputLine(line.clone()));
+                    send_update(update_tx, SessionUpdate::OutputLine(line.clone()));
                 }
                 stats.lines_processed += lines.len() as u64;
             }
@@ -372,7 +384,7 @@ pub fn run(
                 if let Some(tx) = output_tx {
                     let _ = tx.send(remaining.clone());
                 }
-                send_update(update_tx, PilotUpdate::OutputLine(remaining));
+                send_update(update_tx, SessionUpdate::OutputLine(remaining));
                 stats.lines_processed += 1;
             }
             break;
@@ -382,9 +394,9 @@ pub fn run(
     let exit_code = pty.wait()?;
     info!(exit_code, "child process exited");
 
-    emit(event_tx, PilotEvent::ChildExited { exit_code });
-    send_update(update_tx, PilotUpdate::ChildExited { exit_code });
-    send_update(update_tx, PilotUpdate::Stats(stats.clone()));
+    emit(event_tx, SessionEvent::ChildExited { exit_code });
+    send_update(update_tx, SessionUpdate::ChildExited { exit_code });
+    send_update(update_tx, SessionUpdate::Stats(stats.clone()));
 
     Ok((exit_code, stats))
 }
@@ -397,10 +409,10 @@ fn handle_scan_result(
     adapter: &mut dyn AgentAdapter,
     engine: &PolicyEngine,
     config: &SupervisorConfig,
-    stats: &mut PilotStats,
+    stats: &mut SessionStats,
     pending: &mut HashMap<Uuid, PendingInfo>,
-    event_tx: Option<&mpsc::Sender<PilotEvent>>,
-    update_tx: Option<&mpsc::Sender<PilotUpdate>>,
+    event_tx: Option<&mpsc::Sender<SessionEvent>>,
+    update_tx: Option<&mpsc::Sender<SessionUpdate>>,
 ) -> Result<(), AegisError> {
     match result {
         ScanResult::None | ScanResult::Partial => {}
@@ -439,7 +451,7 @@ fn handle_scan_result(
 
             emit(
                 event_tx,
-                PilotEvent::PromptDecided {
+                SessionEvent::PromptDecided {
                     action: format!("{}", detection.action),
                     decision: verdict.decision.clone(),
                     reason: verdict.reason.clone(),
@@ -447,7 +459,7 @@ fn handle_scan_result(
             );
             send_update(
                 update_tx,
-                PilotUpdate::PromptDecided {
+                SessionUpdate::PromptDecided {
                     action: format!("{}", detection.action),
                     decision: verdict.decision,
                     reason: verdict.reason,
@@ -481,7 +493,7 @@ fn handle_scan_result(
                     );
                     send_update(
                         update_tx,
-                        PilotUpdate::PendingPrompt {
+                        SessionUpdate::PendingPrompt {
                             request_id,
                             raw_prompt: text.clone(),
                         },
@@ -500,7 +512,7 @@ fn handle_scan_result(
 
             emit(
                 event_tx,
-                PilotEvent::UncertainPrompt {
+                SessionEvent::UncertainPrompt {
                     text,
                     action_taken: action_taken.into(),
                 },
@@ -514,10 +526,10 @@ fn handle_scan_result(
 fn handle_command(
     cmd: SupervisorCommand,
     pty: &dyn AgentSession,
-    stats: &mut PilotStats,
+    stats: &mut SessionStats,
     pending: &mut HashMap<Uuid, PendingInfo>,
     stall: &mut StallDetector,
-    update_tx: Option<&mpsc::Sender<PilotUpdate>>,
+    update_tx: Option<&mpsc::Sender<SessionUpdate>>,
 ) -> Result<(), AegisError> {
     match cmd {
         SupervisorCommand::Approve { request_id } => {
@@ -526,12 +538,12 @@ fn handle_command(
                 let was_stalled = stall.nudge_count() > 0;
                 stall.activity();
                 if was_stalled {
-                    send_update(update_tx, PilotUpdate::StallResolved);
+                    send_update(update_tx, SessionUpdate::StallResolved);
                 }
                 stats.approved += 1;
                 send_update(
                     update_tx,
-                    PilotUpdate::PendingResolved {
+                    SessionUpdate::PendingResolved {
                         request_id,
                         approved: true,
                     },
@@ -547,7 +559,7 @@ fn handle_command(
                 let was_stalled = stall.nudge_count() > 0;
                 stall.activity();
                 if was_stalled {
-                    send_update(update_tx, PilotUpdate::StallResolved);
+                    send_update(update_tx, SessionUpdate::StallResolved);
                 }
                 stats.denied += 1;
 
@@ -556,7 +568,7 @@ fn handle_command(
 
                 send_update(
                     update_tx,
-                    PilotUpdate::PendingResolved {
+                    SessionUpdate::PendingResolved {
                         request_id,
                         approved: false,
                     },
@@ -571,7 +583,7 @@ fn handle_command(
             let was_stalled = stall.nudge_count() > 0;
             stall.activity();
             if was_stalled {
-                send_update(update_tx, PilotUpdate::StallResolved);
+                send_update(update_tx, SessionUpdate::StallResolved);
             }
             info!(text, "input sent to agent via command");
         }
@@ -586,13 +598,13 @@ fn handle_command(
     Ok(())
 }
 
-fn emit(tx: Option<&mpsc::Sender<PilotEvent>>, event: PilotEvent) {
+fn emit(tx: Option<&mpsc::Sender<SessionEvent>>, event: SessionEvent) {
     if let Some(tx) = tx {
         let _ = tx.send(event);
     }
 }
 
-fn send_update(tx: Option<&mpsc::Sender<PilotUpdate>>, update: PilotUpdate) {
+fn send_update(tx: Option<&mpsc::Sender<SessionUpdate>>, update: SessionUpdate) {
     if let Some(tx) = tx {
         let _ = tx.send(update);
     }
@@ -603,8 +615,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pilot_stats_default() {
-        let stats = PilotStats::default();
+    fn session_stats_default() {
+        let stats = SessionStats::default();
         assert_eq!(stats.approved, 0);
         assert_eq!(stats.denied, 0);
         assert_eq!(stats.uncertain, 0);
@@ -634,27 +646,27 @@ mod tests {
     }
 
     #[test]
-    fn pilot_update_variants() {
+    fn session_update_variants() {
         let id = Uuid::new_v4();
-        let updates: Vec<PilotUpdate> = vec![
-            PilotUpdate::OutputLine("hello".into()),
-            PilotUpdate::PromptDecided {
+        let updates: Vec<SessionUpdate> = vec![
+            SessionUpdate::OutputLine("hello".into()),
+            SessionUpdate::PromptDecided {
                 action: "FileRead".into(),
                 decision: Decision::Allow,
                 reason: "ok".into(),
             },
-            PilotUpdate::PendingPrompt {
+            SessionUpdate::PendingPrompt {
                 request_id: id,
                 raw_prompt: "Allow?".into(),
             },
-            PilotUpdate::PendingResolved {
+            SessionUpdate::PendingResolved {
                 request_id: id,
                 approved: true,
             },
-            PilotUpdate::StallNudge { nudge_count: 1 },
-            PilotUpdate::AttentionNeeded { nudge_count: 3 },
-            PilotUpdate::ChildExited { exit_code: 0 },
-            PilotUpdate::Stats(PilotStats::default()),
+            SessionUpdate::StallNudge { nudge_count: 1 },
+            SessionUpdate::AttentionNeeded { nudge_count: 3 },
+            SessionUpdate::ChildExited { exit_code: 0 },
+            SessionUpdate::Stats(SessionStats::default()),
         ];
         assert_eq!(updates.len(), 8);
     }

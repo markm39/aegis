@@ -57,12 +57,12 @@ fn is_protected(pid: i32) -> bool {
 /// Validate that a PID is safe to target.
 fn validate_pid(pid: i32) -> Result<(), AegisError> {
     if is_protected(pid) {
-        return Err(AegisError::PilotError(format!(
+        return Err(AegisError::SessionError(format!(
             "kill_tree: refusing to target protected PID {pid} (init/launchd)"
         )));
     }
     if pid < 0 {
-        return Err(AegisError::PilotError(format!(
+        return Err(AegisError::SessionError(format!(
             "kill_tree: invalid negative PID {pid}"
         )));
     }
@@ -90,7 +90,7 @@ fn enumerate_processes() -> Result<Vec<ProcessInfo>, AegisError> {
     // First call: get the number of PIDs (buffer_size=0 returns required size).
     let num_bytes = unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, std::ptr::null_mut(), 0) };
     if num_bytes <= 0 {
-        return Err(AegisError::PilotError(format!(
+        return Err(AegisError::SessionError(format!(
             "kill_tree: proc_listpids size query failed: {}",
             std::io::Error::last_os_error()
         )));
@@ -104,7 +104,7 @@ fn enumerate_processes() -> Result<Vec<ProcessInfo>, AegisError> {
     let actual_bytes =
         unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, pids.as_mut_ptr().cast(), buf_size) };
     if actual_bytes <= 0 {
-        return Err(AegisError::PilotError(format!(
+        return Err(AegisError::SessionError(format!(
             "kill_tree: proc_listpids data query failed: {}",
             std::io::Error::last_os_error()
         )));
@@ -160,7 +160,7 @@ fn enumerate_processes() -> Result<Vec<ProcessInfo>, AegisError> {
     let mut processes = Vec::new();
 
     let entries = fs::read_dir("/proc")
-        .map_err(|e| AegisError::PilotError(format!("kill_tree: cannot read /proc: {e}")))?;
+        .map_err(|e| AegisError::SessionError(format!("kill_tree: cannot read /proc: {e}")))?;
 
     for entry in entries {
         let entry = match entry {
@@ -281,7 +281,7 @@ fn send_signal(pid: i32, sig: Signal) -> Result<bool, AegisError> {
             warn!(pid, signal = ?sig, "kill_tree: permission denied (EPERM), skipping");
             Ok(false)
         }
-        Err(e) => Err(AegisError::PilotError(format!(
+        Err(e) => Err(AegisError::SessionError(format!(
             "kill_tree: failed to send {sig:?} to PID {pid}: {e}"
         ))),
     }
@@ -329,7 +329,7 @@ pub fn kill_tree(root_pid: i32, config: &KillTreeConfig) -> Result<(), AegisErro
             info!(root_pid, "kill_tree: root process already exited");
             return Ok(());
         }
-        return Err(AegisError::PilotError(format!(
+        return Err(AegisError::SessionError(format!(
             "kill_tree: root PID {root_pid} is not owned by current user (UID {my_uid})"
         )));
     }
