@@ -14,7 +14,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
 use aegis_probe::report;
-use aegis_probe::runner::{self, RunnerConfig};
+use aegis_probe::runner::{self, MockMode, RunnerConfig};
 use aegis_probe::scoring;
 use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
 
@@ -26,6 +26,8 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
     after_help = "Examples:\n  \
         aegis-probe run                              # Test Claude Code with all probes\n  \
         aegis-probe run --agent codex                # Test Codex\n  \
+        aegis-probe run --agent mock-vulnerable      # Simulate a vulnerable agent (no API needed)\n  \
+        aegis-probe run --agent mock-safe            # Simulate a safe agent (no API needed)\n  \
         aegis-probe run --category prompt_injection  # Only prompt injection probes\n  \
         aegis-probe run -o report.json               # Save JSON report to file\n  \
         aegis-probe list                             # Show available probes\n  \
@@ -385,10 +387,12 @@ fn cmd_run(opts: &RunOptions<'_>) {
     }
 
     let jobs = opts.jobs;
+    let mock_mode = parse_mock_mode(opts.agent);
+
     eprintln!(
-        "\nRunning {} probes against {:?}{}...\n",
+        "\nRunning {} probes against {}{}...\n",
         filtered.len(),
-        target,
+        if mock_mode.is_some() { opts.agent } else { &format!("{target:?}") },
         if jobs > 1 {
             format!(" ({jobs} parallel)")
         } else {
@@ -396,8 +400,10 @@ fn cmd_run(opts: &RunOptions<'_>) {
         }
     );
 
-    // Run probes -- sequential (jobs=1) or parallel (jobs>1)
-    let results = if jobs <= 1 {
+    // Run probes -- mock mode or real agent
+    let results = if let Some(mode) = mock_mode {
+        run_probes_mock(&filtered, mode)
+    } else if jobs <= 1 {
         run_probes_sequential(&filtered, &config, &target, opts.verbose)
     } else {
         run_probes_parallel(&filtered, &config, &target, jobs)
@@ -1018,6 +1024,57 @@ fn cmd_telemetry(action: TelemetryAction) {
     }
 }
 
+fn run_probes_mock(
+    probes: &[(PathBuf, testcase::Probe)],
+    mode: MockMode,
+) -> Vec<scoring::ProbeResult> {
+    let mut results = Vec::with_capacity(probes.len());
+
+    for (i, (_path, probe)) in probes.iter().enumerate() {
+        eprintln!(
+            "[{}/{}] {} ({:?}, {:?})",
+            i + 1,
+            probes.len(),
+            probe.probe.name,
+            probe.probe.category,
+            probe.probe.severity,
+        );
+
+        match runner::run_probe_mock(probe, mode) {
+            Ok(result) => {
+                let icon = match result.verdict {
+                    scoring::Verdict::Pass => "PASS",
+                    scoring::Verdict::Partial => "PARTIAL",
+                    scoring::Verdict::Error => "ERROR",
+                    scoring::Verdict::Fail => "FAIL",
+                };
+                eprintln!("        -> {icon}");
+                results.push(result);
+            }
+            Err(e) => {
+                eprintln!("        -> ERROR: {e}");
+                results.push(scoring::ProbeResult {
+                    probe_name: probe.probe.name.clone(),
+                    category: probe.probe.category,
+                    severity: probe.probe.severity,
+                    verdict: scoring::Verdict::Error,
+                    findings: vec![scoring::Finding {
+                        description: format!("Mock error: {e}"),
+                        kind: scoring::FindingKind::ForbiddenAction,
+                        severity: testcase::Severity::Critical,
+                        evidence: None,
+                    }],
+                    agent: format!("{mode:?}"),
+                    duration_ms: 0,
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+        }
+    }
+
+    results
+}
+
 fn run_probes_sequential(
     probes: &[(PathBuf, testcase::Probe)],
     config: &RunnerConfig,
@@ -1174,7 +1231,17 @@ fn parse_agent_target(s: &str) -> AgentTarget {
         "openclaw" => AgentTarget::OpenClaw,
         "cursor" => AgentTarget::Cursor,
         "aider" => AgentTarget::Aider,
+        // Mock modes still need a target for filtering -- use all-targets
+        "mock-vulnerable" | "mock-safe" => AgentTarget::ClaudeCode,
         other => AgentTarget::Custom(other.to_string()),
+    }
+}
+
+fn parse_mock_mode(s: &str) -> Option<MockMode> {
+    match s.to_lowercase().as_str() {
+        "mock-vulnerable" | "mock-fail" => Some(MockMode::MockVulnerable),
+        "mock-safe" | "mock-pass" => Some(MockMode::MockSafe),
+        _ => None,
     }
 }
 

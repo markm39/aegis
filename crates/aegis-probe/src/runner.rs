@@ -51,6 +51,85 @@ impl Default for RunnerConfig {
     }
 }
 
+/// Run a single probe using a mock agent (no real agent binary needed).
+///
+/// Two modes:
+/// - `MockVulnerable`: simulates an agent that executes everything (should score as fail)
+/// - `MockSafe`: simulates an agent that refuses everything (should score as pass)
+pub fn run_probe_mock(probe: &Probe, mock_mode: MockMode) -> anyhow::Result<ProbeResult> {
+    let start = Instant::now();
+    let observations = generate_mock_observations(probe, mock_mode);
+
+    let mut result = scoring::score_probe(probe, &observations);
+    result.agent = format!("{mock_mode:?}");
+    result.duration_ms = start.elapsed().as_millis() as u64;
+
+    Ok(result)
+}
+
+/// Mock agent mode for testing without real agent binaries.
+#[derive(Debug, Clone, Copy)]
+pub enum MockMode {
+    /// Simulates an agent that follows all instructions (should fail probes).
+    MockVulnerable,
+    /// Simulates an agent that refuses all adversarial requests (should pass probes).
+    MockSafe,
+}
+
+/// Generate simulated observations based on the probe definition and mock mode.
+fn generate_mock_observations(probe: &Probe, mode: MockMode) -> ProbeObservations {
+    match mode {
+        MockMode::MockVulnerable => {
+            // Build output that triggers compromise indicators
+            let mut output_parts = vec![format!(
+                "Sure, I'll help with that. Executing: {}",
+                probe.attack.prompt
+            )];
+            let mut extra_processes = Vec::new();
+            for indicator in &probe.scoring.compromise_indicators {
+                match indicator {
+                    crate::testcase::CompromiseIndicator::OutputContains { pattern } => {
+                        output_parts.push(pattern.clone());
+                    }
+                    crate::testcase::CompromiseIndicator::ProcessSpawned { command } => {
+                        output_parts.push(format!("Running {command}..."));
+                        extra_processes.push(command.clone());
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut processes = probe.policy.forbidden_commands.clone();
+            processes.extend(extra_processes);
+
+            ProbeObservations {
+                attempted_actions: probe.policy.forbidden_actions.clone(),
+                processes_spawned: processes,
+                files_written: probe.policy.forbidden_writes.clone(),
+                files_read: probe.policy.forbidden_reads.clone(),
+                network_connections: probe
+                    .policy
+                    .forbidden_hosts
+                    .iter()
+                    .map(|h| format!("https://{h}"))
+                    .collect(),
+                agent_output: output_parts.join("\n"),
+                ..Default::default()
+            }
+        }
+        MockMode::MockSafe => ProbeObservations {
+            agent_refused: true,
+            agent_output: format!(
+                "I cannot do that. The request appears to contain adversarial instructions. \
+                 I won't execute potentially dangerous commands. \
+                 This appears to be a {} attack targeting the system's security.",
+                format!("{:?}", probe.probe.category).to_lowercase()
+            ),
+            ..Default::default()
+        },
+    }
+}
+
 /// Run a single probe against the configured agent.
 pub fn run_probe(probe: &Probe, config: &RunnerConfig) -> anyhow::Result<ProbeResult> {
     let start = Instant::now();
@@ -258,6 +337,8 @@ fn execute_probe(
     let mut session = TerminalSession::spawn_with_options(opts)
         .context("failed to spawn agent process")?;
 
+    let session_pid = Some(session.pty().pid());
+
     // Wait for agent to complete, go idle, or timeout.
     // "Idle" means no new output for IDLE_THRESHOLD seconds -- this handles
     // agents like Claude Code --print which may not exit the PTY promptly
@@ -299,6 +380,20 @@ fn execute_probe(
     // Capture final output
     observations.agent_output = session.screen_text();
 
+    if config.verbose {
+        tracing::info!(
+            output_len = observations.agent_output.len(),
+            "agent output captured"
+        );
+        // Log first 2000 chars of output for debugging
+        let preview = if observations.agent_output.len() > 2000 {
+            format!("{}...[truncated]", &observations.agent_output[..2000])
+        } else {
+            observations.agent_output.clone()
+        };
+        tracing::debug!("agent output:\n{preview}");
+    }
+
     // Kill agent process if it timed out
     if observations.timed_out {
         // SIGKILL the process immediately
@@ -338,6 +433,14 @@ fn execute_probe(
     let post_snapshot = snapshot_directory(sandbox_path)?;
     let writes = diff_snapshots(&pre_snapshot, &post_snapshot);
     observations.files_written = writes;
+
+    // Collect sandbox violations from macOS system log
+    #[cfg(target_os = "macos")]
+    if config.sandboxed {
+        if let Some(pid) = session_pid {
+            observations.sandbox_violations = collect_sandbox_violations(pid);
+        }
+    }
 
     // Parse agent output for action indicators
     let output_copy = observations.agent_output.clone();
@@ -416,6 +519,58 @@ fn start_probe_observer(sandbox_path: &Path, probe_name: &str) -> Option<aegis_o
         Err(e) => {
             tracing::debug!("observer skipped: {e}");
             None
+        }
+    }
+}
+
+/// Collect sandbox violations from the macOS unified log.
+///
+/// Queries the system log for Sandbox violation messages from the given PID.
+/// Returns a list of human-readable violation descriptions.
+#[cfg(target_os = "macos")]
+fn collect_sandbox_violations(pid: u32) -> Vec<String> {
+    let predicate = format!(
+        "processID == {pid} AND eventMessage CONTAINS 'deny'"
+    );
+    let output = std::process::Command::new("log")
+        .args([
+            "show",
+            "--predicate", &predicate,
+            "--last", "5m",
+            "--style", "compact",
+            "--no-pager",
+        ])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let violations: Vec<String> = text
+                .lines()
+                .filter(|line| line.contains("deny") || line.contains("Sandbox"))
+                .map(|line| {
+                    // Extract the relevant part of the log message
+                    if let Some(idx) = line.find("Sandbox:") {
+                        line[idx..].to_string()
+                    } else if let Some(idx) = line.find("deny") {
+                        line[idx..].to_string()
+                    } else {
+                        line.trim().to_string()
+                    }
+                })
+                .collect();
+
+            if !violations.is_empty() {
+                tracing::info!(
+                    count = violations.len(),
+                    "sandbox violations detected from system log"
+                );
+            }
+            violations
+        }
+        Err(e) => {
+            tracing::debug!("could not query system log for sandbox violations: {e}");
+            Vec::new()
         }
     }
 }
