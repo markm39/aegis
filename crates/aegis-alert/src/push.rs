@@ -536,7 +536,7 @@ impl PushSubscriptionStore {
 ///
 /// # Arguments
 /// * `vapid` - VAPID configuration containing keys and subject.
-/// * `audience` - The push service origin (e.g., "https://fcm.googleapis.com").
+/// * `audience` - The push service origin (e.g., "<https://fcm.googleapis.com>").
 ///
 /// # Returns
 /// A signed JWT string.
@@ -774,7 +774,7 @@ mod tests {
 
     /// A valid 16-byte auth secret, base64url-encoded.
     fn valid_auth() -> String {
-        URL_SAFE_NO_PAD.encode(&[0xCC; 16])
+        URL_SAFE_NO_PAD.encode([0xCC; 16])
     }
 
     /// A valid HTTPS FCM endpoint.
@@ -886,7 +886,7 @@ mod tests {
         assert!(result.unwrap_err().contains("p256dh"));
 
         // Wrong length p256dh (32 bytes instead of 65).
-        let short_key = URL_SAFE_NO_PAD.encode(&[0xAA; 32]);
+        let short_key = URL_SAFE_NO_PAD.encode([0xAA; 32]);
         let result =
             store.add_subscription(&valid_endpoint(), &short_key, &valid_auth(), None, None);
         assert!(result.is_err());
@@ -912,7 +912,7 @@ mod tests {
         assert!(result.unwrap_err().contains("auth"));
 
         // Wrong length auth (8 bytes instead of 16).
-        let short_auth = URL_SAFE_NO_PAD.encode(&[0xCC; 8]);
+        let short_auth = URL_SAFE_NO_PAD.encode([0xCC; 8]);
         let result =
             store.add_subscription(&valid_endpoint(), &valid_p256dh(), &short_auth, None, None);
         assert!(result.is_err());
@@ -1036,7 +1036,7 @@ mod tests {
         let config = VapidConfig {
             subject: String::new(),
             public_key: String::new(),
-            private_key: URL_SAFE_NO_PAD.encode(&[0xAA; 32]),
+            private_key: URL_SAFE_NO_PAD.encode([0xAA; 32]),
         };
         let result = generate_vapid_jwt(&config, "https://fcm.googleapis.com");
         assert!(result.is_err());
@@ -1048,7 +1048,7 @@ mod tests {
         let config = VapidConfig {
             subject: "mailto:test@example.com".into(),
             public_key: String::new(),
-            private_key: URL_SAFE_NO_PAD.encode(&[0xAA; 16]), // 16 bytes, not 32
+            private_key: URL_SAFE_NO_PAD.encode([0xAA; 16]), // 16 bytes, not 32
         };
         let result = generate_vapid_jwt(&config, "https://fcm.googleapis.com");
         assert!(result.is_err());

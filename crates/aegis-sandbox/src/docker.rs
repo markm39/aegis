@@ -544,15 +544,19 @@ mod tests {
     #[test]
     fn network_policy_mapping() {
         // Test bridge network
-        let mut docker_cfg = DockerSandboxConfig::default();
-        docker_cfg.network = "bridge".to_string();
+        let docker_cfg = DockerSandboxConfig {
+            network: "bridge".to_string(),
+            ..DockerSandboxConfig::default()
+        };
         let config = test_config_with_docker(docker_cfg);
         let args = build_docker_args("ls", &[], &config, &[]).unwrap();
         assert!(args.contains(&"--network=bridge".to_string()));
 
         // Test custom network
-        let mut docker_cfg = DockerSandboxConfig::default();
-        docker_cfg.network = "my-custom-net".to_string();
+        let docker_cfg = DockerSandboxConfig {
+            network: "my-custom-net".to_string(),
+            ..DockerSandboxConfig::default()
+        };
         let config = test_config_with_docker(docker_cfg);
         let args = build_docker_args("ls", &[], &config, &[]).unwrap();
         assert!(args.contains(&"--network=my-custom-net".to_string()));
@@ -593,8 +597,10 @@ mod tests {
 
     #[test]
     fn workspace_mount_writable_when_configured() {
-        let mut docker_cfg = DockerSandboxConfig::default();
-        docker_cfg.workspace_writable = true;
+        let docker_cfg = DockerSandboxConfig {
+            workspace_writable: true,
+            ..DockerSandboxConfig::default()
+        };
         let config = test_config_with_docker(docker_cfg);
         let args = build_docker_args("ls", &[], &config, &[]).unwrap();
 
@@ -650,11 +656,13 @@ mod tests {
 
     #[test]
     fn custom_resource_limits() {
-        let mut docker_cfg = DockerSandboxConfig::default();
-        docker_cfg.memory = "1g".to_string();
-        docker_cfg.cpus = 2.5;
-        docker_cfg.pids_limit = 512;
-        docker_cfg.tmpfs_size = "200m".to_string();
+        let docker_cfg = DockerSandboxConfig {
+            memory: "1g".to_string(),
+            cpus: 2.5,
+            pids_limit: 512,
+            tmpfs_size: "200m".to_string(),
+            ..DockerSandboxConfig::default()
+        };
         let config = test_config_with_docker(docker_cfg);
         let args = build_docker_args("ls", &[], &config, &[]).unwrap();
 
@@ -737,11 +745,13 @@ mod tests {
 
     #[test]
     fn extra_mounts_included() {
-        let mut docker_cfg = DockerSandboxConfig::default();
-        docker_cfg.extra_mounts = vec![
-            "/data/models:/models".to_string(),
-            "/data/cache:/cache".to_string(),
-        ];
+        let docker_cfg = DockerSandboxConfig {
+            extra_mounts: vec![
+                "/data/models:/models".to_string(),
+                "/data/cache:/cache".to_string(),
+            ],
+            ..DockerSandboxConfig::default()
+        };
         let config = test_config_with_docker(docker_cfg);
         let args = build_docker_args("ls", &[], &config, &[]).unwrap();
 

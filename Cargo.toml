@@ -23,7 +23,7 @@ repository = "https://github.com/markm39/aegis"
 readme = "README.md"
 keywords = ["ai-security", "red-team", "agent-testing", "adversarial", "security"]
 categories = ["development-tools::testing"]
-rust-version = "1.75"
+rust-version = "1.89"
 
 [workspace.dependencies]
 cedar-policy = "4"
@@ -42,7 +42,7 @@ thiserror = "2"
 anyhow = "1"
 toml = "0.8"
 hex = "0.4"
-notify = { version = "7", features = ["macos_fsevent"] }
+notify = { version = "8.2", features = ["macos_fsevent"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"

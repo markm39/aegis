@@ -1,6 +1,6 @@
 //! Terminal session management with PTY and terminal emulation.
 //!
-//! [`TerminalSession`] wraps a [`PtySession`](aegis_pilot::pty::PtySession)
+//! [`TerminalSession`] wraps a [`PtySession`]
 //! with a [`vt100::Parser`] to provide a fully emulated terminal. This lets
 //! you spawn a TUI application, send it keystrokes, and read back the
 //! rendered screen contents -- exactly as a user would see them.

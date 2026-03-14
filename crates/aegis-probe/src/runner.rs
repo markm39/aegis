@@ -369,6 +369,7 @@ fn execute_probe(
     let mut session =
         TerminalSession::spawn_with_options(opts).context("failed to spawn agent process")?;
 
+    #[cfg(target_os = "macos")]
     let session_pid = Some(session.pty().pid());
 
     // Wait for agent to complete, go idle, or timeout.

@@ -91,7 +91,7 @@ pub enum PilotUpdate {
     /// Periodic stats snapshot.
     Stats(PilotStats),
     /// The session supports external attach (e.g., tmux, or `claude --resume`).
-    /// Contains the command components to attach (e.g., ["claude", "--resume", "<id>"]).
+    /// Contains the command components to attach (e.g., `["claude", "--resume", "<id>"]`).
     AttachCommand(Vec<String>),
     /// Session metadata (stream kind + optional session id).
     SessionInfo {

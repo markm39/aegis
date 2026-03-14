@@ -1,6 +1,6 @@
 //! Real-time webhook alerting for Aegis audit events.
 //!
-//! This crate evaluates audit events against configured [`AlertRule`]s and
+//! This crate evaluates audit events against configured `AlertRule`s and
 //! dispatches HTTP POST webhooks when rules match. It provides:
 //!
 //! - [`AlertEvent`]: a lightweight struct carrying the fields needed for rule matching

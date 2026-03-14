@@ -12,7 +12,7 @@
 //! - [`stall::StallDetector`]: timer-based idle detection with nudge strategies
 //! - [`output::OutputBuffer`]: ring buffer of recent output lines
 //! - [`ansi`]: ANSI escape sequence stripping
-//! - [`supervisor::PilotSupervisor`]: main poll loop orchestrating all components
+//! - [`supervisor::run`]: main poll loop orchestrating all components
 
 pub mod adapter;
 pub mod adapters;

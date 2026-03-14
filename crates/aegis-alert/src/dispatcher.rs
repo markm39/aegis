@@ -1,6 +1,6 @@
 //! Background alert evaluation and dispatch loop.
 //!
-//! The [`AlertDispatcher`] runs on a dedicated `std::thread` with its own
+//! The [`run`] loop runs on a dedicated `std::thread` with its own
 //! single-threaded tokio runtime. It consumes [`AlertEvent`]s from an
 //! `std::sync::mpsc::Receiver`, evaluates them against configured alert rules,
 //! enforces per-rule cooldowns, and dispatches webhooks via `reqwest`.

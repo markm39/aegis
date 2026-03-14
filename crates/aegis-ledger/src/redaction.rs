@@ -77,7 +77,7 @@ impl PiiRedactor {
         Ok(())
     }
 
-    /// Build a [`PiiRedactor`] from a [`RedactionConfig`].
+    /// Build a [`PiiRedactor`] from an `aegis_types::config::RedactionConfig`.
     ///
     /// Compiles the built-in patterns (when `config.enabled` is true) and
     /// all custom patterns.  Returns an error if any custom pattern

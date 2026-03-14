@@ -123,21 +123,21 @@ jobs:
 
   # ---------- MSRV ----------
   msrv:
-    name: MSRV (1.75)
+    name: MSRV (1.89)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.75"
+          toolchain: "1.89"
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
 
       - name: Check MSRV
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
 
   # ---------- Security audit ----------
   security-audit:
@@ -169,9 +169,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          command: check ${{ matrix.check }}
+          key: deny-${{ matrix.check }}
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo-deny
+        run: cargo deny --all-features --locked check ${{ matrix.check }}
 
   # ---------- Unused dependencies ----------
   unused-deps:
@@ -192,4 +200,3 @@ jobs:
       - name: Check for unused deps
         run: cargo +nightly udeps --workspace
         continue-on-error: true  # advisory only, don't block CI
-

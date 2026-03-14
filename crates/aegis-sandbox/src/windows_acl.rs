@@ -3,7 +3,7 @@
 //! Provides a platform-agnostic [`FileSecurityChecker`] trait with concrete
 //! implementations:
 //! - [`UnixFileSecurityChecker`]: uses POSIX mode bits and UID metadata
-//! - [`WindowsFileSecurityChecker`] (behind `cfg(windows)`): stubs for Win32
+//! - `WindowsFileSecurityChecker` (behind `cfg(windows)`): stubs for Win32
 //!   security APIs (`GetNamedSecurityInfoW`, `AccessCheck`, etc.)
 //!
 //! On both platforms, world-writable files and suspicious ownership are flagged

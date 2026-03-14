@@ -401,7 +401,6 @@ mod tests {
             batch_size: 1,
             // Long flush interval so batches don't drain automatically.
             flush_interval: Duration::from_secs(60),
-            ..Default::default()
         };
         let writer = AsyncAuditWriter::start(tmp.path(), config).unwrap();
 

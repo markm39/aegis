@@ -4,9 +4,11 @@
 //! terminal I/O. The master end of the PTY is used for reading agent output
 //! and injecting keystrokes.
 
-use std::ffi::CString;
+use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
@@ -14,7 +16,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::pty::openpty;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{self, ForkResult, Pid};
+use nix::unistd::{self, Pid};
 
 use aegis_types::AegisError;
 
@@ -38,93 +40,69 @@ impl PtySession {
     ) -> Result<Self, AegisError> {
         let pty = openpty(None, None)
             .map_err(|e| AegisError::PilotError(format!("openpty failed: {e}")))?;
+        let slave_fd = pty.slave.as_raw_fd();
+        let stdin_fd = unistd::dup(pty.slave.as_raw_fd())
+            .map_err(|e| AegisError::PilotError(format!("dup stdin failed: {e}")))?;
+        let stdout_fd = unistd::dup(pty.slave.as_raw_fd())
+            .map_err(|e| AegisError::PilotError(format!("dup stdout failed: {e}")))?;
+        let stderr_fd = unistd::dup(pty.slave.as_raw_fd())
+            .map_err(|e| AegisError::PilotError(format!("dup stderr failed: {e}")))?;
 
-        // Safety: fork is unsafe but standard Unix practice for PTY management.
-        // The child immediately exec's, so async-signal-safety is maintained.
-        match unsafe { unistd::fork() } {
-            Ok(ForkResult::Child) => {
-                // Child process: set up the slave PTY as stdin/stdout/stderr.
-                // IMPORTANT: errors must call _exit(), not return via ?, because
-                // returning would propagate back to the caller in the child process,
-                // causing two processes to run the same parent code path.
-                // Run child setup in a closure so ? collects errors without
-                // returning to the caller (which would be the child process
-                // running the parent's code path -- a classic fork bug).
-                let err = (|| -> Result<(), String> {
-                    drop(pty.master);
+        let mut child = Command::new(command);
+        child
+            .args(args)
+            .current_dir(working_dir)
+            .env_remove("CLAUDECODE")
+            .stdin(Stdio::from(unsafe { File::from_raw_fd(stdin_fd) }))
+            .stdout(Stdio::from(unsafe { File::from_raw_fd(stdout_fd) }))
+            .stderr(Stdio::from(unsafe { File::from_raw_fd(stderr_fd) }));
 
-                    unistd::setsid().map_err(|e| format!("setsid failed: {e}"))?;
-
-                    // Set controlling terminal via ioctl TIOCSCTTY
-                    unsafe {
-                        if libc::ioctl(pty.slave.as_raw_fd(), libc::TIOCSCTTY as _, 0) < 0 {
-                            let err = std::io::Error::last_os_error();
-                            eprintln!("aegis-pilot: TIOCSCTTY failed: {err}");
-                        }
-                    }
-
-                    unistd::dup2(pty.slave.as_raw_fd(), libc::STDIN_FILENO)
-                        .map_err(|e| format!("dup2 stdin: {e}"))?;
-                    unistd::dup2(pty.slave.as_raw_fd(), libc::STDOUT_FILENO)
-                        .map_err(|e| format!("dup2 stdout: {e}"))?;
-                    unistd::dup2(pty.slave.as_raw_fd(), libc::STDERR_FILENO)
-                        .map_err(|e| format!("dup2 stderr: {e}"))?;
-
-                    drop(pty.slave);
-
-                    unistd::chdir(working_dir).map_err(|e| format!("chdir: {e}"))?;
-
-                    // Unset CLAUDECODE so nested Claude Code sessions don't
-                    // refuse to start with "cannot be launched inside another
-                    // Claude Code session".
-                    std::env::remove_var("CLAUDECODE");
-
-                    for (key, value) in env {
-                        std::env::set_var(key, value);
-                    }
-
-                    let c_command = CString::new(command.to_string())
-                        .map_err(|e| format!("invalid command: {e}"))?;
-                    let mut c_args: Vec<CString> = vec![c_command.clone()];
-                    for arg in args {
-                        c_args.push(
-                            CString::new(arg.as_str()).map_err(|e| format!("invalid arg: {e}"))?,
-                        );
-                    }
-
-                    unistd::execvp(&c_command, &c_args).map_err(|e| format!("exec failed: {e}"))?;
-
-                    Ok(()) // unreachable: execvp replaces the process
-                })();
-
-                // If we get here, something failed before exec replaced the process.
-                if let Err(e) = err {
-                    eprintln!("aegis-pilot: child setup failed: {e}");
-                }
-                unsafe { libc::_exit(1) };
-            }
-            Ok(ForkResult::Parent { child }) => {
-                // Parent: close the slave, keep the master
-                drop(pty.slave);
-
-                // Set master to non-blocking
-                let flags = fcntl(pty.master.as_raw_fd(), FcntlArg::F_GETFL)
-                    .map_err(|e| AegisError::PilotError(format!("fcntl F_GETFL: {e}")))?;
-                let flags = OFlag::from_bits_truncate(flags);
-                fcntl(
-                    pty.master.as_raw_fd(),
-                    FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK),
-                )
-                .map_err(|e| AegisError::PilotError(format!("fcntl F_SETFL: {e}")))?;
-
-                Ok(Self {
-                    master: pty.master,
-                    child_pid: child,
-                    exit_status: Mutex::new(None),
-                })
-            }
-            Err(e) => Err(AegisError::PilotError(format!("fork failed: {e}"))),
+        for (key, value) in env {
+            child.env(key, value);
         }
+
+        // Keep the post-fork path minimal: create a new session, attach the
+        // PTY as the controlling terminal, and close the extra slave handle.
+        unsafe {
+            child.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::close(slave_fd) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = child
+            .spawn()
+            .map_err(|e| AegisError::PilotError(format!("spawn failed: {e}")))?;
+
+        // Parent: close the extra slave handle, keep the master.
+        drop(pty.slave);
+
+        // Set master to non-blocking.
+        let flags = fcntl(pty.master.as_raw_fd(), FcntlArg::F_GETFL)
+            .map_err(|e| AegisError::PilotError(format!("fcntl F_GETFL: {e}")))?;
+        let flags = OFlag::from_bits_truncate(flags);
+        fcntl(
+            pty.master.as_raw_fd(),
+            FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK),
+        )
+        .map_err(|e| AegisError::PilotError(format!("fcntl F_SETFL: {e}")))?;
+
+        let child_pid = i32::try_from(child.id())
+            .map_err(|_| AegisError::PilotError("child pid exceeded i32".into()))?;
+
+        Ok(Self {
+            master: pty.master,
+            child_pid: Pid::from_raw(child_pid),
+            exit_status: Mutex::new(None),
+        })
     }
 
     /// Non-blocking read from the master PTY.
@@ -265,11 +243,21 @@ impl PtySession {
 
         loop {
             match waitpid(self.child_pid, None) {
-                Ok(WaitStatus::Exited(_, code)) => return Ok(code),
-                Ok(WaitStatus::Signaled(_, sig, _)) => return Ok(-(sig as i32)),
+                Ok(WaitStatus::Exited(_, code)) => {
+                    *self.exit_status.lock().unwrap() = Some(code);
+                    return Ok(code);
+                }
+                Ok(WaitStatus::Signaled(_, sig, _)) => {
+                    let code = -(sig as i32);
+                    *self.exit_status.lock().unwrap() = Some(code);
+                    return Ok(code);
+                }
                 Ok(WaitStatus::StillAlive) => continue,
                 Ok(_) => continue, // Stopped, continued, etc. -- keep waiting
-                Err(nix::errno::Errno::ECHILD) => return Ok(0), // Already reaped
+                Err(nix::errno::Errno::ECHILD) => {
+                    *self.exit_status.lock().unwrap() = Some(0);
+                    return Ok(0);
+                }
                 Err(e) => {
                     return Err(AegisError::PilotError(format!("waitpid: {e}")));
                 }
