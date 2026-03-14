@@ -1,4 +1,4 @@
-//! Main pilot supervisor loop.
+//! Main session supervisor loop.
 //!
 //! Orchestrates the PTY session, agent adapter, stall detector, and output
 //! buffer into a single poll-based event loop. Evaluates detected permission
@@ -25,7 +25,7 @@ use crate::output::OutputBuffer;
 use crate::session::{AgentSession, StreamKind};
 use crate::stall::{StallAction, StallDetector};
 
-/// Statistics collected during a pilot session.
+/// Statistics collected during an interactive probe session.
 #[derive(Debug, Clone, Default)]
 pub struct PilotStats {
     /// Number of prompts auto-approved.
@@ -123,15 +123,15 @@ struct PendingInfo {
 
 /// Configuration for the supervisor run loop.
 pub struct SupervisorConfig {
-    /// Pilot configuration (adapter, stall, control settings).
-    pub pilot_config: PilotConfig,
+    /// Session configuration (adapter, stall, control settings).
+    pub session_config: PilotConfig,
     /// The agent principal name (for Cedar policy evaluation).
     pub principal: String,
     /// Whether to pass raw PTY output to stdout (interactive mode).
     pub interactive: bool,
 }
 
-/// Run the pilot supervisor loop.
+/// Run the session supervisor loop.
 ///
 /// This is the main entry point. It blocks until the child process exits.
 ///
@@ -140,7 +140,7 @@ pub struct SupervisorConfig {
 /// - `adapter`: the agent adapter for prompt detection
 /// - `engine`: the Cedar policy engine for evaluating detected actions
 /// - `config`: supervisor configuration
-/// - `event_tx`: optional channel for emitting pilot events (webhooks, logging)
+/// - `event_tx`: optional channel for emitting session events (webhooks, logging)
 /// - `output_tx`: optional channel for mirroring completed output lines
 ///   to another consumer without sharing the ring buffer
 /// - `update_tx`: optional channel for richer TUI updates
@@ -158,8 +158,8 @@ pub fn run(
     update_tx: Option<&mpsc::Sender<PilotUpdate>>,
     command_rx: Option<&mpsc::Receiver<SupervisorCommand>>,
 ) -> Result<(i32, PilotStats), AegisError> {
-    let mut output_buf = OutputBuffer::new(config.pilot_config.output_buffer_lines);
-    let mut stall = StallDetector::new(&config.pilot_config.stall);
+    let mut output_buf = OutputBuffer::new(config.session_config.output_buffer_lines);
+    let mut stall = StallDetector::new(&config.session_config.stall);
     let mut stats = PilotStats::default();
     let mut read_buf = [0u8; 8192];
     let mut pending: HashMap<Uuid, PendingInfo> = HashMap::new();
@@ -168,7 +168,7 @@ pub fn run(
 
     let poll_timeout_ms = std::cmp::max(
         std::cmp::min(
-            config.pilot_config.stall.timeout_secs.saturating_mul(1000),
+            config.session_config.stall.timeout_secs.saturating_mul(1000),
             5000, // Check at least every 5 seconds
         ) as i32,
         50, // Never busy-loop: minimum 50ms poll interval
@@ -184,7 +184,7 @@ pub fn run(
     info!(
         adapter = adapter.name(),
         principal = config.principal,
-        "pilot supervisor started"
+        "session supervisor started"
     );
 
     // Publish stream kind/session id if available at start.
@@ -451,7 +451,7 @@ fn handle_scan_result(
             );
         }
         ScanResult::Uncertain(text) => {
-            let action_taken = match config.pilot_config.uncertain_action {
+            let action_taken = match config.session_config.uncertain_action {
                 UncertainAction::Deny => {
                     pty.send_line("n")?;
                     stats.denied += 1;

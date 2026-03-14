@@ -245,7 +245,7 @@ Each JSON report includes:
 - [`crates/aegis-observer`](crates/aegis-observer): filesystem observation and snapshot diffing
 - [`crates/aegis-ledger`](crates/aegis-ledger): append-only audit primitives
 - [`crates/aegis-policy`](crates/aegis-policy): Cedar-based policy evaluation
-- [`crates/aegis-pilot`](crates/aegis-pilot): PTY primitives and driver adapters used by the runner
+- [`crates/aegis-pilot`](crates/aegis-pilot): PTY/session primitives and driver adapters used by probe execution
 - [`crates/aegis-harness`](crates/aegis-harness): PTY/session helpers used by probe execution
 
 The legacy runtime and orchestration crates have been removed from the product repo.

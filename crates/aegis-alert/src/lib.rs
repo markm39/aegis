@@ -43,9 +43,9 @@ pub struct AlertEvent {
     pub policy_id: Option<String>,
     /// The session ID this event belongs to, if any.
     pub session_id: Option<Uuid>,
-    /// Optional pilot-specific context for enhanced webhook payloads.
+    /// Optional session-specific context for enhanced webhook payloads.
     ///
     /// When present, the payload includes recent agent output, callback URLs,
-    /// and pending request details. Used by the `aegis pilot` supervisor.
-    pub pilot_context: Option<serde_json::Value>,
+    /// and pending request details from interactive probe sessions.
+    pub session_context: Option<serde_json::Value>,
 }

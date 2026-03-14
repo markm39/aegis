@@ -257,7 +257,7 @@ pub struct AlertRule {
     pub cooldown_secs: u64,
 }
 
-/// What to do when the pilot adapter cannot determine the action type.
+/// What to do when the session adapter cannot determine the action type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum UncertainAction {
     /// Deny the action.
@@ -345,7 +345,7 @@ fn default_nudge_message() -> String {
     "continue".to_string()
 }
 
-/// Stall detection configuration for the pilot supervisor.
+/// Stall detection configuration for the PTY session supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StallConfig {
     /// Seconds of no output before considering the agent stalled.
@@ -373,9 +373,9 @@ fn default_output_buffer_lines() -> usize {
     200
 }
 
-/// Configuration for the PTY-based testing supervisor.
+/// Configuration for PTY-based session supervision during probe execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PilotConfig {
+pub struct SessionConfig {
     /// Which agent adapter to use for prompt detection.
     #[serde(default)]
     pub adapter: AdapterConfig,
@@ -390,7 +390,7 @@ pub struct PilotConfig {
     pub uncertain_action: UncertainAction,
 }
 
-impl Default for PilotConfig {
+impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             adapter: AdapterConfig::default(),
@@ -400,6 +400,9 @@ impl Default for PilotConfig {
         }
     }
 }
+
+#[doc(hidden)]
+pub type PilotConfig = SessionConfig;
 
 /// Configuration for PII redaction in audit logs.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -444,8 +447,9 @@ pub struct AegisConfig {
     /// Webhook alert rules evaluated against every audit event.
     #[serde(default)]
     pub alerts: Vec<AlertRule>,
-    /// PTY supervisor configuration.
-    pub pilot: Option<PilotConfig>,
+    /// PTY session supervision configuration for interactive agents.
+    #[serde(default, alias = "pilot")]
+    pub session: Option<SessionConfig>,
 }
 
 /// Validate that a config name is safe for use as a directory component.
@@ -513,7 +517,7 @@ impl AegisConfig {
             isolation,
             observer: ObserverConfig::default(),
             alerts: Vec::new(),
-            pilot: None,
+            session: None,
         }
     }
 }
@@ -549,7 +553,7 @@ mod tests {
                 principal: None,
                 cooldown_secs: 30,
             }],
-            pilot: Some(PilotConfig::default()),
+            session: Some(SessionConfig::default()),
         };
 
         let toml_str = config.to_toml().unwrap();
@@ -558,7 +562,7 @@ mod tests {
         assert_eq!(parsed.allowed_network.len(), 1);
         assert_eq!(parsed.allowed_network[0].host, "api.openai.com");
         assert_eq!(parsed.alerts.len(), 1);
-        assert!(parsed.pilot.is_some());
+        assert!(parsed.session.is_some());
     }
 
     #[test]
@@ -758,7 +762,24 @@ mod tests {
         let config = AegisConfig::from_toml(toml_str).unwrap();
         assert_eq!(config.name, "legacy-agent");
         assert!(config.alerts.is_empty());
-        assert!(config.pilot.is_none());
+        assert!(config.session.is_none());
+    }
+
+    #[test]
+    fn legacy_pilot_key_still_parses() {
+        let toml_str = r#"
+            name = "legacy-agent"
+            sandbox_dir = "/tmp/sandbox"
+            policy_paths = ["/tmp/policies"]
+            ledger_path = "/tmp/audit.db"
+            allowed_network = []
+            isolation = "Process"
+
+            [pilot]
+            output_buffer_lines = 250
+        "#;
+        let config = AegisConfig::from_toml(toml_str).unwrap();
+        assert_eq!(config.session.unwrap().output_buffer_lines, 250);
     }
 
     #[test]

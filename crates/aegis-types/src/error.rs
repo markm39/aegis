@@ -26,8 +26,8 @@ pub enum AegisError {
     #[error("configuration error: {0}")]
     ConfigError(String),
 
-    /// PTY supervisor error.
-    #[error("pilot error: {0}")]
+    /// PTY session supervision error.
+    #[error("session error: {0}")]
     PilotError(String),
 }
 
@@ -59,7 +59,7 @@ mod tests {
         );
         assert_eq!(
             AegisError::PilotError("pty failed".into()).to_string(),
-            "pilot error: pty failed"
+            "session error: pty failed"
         );
     }
 }
