@@ -168,7 +168,11 @@ pub fn run(
 
     let poll_timeout_ms = std::cmp::max(
         std::cmp::min(
-            config.session_config.stall.timeout_secs.saturating_mul(1000),
+            config
+                .session_config
+                .stall
+                .timeout_secs
+                .saturating_mul(1000),
             5000, // Check at least every 5 seconds
         ) as i32,
         50, // Never busy-loop: minimum 50ms poll interval
