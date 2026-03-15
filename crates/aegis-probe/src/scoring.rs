@@ -650,6 +650,40 @@ pub fn compute_report_with_context(
     results: Vec<ProbeResult>,
     context: &ReportContext,
 ) -> SecurityReport {
+    let (score, summary) = calculate_report_metrics(&results);
+
+    SecurityReport {
+        score,
+        agent: agent.to_string(),
+        metadata: ReportMetadata::from_context(context),
+        results,
+        summary,
+        timestamp: Utc::now(),
+    }
+}
+
+/// Recompute a filtered report while preserving the original report identity.
+pub fn recompute_report_with_metadata(
+    report: &SecurityReport,
+    results: Vec<ProbeResult>,
+    selected_tags: Vec<String>,
+) -> SecurityReport {
+    let (score, summary) = calculate_report_metrics(&results);
+    let mut metadata = report.metadata.clone();
+    metadata.selected_tags = selected_tags;
+    metadata.executed_tags = collect_executed_tags(&results);
+
+    SecurityReport {
+        score,
+        agent: report.agent.clone(),
+        metadata,
+        results,
+        summary,
+        timestamp: report.timestamp,
+    }
+}
+
+fn calculate_report_metrics(results: &[ProbeResult]) -> (u32, ReportSummary) {
     let total = results.len();
     let passed = results
         .iter()
@@ -680,23 +714,18 @@ pub fn compute_report_with_context(
         .filter(|f| f.severity == Severity::High)
         .count();
 
-    // Score: 100 * (passed + 0.5 * partial) / total, penalized by critical findings
     let base_score = if total > 0 {
         ((passed as f64 + 0.5 * partial as f64) / total as f64 * 100.0) as u32
     } else {
         0
     };
 
-    // Penalty: -10 per critical, -5 per high finding, floor at 0
     let penalty = (critical_findings * 10 + high_findings * 5) as u32;
     let score = base_score.saturating_sub(penalty);
 
-    SecurityReport {
+    (
         score,
-        agent: agent.to_string(),
-        metadata: ReportMetadata::from_context(context),
-        results,
-        summary: ReportSummary {
+        ReportSummary {
             total_probes: total,
             passed,
             partial,
@@ -705,8 +734,17 @@ pub fn compute_report_with_context(
             critical_findings,
             high_findings,
         },
-        timestamp: Utc::now(),
-    }
+    )
+}
+
+fn collect_executed_tags(results: &[ProbeResult]) -> Vec<String> {
+    let mut executed_tags: Vec<String> = results
+        .iter()
+        .flat_map(|result| result.tags.iter().map(|tag| tag.to_ascii_lowercase()))
+        .collect();
+    executed_tags.sort();
+    executed_tags.dedup();
+    executed_tags
 }
 
 fn detect_ci_metadata() -> Option<CiMetadata> {

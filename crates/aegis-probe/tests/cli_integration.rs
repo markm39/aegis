@@ -3,6 +3,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::json;
+use std::path::Path;
 use tempfile::TempDir;
 
 #[allow(deprecated)]
@@ -13,6 +14,31 @@ fn probe_binary() -> Command {
 fn probes_dir() -> &'static str {
     // Use the workspace-level probes directory
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../probes")
+}
+
+fn write_json(path: &Path, value: &serde_json::Value) {
+    std::fs::write(path, serde_json::to_string(value).unwrap()).unwrap();
+}
+
+fn tagged_probe_result(
+    probe_name: &str,
+    verdict: &str,
+    tags: &[&str],
+    duration_ms: u64,
+    output_length: usize,
+) -> serde_json::Value {
+    json!({
+        "probe_name": probe_name,
+        "tags": tags,
+        "category": "prompt_injection",
+        "severity": "high",
+        "verdict": verdict,
+        "findings": [],
+        "agent": "TestAgent",
+        "duration_ms": duration_ms,
+        "output_length": output_length,
+        "timestamp": "2026-03-13T00:00:00Z"
+    })
 }
 
 #[test]
@@ -463,6 +489,67 @@ fn compare_detects_regression() {
         .stdout(predicate::str::contains("Regressions"));
 }
 
+#[test]
+fn compare_filter_by_tag_uses_saved_report_tags() {
+    let dir = TempDir::new().unwrap();
+    let baseline = json!({
+        "agent": "Baseline",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 2, "passed": 2, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 1000, 120),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1100, 140)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let current = json!({
+        "agent": "Current",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "fail", &["sbom"], 1200, 128),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1000, 142)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let baseline_path = dir.path().join("baseline.json");
+    let current_path = dir.path().join("current.json");
+    write_json(&baseline_path, &baseline);
+    write_json(&current_path, &current);
+
+    probe_binary()
+        .args([
+            "compare",
+            baseline_path.to_str().unwrap(),
+            current_path.to_str().unwrap(),
+            "--tag",
+            "SBOM",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Tag filter: sbom"))
+        .stdout(predicate::str::contains("Regressions (1):"))
+        .stdout(predicate::str::contains("sbom-probe"))
+        .stdout(predicate::str::contains("gradle-probe").not());
+}
+
 // ---------- Fingerprint ----------
 
 #[test]
@@ -765,6 +852,139 @@ fn summary_valid_report() {
         .failure() // failed > 0 causes exit 1
         .stdout(predicate::str::contains("Score: 95/100"))
         .stdout(predicate::str::contains("9 passed"));
+}
+
+#[test]
+fn summary_filter_by_tag_uses_saved_report_tags() {
+    let dir = TempDir::new().unwrap();
+    let report = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 900, 96),
+            tagged_probe_result("gradle-probe", "fail", &["gradle"], 1200, 144)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let path = dir.path().join("report.json");
+    write_json(&path, &report);
+
+    probe_binary()
+        .args(["summary", path.to_str().unwrap(), "--tag", "SBOM"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Score: 100/100"))
+        .stdout(predicate::str::contains(
+            "1 passed, 0 failed, 0 partial, 0 errors",
+        ))
+        .stdout(predicate::str::contains("Tags: sbom"));
+}
+
+#[test]
+fn summary_filter_requires_persisted_tags() {
+    let dir = TempDir::new().unwrap();
+    let report = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 2,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [{
+            "probe_name": "legacy-probe",
+            "category": "prompt_injection",
+            "severity": "high",
+            "verdict": "pass",
+            "findings": [],
+            "agent": "TestAgent",
+            "duration_ms": 900,
+            "timestamp": "2026-03-13T00:00:00Z"
+        }],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let path = dir.path().join("legacy-report.json");
+    write_json(&path, &report);
+
+    probe_binary()
+        .args(["summary", path.to_str().unwrap(), "--tag", "sbom"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not include persisted probe tags",
+        ));
+}
+
+#[test]
+fn distillation_filter_by_tag_uses_saved_report_tags() {
+    let dir = TempDir::new().unwrap();
+    let report_a = json!({
+        "agent": "Teacher",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 2, "passed": 2, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 1000, 120),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1100, 140)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let report_b = json!({
+        "agent": "Student",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 2, "passed": 2, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 900, 118),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1300, 180)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let report_a_path = dir.path().join("teacher.json");
+    let report_b_path = dir.path().join("student.json");
+    write_json(&report_a_path, &report_a);
+    write_json(&report_b_path, &report_b);
+
+    probe_binary()
+        .args([
+            "distillation",
+            report_a_path.to_str().unwrap(),
+            report_b_path.to_str().unwrap(),
+            "--tag",
+            "SBOM",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tag filter: sbom"))
+        .stdout(predicate::str::contains("Probes compared: 1"));
 }
 
 #[test]

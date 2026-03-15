@@ -138,6 +138,10 @@ enum Command {
     Summary {
         /// Path to JSON report file.
         report: PathBuf,
+
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
     },
 
     /// Re-render a saved JSON report in another output format.
@@ -160,6 +164,10 @@ enum Command {
         baseline: PathBuf,
         /// Path to the current (newer) report.
         current: PathBuf,
+
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
     },
 
     /// Generate shell completions.
@@ -268,6 +276,10 @@ enum Command {
         report_a: PathBuf,
         /// Path to second agent's JSON report.
         report_b: PathBuf,
+
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
     },
 }
 
@@ -358,8 +370,8 @@ fn main() {
         Command::Validate { probes_dir } => {
             cmd_validate(&probes_dir);
         }
-        Command::Summary { report } => {
-            cmd_summary(&report);
+        Command::Summary { report, tag } => {
+            cmd_summary(&report, &tag);
         }
         Command::Render {
             report,
@@ -368,8 +380,12 @@ fn main() {
         } => {
             cmd_render(&report, &format, output.as_deref());
         }
-        Command::Compare { baseline, current } => {
-            cmd_compare(&baseline, &current);
+        Command::Compare {
+            baseline,
+            current,
+            tag,
+        } => {
+            cmd_compare(&baseline, &current, &tag);
         }
         Command::Completions { shell } => {
             clap_complete::generate(
@@ -427,8 +443,12 @@ fn main() {
                 output: output.as_deref(),
             });
         }
-        Command::Distillation { report_a, report_b } => {
-            cmd_distillation(&report_a, &report_b);
+        Command::Distillation {
+            report_a,
+            report_b,
+            tag,
+        } => {
+            cmd_distillation(&report_a, &report_b, &tag);
         }
     }
 }
@@ -743,17 +763,19 @@ fn cmd_validate(probes_dir: &Path) {
     }
 }
 
-fn cmd_summary(report_path: &Path) {
-    let report = load_report(report_path);
+fn cmd_summary(report_path: &Path, tags: &[String]) {
+    let tag_filter = normalized_tag_filter(tags);
+    let report = load_filtered_report(report_path, &tag_filter);
 
     println!(
-        "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}",
+        "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}{}",
         report.score,
         report.summary.passed,
         report.summary.failed,
         report.summary.partial,
         report.summary.errors,
         report.agent,
+        format_tag_filter_suffix(&tag_filter),
     );
 
     if report.summary.failed > 0 {
@@ -790,9 +812,10 @@ fn cmd_render(report_path: &Path, format: &str, output_path: Option<&Path>) {
     }
 }
 
-fn cmd_compare(baseline_path: &Path, current_path: &Path) {
-    let baseline = load_report(baseline_path);
-    let current = load_report(current_path);
+fn cmd_compare(baseline_path: &Path, current_path: &Path, tags: &[String]) {
+    let tag_filter = normalized_tag_filter(tags);
+    let baseline = load_filtered_report(baseline_path, &tag_filter);
+    let current = load_filtered_report(current_path, &tag_filter);
     ensure_compatible_reports(&baseline, &current);
 
     // Score delta
@@ -807,6 +830,9 @@ fn cmd_compare(baseline_path: &Path, current_path: &Path) {
         baseline.score, current.score, delta_str,
     );
     println!("Agent: {} -> {}", baseline.agent, current.agent);
+    if !tag_filter.is_empty() {
+        println!("Tag filter: {}", tag_filter.join(", "));
+    }
     if !current.metadata.probe_pack_hash.is_empty() {
         println!(
             "Probe pack: {}",
@@ -923,6 +949,70 @@ fn load_report(path: &Path) -> scoring::SecurityReport {
             eprintln!("Error parsing {}: {e}", path.display());
             process::exit(1);
         }
+    }
+}
+
+fn load_filtered_report(path: &Path, tags: &[String]) -> scoring::SecurityReport {
+    let report = load_report(path);
+    filter_saved_report_by_tags(report, path, tags)
+}
+
+fn filter_saved_report_by_tags(
+    report: scoring::SecurityReport,
+    path: &Path,
+    tags: &[String],
+) -> scoring::SecurityReport {
+    if tags.is_empty() {
+        return report;
+    }
+
+    let supports_tags = report.metadata.schema_version >= 3
+        || !report.metadata.executed_tags.is_empty()
+        || report.results.iter().any(|result| !result.tags.is_empty());
+
+    if !supports_tags {
+        eprintln!(
+            "Report {} does not include persisted probe tags. Re-run probes with schema v3 or later.",
+            path.display()
+        );
+        process::exit(1);
+    }
+
+    let filtered_results: Vec<_> = report
+        .results
+        .iter()
+        .filter(|result| result_matches_tag_filter(result, tags))
+        .cloned()
+        .collect();
+
+    if filtered_results.is_empty() {
+        eprintln!(
+            "No probes matched tag filter [{}] in {}.",
+            tags.join(", "),
+            path.display()
+        );
+        process::exit(1);
+    }
+
+    scoring::recompute_report_with_metadata(&report, filtered_results, tags.to_vec())
+}
+
+fn result_matches_tag_filter(result: &scoring::ProbeResult, tags: &[String]) -> bool {
+    if tags.is_empty() {
+        return true;
+    }
+
+    result
+        .tags
+        .iter()
+        .any(|tag| tags.iter().any(|wanted| tag.eq_ignore_ascii_case(wanted)))
+}
+
+fn format_tag_filter_suffix(tags: &[String]) -> String {
+    if tags.is_empty() {
+        String::new()
+    } else {
+        format!(" | Tags: {}", tags.join(", "))
     }
 }
 
@@ -1824,9 +1914,10 @@ fn render_multi_run_terminal(report: &aegis_probe::stats::MultiRunReport) {
     println!();
 }
 
-fn cmd_distillation(path_a: &Path, path_b: &Path) {
-    let report_a = load_report(path_a);
-    let report_b = load_report(path_b);
+fn cmd_distillation(path_a: &Path, path_b: &Path, tags: &[String]) {
+    let tag_filter = normalized_tag_filter(tags);
+    let report_a = load_filtered_report(path_a, &tag_filter);
+    let report_b = load_filtered_report(path_b, &tag_filter);
     ensure_compatible_reports(&report_a, &report_b);
 
     // Extract model fingerprints if output is available
@@ -1860,12 +1951,20 @@ fn cmd_distillation(path_a: &Path, path_b: &Path) {
         analysis.agent_a, analysis.agent_b
     );
     println!("{}", "=".repeat(60));
+    if !tag_filter.is_empty() {
+        println!("Tag filter: {}", tag_filter.join(", "));
+    }
     println!(
         "Distillation score: {:.1}%",
         analysis.distillation_score * 100.0,
     );
     println!("Interpretation: {:?}", analysis.interpretation);
     println!("Probes compared: {}", analysis.probes_compared);
+
+    if analysis.probes_compared == 0 {
+        eprintln!("No overlapping probes remained after applying the saved-report tag filter.");
+        process::exit(1);
+    }
 
     println!("\nSignal Breakdown:");
     println!("{:<30} {:>10}", "SIGNAL", "SCORE");
