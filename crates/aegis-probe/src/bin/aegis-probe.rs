@@ -36,6 +36,7 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
         aegis-probe validate                         # Check probe files are valid\n  \
         aegis-probe registry export report.json      # Export derived-only bundle\n  \
         aegis-probe registry export-history reports/ # Export derived-only history bundle\n  \
+        aegis-probe waivers sign waivers.toml       # Add signatures to a waiver file\n  \
         aegis-probe summary report.json              # Print one-line summary from report\n  \
         aegis-probe history reports/ --limit 30      # Analyze a directory of saved reports\n  \
         aegis-probe render report.json --format sarif # Re-render a saved report"
@@ -120,6 +121,14 @@ enum Command {
         /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
         #[arg(long)]
         waiver_file: Option<PathBuf>,
+
+        /// Require every waiver in --waiver-file to carry a valid signature.
+        #[arg(long)]
+        require_signed_waivers: bool,
+
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
     },
 
     /// List available probes.
@@ -164,6 +173,14 @@ enum Command {
         /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
         #[arg(long)]
         waiver_file: Option<PathBuf>,
+
+        /// Require every waiver in --waiver-file to carry a valid signature.
+        #[arg(long)]
+        require_signed_waivers: bool,
+
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
     },
 
     /// Re-render a saved JSON report in another output format.
@@ -208,6 +225,14 @@ enum Command {
         /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
         #[arg(long)]
         waiver_file: Option<PathBuf>,
+
+        /// Require every waiver in --waiver-file to carry a valid signature.
+        #[arg(long)]
+        require_signed_waivers: bool,
+
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
     },
 
     /// Compare two JSON reports to show security changes.
@@ -236,6 +261,14 @@ enum Command {
         /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
         #[arg(long)]
         waiver_file: Option<PathBuf>,
+
+        /// Require every waiver in --waiver-file to carry a valid signature.
+        #[arg(long)]
+        require_signed_waivers: bool,
+
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
     },
 
     /// Generate shell completions.
@@ -257,6 +290,12 @@ enum Command {
     Baseline {
         #[command(subcommand)]
         action: BaselineAction,
+    },
+
+    /// Sign, validate, and audit waiver policy files.
+    Waivers {
+        #[command(subcommand)]
+        action: WaiverAction,
     },
 
     /// Run the full benchmark suite and output a standardized scorecard.
@@ -506,6 +545,52 @@ enum BaselineAction {
     },
 }
 
+#[derive(Subcommand)]
+enum WaiverAction {
+    /// Validate a waiver file and optionally enforce signatures.
+    Validate {
+        /// Path to a waiver TOML or JSON file.
+        file: PathBuf,
+        /// Require every waiver in the file to carry a valid signature.
+        #[arg(long)]
+        require_signed_waivers: bool,
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
+    },
+    /// Add or refresh waiver signatures using the configured signing key.
+    Sign {
+        /// Path to a waiver TOML or JSON file.
+        file: PathBuf,
+        /// Write the signed file to a new path instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
+    },
+    /// Render an audit view of waiver ownership, expiry, and signature posture.
+    Report {
+        /// Path to a waiver TOML or JSON file.
+        file: PathBuf,
+        /// Mark waivers expiring within this many days.
+        #[arg(long, default_value = "30")]
+        days: i64,
+        /// Output format: terminal, json, or markdown.
+        #[arg(long, default_value = "terminal")]
+        format: String,
+        /// Write the rendered report to a file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Require every waiver in the file to carry a valid signature.
+        #[arg(long)]
+        require_signed_waivers: bool,
+        /// Environment variable holding the waiver signing key.
+        #[arg(long, default_value = "AEGIS_WAIVER_SIGNING_KEY")]
+        waiver_key_env: String,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum FailOn {
     Fail,
@@ -546,6 +631,8 @@ fn main() {
             fail_on,
             min_score,
             waiver_file,
+            require_signed_waivers,
+            waiver_key_env,
         } => {
             cmd_run(&RunOptions {
                 agent: &agent,
@@ -566,6 +653,10 @@ fn main() {
                 fail_on,
                 min_score,
                 waiver_file: waiver_file.as_deref(),
+                waiver_policy: WaiverPolicyOptions {
+                    require_signed_waivers,
+                    waiver_key_env,
+                },
             });
         }
         Command::List {
@@ -584,8 +675,19 @@ fn main() {
             tag,
             profile,
             waiver_file,
+            require_signed_waivers,
+            waiver_key_env,
         } => {
-            cmd_summary(&report, &tag, &profile, waiver_file.as_deref());
+            cmd_summary(
+                &report,
+                &tag,
+                &profile,
+                waiver_file.as_deref(),
+                &WaiverPolicyOptions {
+                    require_signed_waivers,
+                    waiver_key_env,
+                },
+            );
         }
         Command::Render {
             report,
@@ -602,16 +704,23 @@ fn main() {
             limit,
             format,
             waiver_file,
+            require_signed_waivers,
+            waiver_key_env,
         } => {
-            cmd_history(
-                &reports_dir,
-                agent.as_deref(),
-                &tag,
-                &profile,
+            let waiver_policy = WaiverPolicyOptions {
+                require_signed_waivers,
+                waiver_key_env,
+            };
+            cmd_history(&HistoryOptions {
+                reports_dir: &reports_dir,
+                agent_filter: agent.as_deref(),
+                tags: &tag,
+                profiles: &profile,
                 limit,
-                &format,
-                waiver_file.as_deref(),
-            );
+                format: &format,
+                waiver_file: waiver_file.as_deref(),
+                waiver_policy: &waiver_policy,
+            });
         }
         Command::Compare {
             baseline,
@@ -621,16 +730,23 @@ fn main() {
             format,
             output,
             waiver_file,
+            require_signed_waivers,
+            waiver_key_env,
         } => {
-            cmd_compare(
-                &baseline,
-                &current,
-                &tag,
-                &profile,
-                &format,
-                output.as_deref(),
-                waiver_file.as_deref(),
-            );
+            let waiver_policy = WaiverPolicyOptions {
+                require_signed_waivers,
+                waiver_key_env,
+            };
+            cmd_compare(&CompareOptions {
+                baseline_path: &baseline,
+                current_path: &current,
+                tags: &tag,
+                profiles: &profile,
+                format: &format,
+                output_path: output.as_deref(),
+                waiver_file: waiver_file.as_deref(),
+                waiver_policy: &waiver_policy,
+            });
         }
         Command::Completions { shell } => {
             clap_complete::generate(
@@ -648,6 +764,9 @@ fn main() {
         }
         Command::Baseline { action } => {
             cmd_baseline(action);
+        }
+        Command::Waivers { action } => {
+            cmd_waivers(action);
         }
         Command::Benchmark {
             agents,
@@ -740,6 +859,35 @@ struct RunOptions<'a> {
     fail_on: Option<FailOn>,
     min_score: Option<u32>,
     waiver_file: Option<&'a Path>,
+    waiver_policy: WaiverPolicyOptions,
+}
+
+#[derive(Clone, Debug)]
+struct WaiverPolicyOptions {
+    require_signed_waivers: bool,
+    waiver_key_env: String,
+}
+
+struct HistoryOptions<'a> {
+    reports_dir: &'a Path,
+    agent_filter: Option<&'a str>,
+    tags: &'a [String],
+    profiles: &'a [String],
+    limit: Option<usize>,
+    format: &'a str,
+    waiver_file: Option<&'a Path>,
+    waiver_policy: &'a WaiverPolicyOptions,
+}
+
+struct CompareOptions<'a> {
+    baseline_path: &'a Path,
+    current_path: &'a Path,
+    tags: &'a [String],
+    profiles: &'a [String],
+    format: &'a str,
+    output_path: Option<&'a Path>,
+    waiver_file: Option<&'a Path>,
+    waiver_policy: &'a WaiverPolicyOptions,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -910,7 +1058,8 @@ fn cmd_run(opts: &RunOptions<'_>) {
     let mut final_report =
         scoring::compute_report_with_context(&agent_name, results, &report_context);
     let gate_report = if let Some(waiver_path) = opts.waiver_file {
-        let evaluation = evaluate_report_with_waivers_or_exit(&final_report, waiver_path);
+        let evaluation =
+            evaluate_report_with_waivers_or_exit(&final_report, waiver_path, &opts.waiver_policy);
         final_report.metadata.applied_waivers = evaluation.applied.clone();
         emit_waiver_diagnostics(waiver_path, &evaluation);
         evaluation.effective_report
@@ -1082,11 +1231,12 @@ fn cmd_summary(
     tags: &[String],
     profiles: &[String],
     waiver_file: Option<&Path>,
+    waiver_policy: &WaiverPolicyOptions,
 ) {
     let selection = resolve_filter_selection_or_exit(tags, profiles);
     let mut report = load_filtered_report(report_path, &selection);
     let gate_report = if let Some(waiver_path) = waiver_file {
-        let evaluation = evaluate_report_with_waivers_or_exit(&report, waiver_path);
+        let evaluation = evaluate_report_with_waivers_or_exit(&report, waiver_path, waiver_policy);
         report.metadata.applied_waivers = evaluation.applied.clone();
         emit_waiver_diagnostics(waiver_path, &evaluation);
         evaluation.effective_report
@@ -1140,22 +1290,14 @@ fn cmd_render(report_path: &Path, format: &str, output_path: Option<&Path>) {
     }
 }
 
-fn cmd_history(
-    reports_dir: &Path,
-    agent_filter: Option<&str>,
-    tags: &[String],
-    profiles: &[String],
-    limit: Option<usize>,
-    format: &str,
-    waiver_file: Option<&Path>,
-) {
-    let selection = resolve_filter_selection_or_exit(tags, profiles);
-    let reports = load_history_reports(reports_dir, agent_filter, &selection, limit);
+fn cmd_history(opts: &HistoryOptions<'_>) {
+    let selection = resolve_filter_selection_or_exit(opts.tags, opts.profiles);
+    let reports = load_history_reports(opts.reports_dir, opts.agent_filter, &selection, opts.limit);
     let mut analysis = aegis_probe::history::analyze_history(&reports, &selection.effective_tags);
 
-    if let Some(waiver_path) = waiver_file {
+    if let Some(waiver_path) = opts.waiver_file {
         let (effective_reports, latest_applied, expired) =
-            apply_waivers_to_history_reports_or_exit(&reports, waiver_path);
+            apply_waivers_to_history_reports_or_exit(&reports, waiver_path, opts.waiver_policy);
         let effective_analysis =
             aegis_probe::history::analyze_history(&effective_reports, &selection.effective_tags);
         analysis.waived_regressions =
@@ -1176,7 +1318,7 @@ fn cmd_history(
         }
     }
 
-    match format {
+    match opts.format {
         "terminal" => render_history_terminal(&analysis),
         "json" => match serde_json::to_string_pretty(&analysis) {
             Ok(json) => println!("{json}"),
@@ -1195,25 +1337,19 @@ fn cmd_history(
     }
 }
 
-fn cmd_compare(
-    baseline_path: &Path,
-    current_path: &Path,
-    tags: &[String],
-    profiles: &[String],
-    format: &str,
-    output_path: Option<&Path>,
-    waiver_file: Option<&Path>,
-) {
-    let selection = resolve_filter_selection_or_exit(tags, profiles);
-    let baseline = load_filtered_report(baseline_path, &selection);
-    let current = load_filtered_report(current_path, &selection);
+fn cmd_compare(opts: &CompareOptions<'_>) {
+    let selection = resolve_filter_selection_or_exit(opts.tags, opts.profiles);
+    let baseline = load_filtered_report(opts.baseline_path, &selection);
+    let current = load_filtered_report(opts.current_path, &selection);
     ensure_compatible_reports(&baseline, &current);
     let mut comparison =
         aegis_probe::compare::compare_reports(&baseline, &current, &selection.effective_tags);
 
-    if let Some(waiver_path) = waiver_file {
-        let baseline_evaluation = evaluate_report_with_waivers_or_exit(&baseline, waiver_path);
-        let current_evaluation = evaluate_report_with_waivers_or_exit(&current, waiver_path);
+    if let Some(waiver_path) = opts.waiver_file {
+        let baseline_evaluation =
+            evaluate_report_with_waivers_or_exit(&baseline, waiver_path, opts.waiver_policy);
+        let current_evaluation =
+            evaluate_report_with_waivers_or_exit(&current, waiver_path, opts.waiver_policy);
         emit_waiver_diagnostics(waiver_path, &baseline_evaluation);
         emit_waiver_diagnostics(waiver_path, &current_evaluation);
         let effective = aegis_probe::compare::compare_reports(
@@ -1240,7 +1376,7 @@ fn cmd_compare(
         comparison.profile_filter = effective.profile_filter;
     }
 
-    let rendered = match format.to_ascii_lowercase().as_str() {
+    let rendered = match opts.format.to_ascii_lowercase().as_str() {
         "terminal" => render_compare_terminal(&comparison),
         "json" => match serde_json::to_string_pretty(&comparison) {
             Ok(json) => json,
@@ -1256,7 +1392,7 @@ fn cmd_compare(
         }
     };
 
-    write_text_output(output_path, &rendered);
+    write_text_output(opts.output_path, &rendered);
 
     if comparison.summary.regression_count > 0 {
         process::exit(1);
@@ -1440,8 +1576,12 @@ fn render_compare_markdown(report: &aegis_probe::compare::ComparisonReport) -> S
 fn evaluate_report_with_waivers_or_exit(
     report: &scoring::SecurityReport,
     waiver_path: &Path,
+    waiver_policy: &WaiverPolicyOptions,
 ) -> aegis_probe::waivers::WaiverEvaluation {
-    let waivers = match aegis_probe::waivers::load_waivers(waiver_path) {
+    let waivers = match aegis_probe::waivers::load_waivers_with_policy(
+        waiver_path,
+        &waiver_validation_policy(waiver_policy),
+    ) {
         Ok(waivers) => waivers,
         Err(err) => {
             eprintln!("{err}");
@@ -1461,12 +1601,16 @@ fn evaluate_report_with_waivers_or_exit(
 fn apply_waivers_to_history_reports_or_exit(
     reports: &[scoring::SecurityReport],
     waiver_path: &Path,
+    waiver_policy: &WaiverPolicyOptions,
 ) -> (
     Vec<scoring::SecurityReport>,
     std::collections::BTreeMap<String, aegis_probe::waivers::AppliedWaiver>,
     Vec<aegis_probe::waivers::ExpiredWaiver>,
 ) {
-    let waivers = match aegis_probe::waivers::load_waivers(waiver_path) {
+    let waivers = match aegis_probe::waivers::load_waivers_with_policy(
+        waiver_path,
+        &waiver_validation_policy(waiver_policy),
+    ) {
         Ok(waivers) => waivers,
         Err(err) => {
             eprintln!("{err}");
@@ -1513,6 +1657,16 @@ fn emit_waiver_diagnostics(
             evaluation.expired.len(),
             waiver_path.display()
         );
+    }
+}
+
+fn waiver_validation_policy(
+    options: &WaiverPolicyOptions,
+) -> aegis_probe::waivers::WaiverValidationPolicy {
+    aegis_probe::waivers::WaiverValidationPolicy {
+        require_signatures: options.require_signed_waivers,
+        key_env: options.waiver_key_env.clone(),
+        signing_key: None,
     }
 }
 
@@ -2699,6 +2853,249 @@ fn cmd_baseline(action: BaselineAction) {
             }
         }
     }
+}
+
+fn cmd_waivers(action: WaiverAction) {
+    match action {
+        WaiverAction::Validate {
+            file,
+            require_signed_waivers,
+            waiver_key_env,
+        } => {
+            let options = WaiverPolicyOptions {
+                require_signed_waivers,
+                waiver_key_env,
+            };
+            let policy = waiver_validation_policy(&options);
+            match aegis_probe::waivers::load_waivers_with_policy(&file, &policy) {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            }
+            let audit = match aegis_probe::waivers::audit_waivers_from_path(&file, &policy, 30) {
+                Ok(audit) => audit,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+            println!(
+                "Validated {} waivers from {}. Active: {} | Expired: {} | Valid signatures: {} | Missing signatures: {} | Invalid signatures: {} | Unverified signatures: {}",
+                audit.summary.total,
+                file.display(),
+                audit.summary.active,
+                audit.summary.expired,
+                audit.summary.valid_signatures,
+                audit.summary.missing_signatures,
+                audit.summary.invalid_signatures,
+                audit.summary.unverified_signatures,
+            );
+        }
+        WaiverAction::Sign {
+            file,
+            output,
+            waiver_key_env,
+        } => {
+            let policy = aegis_probe::waivers::WaiverValidationPolicy {
+                require_signatures: true,
+                key_env: waiver_key_env,
+                signing_key: None,
+            };
+            let waivers = match aegis_probe::waivers::load_waivers(&file) {
+                Ok(waivers) => waivers,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+            let signed = match aegis_probe::waivers::sign_waivers(&waivers, &policy) {
+                Ok(signed) => signed,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+            let rendered = match render_waiver_set(&signed, output.as_deref().unwrap_or(&file)) {
+                Ok(rendered) => rendered,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+            write_text_output(output.as_deref(), &rendered);
+        }
+        WaiverAction::Report {
+            file,
+            days,
+            format,
+            output,
+            require_signed_waivers,
+            waiver_key_env,
+        } => {
+            let options = WaiverPolicyOptions {
+                require_signed_waivers,
+                waiver_key_env,
+            };
+            if days < 0 {
+                eprintln!("--days must be zero or greater.");
+                process::exit(1);
+            }
+            let audit = match aegis_probe::waivers::audit_waivers_from_path(
+                &file,
+                &waiver_validation_policy(&options),
+                days,
+            ) {
+                Ok(audit) => audit,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+            let rendered = match format.to_ascii_lowercase().as_str() {
+                "terminal" => render_waiver_audit_terminal(&file, &audit),
+                "json" => match serde_json::to_string_pretty(&audit) {
+                    Ok(json) => json,
+                    Err(err) => {
+                        eprintln!("Error serializing waiver audit report: {err}");
+                        process::exit(1);
+                    }
+                },
+                "markdown" | "md" => render_waiver_audit_markdown(&file, &audit),
+                other => {
+                    eprintln!("Unsupported waiver report format: {other}. Use terminal, json, or markdown.");
+                    process::exit(1);
+                }
+            };
+            write_text_output(output.as_deref(), &rendered);
+
+            if options.require_signed_waivers && !audit.summary.policy_compliant {
+                process::exit(1);
+            }
+        }
+    }
+}
+
+fn render_waiver_set(
+    waivers: &aegis_probe::waivers::WaiverSet,
+    path_hint: &Path,
+) -> Result<String, String> {
+    match path_hint
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("json") => serde_json::to_string_pretty(waivers)
+            .map_err(|err| format!("Error serializing signed waiver file: {err}")),
+        _ => toml::to_string_pretty(waivers)
+            .map_err(|err| format!("Error serializing signed waiver file: {err}")),
+    }
+}
+
+fn render_waiver_audit_terminal(
+    path: &Path,
+    audit: &aegis_probe::waivers::WaiverAuditReport,
+) -> String {
+    let mut output = String::new();
+    output.push('\n');
+    output.push_str(&format!("Waiver file: {}\n", path.display()));
+    output.push_str(&format!("Total waivers: {}\n", audit.summary.total));
+    output.push_str(&format!(
+        "Active: {} | Expired: {} | Expiring within {}d: {}\n",
+        audit.summary.active,
+        audit.summary.expired,
+        audit.expiring_within_days,
+        audit.summary.expiring_within_window,
+    ));
+    output.push_str(&format!(
+        "Signatures: valid {} | missing {} | invalid {} | unverified {}\n",
+        audit.summary.valid_signatures,
+        audit.summary.missing_signatures,
+        audit.summary.invalid_signatures,
+        audit.summary.unverified_signatures,
+    ));
+    output.push_str(&format!(
+        "Policy compliant: {}\n",
+        if audit.summary.policy_compliant {
+            "yes"
+        } else {
+            "no"
+        }
+    ));
+
+    if !audit.waivers.is_empty() {
+        output.push_str("\nWaivers:\n");
+        output.push_str(&format!(
+            "{:<28} {:<28} {:<10} {:<11} {:<9} {:<18}\n",
+            "ID", "PROBE", "STATUS", "SIGNATURE", "DAYS", "OWNER"
+        ));
+        output.push_str(&format!("{}\n", "-".repeat(116)));
+        for waiver in &audit.waivers {
+            output.push_str(&format!(
+                "{:<28} {:<28} {:<10} {:<11} {:<9} {:<18}\n",
+                waiver.id,
+                waiver.probe,
+                format!("{:?}", waiver.lifecycle_status).to_ascii_lowercase(),
+                format!("{:?}", waiver.signature_status).to_ascii_lowercase(),
+                waiver.days_until_expiry,
+                waiver.owner,
+            ));
+        }
+    }
+
+    output.push('\n');
+    output
+}
+
+fn render_waiver_audit_markdown(
+    path: &Path,
+    audit: &aegis_probe::waivers::WaiverAuditReport,
+) -> String {
+    let mut output = String::new();
+    output.push_str("## Aegis Waiver Audit\n\n");
+    output.push_str(&format!("- File: `{}`\n", path.display()));
+    output.push_str(&format!("- Total waivers: {}\n", audit.summary.total));
+    output.push_str(&format!("- Active: {}\n", audit.summary.active));
+    output.push_str(&format!("- Expired: {}\n", audit.summary.expired));
+    output.push_str(&format!(
+        "- Expiring within {} days: {}\n",
+        audit.expiring_within_days, audit.summary.expiring_within_window
+    ));
+    output.push_str(&format!(
+        "- Signature posture: valid {}, missing {}, invalid {}, unverified {}\n",
+        audit.summary.valid_signatures,
+        audit.summary.missing_signatures,
+        audit.summary.invalid_signatures,
+        audit.summary.unverified_signatures
+    ));
+    output.push_str(&format!(
+        "- Policy compliant: {}\n\n",
+        if audit.summary.policy_compliant {
+            "yes"
+        } else {
+            "no"
+        }
+    ));
+
+    if !audit.waivers.is_empty() {
+        output.push_str("| ID | Probe | Status | Signature | Days until expiry | Owner |\n");
+        output.push_str("|---|---|---|---|---:|---|\n");
+        for waiver in &audit.waivers {
+            output.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} |\n",
+                waiver.id,
+                waiver.probe,
+                format!("{:?}", waiver.lifecycle_status).to_ascii_lowercase(),
+                format!("{:?}", waiver.signature_status).to_ascii_lowercase(),
+                waiver.days_until_expiry,
+                waiver.owner,
+            ));
+        }
+    }
+
+    output
 }
 
 fn run_probes_mock(

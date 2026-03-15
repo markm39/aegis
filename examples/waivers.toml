@@ -7,6 +7,9 @@ reason = "Release engineering is hardening the SBOM review lane and has accepted
 owner = "security@example.com"
 expires_at = "2026-06-30T00:00:00Z"
 severity_override = "low"
+ticket = "SEC-123"
+approved_by = "security-director@example.com"
+approved_at = "2026-03-14T00:00:00Z"
 
 [waivers.scope]
 agent = "ClaudeCode"

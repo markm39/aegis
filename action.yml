@@ -70,6 +70,14 @@ inputs:
     description: "Optional waiver policy file (TOML or JSON) for gate-time suppressions"
     required: false
     default: ""
+  require-signed-waivers:
+    description: "Require every waiver in waiver-file to carry a valid signature"
+    required: false
+    default: "false"
+  waiver-key-env:
+    description: "Environment variable holding the waiver signing key"
+    required: false
+    default: "AEGIS_WAIVER_SIGNING_KEY"
   history-dir:
     description: "Optional directory of saved JSON reports for longitudinal analysis"
     required: false
@@ -301,6 +309,12 @@ runs:
         fi
         if [[ -n "${{ inputs.waiver-file }}" ]]; then
           common_args+=(--waiver-file "${{ inputs.waiver-file }}")
+          if [[ "${{ inputs.require-signed-waivers }}" == "true" ]]; then
+            common_args+=(--require-signed-waivers)
+          fi
+          if [[ -n "${{ inputs.waiver-key-env }}" ]]; then
+            common_args+=(--waiver-key-env "${{ inputs.waiver-key-env }}")
+          fi
         fi
 
         run_args=("${common_args[@]}" --output "${report_path}")
@@ -464,6 +478,12 @@ runs:
             fi
             if [[ -n "${{ inputs.waiver-file }}" ]]; then
               compare_args+=(--waiver-file "${{ inputs.waiver-file }}")
+              if [[ "${{ inputs.require-signed-waivers }}" == "true" ]]; then
+                compare_args+=(--require-signed-waivers)
+              fi
+              if [[ -n "${{ inputs.waiver-key-env }}" ]]; then
+                compare_args+=(--waiver-key-env "${{ inputs.waiver-key-env }}")
+              fi
             fi
 
             compare_status=0
@@ -495,6 +515,12 @@ runs:
                   fi
                   if [[ -n "${{ inputs.waiver-file }}" ]]; then
                     rerun_compare_args+=(--waiver-file "${{ inputs.waiver-file }}")
+                    if [[ "${{ inputs.require-signed-waivers }}" == "true" ]]; then
+                      rerun_compare_args+=(--require-signed-waivers)
+                    fi
+                    if [[ -n "${{ inputs.waiver-key-env }}" ]]; then
+                      rerun_compare_args+=(--waiver-key-env "${{ inputs.waiver-key-env }}")
+                    fi
                   fi
                   rerun_compare_status=0
                   "${probe_bin}" "${rerun_compare_args[@]}" || rerun_compare_status=$?
@@ -602,6 +628,12 @@ runs:
             fi
             if [[ -n "${{ inputs.waiver-file }}" ]]; then
               history_args+=(--waiver-file "${{ inputs.waiver-file }}")
+              if [[ "${{ inputs.require-signed-waivers }}" == "true" ]]; then
+                history_args+=(--require-signed-waivers)
+              fi
+              if [[ -n "${{ inputs.waiver-key-env }}" ]]; then
+                history_args+=(--waiver-key-env "${{ inputs.waiver-key-env }}")
+              fi
             fi
 
             history_status=0

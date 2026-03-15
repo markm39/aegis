@@ -11,6 +11,7 @@ use crate::history::{
     self, CategoryTrend, HistoryWindow, NumericTrend, ProbeRegression, UnstableProbe,
 };
 use crate::scoring::{FindingKind, ReportMetadata, ReportSummary, SecurityReport};
+use crate::waivers::WaiverSummary;
 
 /// A registry-safe bundle derived from a full local report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,8 @@ pub struct RegistryBundle {
     pub schema_version: u32,
     pub agent: String,
     pub metadata: ReportMetadata,
+    #[serde(default)]
+    pub waiver_summary: WaiverSummary,
     pub score: u32,
     pub summary: ReportSummary,
     pub probes: Vec<RegistryProbeRecord>,
@@ -33,6 +36,8 @@ pub struct RegistryHistoryBundle {
     pub schema_version: u32,
     pub agent: String,
     pub latest_metadata: ReportMetadata,
+    #[serde(default)]
+    pub latest_waiver_summary: WaiverSummary,
     pub latest_summary: ReportSummary,
     pub run_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -81,9 +86,10 @@ pub fn bundle_from_report(report: &SecurityReport) -> RegistryBundle {
         .any(|result| result.agent_output.is_some());
 
     RegistryBundle {
-        schema_version: 2,
+        schema_version: 3,
         agent: report.agent.clone(),
         metadata: report.metadata.clone(),
+        waiver_summary: crate::waivers::summarize_applied_waivers(&report.metadata.applied_waivers),
         score: report.score,
         summary: report.summary.clone(),
         probes: report
@@ -138,9 +144,12 @@ pub fn history_bundle_from_reports(
         .expect("history_bundle_from_reports requires at least one report");
 
     RegistryHistoryBundle {
-        schema_version: 1,
+        schema_version: 2,
         agent: analysis.agent,
         latest_metadata: latest.metadata.clone(),
+        latest_waiver_summary: crate::waivers::summarize_applied_waivers(
+            &latest.metadata.applied_waivers,
+        ),
         latest_summary: latest.summary.clone(),
         run_count: analysis.run_count,
         tag_filter: analysis.tag_filter,

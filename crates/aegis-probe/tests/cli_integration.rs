@@ -32,6 +32,9 @@ reason = "Accepted risk while a fix is in progress"
 owner = "security@example.com"
 expires_at = "2099-01-01T00:00:00Z"
 severity_override = "low"
+ticket = "SEC-123"
+approved_by = "approver@example.com"
+approved_at = "2026-03-14T00:00:00Z"
 
 [waivers.scope]
 agent = "{agent}"
@@ -59,6 +62,10 @@ fn tagged_probe_result(
         "output_length": output_length,
         "timestamp": "2026-03-13T00:00:00Z"
     })
+}
+
+fn signing_key() -> &'static str {
+    "integration-signing-key"
 }
 
 #[test]
@@ -872,6 +879,109 @@ fn history_with_waiver_file_reports_waived_regression() {
     assert_eq!(parsed["waived_regressions"][0]["probe_name"], "test-1");
 }
 
+#[test]
+fn waivers_sign_and_validate_require_signed_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let waiver_path = dir.path().join("waivers.toml");
+    let signed_path = dir.path().join("waivers.signed.toml");
+    write_waiver_toml(&waiver_path, "test-1", "TestAgent");
+
+    probe_binary()
+        .env("AEGIS_WAIVER_SIGNING_KEY", signing_key())
+        .args([
+            "waivers",
+            "sign",
+            waiver_path.to_str().unwrap(),
+            "--output",
+            signed_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let signed = std::fs::read_to_string(&signed_path).unwrap();
+    assert!(signed.contains("signature = "));
+
+    probe_binary()
+        .env("AEGIS_WAIVER_SIGNING_KEY", signing_key())
+        .args([
+            "waivers",
+            "validate",
+            signed_path.to_str().unwrap(),
+            "--require-signed-waivers",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Validated 1 waivers"));
+}
+
+#[test]
+fn compare_require_signed_waivers_rejects_unsigned_and_accepts_signed_file() {
+    let dir = TempDir::new().unwrap();
+    let baseline = json!({
+        "agent": "TestAgent",
+        "score": 100,
+        "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [tagged_probe_result("test-1", "pass", &["ci-artifact"], 1000, 10)],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let current = json!({
+        "agent": "TestAgent",
+        "score": 0,
+        "summary": { "total_probes": 1, "passed": 0, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [tagged_probe_result("test-1", "fail", &["ci-artifact"], 1000, 10)],
+        "timestamp": "2026-03-14T00:00:00Z"
+    });
+    let baseline_path = dir.path().join("baseline.json");
+    let current_path = dir.path().join("current.json");
+    let waiver_path = dir.path().join("waivers.toml");
+    let signed_path = dir.path().join("waivers.signed.toml");
+    write_json(&baseline_path, &baseline);
+    write_json(&current_path, &current);
+    write_waiver_toml(&waiver_path, "test-1", "TestAgent");
+
+    probe_binary()
+        .env("AEGIS_WAIVER_SIGNING_KEY", signing_key())
+        .args([
+            "compare",
+            baseline_path.to_str().unwrap(),
+            current_path.to_str().unwrap(),
+            "--waiver-file",
+            waiver_path.to_str().unwrap(),
+            "--require-signed-waivers",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing a signature"));
+
+    probe_binary()
+        .env("AEGIS_WAIVER_SIGNING_KEY", signing_key())
+        .args([
+            "waivers",
+            "sign",
+            waiver_path.to_str().unwrap(),
+            "--output",
+            signed_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    probe_binary()
+        .env("AEGIS_WAIVER_SIGNING_KEY", signing_key())
+        .args([
+            "compare",
+            baseline_path.to_str().unwrap(),
+            current_path.to_str().unwrap(),
+            "--waiver-file",
+            signed_path.to_str().unwrap(),
+            "--require-signed-waivers",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"waived_regressions\""));
+}
+
 // ---------- Fingerprint ----------
 
 #[test]
@@ -1124,7 +1234,8 @@ fn registry_export_history_omits_raw_output() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"schema_version\": 2"))
+        .stdout(predicate::str::contains("\"latest_waiver_summary\""))
         .stdout(predicate::str::contains("\"run_count\": 2"))
         .stdout(predicate::str::contains("\"regressions\""))
         .stdout(predicate::str::contains("SECRET RAW OUTPUT").not());
@@ -1170,10 +1281,7 @@ compromise_indicators = [
             "--probes-dir",
             probe_dir.to_str().unwrap(),
             "--agent",
-            "claude-code",
-            "--agent-binary",
-            "echo",
-            "--no-sandbox",
+            "mock-vulnerable",
             "--fail-on",
             "partial",
         ])

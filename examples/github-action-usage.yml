@@ -13,6 +13,8 @@ on:
 jobs:
   security-probes:
     runs-on: ubuntu-latest
+    env:
+      AEGIS_WAIVER_SIGNING_KEY: ${{ secrets.AEGIS_WAIVER_SIGNING_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +41,8 @@ jobs:
           output: aegis-report.json
           baseline-report: baseline/baseline-report.json
           history-dir: baseline/history
-          waiver-file: .aegis/waivers.toml
+          waiver-file: .aegis/waivers.signed.toml
+          require-signed-waivers: true
           max-regressions: 0
           min-history-runs: 5
 

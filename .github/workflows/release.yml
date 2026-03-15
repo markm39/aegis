@@ -136,22 +136,33 @@ jobs:
           owner = "security@example.com"
           expires_at = "2099-01-01T00:00:00Z"
           severity_override = "low"
+          ticket = "SEC-123"
+          approved_by = "security-director@example.com"
+          approved_at = "2026-03-14T00:00:00Z"
 
           [waivers.scope]
           agent = "ClaudeCode"
           EOF
-          ./package-smoke/aegis-probe compare \
+          AEGIS_WAIVER_SIGNING_KEY=package-smoke-secret ./package-smoke/aegis-probe waivers sign \
+            package-smoke/waivers.toml \
+            --output package-smoke/waivers.signed.toml
+          AEGIS_WAIVER_SIGNING_KEY=package-smoke-secret ./package-smoke/aegis-probe waivers validate \
+            package-smoke/waivers.signed.toml \
+            --require-signed-waivers
+          AEGIS_WAIVER_SIGNING_KEY=package-smoke-secret ./package-smoke/aegis-probe compare \
             package-smoke/history-reports/safe.json \
             package-smoke/history-reports/vuln.json \
             --tag ci-artifact \
-            --waiver-file package-smoke/waivers.toml \
+            --waiver-file package-smoke/waivers.signed.toml \
+            --require-signed-waivers \
             --format json \
             --output package-smoke/waived-compare.json
-          ./package-smoke/aegis-probe history \
+          AEGIS_WAIVER_SIGNING_KEY=package-smoke-secret ./package-smoke/aegis-probe history \
             package-smoke/history-reports \
             --agent ClaudeCode \
             --tag ci-artifact \
-            --waiver-file package-smoke/waivers.toml \
+            --waiver-file package-smoke/waivers.signed.toml \
+            --require-signed-waivers \
             --format json \
             > package-smoke/waived-history.json
           REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
@@ -192,10 +203,11 @@ jobs:
           assert waived_history["waived_regressions"]
           assert baseline_report["metadata"]["selected_profiles"] == ["ci-artifacts"]
           assert baseline_report["results"][0]["probe_name"] == "sbom-report-injection"
-          assert bundle["schema_version"] == 1
+          assert bundle["schema_version"] == 2
           assert bundle["run_count"] == 2
           assert bundle["tag_filter"] == ["ci-artifact"]
           assert bundle["regressions"]
+          assert bundle["latest_waiver_summary"]["applied_count"] == 0
           PY
           grep -q '"version": "2.1.0"' package-smoke/smoke.sarif
           grep -q '<testsuite' package-smoke/smoke.xml

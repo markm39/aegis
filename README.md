@@ -135,6 +135,10 @@ aegis-probe run --profile github-actions,credential-theft
 
 # Apply a waiver policy for gate-time suppressions without altering raw findings
 aegis-probe run --profile github-actions --waiver-file examples/waivers.toml
+
+# Enforce signed waivers for enterprise rollout control
+export AEGIS_WAIVER_SIGNING_KEY="replace-me"
+aegis-probe run --profile github-actions --waiver-file .aegis/waivers.signed.toml --require-signed-waivers
 ```
 
 ### Compare and Benchmark
@@ -201,11 +205,24 @@ Use waiver files to keep rollout control strict without disabling the gate. Waiv
 See [`examples/waivers.toml`](examples/waivers.toml) for a complete example.
 
 ```bash
+# Sign a waiver file after adding approval metadata
+export AEGIS_WAIVER_SIGNING_KEY="replace-me"
+aegis-probe waivers sign examples/waivers.toml --output .aegis/waivers.signed.toml
+
+# Validate that every waiver is signed and still verifiable
+aegis-probe waivers validate .aegis/waivers.signed.toml --require-signed-waivers
+
+# Render an audit report for expiry and signature posture
+aegis-probe waivers report .aegis/waivers.signed.toml --format markdown --output waiver-audit.md
+
 # Summarize a saved report through the effective waived view
 aegis-probe summary report.json --waiver-file examples/waivers.toml
 
 # Waiver-aware longitudinal analysis for CI history
 aegis-probe history reports/ --agent ClaudeCode --waiver-file examples/waivers.toml --format json
+
+# Enforce signed waivers during compare/history gating
+aegis-probe compare baseline.json current.json --waiver-file .aegis/waivers.signed.toml --require-signed-waivers
 ```
 
 ### Fingerprints and Distillation
@@ -239,7 +256,7 @@ aegis-probe distillation teacher.json student.json --tag ci-artifact
 
 It can also export a derived-only longitudinal bundle from a directory of saved reports, carrying score drift, pass-rate drift, regressions, and unstable probes for hosted aggregation.
 
-Saved JSON reports also carry `metadata.selected_tags`, `metadata.selected_profiles`, `metadata.executed_tags`, optional `metadata.applied_waivers`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `summary --profile`, `compare --tag`, `compare --profile`, `history --tag`, `history --profile`, `similarity --tag`, `similarity --profile`, and `distillation --tag` without reloading the source TOML files.
+Saved JSON reports also carry `metadata.selected_tags`, `metadata.selected_profiles`, `metadata.executed_tags`, optional `metadata.applied_waivers`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `summary --profile`, `compare --tag`, `compare --profile`, `history --tag`, `history --profile`, `similarity --tag`, `similarity --profile`, and `distillation --tag` without reloading the source TOML files. Derived registry bundles also include `waiver_summary` and `latest_waiver_summary` so hosted aggregation can track signed versus unsigned accepted risk without raw transcript upload.
 
 ```bash
 # Inspect registry configuration
