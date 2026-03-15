@@ -35,6 +35,7 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
         aegis-probe list                             # Show available probes\n  \
         aegis-probe validate                         # Check probe files are valid\n  \
         aegis-probe registry export report.json      # Export derived-only bundle\n  \
+        aegis-probe registry export-history reports/ # Export derived-only history bundle\n  \
         aegis-probe summary report.json              # Print one-line summary from report\n  \
         aegis-probe history reports/ --limit 30      # Analyze a directory of saved reports\n  \
         aegis-probe render report.json --format sarif # Re-render a saved report"
@@ -322,10 +323,41 @@ enum RegistryAction {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Export a derived-only longitudinal bundle from saved reports.
+    ExportHistory {
+        /// Directory containing saved JSON reports.
+        reports_dir: PathBuf,
+        /// Filter to a single agent when the directory contains multiple agents.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+        /// Limit analysis to the most recent N reports after filtering.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Write the bundle to a file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Upload a derived-only bundle from a local report.
     Upload {
         /// Path to a local JSON report.
         report: PathBuf,
+    },
+    /// Upload a derived-only longitudinal bundle from saved reports.
+    UploadHistory {
+        /// Directory containing saved JSON reports.
+        reports_dir: PathBuf,
+        /// Filter to a single agent when the directory contains multiple agents.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+        /// Limit analysis to the most recent N reports after filtering.
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -1605,6 +1637,37 @@ fn cmd_registry(action: RegistryAction) {
                 println!("{json}");
             }
         }
+        RegistryAction::ExportHistory {
+            reports_dir,
+            agent,
+            tag,
+            limit,
+            output,
+        } => {
+            let tag_filter = normalized_tag_filter(&tag);
+            let reports = load_history_reports(&reports_dir, agent.as_deref(), &tag_filter, limit);
+            let bundle = aegis_probe::registry::history_bundle_from_reports(&reports, &tag_filter);
+            let json = match serde_json::to_string_pretty(&bundle) {
+                Ok(json) => json,
+                Err(e) => {
+                    eprintln!("Error serializing registry history bundle: {e}");
+                    process::exit(1);
+                }
+            };
+
+            if let Some(output_path) = output {
+                if let Err(e) = std::fs::write(&output_path, &json) {
+                    eprintln!("Error writing {}: {e}", output_path.display());
+                    process::exit(1);
+                }
+                println!(
+                    "Registry history bundle written to {}",
+                    output_path.display()
+                );
+            } else {
+                println!("{json}");
+            }
+        }
         RegistryAction::Upload { report } => {
             let config = match aegis_probe::registry::registry_config() {
                 Some(config) => config,
@@ -1628,6 +1691,39 @@ fn cmd_registry(action: RegistryAction) {
                 Ok(()) => println!("Registry upload complete."),
                 Err(e) => {
                     eprintln!("Registry upload failed: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        RegistryAction::UploadHistory {
+            reports_dir,
+            agent,
+            tag,
+            limit,
+        } => {
+            let config = match aegis_probe::registry::registry_config() {
+                Some(config) => config,
+                None => {
+                    eprintln!("Registry is not configured.");
+                    eprintln!("Set AEGIS_REGISTRY_URL and optionally AEGIS_REGISTRY_TOKEN.");
+                    process::exit(1);
+                }
+            };
+
+            let tag_filter = normalized_tag_filter(&tag);
+            let reports = load_history_reports(&reports_dir, agent.as_deref(), &tag_filter, limit);
+            let bundle = aegis_probe::registry::history_bundle_from_reports(&reports, &tag_filter);
+
+            if config.using_legacy_aliases {
+                eprintln!(
+                    "Warning: using deprecated telemetry env aliases. Switch to AEGIS_REGISTRY_URL/TOKEN."
+                );
+            }
+
+            match aegis_probe::registry::upload_history_bundle(&bundle, &config) {
+                Ok(()) => println!("Registry history upload complete."),
+                Err(e) => {
+                    eprintln!("Registry history upload failed: {e}");
                     process::exit(1);
                 }
             }

@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::fingerprint::{self, BehavioralFingerprint, ModelFingerprint};
+use crate::history::{
+    self, CategoryTrend, HistoryWindow, NumericTrend, ProbeRegression, UnstableProbe,
+};
 use crate::scoring::{FindingKind, ReportMetadata, ReportSummary, SecurityReport};
 
 /// A registry-safe bundle derived from a full local report.
@@ -20,6 +23,25 @@ pub struct RegistryBundle {
     pub behavioral_fingerprint: BehavioralFingerprint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_fingerprint: Option<ModelFingerprint>,
+    pub generated_at: String,
+}
+
+/// A registry-safe longitudinal bundle derived from multiple local reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryHistoryBundle {
+    pub schema_version: u32,
+    pub agent: String,
+    pub latest_metadata: ReportMetadata,
+    pub latest_summary: ReportSummary,
+    pub run_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_filter: Vec<String>,
+    pub window: HistoryWindow,
+    pub score: NumericTrend,
+    pub overall_pass_rate: NumericTrend,
+    pub category_trends: Vec<CategoryTrend>,
+    pub regressions: Vec<ProbeRegression>,
+    pub unstable_probes: Vec<UnstableProbe>,
     pub generated_at: String,
 }
 
@@ -102,6 +124,33 @@ pub fn bundle_from_report(report: &SecurityReport) -> RegistryBundle {
     }
 }
 
+/// Build a registry-safe longitudinal bundle from compatible local reports.
+pub fn history_bundle_from_reports(
+    reports: &[SecurityReport],
+    tag_filter: &[String],
+) -> RegistryHistoryBundle {
+    let analysis = history::analyze_history(reports, tag_filter);
+    let latest = reports
+        .last()
+        .expect("history_bundle_from_reports requires at least one report");
+
+    RegistryHistoryBundle {
+        schema_version: 1,
+        agent: analysis.agent,
+        latest_metadata: latest.metadata.clone(),
+        latest_summary: latest.summary.clone(),
+        run_count: analysis.run_count,
+        tag_filter: analysis.tag_filter,
+        window: analysis.window,
+        score: analysis.score,
+        overall_pass_rate: analysis.overall_pass_rate,
+        category_trends: analysis.category_trends,
+        regressions: analysis.regressions,
+        unstable_probes: analysis.unstable_probes,
+        generated_at: analysis.generated_at,
+    }
+}
+
 /// Resolve registry configuration from environment.
 ///
 /// `AEGIS_REGISTRY_URL` and `AEGIS_REGISTRY_TOKEN` are preferred. The older
@@ -125,6 +174,18 @@ pub fn registry_config() -> Option<RegistryConfig> {
 
 /// Upload a derived-only bundle to a configured registry endpoint.
 pub fn upload_bundle(bundle: &RegistryBundle, config: &RegistryConfig) -> Result<(), String> {
+    upload_json(bundle, config)
+}
+
+/// Upload a derived-only longitudinal bundle to a configured registry endpoint.
+pub fn upload_history_bundle(
+    bundle: &RegistryHistoryBundle,
+    config: &RegistryConfig,
+) -> Result<(), String> {
+    upload_json(bundle, config)
+}
+
+fn upload_json<T: Serialize>(payload: &T, config: &RegistryConfig) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -133,7 +194,7 @@ pub fn upload_bundle(bundle: &RegistryBundle, config: &RegistryConfig) -> Result
     let mut request = client
         .post(&config.url)
         .header("Content-Type", "application/json")
-        .json(bundle);
+        .json(payload);
 
     if let Some(token) = &config.token {
         request = request.header("Authorization", format!("Bearer {token}"));
@@ -213,6 +274,24 @@ mod tests {
         }
     }
 
+    fn sample_history_reports() -> Vec<SecurityReport> {
+        let first = sample_report();
+        let mut second = sample_report();
+        second.score = 0;
+        second.summary = ReportSummary {
+            total_probes: 1,
+            passed: 0,
+            partial: 0,
+            failed: 1,
+            errors: 0,
+            critical_findings: 0,
+            high_findings: 1,
+        };
+        second.results[0].verdict = Verdict::Fail;
+        second.timestamp = first.timestamp + chrono::TimeDelta::seconds(30);
+        vec![first, second]
+    }
+
     #[test]
     fn bundle_excludes_raw_agent_output() {
         let bundle = bundle_from_report(&sample_report());
@@ -222,6 +301,18 @@ mod tests {
         assert!(serialized.contains("behavioral_fingerprint"));
         assert!(serialized.contains("\"tags\":[\"ci-artifact\",\"credential-theft\"]"));
         assert!(serialized.contains("\"selected_tags\":[\"ci-artifact\"]"));
+    }
+
+    #[test]
+    fn history_bundle_excludes_raw_agent_output() {
+        let bundle =
+            history_bundle_from_reports(&sample_history_reports(), &["ci-artifact".into()]);
+        let serialized = serde_json::to_string(&bundle).unwrap();
+        assert!(!serialized.contains("I cannot do that."));
+        assert!(!serialized.contains("local-only"));
+        assert!(serialized.contains("\"tag_filter\":[\"ci-artifact\"]"));
+        assert!(serialized.contains("\"regressions\":["));
+        assert!(serialized.contains("\"probe_name\":\"probe-1\""));
     }
 
     #[test]

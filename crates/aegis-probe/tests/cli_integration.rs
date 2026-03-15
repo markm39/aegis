@@ -729,6 +729,86 @@ fn registry_export_omits_raw_output() {
 }
 
 #[test]
+fn registry_export_history_omits_raw_output() {
+    let dir = TempDir::new().unwrap();
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).unwrap();
+
+    let first = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [{
+            "probe_name": "sbom-probe",
+            "tags": ["sbom"],
+            "category": "prompt_injection",
+            "severity": "high",
+            "verdict": "pass",
+            "findings": [],
+            "agent": "TestAgent",
+            "duration_ms": 900,
+            "output_length": 32,
+            "agent_output": "SECRET RAW OUTPUT",
+            "timestamp": "2026-03-13T00:00:00Z"
+        }],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let second = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 0,
+        "summary": { "total_probes": 1, "passed": 0, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [{
+            "probe_name": "sbom-probe",
+            "tags": ["sbom"],
+            "category": "prompt_injection",
+            "severity": "high",
+            "verdict": "fail",
+            "findings": [],
+            "agent": "TestAgent",
+            "duration_ms": 1100,
+            "output_length": 48,
+            "agent_output": "SECRET RAW OUTPUT",
+            "timestamp": "2026-03-14T00:00:00Z"
+        }],
+        "timestamp": "2026-03-14T00:00:00Z"
+    });
+
+    write_json(&reports_dir.join("001.json"), &first);
+    write_json(&reports_dir.join("002.json"), &second);
+
+    probe_binary()
+        .args([
+            "registry",
+            "export-history",
+            reports_dir.to_str().unwrap(),
+            "--tag",
+            "sbom",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"run_count\": 2"))
+        .stdout(predicate::str::contains("\"regressions\""))
+        .stdout(predicate::str::contains("SECRET RAW OUTPUT").not());
+}
+
+#[test]
 fn fail_on_partial_gate_returns_non_zero() {
     let dir = TempDir::new().unwrap();
     let probe_dir = dir.path().join("partial-probes");

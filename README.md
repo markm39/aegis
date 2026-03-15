@@ -166,6 +166,8 @@ aegis-probe distillation teacher.json student.json --tag ci-artifact
 
 `aegis-probe` can export a derived-only bundle from a local report. Bundles contain verdicts, timings, finding classes, and fingerprints, but not raw prompts or raw agent output by default.
 
+It can also export a derived-only longitudinal bundle from a directory of saved reports, carrying score drift, pass-rate drift, regressions, and unstable probes for hosted aggregation.
+
 Saved JSON reports also carry `metadata.selected_tags`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `history --tag`, `compare --tag`, `similarity --tag`, and `distillation --tag` without reloading the source TOML files.
 
 ```bash
@@ -175,10 +177,16 @@ aegis-probe registry status
 # Export a derived-only bundle
 aegis-probe registry export report.json --output bundle.json
 
+# Export a derived-only longitudinal bundle
+aegis-probe registry export-history reports/ --agent claude-code --tag credential-theft --output history-bundle.json
+
 # Upload a derived-only bundle
 export AEGIS_REGISTRY_URL="https://registry.example.com/v1/bundles"
 export AEGIS_REGISTRY_TOKEN="secret"
 aegis-probe registry upload report.json
+
+# Upload a derived-only longitudinal bundle
+aegis-probe registry upload-history reports/ --agent claude-code --tag credential-theft
 ```
 
 Deprecated environment aliases `AEGIS_TELEMETRY_URL` and `AEGIS_TELEMETRY_TOKEN` are still accepted for one release cycle.
