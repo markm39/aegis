@@ -78,6 +78,32 @@ jobs:
             package-smoke/smoke.json \
             --format junit \
             --output package-smoke/smoke.xml
+          mkdir -p package-smoke/history-reports
+          ./package-smoke/aegis-probe run \
+            --agent mock-safe \
+            --probes-dir probes \
+            --probe sbom-report-injection \
+            --tag ci-artifact \
+            --output package-smoke/history-reports/safe.json \
+            --format json
+          ./package-smoke/aegis-probe run \
+            --agent mock-vulnerable \
+            --probes-dir probes \
+            --probe sbom-report-injection \
+            --tag ci-artifact \
+            --output package-smoke/history-reports/vuln.json \
+            --format json || true
+          ./package-smoke/aegis-probe history \
+            package-smoke/history-reports \
+            --agent ClaudeCode \
+            --tag ci-artifact \
+            --format json \
+            > package-smoke/history.json
+          ./package-smoke/aegis-probe registry export-history \
+            package-smoke/history-reports \
+            --agent ClaudeCode \
+            --tag ci-artifact \
+            --output package-smoke/history-bundle.json
           REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
           import json
           import os
@@ -88,6 +114,23 @@ jobs:
           assert report["summary"]["passed"] == 1
           assert report["summary"]["failed"] == 0
           assert report["metadata"]["schema_version"] == 3
+          PY
+          HISTORY_PATH=package-smoke/history.json BUNDLE_PATH=package-smoke/history-bundle.json python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["HISTORY_PATH"], "r", encoding="utf-8") as handle:
+              history = json.load(handle)
+          with open(os.environ["BUNDLE_PATH"], "r", encoding="utf-8") as handle:
+              bundle = json.load(handle)
+
+          assert history["run_count"] == 2
+          assert history["tag_filter"] == ["ci-artifact"]
+          assert history["regressions"]
+          assert bundle["schema_version"] == 1
+          assert bundle["run_count"] == 2
+          assert bundle["tag_filter"] == ["ci-artifact"]
+          assert bundle["regressions"]
           PY
           grep -q '"version": "2.1.0"' package-smoke/smoke.sarif
           grep -q '<testsuite' package-smoke/smoke.xml
@@ -135,8 +178,13 @@ jobs:
       - name: Generate completions
         run: |
           mkdir -p completions
+          mkdir -p history-reports
           chmod +x aegis-probe
           ./aegis-probe run --agent mock-safe --probes-dir probes --probe curl-pipe-bash --output universal-smoke.json --format json
+          ./aegis-probe run --agent mock-safe --probes-dir probes --probe sbom-report-injection --tag ci-artifact --output history-reports/safe.json --format json
+          ./aegis-probe run --agent mock-vulnerable --probes-dir probes --probe sbom-report-injection --tag ci-artifact --output history-reports/vuln.json --format json || true
+          ./aegis-probe history history-reports --agent ClaudeCode --tag ci-artifact --format json > universal-history.json
+          ./aegis-probe registry export-history history-reports --agent ClaudeCode --tag ci-artifact --output universal-history-bundle.json
           ./aegis-probe completions bash > completions/aegis-probe.bash
           ./aegis-probe completions zsh > completions/_aegis-probe
           ./aegis-probe completions fish > completions/aegis-probe.fish
