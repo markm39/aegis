@@ -58,13 +58,37 @@ inputs:
     description: "Optional path to write a JUnit artifact rendered from the JSON report"
     required: false
     default: ""
+  baseline-report:
+    description: "Optional baseline JSON report to compare against the current run"
+    required: false
+    default: ""
+  history-dir:
+    description: "Optional directory of saved JSON reports for longitudinal analysis"
+    required: false
+    default: ""
+  history-agent:
+    description: "Optional saved-report agent filter to apply when analyzing history-dir"
+    required: false
+    default: ""
+  max-regressions:
+    description: "Optional maximum allowed regressions versus baseline-report"
+    required: false
+    default: ""
+  max-unstable-probes:
+    description: "Optional maximum allowed unstable probes in history-dir analysis"
+    required: false
+    default: ""
+  min-history-runs:
+    description: "Optional minimum required run count after history-dir filtering"
+    required: false
+    default: ""
 
 outputs:
   report-path:
     description: "Path to the generated JSON report"
     value: ${{ steps.run.outputs.report_path }}
   exit-code:
-    description: "Exit code returned by aegis-probe after applying gates"
+    description: "Final exit code after probe, comparison, and history gates"
     value: ${{ steps.run.outputs.exit_code }}
   score:
     description: "Aggregate security score from the JSON report"
@@ -93,6 +117,18 @@ outputs:
   junit-path:
     description: "Path to the rendered JUnit artifact when requested"
     value: ${{ steps.run.outputs.junit_path }}
+  regressions:
+    description: "Regression count from the baseline comparison when baseline-report is set"
+    value: ${{ steps.run.outputs.regressions }}
+  improvements:
+    description: "Improvement count from the baseline comparison when baseline-report is set"
+    value: ${{ steps.run.outputs.improvements }}
+  unstable-probes:
+    description: "Unstable probe count from the history analysis when history-dir is set"
+    value: ${{ steps.run.outputs.unstable_probes }}
+  history-run-count:
+    description: "Saved run count included in the history analysis when history-dir is set"
+    value: ${{ steps.run.outputs.history_run_count }}
 
 runs:
   using: "composite"
@@ -114,13 +150,45 @@ runs:
       run: |
         set -euo pipefail
 
+        probe_bin="${{ github.action_path }}/target/release/aegis-probe"
+        report_path="${{ inputs.output }}"
+        compare_path="${RUNNER_TEMP}/aegis-compare.json"
+        history_path="${RUNNER_TEMP}/aegis-history.json"
+        history_input_dir="${RUNNER_TEMP}/aegis-history-input"
+
+        echo "report_path=${report_path}" >> "$GITHUB_OUTPUT"
+        echo "sarif_path=" >> "$GITHUB_OUTPUT"
+        echo "junit_path=" >> "$GITHUB_OUTPUT"
+        echo "regressions=" >> "$GITHUB_OUTPUT"
+        echo "improvements=" >> "$GITHUB_OUTPUT"
+        echo "unstable_probes=" >> "$GITHUB_OUTPUT"
+        echo "history_run_count=" >> "$GITHUB_OUTPUT"
+
+        if [[ -n "${{ inputs.max-regressions }}" && -z "${{ inputs.baseline-report }}" ]]; then
+          echo "max-regressions requires baseline-report." >&2
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        if [[ -n "${{ inputs.max-unstable-probes }}" && -z "${{ inputs.history-dir }}" ]]; then
+          echo "max-unstable-probes requires history-dir." >&2
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        if [[ -n "${{ inputs.min-history-runs }}" && -z "${{ inputs.history-dir }}" ]]; then
+          echo "min-history-runs requires history-dir." >&2
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
         args=(
           run
           --agent "${{ inputs.agent }}"
           --probes-dir "${{ inputs.probes-dir }}"
           --timeout "${{ inputs.timeout }}"
           --jobs "${{ inputs.jobs }}"
-          --output "${{ inputs.output }}"
+          --output "${report_path}"
           --format json
           --fail-on "${{ inputs.fail-on }}"
         )
@@ -149,36 +217,36 @@ runs:
           args+=(--min-score "${{ inputs.min-score }}")
         fi
 
-        echo "report_path=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
-        status=0
-        "${{ github.action_path }}/target/release/aegis-probe" "${args[@]}" || status=$?
-        echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+        run_status=0
+        final_status=0
+        "${probe_bin}" "${args[@]}" || run_status=$?
+        final_status=$run_status
 
-        if [[ -f "${{ inputs.output }}" ]]; then
-          REPORT_PATH="${{ inputs.output }}" python3 - <<'PY' >> "$GITHUB_OUTPUT"
-import json
-import os
+        if [[ -f "${report_path}" ]]; then
+          REPORT_PATH="${report_path}" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
 
-report_path = os.environ["REPORT_PATH"]
-with open(report_path, "r", encoding="utf-8") as handle:
-    report = json.load(handle)
+          report_path = os.environ["REPORT_PATH"]
+          with open(report_path, "r", encoding="utf-8") as handle:
+              report = json.load(handle)
 
-summary = report.get("summary", {})
-metadata = report.get("metadata", {})
+          summary = report.get("summary", {})
+          metadata = report.get("metadata", {})
 
-print(f"score={report.get('score', '')}")
-print(f"passed={summary.get('passed', '')}")
-print(f"partial={summary.get('partial', '')}")
-print(f"failed={summary.get('failed', '')}")
-print(f"errors={summary.get('errors', '')}")
-print(f"probe_pack_hash={metadata.get('probe_pack_hash', '')}")
-print(f"schema_version={metadata.get('schema_version', '')}")
-PY
+          print(f"score={report.get('score', '')}")
+          print(f"passed={summary.get('passed', '')}")
+          print(f"partial={summary.get('partial', '')}")
+          print(f"failed={summary.get('failed', '')}")
+          print(f"errors={summary.get('errors', '')}")
+          print(f"probe_pack_hash={metadata.get('probe_pack_hash', '')}")
+          print(f"schema_version={metadata.get('schema_version', '')}")
+          PY
 
           if [[ -n "${{ inputs.sarif-output }}" ]]; then
             mkdir -p "$(dirname "${{ inputs.sarif-output }}")"
-            "${{ github.action_path }}/target/release/aegis-probe" \
-              render "${{ inputs.output }}" \
+            "${probe_bin}" \
+              render "${report_path}" \
               --format sarif \
               --output "${{ inputs.sarif-output }}"
             echo "sarif_path=${{ inputs.sarif-output }}" >> "$GITHUB_OUTPUT"
@@ -186,12 +254,146 @@ PY
 
           if [[ -n "${{ inputs.junit-output }}" ]]; then
             mkdir -p "$(dirname "${{ inputs.junit-output }}")"
-            "${{ github.action_path }}/target/release/aegis-probe" \
-              render "${{ inputs.output }}" \
+            "${probe_bin}" \
+              render "${report_path}" \
               --format junit \
               --output "${{ inputs.junit-output }}"
             echo "junit_path=${{ inputs.junit-output }}" >> "$GITHUB_OUTPUT"
           fi
+        elif [[ "${run_status}" == "0" ]]; then
+          echo "Probe run completed without writing ${report_path}." >&2
+          final_status=1
         fi
 
-        exit "$status"
+        if [[ -n "${{ inputs.baseline-report }}" ]]; then
+          if [[ ! -f "${{ inputs.baseline-report }}" ]]; then
+            echo "Baseline report not found: ${{ inputs.baseline-report }}" >&2
+            final_status=1
+          elif [[ ! -f "${report_path}" ]]; then
+            echo "Baseline comparison requires a local JSON report at ${report_path}." >&2
+            final_status=1
+          else
+            compare_args=(
+              compare
+              "${{ inputs.baseline-report }}"
+              "${report_path}"
+              --format json
+              --output "${compare_path}"
+            )
+
+            if [[ -n "${{ inputs.tag }}" ]]; then
+              compare_args+=(--tag "${{ inputs.tag }}")
+            fi
+
+            compare_status=0
+            "${probe_bin}" "${compare_args[@]}" || compare_status=$?
+
+            if [[ ! -f "${compare_path}" ]]; then
+              echo "Comparison did not produce ${compare_path}." >&2
+              final_status=1
+            else
+              mapfile -t compare_metrics < <(
+                COMPARE_PATH="${compare_path}" python3 - <<'PY'
+                import json
+                import os
+
+                with open(os.environ["COMPARE_PATH"], "r", encoding="utf-8") as handle:
+                    comparison = json.load(handle)
+
+                summary = comparison.get("summary", {})
+                print(summary.get("regression_count", 0))
+                print(summary.get("improvement_count", 0))
+                PY
+              )
+              regressions="${compare_metrics[0]:-0}"
+              improvements="${compare_metrics[1]:-0}"
+              echo "regressions=${regressions}" >> "$GITHUB_OUTPUT"
+              echo "improvements=${improvements}" >> "$GITHUB_OUTPUT"
+
+              regression_limit="${{ inputs.max-regressions }}"
+              if [[ -z "${regression_limit}" ]]; then
+                regression_limit=0
+              fi
+
+              if (( regressions > regression_limit )); then
+                echo "Regression gate failed: ${regressions} regressions exceeds limit ${regression_limit}." >&2
+                final_status=1
+              fi
+            fi
+
+            if [[ "${compare_status}" != "0" && "${compare_status}" != "1" ]]; then
+              final_status="${compare_status}"
+            fi
+          fi
+        fi
+
+        if [[ -n "${{ inputs.history-dir }}" ]]; then
+          if [[ ! -d "${{ inputs.history-dir }}" ]]; then
+            echo "History directory not found: ${{ inputs.history-dir }}" >&2
+            final_status=1
+          elif [[ ! -f "${report_path}" ]]; then
+            echo "History analysis requires a local JSON report at ${report_path}." >&2
+            final_status=1
+          else
+            rm -rf "${history_input_dir}"
+            mkdir -p "${history_input_dir}"
+            shopt -s nullglob
+            for path in "${{ inputs.history-dir }}"/*.json; do
+              cp "${path}" "${history_input_dir}/$(basename "${path}")"
+            done
+            shopt -u nullglob
+            cp "${report_path}" "${history_input_dir}/current-report.json"
+
+            history_args=(
+              history
+              "${history_input_dir}"
+              --format json
+            )
+
+            if [[ -n "${{ inputs.history-agent }}" ]]; then
+              history_args+=(--agent "${{ inputs.history-agent }}")
+            fi
+
+            if [[ -n "${{ inputs.tag }}" ]]; then
+              history_args+=(--tag "${{ inputs.tag }}")
+            fi
+
+            history_status=0
+            "${probe_bin}" "${history_args[@]}" > "${history_path}" || history_status=$?
+
+            if [[ "${history_status}" != "0" || ! -f "${history_path}" ]]; then
+              echo "History analysis failed for ${history_input_dir}." >&2
+              final_status=1
+            else
+              mapfile -t history_metrics < <(
+                HISTORY_PATH="${history_path}" python3 - <<'PY'
+                import json
+                import os
+
+                with open(os.environ["HISTORY_PATH"], "r", encoding="utf-8") as handle:
+                    history = json.load(handle)
+
+                print(history.get("run_count", 0))
+                print(len(history.get("unstable_probes", [])))
+                PY
+              )
+              history_run_count="${history_metrics[0]:-0}"
+              unstable_probes="${history_metrics[1]:-0}"
+              echo "history_run_count=${history_run_count}" >> "$GITHUB_OUTPUT"
+              echo "unstable_probes=${unstable_probes}" >> "$GITHUB_OUTPUT"
+
+              if [[ -n "${{ inputs.min-history-runs }}" ]] && (( history_run_count < ${{ inputs.min-history-runs }} )); then
+                echo "History gate failed: ${history_run_count} runs is below minimum ${{ inputs.min-history-runs }}." >&2
+                final_status=1
+              fi
+
+              if [[ -n "${{ inputs.max-unstable-probes }}" ]] && (( unstable_probes > ${{ inputs.max-unstable-probes }} )); then
+                echo "History gate failed: ${unstable_probes} unstable probes exceeds limit ${{ inputs.max-unstable-probes }}." >&2
+                final_status=1
+              fi
+            fi
+          fi
+        fi
+
+        echo "exit_code=${final_status}" >> "$GITHUB_OUTPUT"
+        exit "${final_status}"

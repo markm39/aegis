@@ -87,12 +87,14 @@ This repo includes a real composite action at [`action.yml`](action.yml).
   run: |
     echo "Score: ${{ steps.aegis.outputs.score }}"
     echo "Failed probes: ${{ steps.aegis.outputs.failed }}"
+    echo "Regressions: ${{ steps.aegis.outputs.regressions }}"
+    echo "History runs: ${{ steps.aegis.outputs.history-run-count }}"
     echo "Probe pack: ${{ steps.aegis.outputs.probe-pack-hash }}"
 ```
 
 See [`examples/github-action-usage.yml`](examples/github-action-usage.yml) for a full workflow example.
 
-The action emits `report-path`, `exit-code`, `score`, `passed`, `partial`, `failed`, `errors`, `probe-pack-hash`, and `schema-version` outputs so downstream CI steps can branch without scraping terminal text.
+The action emits `report-path`, `exit-code`, `score`, `passed`, `partial`, `failed`, `errors`, `probe-pack-hash`, `schema-version`, `regressions`, `improvements`, `unstable-probes`, and `history-run-count` so downstream CI steps can branch without scraping terminal text.
 
 ## Key Commands
 
@@ -126,6 +128,9 @@ aegis-probe compare baseline.json current.json
 
 # Compare only CI artifact probes from saved reports
 aegis-probe compare baseline.json current.json --tag ci-artifact
+
+# Emit machine-readable regression data for CI gating
+aegis-probe compare baseline.json current.json --tag ci-artifact --format json --output compare.json
 
 # Analyze the last 30 saved runs for one agent
 aegis-probe history reports/ --agent claude-code --limit 30

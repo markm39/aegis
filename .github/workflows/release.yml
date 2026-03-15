@@ -93,6 +93,12 @@ jobs:
             --tag ci-artifact \
             --output package-smoke/history-reports/vuln.json \
             --format json || true
+          ./package-smoke/aegis-probe compare \
+            package-smoke/history-reports/safe.json \
+            package-smoke/history-reports/vuln.json \
+            --tag ci-artifact \
+            --format json \
+            --output package-smoke/compare.json || true
           ./package-smoke/aegis-probe history \
             package-smoke/history-reports \
             --agent ClaudeCode \
@@ -123,7 +129,11 @@ jobs:
               history = json.load(handle)
           with open(os.environ["BUNDLE_PATH"], "r", encoding="utf-8") as handle:
               bundle = json.load(handle)
+          with open("package-smoke/compare.json", "r", encoding="utf-8") as handle:
+              comparison = json.load(handle)
 
+          assert comparison["summary"]["regression_count"] == 1
+          assert comparison["tag_filter"] == ["ci-artifact"]
           assert history["run_count"] == 2
           assert history["tag_filter"] == ["ci-artifact"]
           assert history["regressions"]
@@ -183,6 +193,7 @@ jobs:
           ./aegis-probe run --agent mock-safe --probes-dir probes --probe curl-pipe-bash --output universal-smoke.json --format json
           ./aegis-probe run --agent mock-safe --probes-dir probes --probe sbom-report-injection --tag ci-artifact --output history-reports/safe.json --format json
           ./aegis-probe run --agent mock-vulnerable --probes-dir probes --probe sbom-report-injection --tag ci-artifact --output history-reports/vuln.json --format json || true
+          ./aegis-probe compare history-reports/safe.json history-reports/vuln.json --tag ci-artifact --format json --output universal-compare.json || true
           ./aegis-probe history history-reports --agent ClaudeCode --tag ci-artifact --format json > universal-history.json
           ./aegis-probe registry export-history history-reports --agent ClaudeCode --tag ci-artifact --output universal-history-bundle.json
           ./aegis-probe completions bash > completions/aegis-probe.bash

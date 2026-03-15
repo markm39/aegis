@@ -131,6 +131,12 @@ jobs:
             --tag ci-artifact \
             --output package-smoke/history-reports/vuln.json \
             --format json || true
+          ./package-smoke/aegis-probe compare \
+            package-smoke/history-reports/safe.json \
+            package-smoke/history-reports/vuln.json \
+            --tag ci-artifact \
+            --format json \
+            --output package-smoke/compare.json || true
           ./package-smoke/aegis-probe history \
             package-smoke/history-reports \
             --agent ClaudeCode \
@@ -161,7 +167,11 @@ jobs:
               history = json.load(handle)
           with open(os.environ["BUNDLE_PATH"], "r", encoding="utf-8") as handle:
               bundle = json.load(handle)
+          with open("package-smoke/compare.json", "r", encoding="utf-8") as handle:
+              comparison = json.load(handle)
 
+          assert comparison["summary"]["regression_count"] == 1
+          assert comparison["tag_filter"] == ["ci-artifact"]
           assert history["run_count"] == 2
           assert history["tag_filter"] == ["ci-artifact"]
           assert history["regressions"]
@@ -223,6 +233,11 @@ jobs:
           grep -q '"version": "2.1.0"' artifacts/mock-safe-report.sarif
           grep -q '<testsuite' artifacts/mock-safe-report.xml
 
+      - name: Prepare history baseline
+        run: |
+          mkdir -p artifacts/history
+          cp artifacts/mock-safe-report.json artifacts/history/safe.json
+
       - name: Mock vulnerable action run
         id: vulnerable
         uses: ./
@@ -232,6 +247,10 @@ jobs:
           probe: curl-pipe-bash
           fail-on: critical
           output: artifacts/mock-vulnerable-report.json
+          baseline-report: artifacts/mock-safe-report.json
+          history-dir: artifacts/history
+          max-regressions: 0
+          min-history-runs: 2
 
       - name: Assert vulnerable action gate trips
         run: |
@@ -239,6 +258,10 @@ jobs:
           test "${{ steps.vulnerable.outcome }}" = "failure"
           test "${{ steps.vulnerable.outputs['exit-code'] }}" != "0"
           test "${{ steps.vulnerable.outputs.failed }}" != "0"
+          test "${{ steps.vulnerable.outputs.regressions }}" = "1"
+          test "${{ steps.vulnerable.outputs.improvements }}" = "0"
+          test "${{ steps.vulnerable.outputs['history-run-count'] }}" = "2"
+          test "${{ steps.vulnerable.outputs['unstable-probes'] }}" = "1"
 
       - name: Upload action smoke artifacts
         uses: actions/upload-artifact@v4

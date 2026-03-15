@@ -192,6 +192,14 @@ enum Command {
         /// Filter saved report results by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Output format: terminal or json.
+        #[arg(long, default_value = "terminal")]
+        format: String,
+
+        /// Write rendered output to this file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Generate shell completions.
@@ -452,8 +460,10 @@ fn main() {
             baseline,
             current,
             tag,
+            format,
+            output,
         } => {
-            cmd_compare(&baseline, &current, &tag);
+            cmd_compare(&baseline, &current, &tag, &format, output.as_deref());
         }
         Command::Completions { shell } => {
             clap_complete::generate(
@@ -911,126 +921,140 @@ fn cmd_history(
     }
 }
 
-fn cmd_compare(baseline_path: &Path, current_path: &Path, tags: &[String]) {
+fn cmd_compare(
+    baseline_path: &Path,
+    current_path: &Path,
+    tags: &[String],
+    format: &str,
+    output_path: Option<&Path>,
+) {
     let tag_filter = normalized_tag_filter(tags);
     let baseline = load_filtered_report(baseline_path, &tag_filter);
     let current = load_filtered_report(current_path, &tag_filter);
     ensure_compatible_reports(&baseline, &current);
+    let comparison = aegis_probe::compare::compare_reports(&baseline, &current, &tag_filter);
 
-    // Score delta
-    let score_delta = current.score as i32 - baseline.score as i32;
-    let delta_str = if score_delta > 0 {
-        format!("+{score_delta}")
-    } else {
-        format!("{score_delta}")
+    let rendered = match format.to_ascii_lowercase().as_str() {
+        "terminal" => render_compare_terminal(&comparison),
+        "json" => match serde_json::to_string_pretty(&comparison) {
+            Ok(json) => json,
+            Err(err) => {
+                eprintln!("Error serializing comparison report: {err}");
+                process::exit(1);
+            }
+        },
+        other => {
+            eprintln!("Unsupported compare format: {other}. Use terminal or json.");
+            process::exit(1);
+        }
     };
-    println!(
-        "\nScore: {} -> {} ({})",
-        baseline.score, current.score, delta_str,
-    );
-    println!("Agent: {} -> {}", baseline.agent, current.agent);
-    if !tag_filter.is_empty() {
-        println!("Tag filter: {}", tag_filter.join(", "));
-    }
-    if !current.metadata.probe_pack_hash.is_empty() {
-        println!(
-            "Probe pack: {}",
-            &current.metadata.probe_pack_hash[..current.metadata.probe_pack_hash.len().min(16)]
-        );
-    }
 
-    // Build probe result maps
-    let baseline_map: std::collections::HashMap<&str, &scoring::ProbeResult> = baseline
-        .results
-        .iter()
-        .map(|r| (r.probe_name.as_str(), r))
-        .collect();
-    let current_map: std::collections::HashMap<&str, &scoring::ProbeResult> = current
-        .results
-        .iter()
-        .map(|r| (r.probe_name.as_str(), r))
-        .collect();
+    write_text_output(output_path, &rendered);
 
-    // Find regressions (was pass/partial, now fail)
-    let mut regressions = Vec::new();
-    let mut improvements = Vec::new();
-    let mut new_probes = Vec::new();
-    let mut removed_probes = Vec::new();
-
-    for result in &current.results {
-        match baseline_map.get(result.probe_name.as_str()) {
-            Some(baseline_result) => {
-                let old_v = &baseline_result.verdict;
-                let new_v = &result.verdict;
-                if verdict_rank(new_v) > verdict_rank(old_v) {
-                    regressions.push((&result.probe_name, old_v, new_v));
-                } else if verdict_rank(new_v) < verdict_rank(old_v) {
-                    improvements.push((&result.probe_name, old_v, new_v));
-                }
-            }
-            None => {
-                new_probes.push(&result.probe_name);
-            }
-        }
-    }
-
-    for result in &baseline.results {
-        if !current_map.contains_key(result.probe_name.as_str()) {
-            removed_probes.push(&result.probe_name);
-        }
-    }
-
-    if !regressions.is_empty() {
-        println!("\nRegressions ({}):", regressions.len());
-        for (name, old, new) in &regressions {
-            println!("  {name}: {old:?} -> {new:?}");
-        }
-    }
-
-    if !improvements.is_empty() {
-        println!("\nImprovements ({}):", improvements.len());
-        for (name, old, new) in &improvements {
-            println!("  {name}: {old:?} -> {new:?}");
-        }
-    }
-
-    if !new_probes.is_empty() {
-        println!("\nNew probes ({}):", new_probes.len());
-        for name in &new_probes {
-            let v = &current_map[name.as_str()].verdict;
-            println!("  {name}: {v:?}");
-        }
-    }
-
-    if !removed_probes.is_empty() {
-        println!("\nRemoved probes ({}):", removed_probes.len());
-        for name in &removed_probes {
-            println!("  {name}");
-        }
-    }
-
-    if regressions.is_empty()
-        && improvements.is_empty()
-        && new_probes.is_empty()
-        && removed_probes.is_empty()
-    {
-        println!("\nNo changes between reports.");
-    }
-
-    println!();
-
-    if !regressions.is_empty() {
+    if comparison.summary.regression_count > 0 {
         process::exit(1);
     }
 }
 
-/// Rank verdicts for comparison (lower = better).
-fn verdict_rank(v: &scoring::Verdict) -> u8 {
-    match v {
-        scoring::Verdict::Pass => 0,
-        scoring::Verdict::Partial => 1,
-        scoring::Verdict::Error => 2,
-        scoring::Verdict::Fail => 3,
+fn render_compare_terminal(report: &aegis_probe::compare::ComparisonReport) -> String {
+    let mut output = String::new();
+    let delta_str = if report.score_delta > 0 {
+        format!("+{}", report.score_delta)
+    } else {
+        report.score_delta.to_string()
+    };
+
+    output.push('\n');
+    output.push_str(&format!(
+        "Score: {} -> {} ({delta_str})\n",
+        report.baseline_score, report.current_score,
+    ));
+    output.push_str(&format!(
+        "Agent: {} -> {}\n",
+        report.baseline_agent, report.current_agent
+    ));
+    if !report.tag_filter.is_empty() {
+        output.push_str(&format!("Tag filter: {}\n", report.tag_filter.join(", ")));
+    }
+    if !report.probe_pack_hash.is_empty() {
+        output.push_str(&format!(
+            "Probe pack: {}\n",
+            &report.probe_pack_hash[..report.probe_pack_hash.len().min(16)]
+        ));
+    }
+
+    if !report.regressions.is_empty() {
+        output.push_str(&format!(
+            "\nRegressions ({}):\n",
+            report.summary.regression_count
+        ));
+        for regression in &report.regressions {
+            output.push_str(&format!(
+                "  {}: {} -> {}\n",
+                regression.probe_name, regression.baseline_verdict, regression.current_verdict
+            ));
+        }
+    }
+
+    if !report.improvements.is_empty() {
+        output.push_str(&format!(
+            "\nImprovements ({}):\n",
+            report.summary.improvement_count
+        ));
+        for improvement in &report.improvements {
+            output.push_str(&format!(
+                "  {}: {} -> {}\n",
+                improvement.probe_name, improvement.baseline_verdict, improvement.current_verdict
+            ));
+        }
+    }
+
+    if !report.new_probes.is_empty() {
+        output.push_str(&format!(
+            "\nNew probes ({}):\n",
+            report.summary.new_probe_count
+        ));
+        for probe in &report.new_probes {
+            output.push_str(&format!("  {}: {}\n", probe.probe_name, probe.verdict));
+        }
+    }
+
+    if !report.removed_probes.is_empty() {
+        output.push_str(&format!(
+            "\nRemoved probes ({}):\n",
+            report.summary.removed_probe_count
+        ));
+        for probe in &report.removed_probes {
+            output.push_str(&format!("  {}\n", probe.probe_name));
+        }
+    }
+
+    if !report.summary.has_changes {
+        output.push_str("\nNo changes between reports.\n");
+    }
+
+    output.push('\n');
+    output
+}
+
+fn write_text_output(output_path: Option<&Path>, content: &str) {
+    if let Some(path) = output_path {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                eprintln!("Error creating {}: {err}", parent.display());
+                process::exit(1);
+            }
+        }
+
+        if let Err(err) = std::fs::write(path, content.as_bytes()) {
+            eprintln!("Error writing {}: {err}", path.display());
+            process::exit(1);
+        }
+    } else {
+        print!("{content}");
     }
 }
 

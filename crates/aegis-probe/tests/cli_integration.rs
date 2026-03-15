@@ -550,6 +550,75 @@ fn compare_filter_by_tag_uses_saved_report_tags() {
         .stdout(predicate::str::contains("gradle-probe").not());
 }
 
+#[test]
+fn compare_json_output_writes_machine_readable_report() {
+    let dir = TempDir::new().unwrap();
+    let baseline = json!({
+        "agent": "Baseline",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 2, "passed": 2, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 1000, 120),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1100, 140)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let current = json!({
+        "agent": "Current",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "fail", &["sbom"], 1200, 128),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1000, 142)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let baseline_path = dir.path().join("baseline.json");
+    let current_path = dir.path().join("current.json");
+    let output_path = dir.path().join("compare.json");
+    write_json(&baseline_path, &baseline);
+    write_json(&current_path, &current);
+
+    probe_binary()
+        .args([
+            "compare",
+            baseline_path.to_str().unwrap(),
+            current_path.to_str().unwrap(),
+            "--tag",
+            "SBOM",
+            "--format",
+            "json",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["summary"]["regression_count"], 1);
+    assert_eq!(parsed["summary"]["improvement_count"], 0);
+    assert_eq!(parsed["tag_filter"], json!(["sbom"]));
+    assert_eq!(parsed["regressions"][0]["probe_name"], "sbom-probe");
+}
+
 // ---------- Fingerprint ----------
 
 #[test]
