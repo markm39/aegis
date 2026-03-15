@@ -1048,6 +1048,128 @@ fn distillation_filter_by_tag_uses_saved_report_tags() {
 }
 
 #[test]
+fn history_directory_with_tag_filter_shows_regressions() {
+    let dir = TempDir::new().unwrap();
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).unwrap();
+
+    let first = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 2, "passed": 2, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 900, 96),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1200, 144)
+        ],
+        "timestamp": "2026-03-12T00:00:00Z"
+    });
+    let second = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "fail", &["sbom"], 1000, 120),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1100, 140)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let third = json!({
+        "agent": "TestAgent",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "fail", &["sbom"], 1100, 124),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1000, 138)
+        ],
+        "timestamp": "2026-03-14T00:00:00Z"
+    });
+
+    write_json(&reports_dir.join("first.json"), &first);
+    write_json(&reports_dir.join("second.json"), &second);
+    write_json(&reports_dir.join("third.json"), &third);
+
+    probe_binary()
+        .args(["history", reports_dir.to_str().unwrap(), "--tag", "SBOM"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Runs analyzed: 3"))
+        .stdout(predicate::str::contains("Tag filter: sbom"))
+        .stdout(predicate::str::contains("Regressions since first run (1):"))
+        .stdout(predicate::str::contains("sbom-probe: Pass -> Fail"));
+}
+
+#[test]
+fn history_rejects_mixed_agents_without_filter() {
+    let dir = TempDir::new().unwrap();
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).unwrap();
+
+    let report_a = json!({
+        "agent": "AgentA",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [tagged_probe_result("sbom-probe", "pass", &["sbom"], 900, 96)],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let report_b = json!({
+        "agent": "AgentB",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [tagged_probe_result("sbom-probe", "pass", &["sbom"], 900, 96)],
+        "timestamp": "2026-03-14T00:00:00Z"
+    });
+
+    write_json(&reports_dir.join("a.json"), &report_a);
+    write_json(&reports_dir.join("b.json"), &report_b);
+
+    probe_binary()
+        .args(["history", reports_dir.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Multiple agents found"));
+}
+
+#[test]
 fn render_sarif_from_saved_report() {
     let dir = TempDir::new().unwrap();
     let report = json!({

@@ -34,6 +34,7 @@
 
 pub mod distillation;
 pub mod fingerprint;
+pub mod history;
 pub mod registry;
 pub mod report;
 pub mod runner;

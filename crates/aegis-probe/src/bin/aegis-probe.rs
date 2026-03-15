@@ -36,6 +36,7 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
         aegis-probe validate                         # Check probe files are valid\n  \
         aegis-probe registry export report.json      # Export derived-only bundle\n  \
         aegis-probe summary report.json              # Print one-line summary from report\n  \
+        aegis-probe history reports/ --limit 30      # Analyze a directory of saved reports\n  \
         aegis-probe render report.json --format sarif # Re-render a saved report"
 )]
 struct Cli {
@@ -156,6 +157,28 @@ enum Command {
         /// Write rendered output to this file instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+
+    /// Analyze a directory of saved reports for trends and regressions.
+    History {
+        /// Directory containing saved JSON reports.
+        reports_dir: PathBuf,
+
+        /// Filter to a single agent when the directory contains multiple agents.
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+
+        /// Limit analysis to the most recent N reports after filtering.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Output format: terminal or json.
+        #[arg(long, default_value = "terminal")]
+        format: String,
     },
 
     /// Compare two JSON reports to show security changes.
@@ -383,6 +406,15 @@ fn main() {
             output,
         } => {
             cmd_render(&report, &format, output.as_deref());
+        }
+        Command::History {
+            reports_dir,
+            agent,
+            tag,
+            limit,
+            format,
+        } => {
+            cmd_history(&reports_dir, agent.as_deref(), &tag, limit, &format);
         }
         Command::Compare {
             baseline,
@@ -820,6 +852,33 @@ fn cmd_render(report_path: &Path, format: &str, output_path: Option<&Path>) {
     }
 }
 
+fn cmd_history(
+    reports_dir: &Path,
+    agent_filter: Option<&str>,
+    tags: &[String],
+    limit: Option<usize>,
+    format: &str,
+) {
+    let tag_filter = normalized_tag_filter(tags);
+    let reports = load_history_reports(reports_dir, agent_filter, &tag_filter, limit);
+    let analysis = aegis_probe::history::analyze_history(&reports, &tag_filter);
+
+    match format {
+        "terminal" => render_history_terminal(&analysis),
+        "json" => match serde_json::to_string_pretty(&analysis) {
+            Ok(json) => println!("{json}"),
+            Err(err) => {
+                eprintln!("Error serializing history analysis: {err}");
+                process::exit(1);
+            }
+        },
+        other => {
+            eprintln!("Unsupported history format: {other}. Use terminal or json.");
+            process::exit(1);
+        }
+    }
+}
+
 fn cmd_compare(baseline_path: &Path, current_path: &Path, tags: &[String]) {
     let tag_filter = normalized_tag_filter(tags);
     let baseline = load_filtered_report(baseline_path, &tag_filter);
@@ -965,6 +1024,110 @@ fn load_filtered_report(path: &Path, tags: &[String]) -> scoring::SecurityReport
     filter_saved_report_by_tags(report, path, tags)
 }
 
+fn load_history_reports(
+    reports_dir: &Path,
+    agent_filter: Option<&str>,
+    tags: &[String],
+    limit: Option<usize>,
+) -> Vec<scoring::SecurityReport> {
+    if let Some(0) = limit {
+        eprintln!("--limit must be greater than zero.");
+        process::exit(1);
+    }
+
+    let entries = match std::fs::read_dir(reports_dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            eprintln!("Error reading {}: {err}", reports_dir.display());
+            process::exit(1);
+        }
+    };
+
+    let mut report_paths = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
+        .collect::<Vec<_>>();
+    report_paths.sort();
+
+    if report_paths.is_empty() {
+        eprintln!("No JSON reports found in {}.", reports_dir.display());
+        process::exit(1);
+    }
+
+    let mut reports = report_paths
+        .into_iter()
+        .map(|path| {
+            let report = load_filtered_report(&path, tags);
+            (path, report)
+        })
+        .collect::<Vec<_>>();
+
+    reports.sort_by(|(path_a, report_a), (path_b, report_b)| {
+        report_a
+            .timestamp
+            .cmp(&report_b.timestamp)
+            .then_with(|| path_a.cmp(path_b))
+    });
+
+    if let Some(agent) = agent_filter {
+        reports.retain(|(_, report)| report.agent.eq_ignore_ascii_case(agent));
+        if reports.is_empty() {
+            eprintln!(
+                "No saved reports for agent '{}' were found in {}.",
+                agent,
+                reports_dir.display()
+            );
+            process::exit(1);
+        }
+    } else {
+        let mut agents = reports
+            .iter()
+            .map(|(_, report)| report.agent.clone())
+            .collect::<Vec<_>>();
+        agents.sort();
+        agents.dedup();
+        if agents.len() > 1 {
+            eprintln!(
+                "Multiple agents found in {}: {}. Re-run with --agent.",
+                reports_dir.display(),
+                agents.join(", ")
+            );
+            process::exit(1);
+        }
+    }
+
+    if let Some(limit) = limit {
+        if reports.len() > limit {
+            let split_at = reports.len() - limit;
+            reports = reports.split_off(split_at);
+        }
+    }
+
+    let mut probe_packs = reports
+        .iter()
+        .map(|(_, report)| report.metadata.probe_pack_hash.trim())
+        .filter(|hash| !hash.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    probe_packs.sort();
+    probe_packs.dedup();
+
+    if probe_packs.len() > 1 {
+        eprintln!(
+            "Saved reports were generated from different probe packs: {}",
+            probe_packs.join(", ")
+        );
+        process::exit(1);
+    }
+
+    reports.into_iter().map(|(_, report)| report).collect()
+}
+
 fn filter_saved_report_by_tags(
     report: scoring::SecurityReport,
     path: &Path,
@@ -1034,6 +1197,103 @@ fn render_report_format(report: &scoring::SecurityReport, format: &str) -> Resul
             report::render_sarif(report).map_err(|e| format!("Error serializing SARIF report: {e}"))
         }
         _ => Ok(report::render_report(report)),
+    }
+}
+
+fn render_history_terminal(report: &aegis_probe::history::HistoryReport) {
+    println!("\nHistory Analysis: {}", report.agent);
+    println!("{}", "=".repeat(60));
+    println!("Runs analyzed: {}", report.run_count);
+    println!(
+        "Window: {} -> {}",
+        report.window.first_timestamp.to_rfc3339(),
+        report.window.latest_timestamp.to_rfc3339()
+    );
+    if !report.tag_filter.is_empty() {
+        println!("Tag filter: {}", report.tag_filter.join(", "));
+    }
+    if !report.window.probe_pack_hash.is_empty() {
+        println!(
+            "Probe pack: {}",
+            &report.window.probe_pack_hash[..report.window.probe_pack_hash.len().min(16)]
+        );
+    }
+    println!(
+        "Score trend: {:.0} -> {:.0} ({:+.0}) | mean {:.1} | range {:.0}-{:.0}",
+        report.score.first,
+        report.score.latest,
+        report.score.delta,
+        report.score.mean,
+        report.score.min,
+        report.score.max,
+    );
+    println!(
+        "Overall pass rate: {:.0}% -> {:.0}% ({:+.0}%) | mean {:.1}%",
+        report.overall_pass_rate.first * 100.0,
+        report.overall_pass_rate.latest * 100.0,
+        report.overall_pass_rate.delta * 100.0,
+        report.overall_pass_rate.mean * 100.0,
+    );
+
+    if !report.category_trends.is_empty() {
+        println!("\nCategory Pass Rate Trends:");
+        println!(
+            "{:<25} {:>10} {:>10} {:>10} {:>10}",
+            "CATEGORY", "FIRST", "LATEST", "DELTA", "MEAN"
+        );
+        println!("{}", "-".repeat(70));
+        for category in &report.category_trends {
+            println!(
+                "{:<25} {:>9.0}% {:>9.0}% {:>+9.0}% {:>9.0}%",
+                category.category,
+                category.first_pass_rate * 100.0,
+                category.latest_pass_rate * 100.0,
+                category.delta * 100.0,
+                category.mean_pass_rate * 100.0,
+            );
+        }
+    }
+
+    if !report.regressions.is_empty() {
+        println!(
+            "\nRegressions since first run ({}):",
+            report.regressions.len()
+        );
+        for regression in &report.regressions {
+            println!(
+                "  {}: {} -> {} | fail {:.0}% | stability {:.0}%{}",
+                regression.probe_name,
+                regression.baseline_verdict,
+                regression.latest_verdict,
+                regression.fail_rate * 100.0,
+                regression.verdict_stability * 100.0,
+                format_tags_suffix(&regression.tags),
+            );
+        }
+    }
+
+    if !report.unstable_probes.is_empty() {
+        println!("\nMost unstable probes:");
+        for probe in report.unstable_probes.iter().take(10) {
+            println!(
+                "  {}: stability {:.0}% | pass {:.0}% | fail {:.0}%{}",
+                probe.probe_name,
+                probe.verdict_stability * 100.0,
+                probe.pass_rate * 100.0,
+                probe.fail_rate * 100.0,
+                format_tags_suffix(&probe.tags),
+            );
+        }
+    }
+
+    println!();
+}
+
+fn format_tags_suffix(tags: &[String]) -> String {
+    if tags.is_empty() {
+        String::new()
+    } else {
+        format!(" | tags: {}", tags.join(", "))
     }
 }
 
