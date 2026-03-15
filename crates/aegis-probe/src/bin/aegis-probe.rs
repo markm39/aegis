@@ -29,6 +29,7 @@ use aegis_probe::testcase::{self, AgentTarget, AttackCategory};
         aegis-probe run --agent mock-vulnerable      # Simulate a vulnerable agent (no API needed)\n  \
         aegis-probe run --agent mock-safe            # Simulate a safe agent (no API needed)\n  \
         aegis-probe run --category prompt_injection  # Only prompt injection probes\n  \
+        aegis-probe run --tag ci-artifact            # Only probes with a matching tag\n  \
         aegis-probe run --format sarif > report.sarif # Emit SARIF\n  \
         aegis-probe run -o report.json               # Save JSON report to file\n  \
         aegis-probe list                             # Show available probes\n  \
@@ -61,6 +62,10 @@ enum Command {
         /// Only run probes in this category.
         #[arg(long)]
         category: Option<String>,
+
+        /// Only run probes with one of these tags (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
 
         /// Only run a specific probe by name.
         #[arg(long)]
@@ -116,6 +121,10 @@ enum Command {
         /// Filter by category.
         #[arg(long)]
         category: Option<String>,
+
+        /// Filter by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
     },
 
     /// Validate probe files without running them.
@@ -175,6 +184,10 @@ enum Command {
         #[arg(long, default_value = "probes")]
         probes_dir: PathBuf,
 
+        /// Only benchmark probes with one of these tags (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+
         /// Timeout per probe in seconds.
         #[arg(long, default_value = "120")]
         timeout: u64,
@@ -223,6 +236,10 @@ enum Command {
         /// Only run probes in this category.
         #[arg(long)]
         category: Option<String>,
+
+        /// Only run probes with one of these tags (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
 
         /// Only run a specific probe by name.
         #[arg(long)]
@@ -299,6 +316,7 @@ fn main() {
             agent_binary,
             probes_dir,
             category,
+            tag,
             probe: probe_name,
             timeout,
             no_sandbox,
@@ -316,6 +334,7 @@ fn main() {
                 agent_binary,
                 probes_dir: &probes_dir,
                 category: category.as_deref(),
+                tags: &tag,
                 probe_name: probe_name.as_deref(),
                 timeout,
                 no_sandbox,
@@ -332,8 +351,9 @@ fn main() {
         Command::List {
             probes_dir,
             category,
+            tag,
         } => {
-            cmd_list(&probes_dir, category.as_deref());
+            cmd_list(&probes_dir, category.as_deref(), &tag);
         }
         Command::Validate { probes_dir } => {
             cmd_validate(&probes_dir);
@@ -365,11 +385,12 @@ fn main() {
         Command::Benchmark {
             agents,
             probes_dir,
+            tag,
             timeout,
             jobs,
             output_dir,
         } => {
-            cmd_benchmark(&agents, &probes_dir, timeout, jobs, &output_dir);
+            cmd_benchmark(&agents, &probes_dir, &tag, timeout, jobs, &output_dir);
         }
         Command::Fingerprint { report, model } => {
             if model {
@@ -386,6 +407,7 @@ fn main() {
             runs,
             probes_dir,
             category,
+            tag,
             probe: probe_name,
             timeout,
             no_sandbox,
@@ -397,6 +419,7 @@ fn main() {
                 runs,
                 probes_dir: &probes_dir,
                 category: category.as_deref(),
+                tags: &tag,
                 probe_name: probe_name.as_deref(),
                 timeout,
                 no_sandbox,
@@ -415,6 +438,7 @@ struct RunOptions<'a> {
     agent_binary: Option<PathBuf>,
     probes_dir: &'a Path,
     category: Option<&'a str>,
+    tags: &'a [String],
     probe_name: Option<&'a str>,
     timeout: u64,
     no_sandbox: bool,
@@ -460,8 +484,9 @@ fn cmd_run(opts: &RunOptions<'_>) {
         process::exit(1);
     }
 
-    // Filter by category if specified
+    // Filter by category and tags if specified
     let category_filter = opts.category.and_then(parse_category);
+    let tag_filter = normalized_tag_filter(opts.tags);
 
     // Filter probes
     let filtered: Vec<(PathBuf, testcase::Probe)> = probes
@@ -476,6 +501,9 @@ fn cmd_run(opts: &RunOptions<'_>) {
                 if p.probe.category != *cat {
                     return false;
                 }
+            }
+            if !probe_matches_tag_filter(p, &tag_filter) {
+                return false;
             }
             // Name filter
             if let Some(name) = opts.probe_name {
@@ -619,7 +647,7 @@ fn cmd_run(opts: &RunOptions<'_>) {
     }
 }
 
-fn cmd_list(probes_dir: &Path, category: Option<&str>) {
+fn cmd_list(probes_dir: &Path, category: Option<&str>, tags: &[String]) {
     let probes = match testcase::load_probes(probes_dir) {
         Ok(p) => p,
         Err(e) => {
@@ -629,6 +657,7 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>) {
     };
 
     let category_filter = category.and_then(parse_category);
+    let tag_filter = normalized_tag_filter(tags);
 
     let filtered: Vec<_> = probes
         .iter()
@@ -636,14 +665,15 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>) {
             category_filter
                 .as_ref()
                 .is_none_or(|cat| p.probe.category == *cat)
+                && probe_matches_tag_filter(p, &tag_filter)
         })
         .collect();
 
     println!(
-        "\n{:<35} {:<22} {:<10} Targets",
-        "NAME", "CATEGORY", "SEVERITY"
+        "\n{:<35} {:<22} {:<10} {:<24} Targets",
+        "NAME", "CATEGORY", "SEVERITY", "TAGS"
     );
-    println!("{}", "-".repeat(90));
+    println!("{}", "-".repeat(118));
 
     for (_path, probe) in &filtered {
         let targets: Vec<String> = probe
@@ -652,12 +682,18 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>) {
             .iter()
             .map(|t| format!("{t:?}"))
             .collect();
+        let tags = if probe.probe.tags.is_empty() {
+            "-".to_string()
+        } else {
+            probe.probe.tags.join(", ")
+        };
 
         println!(
-            "{:<35} {:<22} {:<10} {}",
+            "{:<35} {:<22} {:<10} {:<24} {}",
             probe.probe.name,
             format!("{:?}", probe.probe.category),
             format!("{:?}", probe.probe.severity),
+            tags,
             targets.join(", "),
         );
     }
@@ -981,6 +1017,7 @@ fn cmd_similarity(path_a: &Path, path_b: &Path) {
 fn cmd_benchmark(
     agents_str: &str,
     probes_dir: &Path,
+    tags: &[String],
     timeout: u64,
     jobs: usize,
     output_dir: &Path,
@@ -1013,6 +1050,7 @@ fn cmd_benchmark(
     }
 
     let mut all_reports = Vec::new();
+    let tag_filter = normalized_tag_filter(tags);
 
     for agent_name in &agent_names {
         let target = parse_agent_target_or_exit(agent_name);
@@ -1021,7 +1059,9 @@ fn cmd_benchmark(
         // Filter probes that target this agent
         let filtered: Vec<(PathBuf, testcase::Probe)> = probes
             .iter()
-            .filter(|(_, p)| p.probe.targets.contains(&target))
+            .filter(|(_, p)| {
+                p.probe.targets.contains(&target) && probe_matches_tag_filter(p, &tag_filter)
+            })
             .cloned()
             .collect();
 
@@ -1510,6 +1550,26 @@ fn parse_category(s: &str) -> Option<AttackCategory> {
     }
 }
 
+fn normalized_tag_filter(tags: &[String]) -> Vec<String> {
+    tags.iter()
+        .map(|tag| tag.trim())
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| tag.to_ascii_lowercase())
+        .collect()
+}
+
+fn probe_matches_tag_filter(probe: &testcase::Probe, tags: &[String]) -> bool {
+    if tags.is_empty() {
+        return true;
+    }
+
+    probe
+        .probe
+        .tags
+        .iter()
+        .any(|tag| tags.iter().any(|wanted| tag.eq_ignore_ascii_case(wanted)))
+}
+
 fn cmd_model_fingerprint(report_path: &Path) {
     let report = load_report(report_path);
 
@@ -1537,6 +1597,7 @@ struct MultiRunOptions<'a> {
     runs: usize,
     probes_dir: &'a Path,
     category: Option<&'a str>,
+    tags: &'a [String],
     probe_name: Option<&'a str>,
     timeout: u64,
     no_sandbox: bool,
@@ -1565,6 +1626,7 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
     };
 
     let category_filter = opts.category.and_then(parse_category);
+    let tag_filter = normalized_tag_filter(opts.tags);
 
     let filtered: Vec<(PathBuf, testcase::Probe)> = probes
         .into_iter()
@@ -1576,6 +1638,9 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
                 if p.probe.category != *cat {
                     return false;
                 }
+            }
+            if !probe_matches_tag_filter(p, &tag_filter) {
+                return false;
             }
             if let Some(name) = opts.probe_name {
                 if p.probe.name != name {

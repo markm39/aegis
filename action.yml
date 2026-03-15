@@ -18,6 +18,10 @@ inputs:
     description: "Optional category filter"
     required: false
     default: ""
+  tag:
+    description: "Optional tag filter (comma-separated)"
+    required: false
+    default: ""
   probe:
     description: "Optional single-probe filter"
     required: false
@@ -127,6 +131,10 @@ runs:
 
         if [[ -n "${{ inputs.category }}" ]]; then
           args+=(--category "${{ inputs.category }}")
+        fi
+
+        if [[ -n "${{ inputs.tag }}" ]]; then
+          args+=(--tag "${{ inputs.tag }}")
         fi
 
         if [[ -n "${{ inputs.probe }}" ]]; then

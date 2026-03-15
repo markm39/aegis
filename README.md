@@ -33,6 +33,9 @@ aegis-probe validate --probes-dir probes
 # Run all probes against Claude Code
 aegis-probe run --agent claude-code --agent-binary claude --probes-dir probes
 
+# Run only CI artifact and credential-theft probes
+aegis-probe run --agent claude-code --agent-binary claude --probes-dir probes --tag ci-artifact,credential-theft
+
 # Gate CI on partial-or-worse results and a minimum score
 aegis-probe run \
   --agent codex \
@@ -75,6 +78,7 @@ This repo includes a real composite action at [`action.yml`](action.yml).
   with:
     agent: claude-code
     agent-binary: claude
+    tag: ci-artifact,credential-theft
     jobs: 4
     fail-on: fail
     output: aegis-report.json
@@ -109,6 +113,9 @@ aegis-probe run --agent claude-code --agent-binary claude --fail-on critical
 
 # Dry run filtering
 aegis-probe run --dry-run --category prompt_injection --probe code-comment-injection
+
+# Tag-based filtering for enterprise subsets
+aegis-probe run --tag ci-artifact,credential-theft
 ```
 
 ### Compare and Benchmark

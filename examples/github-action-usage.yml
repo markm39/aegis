@@ -25,6 +25,7 @@ jobs:
         with:
           agent: claude-code
           agent-binary: claude
+          tag: ci-artifact,credential-theft
           jobs: 4
           fail-on: fail
           output: aegis-report.json
