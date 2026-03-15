@@ -31,9 +31,10 @@ jobs:
         with:
           agent: claude-code
           agent-binary: claude
-          tag: ci-artifact,credential-theft
+          profile: github-actions
           jobs: 4
           fail-on: fail
+          stability-runs: 3
           output: aegis-report.json
           baseline-report: baseline/baseline-report.json
           history-dir: baseline/history
@@ -48,6 +49,8 @@ jobs:
           echo "Regressions: ${{ steps.aegis.outputs.regressions }}"
           echo "Unstable probes: ${{ steps.aegis.outputs.unstable-probes }}"
           echo "History runs: ${{ steps.aegis.outputs.history-run-count }}"
+          echo "Compare JSON: ${{ steps.aegis.outputs.compare-path }}"
+          echo "History JSON: ${{ steps.aegis.outputs.history-path }}"
           echo "Probe pack: ${{ steps.aegis.outputs.probe-pack-hash }}"
 
       - name: Upload JSON report

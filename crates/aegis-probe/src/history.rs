@@ -276,6 +276,7 @@ mod tests {
         let context = ReportContext {
             probe_pack_hash: "pack-123".into(),
             selected_tags: vec![],
+            selected_profiles: vec![],
             executed_tags: vec!["ci-artifact".into(), "sbom".into()],
         };
         let mut report =

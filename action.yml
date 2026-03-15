@@ -22,6 +22,10 @@ inputs:
     description: "Optional tag filter (comma-separated)"
     required: false
     default: ""
+  profile:
+    description: "Optional named profile filter (comma-separated)"
+    required: false
+    default: ""
   probe:
     description: "Optional single-probe filter"
     required: false
@@ -82,6 +86,10 @@ inputs:
     description: "Optional minimum required run count after history-dir filtering"
     required: false
     default: ""
+  stability-runs:
+    description: "Optional number of repeated local runs to add into the history/stability window"
+    required: false
+    default: "1"
 
 outputs:
   report-path:
@@ -117,6 +125,15 @@ outputs:
   junit-path:
     description: "Path to the rendered JUnit artifact when requested"
     value: ${{ steps.run.outputs.junit_path }}
+  compare-path:
+    description: "Path to the machine-readable comparison report when baseline-report is set"
+    value: ${{ steps.run.outputs.compare_path }}
+  history-path:
+    description: "Path to the machine-readable history report when history analysis runs"
+    value: ${{ steps.run.outputs.history_path }}
+  stability-report-dir:
+    description: "Directory containing generated repeat-run reports when stability-runs is greater than 1"
+    value: ${{ steps.run.outputs.stability_report_dir }}
   regressions:
     description: "Regression count from the baseline comparison when baseline-report is set"
     value: ${{ steps.run.outputs.regressions }}
@@ -159,10 +176,20 @@ runs:
         echo "report_path=${report_path}" >> "$GITHUB_OUTPUT"
         echo "sarif_path=" >> "$GITHUB_OUTPUT"
         echo "junit_path=" >> "$GITHUB_OUTPUT"
+        echo "compare_path=" >> "$GITHUB_OUTPUT"
+        echo "history_path=" >> "$GITHUB_OUTPUT"
+        echo "stability_report_dir=" >> "$GITHUB_OUTPUT"
         echo "regressions=" >> "$GITHUB_OUTPUT"
         echo "improvements=" >> "$GITHUB_OUTPUT"
         echo "unstable_probes=" >> "$GITHUB_OUTPUT"
         echo "history_run_count=" >> "$GITHUB_OUTPUT"
+
+        stability_runs="${{ inputs.stability-runs }}"
+        if ! [[ "${stability_runs}" =~ ^[0-9]+$ ]] || (( stability_runs < 1 )); then
+          echo "stability-runs must be an integer greater than or equal to 1." >&2
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
 
         if [[ -n "${{ inputs.max-regressions }}" && -z "${{ inputs.baseline-report }}" ]]; then
           echo "max-regressions requires baseline-report." >&2
@@ -170,56 +197,53 @@ runs:
           exit 1
         fi
 
-        if [[ -n "${{ inputs.max-unstable-probes }}" && -z "${{ inputs.history-dir }}" ]]; then
-          echo "max-unstable-probes requires history-dir." >&2
-          echo "exit_code=1" >> "$GITHUB_OUTPUT"
-          exit 1
+        history_requested=0
+        if [[ -n "${{ inputs.history-dir }}" || -n "${{ inputs.max-unstable-probes }}" || -n "${{ inputs.min-history-runs }}" || "${stability_runs}" != "1" ]]; then
+          history_requested=1
         fi
 
-        if [[ -n "${{ inputs.min-history-runs }}" && -z "${{ inputs.history-dir }}" ]]; then
-          echo "min-history-runs requires history-dir." >&2
-          echo "exit_code=1" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
-
-        args=(
+        common_args=(
           run
           --agent "${{ inputs.agent }}"
           --probes-dir "${{ inputs.probes-dir }}"
           --timeout "${{ inputs.timeout }}"
           --jobs "${{ inputs.jobs }}"
-          --output "${report_path}"
           --format json
           --fail-on "${{ inputs.fail-on }}"
         )
 
         if [[ -n "${{ inputs.agent-binary }}" ]]; then
-          args+=(--agent-binary "${{ inputs.agent-binary }}")
+          common_args+=(--agent-binary "${{ inputs.agent-binary }}")
         fi
 
         if [[ -n "${{ inputs.category }}" ]]; then
-          args+=(--category "${{ inputs.category }}")
+          common_args+=(--category "${{ inputs.category }}")
         fi
 
         if [[ -n "${{ inputs.tag }}" ]]; then
-          args+=(--tag "${{ inputs.tag }}")
+          common_args+=(--tag "${{ inputs.tag }}")
+        fi
+
+        if [[ -n "${{ inputs.profile }}" ]]; then
+          common_args+=(--profile "${{ inputs.profile }}")
         fi
 
         if [[ -n "${{ inputs.probe }}" ]]; then
-          args+=(--probe "${{ inputs.probe }}")
+          common_args+=(--probe "${{ inputs.probe }}")
         fi
 
         if [[ "${{ inputs.capture-output }}" == "true" ]]; then
-          args+=(--capture-output)
+          common_args+=(--capture-output)
         fi
 
         if [[ -n "${{ inputs.min-score }}" ]]; then
-          args+=(--min-score "${{ inputs.min-score }}")
+          common_args+=(--min-score "${{ inputs.min-score }}")
         fi
 
+        run_args=("${common_args[@]}" --output "${report_path}")
         run_status=0
         final_status=0
-        "${probe_bin}" "${args[@]}" || run_status=$?
+        "${probe_bin}" "${run_args[@]}" || run_status=$?
         final_status=$run_status
 
         if [[ -f "${report_path}" ]]; then
@@ -285,6 +309,10 @@ runs:
               compare_args+=(--tag "${{ inputs.tag }}")
             fi
 
+            if [[ -n "${{ inputs.profile }}" ]]; then
+              compare_args+=(--profile "${{ inputs.profile }}")
+            fi
+
             compare_status=0
             "${probe_bin}" "${compare_args[@]}" || compare_status=$?
 
@@ -292,6 +320,7 @@ runs:
               echo "Comparison did not produce ${compare_path}." >&2
               final_status=1
             else
+              echo "compare_path=${compare_path}" >> "$GITHUB_OUTPUT"
               mapfile -t compare_metrics < <(
                 COMPARE_PATH="${compare_path}" python3 - <<'PY'
                 import json
@@ -327,8 +356,8 @@ runs:
           fi
         fi
 
-        if [[ -n "${{ inputs.history-dir }}" ]]; then
-          if [[ ! -d "${{ inputs.history-dir }}" ]]; then
+        if (( history_requested == 1 )); then
+          if [[ -n "${{ inputs.history-dir }}" && ! -d "${{ inputs.history-dir }}" ]]; then
             echo "History directory not found: ${{ inputs.history-dir }}" >&2
             final_status=1
           elif [[ ! -f "${report_path}" ]]; then
@@ -337,12 +366,28 @@ runs:
           else
             rm -rf "${history_input_dir}"
             mkdir -p "${history_input_dir}"
-            shopt -s nullglob
-            for path in "${{ inputs.history-dir }}"/*.json; do
-              cp "${path}" "${history_input_dir}/$(basename "${path}")"
-            done
-            shopt -u nullglob
+            if [[ -n "${{ inputs.history-dir }}" ]]; then
+              shopt -s nullglob
+              for path in "${{ inputs.history-dir }}"/*.json; do
+                cp "${path}" "${history_input_dir}/$(basename "${path}")"
+              done
+              shopt -u nullglob
+            fi
             cp "${report_path}" "${history_input_dir}/current-report.json"
+
+            if (( stability_runs > 1 )); then
+              echo "stability_report_dir=${history_input_dir}" >> "$GITHUB_OUTPUT"
+              for (( run_index = 2; run_index <= stability_runs; run_index++ )); do
+                rerun_path="${history_input_dir}/stability-${run_index}.json"
+                rerun_args=("${common_args[@]}" --output "${rerun_path}")
+                rerun_status=0
+                "${probe_bin}" "${rerun_args[@]}" || rerun_status=$?
+                if [[ ! -f "${rerun_path}" ]]; then
+                  echo "Stability run ${run_index} did not produce ${rerun_path}." >&2
+                  final_status=1
+                fi
+              done
+            fi
 
             history_args=(
               history
@@ -358,6 +403,10 @@ runs:
               history_args+=(--tag "${{ inputs.tag }}")
             fi
 
+            if [[ -n "${{ inputs.profile }}" ]]; then
+              history_args+=(--profile "${{ inputs.profile }}")
+            fi
+
             history_status=0
             "${probe_bin}" "${history_args[@]}" > "${history_path}" || history_status=$?
 
@@ -365,6 +414,7 @@ runs:
               echo "History analysis failed for ${history_input_dir}." >&2
               final_status=1
             else
+              echo "history_path=${history_path}" >> "$GITHUB_OUTPUT"
               mapfile -t history_metrics < <(
                 HISTORY_PATH="${history_path}" python3 - <<'PY'
                 import json

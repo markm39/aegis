@@ -63,6 +63,7 @@ jobs:
           mkdir -p package-smoke
           tar xzf "aegis-probe-${VERSION}-${TARGET}.tar.gz" -C package-smoke
           ./package-smoke/aegis-probe --version
+          ./package-smoke/aegis-probe profiles | grep -q 'github-actions'
           ./package-smoke/aegis-probe validate --probes-dir probes
           ./package-smoke/aegis-probe run \
             --agent mock-safe \
@@ -110,6 +111,21 @@ jobs:
             --agent ClaudeCode \
             --tag ci-artifact \
             --output package-smoke/history-bundle.json
+          ./package-smoke/aegis-probe baseline promote \
+            package-smoke/history-reports/safe.json \
+            --name ci-main \
+            --profile ci-artifacts \
+            --output package-smoke/baseline.bundle.json
+          ./package-smoke/aegis-probe baseline publish \
+            package-smoke/baseline.bundle.json \
+            --store package-smoke/baselines
+          ./package-smoke/aegis-probe baseline fetch \
+            --store package-smoke/baselines \
+            --agent ClaudeCode \
+            --name ci-main \
+            --profile ci-artifacts \
+            --format report \
+            --output package-smoke/fetched-baseline.json
           REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
           import json
           import os
@@ -131,12 +147,16 @@ jobs:
               bundle = json.load(handle)
           with open("package-smoke/compare.json", "r", encoding="utf-8") as handle:
               comparison = json.load(handle)
+          with open("package-smoke/fetched-baseline.json", "r", encoding="utf-8") as handle:
+              baseline_report = json.load(handle)
 
           assert comparison["summary"]["regression_count"] == 1
           assert comparison["tag_filter"] == ["ci-artifact"]
           assert history["run_count"] == 2
           assert history["tag_filter"] == ["ci-artifact"]
           assert history["regressions"]
+          assert baseline_report["metadata"]["selected_profiles"] == ["ci-artifacts"]
+          assert baseline_report["results"][0]["probe_name"] == "sbom-report-injection"
           assert bundle["schema_version"] == 1
           assert bundle["run_count"] == 2
           assert bundle["tag_filter"] == ["ci-artifact"]
@@ -190,12 +210,14 @@ jobs:
           mkdir -p completions
           mkdir -p history-reports
           chmod +x aegis-probe
+          ./aegis-probe profiles > /dev/null
           ./aegis-probe run --agent mock-safe --probes-dir probes --probe curl-pipe-bash --output universal-smoke.json --format json
           ./aegis-probe run --agent mock-safe --probes-dir probes --probe sbom-report-injection --tag ci-artifact --output history-reports/safe.json --format json
           ./aegis-probe run --agent mock-vulnerable --probes-dir probes --probe sbom-report-injection --tag ci-artifact --output history-reports/vuln.json --format json || true
           ./aegis-probe compare history-reports/safe.json history-reports/vuln.json --tag ci-artifact --format json --output universal-compare.json || true
           ./aegis-probe history history-reports --agent ClaudeCode --tag ci-artifact --format json > universal-history.json
           ./aegis-probe registry export-history history-reports --agent ClaudeCode --tag ci-artifact --output universal-history-bundle.json
+          ./aegis-probe baseline promote history-reports/safe.json --name ci-main --profile ci-artifacts --output universal-baseline.bundle.json
           ./aegis-probe completions bash > completions/aegis-probe.bash
           ./aegis-probe completions zsh > completions/_aegis-probe
           ./aegis-probe completions fish > completions/aegis-probe.fish

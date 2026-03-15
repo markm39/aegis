@@ -365,6 +365,7 @@ pub fn render_sarif(report: &SecurityReport) -> Result<String, serde_json::Error
                 "score": report.score,
                 "schema_version": report.metadata.schema_version,
                 "selected_tags": report.metadata.selected_tags,
+                "selected_profiles": report.metadata.selected_profiles,
                 "executed_tags": report.metadata.executed_tags,
                 "platform": {
                     "os": report.metadata.platform.os,

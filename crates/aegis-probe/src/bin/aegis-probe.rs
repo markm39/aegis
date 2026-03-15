@@ -69,6 +69,10 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
 
+        /// Only run probes in one of these named profiles (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
+
         /// Only run a specific probe by name.
         #[arg(long)]
         probe: Option<String>,
@@ -127,6 +131,10 @@ enum Command {
         /// Filter by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Filter by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
     },
 
     /// Validate probe files without running them.
@@ -144,6 +152,10 @@ enum Command {
         /// Filter saved report results by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
     },
 
     /// Re-render a saved JSON report in another output format.
@@ -173,6 +185,10 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
 
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
+
         /// Limit analysis to the most recent N reports after filtering.
         #[arg(long)]
         limit: Option<usize>,
@@ -193,6 +209,10 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
 
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
+
         /// Output format: terminal or json.
         #[arg(long, default_value = "terminal")]
         format: String,
@@ -208,10 +228,19 @@ enum Command {
         shell: Shell,
     },
 
+    /// List the built-in named probe profiles.
+    Profiles,
+
     /// Export or upload derived-only registry bundles.
     Registry {
         #[command(subcommand)]
         action: RegistryAction,
+    },
+
+    /// Promote, publish, fetch, and inspect local baseline bundles.
+    Baseline {
+        #[command(subcommand)]
+        action: BaselineAction,
     },
 
     /// Run the full benchmark suite and output a standardized scorecard.
@@ -227,6 +256,10 @@ enum Command {
         /// Only benchmark probes with one of these tags (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Only benchmark probes in one of these named profiles (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
 
         /// Timeout per probe in seconds.
         #[arg(long, default_value = "120")]
@@ -261,6 +294,10 @@ enum Command {
         /// Filter saved report results by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
     },
 
     /// Run probes multiple times and compute statistical aggregates.
@@ -284,6 +321,10 @@ enum Command {
         /// Only run probes with one of these tags (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Only run probes in one of these named profiles (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
 
         /// Only run a specific probe by name.
         #[arg(long)]
@@ -316,6 +357,10 @@ enum Command {
         /// Filter saved report results by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
     },
 }
 
@@ -341,6 +386,9 @@ enum RegistryAction {
         /// Filter saved report results by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
         /// Limit analysis to the most recent N reports after filtering.
         #[arg(long)]
         limit: Option<usize>,
@@ -363,9 +411,76 @@ enum RegistryAction {
         /// Filter saved report results by tag (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         tag: Vec<String>,
+        /// Filter saved report results by named profile (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
         /// Limit analysis to the most recent N reports after filtering.
         #[arg(long)]
         limit: Option<usize>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BaselineAction {
+    /// Promote a saved JSON report into an immutable baseline bundle.
+    Promote {
+        /// Path to a saved JSON report.
+        report: PathBuf,
+        /// Human-readable baseline name.
+        #[arg(long, default_value = "default")]
+        name: String,
+        /// Filter the saved report by tag before promoting it.
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+        /// Filter the saved report by named profile before promoting it.
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
+        /// Optional notes stored alongside the baseline metadata.
+        #[arg(long)]
+        notes: Option<String>,
+        /// Write the bundle to a file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Publish an existing baseline bundle into a local baseline store.
+    Publish {
+        /// Path to a baseline bundle created by `baseline promote`.
+        bundle: PathBuf,
+        /// Baseline store directory.
+        #[arg(long, default_value = ".aegis/baselines")]
+        store: PathBuf,
+    },
+    /// Fetch the most recent matching baseline from a local store.
+    Fetch {
+        /// Baseline store directory.
+        #[arg(long, default_value = ".aegis/baselines")]
+        store: PathBuf,
+        /// Agent name to match, for example `ClaudeCode`.
+        #[arg(long)]
+        agent: String,
+        /// Optional baseline name filter.
+        #[arg(long)]
+        name: Option<String>,
+        /// Filter the requested baseline by selected tags.
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+        /// Filter the requested baseline by selected profiles.
+        #[arg(long, value_delimiter = ',')]
+        profile: Vec<String>,
+        /// Output format: path, bundle, or report.
+        #[arg(long, default_value = "path")]
+        format: String,
+        /// Write fetched output to a file instead of stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Inspect a baseline bundle.
+    Inspect {
+        /// Path to a baseline bundle.
+        bundle: PathBuf,
+        /// Output format: terminal or json.
+        #[arg(long, default_value = "terminal")]
+        format: String,
     },
 }
 
@@ -396,6 +511,7 @@ fn main() {
             probes_dir,
             category,
             tag,
+            profile,
             probe: probe_name,
             timeout,
             no_sandbox,
@@ -414,6 +530,7 @@ fn main() {
                 probes_dir: &probes_dir,
                 category: category.as_deref(),
                 tags: &tag,
+                profiles: &profile,
                 probe_name: probe_name.as_deref(),
                 timeout,
                 no_sandbox,
@@ -431,14 +548,19 @@ fn main() {
             probes_dir,
             category,
             tag,
+            profile,
         } => {
-            cmd_list(&probes_dir, category.as_deref(), &tag);
+            cmd_list(&probes_dir, category.as_deref(), &tag, &profile);
         }
         Command::Validate { probes_dir } => {
             cmd_validate(&probes_dir);
         }
-        Command::Summary { report, tag } => {
-            cmd_summary(&report, &tag);
+        Command::Summary {
+            report,
+            tag,
+            profile,
+        } => {
+            cmd_summary(&report, &tag, &profile);
         }
         Command::Render {
             report,
@@ -451,19 +573,35 @@ fn main() {
             reports_dir,
             agent,
             tag,
+            profile,
             limit,
             format,
         } => {
-            cmd_history(&reports_dir, agent.as_deref(), &tag, limit, &format);
+            cmd_history(
+                &reports_dir,
+                agent.as_deref(),
+                &tag,
+                &profile,
+                limit,
+                &format,
+            );
         }
         Command::Compare {
             baseline,
             current,
             tag,
+            profile,
             format,
             output,
         } => {
-            cmd_compare(&baseline, &current, &tag, &format, output.as_deref());
+            cmd_compare(
+                &baseline,
+                &current,
+                &tag,
+                &profile,
+                &format,
+                output.as_deref(),
+            );
         }
         Command::Completions { shell } => {
             clap_complete::generate(
@@ -473,18 +611,33 @@ fn main() {
                 &mut std::io::stdout(),
             );
         }
+        Command::Profiles => {
+            cmd_profiles();
+        }
         Command::Registry { action } => {
             cmd_registry(action);
+        }
+        Command::Baseline { action } => {
+            cmd_baseline(action);
         }
         Command::Benchmark {
             agents,
             probes_dir,
             tag,
+            profile,
             timeout,
             jobs,
             output_dir,
         } => {
-            cmd_benchmark(&agents, &probes_dir, &tag, timeout, jobs, &output_dir);
+            cmd_benchmark(
+                &agents,
+                &probes_dir,
+                &tag,
+                &profile,
+                timeout,
+                jobs,
+                &output_dir,
+            );
         }
         Command::Fingerprint { report, model } => {
             if model {
@@ -497,8 +650,9 @@ fn main() {
             report_a,
             report_b,
             tag,
+            profile,
         } => {
-            cmd_similarity(&report_a, &report_b, &tag);
+            cmd_similarity(&report_a, &report_b, &tag, &profile);
         }
         Command::MultiRun {
             agent,
@@ -506,6 +660,7 @@ fn main() {
             probes_dir,
             category,
             tag,
+            profile,
             probe: probe_name,
             timeout,
             no_sandbox,
@@ -518,6 +673,7 @@ fn main() {
                 probes_dir: &probes_dir,
                 category: category.as_deref(),
                 tags: &tag,
+                profiles: &profile,
                 probe_name: probe_name.as_deref(),
                 timeout,
                 no_sandbox,
@@ -529,8 +685,9 @@ fn main() {
             report_a,
             report_b,
             tag,
+            profile,
         } => {
-            cmd_distillation(&report_a, &report_b, &tag);
+            cmd_distillation(&report_a, &report_b, &tag, &profile);
         }
     }
 }
@@ -541,6 +698,7 @@ struct RunOptions<'a> {
     probes_dir: &'a Path,
     category: Option<&'a str>,
     tags: &'a [String],
+    profiles: &'a [String],
     probe_name: Option<&'a str>,
     timeout: u64,
     no_sandbox: bool,
@@ -552,6 +710,40 @@ struct RunOptions<'a> {
     capture_output: bool,
     fail_on: Option<FailOn>,
     min_score: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FilterSelection {
+    explicit_tags: Vec<String>,
+    profiles: Vec<String>,
+    effective_tags: Vec<String>,
+}
+
+fn resolve_filter_selection_or_exit(tags: &[String], profiles: &[String]) -> FilterSelection {
+    let explicit_tags = normalized_tag_filter(tags);
+    let profiles = match aegis_probe::profiles::normalize_profiles(profiles) {
+        Ok(profiles) => profiles,
+        Err(err) => {
+            eprintln!("{err}");
+            process::exit(1);
+        }
+    };
+    let mut effective_tags = explicit_tags.clone();
+    match aegis_probe::profiles::expand_profile_tags(&profiles) {
+        Ok(profile_tags) => effective_tags.extend(profile_tags),
+        Err(err) => {
+            eprintln!("{err}");
+            process::exit(1);
+        }
+    }
+    effective_tags.sort();
+    effective_tags.dedup();
+
+    FilterSelection {
+        explicit_tags,
+        profiles,
+        effective_tags,
+    }
 }
 
 fn cmd_run(opts: &RunOptions<'_>) {
@@ -586,9 +778,9 @@ fn cmd_run(opts: &RunOptions<'_>) {
         process::exit(1);
     }
 
-    // Filter by category and tags if specified
+    // Filter by category and named selection if specified
     let category_filter = opts.category.and_then(parse_category);
-    let tag_filter = normalized_tag_filter(opts.tags);
+    let selection = resolve_filter_selection_or_exit(opts.tags, opts.profiles);
 
     // Filter probes
     let filtered: Vec<(PathBuf, testcase::Probe)> = probes
@@ -604,7 +796,7 @@ fn cmd_run(opts: &RunOptions<'_>) {
                     return false;
                 }
             }
-            if !probe_matches_tag_filter(p, &tag_filter) {
+            if !probe_matches_tag_filter(p, &selection.effective_tags) {
                 return false;
             }
             // Name filter
@@ -622,7 +814,8 @@ fn cmd_run(opts: &RunOptions<'_>) {
         process::exit(1);
     }
 
-    let report_context = report_context_from_filtered(&filtered, &tag_filter);
+    let report_context =
+        report_context_from_filtered(&filtered, &selection.explicit_tags, &selection.profiles);
 
     // Build runner config
     let config = RunnerConfig {
@@ -747,7 +940,7 @@ fn cmd_run(opts: &RunOptions<'_>) {
     }
 }
 
-fn cmd_list(probes_dir: &Path, category: Option<&str>, tags: &[String]) {
+fn cmd_list(probes_dir: &Path, category: Option<&str>, tags: &[String], profiles: &[String]) {
     let probes = match testcase::load_probes(probes_dir) {
         Ok(p) => p,
         Err(e) => {
@@ -757,7 +950,7 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>, tags: &[String]) {
     };
 
     let category_filter = category.and_then(parse_category);
-    let tag_filter = normalized_tag_filter(tags);
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
 
     let filtered: Vec<_> = probes
         .iter()
@@ -765,7 +958,7 @@ fn cmd_list(probes_dir: &Path, category: Option<&str>, tags: &[String]) {
             category_filter
                 .as_ref()
                 .is_none_or(|cat| p.probe.category == *cat)
-                && probe_matches_tag_filter(p, &tag_filter)
+                && probe_matches_tag_filter(p, &selection.effective_tags)
         })
         .collect();
 
@@ -845,9 +1038,9 @@ fn cmd_validate(probes_dir: &Path) {
     }
 }
 
-fn cmd_summary(report_path: &Path, tags: &[String]) {
-    let tag_filter = normalized_tag_filter(tags);
-    let report = load_filtered_report(report_path, &tag_filter);
+fn cmd_summary(report_path: &Path, tags: &[String], profiles: &[String]) {
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
+    let report = load_filtered_report(report_path, &selection);
 
     println!(
         "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}{}",
@@ -857,7 +1050,7 @@ fn cmd_summary(report_path: &Path, tags: &[String]) {
         report.summary.partial,
         report.summary.errors,
         report.agent,
-        format_tag_filter_suffix(&tag_filter),
+        format_tag_filter_suffix(&selection.effective_tags),
     );
 
     if report.summary.failed > 0 {
@@ -898,12 +1091,13 @@ fn cmd_history(
     reports_dir: &Path,
     agent_filter: Option<&str>,
     tags: &[String],
+    profiles: &[String],
     limit: Option<usize>,
     format: &str,
 ) {
-    let tag_filter = normalized_tag_filter(tags);
-    let reports = load_history_reports(reports_dir, agent_filter, &tag_filter, limit);
-    let analysis = aegis_probe::history::analyze_history(&reports, &tag_filter);
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
+    let reports = load_history_reports(reports_dir, agent_filter, &selection, limit);
+    let analysis = aegis_probe::history::analyze_history(&reports, &selection.effective_tags);
 
     match format {
         "terminal" => render_history_terminal(&analysis),
@@ -925,14 +1119,16 @@ fn cmd_compare(
     baseline_path: &Path,
     current_path: &Path,
     tags: &[String],
+    profiles: &[String],
     format: &str,
     output_path: Option<&Path>,
 ) {
-    let tag_filter = normalized_tag_filter(tags);
-    let baseline = load_filtered_report(baseline_path, &tag_filter);
-    let current = load_filtered_report(current_path, &tag_filter);
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
+    let baseline = load_filtered_report(baseline_path, &selection);
+    let current = load_filtered_report(current_path, &selection);
     ensure_compatible_reports(&baseline, &current);
-    let comparison = aegis_probe::compare::compare_reports(&baseline, &current, &tag_filter);
+    let comparison =
+        aegis_probe::compare::compare_reports(&baseline, &current, &selection.effective_tags);
 
     let rendered = match format.to_ascii_lowercase().as_str() {
         "terminal" => render_compare_terminal(&comparison),
@@ -1075,15 +1271,15 @@ fn load_report(path: &Path) -> scoring::SecurityReport {
     }
 }
 
-fn load_filtered_report(path: &Path, tags: &[String]) -> scoring::SecurityReport {
+fn load_filtered_report(path: &Path, selection: &FilterSelection) -> scoring::SecurityReport {
     let report = load_report(path);
-    filter_saved_report_by_tags(report, path, tags)
+    filter_saved_report_by_tags(report, path, selection)
 }
 
 fn load_history_reports(
     reports_dir: &Path,
     agent_filter: Option<&str>,
-    tags: &[String],
+    selection: &FilterSelection,
     limit: Option<usize>,
 ) -> Vec<scoring::SecurityReport> {
     if let Some(0) = limit {
@@ -1118,7 +1314,7 @@ fn load_history_reports(
     let mut reports = report_paths
         .into_iter()
         .map(|path| {
-            let report = load_filtered_report(&path, tags);
+            let report = load_filtered_report(&path, selection);
             (path, report)
         })
         .collect::<Vec<_>>();
@@ -1187,9 +1383,9 @@ fn load_history_reports(
 fn filter_saved_report_by_tags(
     report: scoring::SecurityReport,
     path: &Path,
-    tags: &[String],
+    selection: &FilterSelection,
 ) -> scoring::SecurityReport {
-    if tags.is_empty() {
+    if selection.effective_tags.is_empty() {
         return report;
     }
 
@@ -1208,20 +1404,25 @@ fn filter_saved_report_by_tags(
     let filtered_results: Vec<_> = report
         .results
         .iter()
-        .filter(|result| result_matches_tag_filter(result, tags))
+        .filter(|result| result_matches_tag_filter(result, &selection.effective_tags))
         .cloned()
         .collect();
 
     if filtered_results.is_empty() {
         eprintln!(
             "No probes matched tag filter [{}] in {}.",
-            tags.join(", "),
+            selection.effective_tags.join(", "),
             path.display()
         );
         process::exit(1);
     }
 
-    scoring::recompute_report_with_metadata(&report, filtered_results, tags.to_vec())
+    scoring::recompute_report_with_metadata(
+        &report,
+        filtered_results,
+        selection.explicit_tags.clone(),
+        selection.profiles.clone(),
+    )
 }
 
 fn result_matches_tag_filter(result: &scoring::ProbeResult, tags: &[String]) -> bool {
@@ -1387,10 +1588,10 @@ fn cmd_fingerprint(report_path: &Path) {
     }
 }
 
-fn cmd_similarity(path_a: &Path, path_b: &Path, tags: &[String]) {
-    let tag_filter = normalized_tag_filter(tags);
-    let report_a = load_filtered_report(path_a, &tag_filter);
-    let report_b = load_filtered_report(path_b, &tag_filter);
+fn cmd_similarity(path_a: &Path, path_b: &Path, tags: &[String], profiles: &[String]) {
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
+    let report_a = load_filtered_report(path_a, &selection);
+    let report_b = load_filtered_report(path_b, &selection);
     ensure_compatible_reports(&report_a, &report_b);
 
     let fp_a = aegis_probe::fingerprint::extract_fingerprint(&report_a);
@@ -1402,8 +1603,8 @@ fn cmd_similarity(path_a: &Path, path_b: &Path, tags: &[String]) {
         result.agent_a, result.agent_b
     );
     println!("{}", "=".repeat(55));
-    if !tag_filter.is_empty() {
-        println!("Tag filter: {}", tag_filter.join(", "));
+    if !selection.effective_tags.is_empty() {
+        println!("Tag filter: {}", selection.effective_tags.join(", "));
     }
     println!("Overall similarity: {:.1}%", result.similarity * 100.0);
     println!("Exact behavioral match: {}", result.exact_match);
@@ -1434,6 +1635,7 @@ fn cmd_benchmark(
     agents_str: &str,
     probes_dir: &Path,
     tags: &[String],
+    profiles: &[String],
     timeout: u64,
     jobs: usize,
     output_dir: &Path,
@@ -1466,7 +1668,7 @@ fn cmd_benchmark(
     }
 
     let mut all_reports = Vec::new();
-    let tag_filter = normalized_tag_filter(tags);
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
 
     for agent_name in &agent_names {
         let target = parse_agent_target_or_exit(agent_name);
@@ -1476,7 +1678,8 @@ fn cmd_benchmark(
         let filtered: Vec<(PathBuf, testcase::Probe)> = probes
             .iter()
             .filter(|(_, p)| {
-                p.probe.targets.contains(&target) && probe_matches_tag_filter(p, &tag_filter)
+                p.probe.targets.contains(&target)
+                    && probe_matches_tag_filter(p, &selection.effective_tags)
             })
             .cloned()
             .collect();
@@ -1486,7 +1689,8 @@ fn cmd_benchmark(
             continue;
         }
 
-        let report_context = report_context_from_filtered(&filtered, &tag_filter);
+        let report_context =
+            report_context_from_filtered(&filtered, &selection.explicit_tags, &selection.profiles);
 
         let config = RunnerConfig {
             target: target.clone(),
@@ -1665,12 +1869,16 @@ fn cmd_registry(action: RegistryAction) {
             reports_dir,
             agent,
             tag,
+            profile,
             limit,
             output,
         } => {
-            let tag_filter = normalized_tag_filter(&tag);
-            let reports = load_history_reports(&reports_dir, agent.as_deref(), &tag_filter, limit);
-            let bundle = aegis_probe::registry::history_bundle_from_reports(&reports, &tag_filter);
+            let selection = resolve_filter_selection_or_exit(&tag, &profile);
+            let reports = load_history_reports(&reports_dir, agent.as_deref(), &selection, limit);
+            let bundle = aegis_probe::registry::history_bundle_from_reports(
+                &reports,
+                &selection.effective_tags,
+            );
             let json = match serde_json::to_string_pretty(&bundle) {
                 Ok(json) => json,
                 Err(e) => {
@@ -1723,6 +1931,7 @@ fn cmd_registry(action: RegistryAction) {
             reports_dir,
             agent,
             tag,
+            profile,
             limit,
         } => {
             let config = match aegis_probe::registry::registry_config() {
@@ -1734,9 +1943,12 @@ fn cmd_registry(action: RegistryAction) {
                 }
             };
 
-            let tag_filter = normalized_tag_filter(&tag);
-            let reports = load_history_reports(&reports_dir, agent.as_deref(), &tag_filter, limit);
-            let bundle = aegis_probe::registry::history_bundle_from_reports(&reports, &tag_filter);
+            let selection = resolve_filter_selection_or_exit(&tag, &profile);
+            let reports = load_history_reports(&reports_dir, agent.as_deref(), &selection, limit);
+            let bundle = aegis_probe::registry::history_bundle_from_reports(
+                &reports,
+                &selection.effective_tags,
+            );
 
             if config.using_legacy_aliases {
                 eprintln!(
@@ -1748,6 +1960,144 @@ fn cmd_registry(action: RegistryAction) {
                 Ok(()) => println!("Registry history upload complete."),
                 Err(e) => {
                     eprintln!("Registry history upload failed: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn cmd_baseline(action: BaselineAction) {
+    match action {
+        BaselineAction::Promote {
+            report,
+            name,
+            tag,
+            profile,
+            notes,
+            output,
+        } => {
+            let selection = resolve_filter_selection_or_exit(&tag, &profile);
+            let source_report = report.to_string_lossy().to_string();
+            let report = load_filtered_report(&report, &selection);
+            let bundle = aegis_probe::baseline::bundle_from_report(
+                &report,
+                &name,
+                notes,
+                Some(source_report),
+            );
+            let json = match serde_json::to_string_pretty(&bundle) {
+                Ok(json) => json,
+                Err(err) => {
+                    eprintln!("Error serializing baseline bundle: {err}");
+                    process::exit(1);
+                }
+            };
+            write_text_output(output.as_deref(), &json);
+        }
+        BaselineAction::Publish { bundle, store } => {
+            match aegis_probe::baseline::publish_bundle(&bundle, &store) {
+                Ok(path) => println!("{}", path.display()),
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            }
+        }
+        BaselineAction::Fetch {
+            store,
+            agent,
+            name,
+            tag,
+            profile,
+            format,
+            output,
+        } => {
+            let selection = resolve_filter_selection_or_exit(&tag, &profile);
+            let query = aegis_probe::baseline::BaselineQuery {
+                agent,
+                name,
+                selected_tags: selection.explicit_tags.clone(),
+                selected_profiles: selection.profiles.clone(),
+            };
+
+            let (_entry, bundle, path) = match aegis_probe::baseline::fetch_bundle(&store, &query) {
+                Ok(found) => found,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+
+            let rendered = match format.to_ascii_lowercase().as_str() {
+                "path" => format!("{}\n", path.display()),
+                "bundle" => match serde_json::to_string_pretty(&bundle) {
+                    Ok(json) => json,
+                    Err(err) => {
+                        eprintln!("Error serializing baseline bundle: {err}");
+                        process::exit(1);
+                    }
+                },
+                "report" => match report::render_json(&bundle.report) {
+                    Ok(json) => json,
+                    Err(err) => {
+                        eprintln!("Error serializing baseline report: {err}");
+                        process::exit(1);
+                    }
+                },
+                other => {
+                    eprintln!(
+                        "Unsupported baseline fetch format: {other}. Use path, bundle, or report."
+                    );
+                    process::exit(1);
+                }
+            };
+
+            write_text_output(output.as_deref(), &rendered);
+        }
+        BaselineAction::Inspect { bundle, format } => {
+            let bundle = match aegis_probe::baseline::read_bundle(&bundle) {
+                Ok(bundle) => bundle,
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(1);
+                }
+            };
+
+            match format.to_ascii_lowercase().as_str() {
+                "terminal" => {
+                    println!("Name: {}", bundle.metadata.name);
+                    println!("Agent: {}", bundle.metadata.agent);
+                    println!("Score: {}/100", bundle.metadata.score);
+                    println!("Promoted: {}", bundle.metadata.promoted_at);
+                    if !bundle.metadata.selected_profiles.is_empty() {
+                        println!("Profiles: {}", bundle.metadata.selected_profiles.join(", "));
+                    }
+                    if !bundle.metadata.selected_tags.is_empty() {
+                        println!("Tags: {}", bundle.metadata.selected_tags.join(", "));
+                    }
+                    if !bundle.metadata.probe_pack_hash.is_empty() {
+                        println!("Probe pack: {}", bundle.metadata.probe_pack_hash);
+                    }
+                    println!(
+                        "Summary: {} passed, {} failed, {} partial, {} errors",
+                        bundle.metadata.summary.passed,
+                        bundle.metadata.summary.failed,
+                        bundle.metadata.summary.partial,
+                        bundle.metadata.summary.errors,
+                    );
+                }
+                "json" => match serde_json::to_string_pretty(&bundle) {
+                    Ok(json) => println!("{json}"),
+                    Err(err) => {
+                        eprintln!("Error serializing baseline bundle: {err}");
+                        process::exit(1);
+                    }
+                },
+                other => {
+                    eprintln!(
+                        "Unsupported baseline inspect format: {other}. Use terminal or json."
+                    );
                     process::exit(1);
                 }
             }
@@ -2046,6 +2396,7 @@ fn normalized_tag_filter(tags: &[String]) -> Vec<String> {
 fn report_context_from_filtered(
     filtered: &[(PathBuf, testcase::Probe)],
     selected_tags: &[String],
+    selected_profiles: &[String],
 ) -> ReportContext {
     let mut executed_tags: Vec<String> = filtered
         .iter()
@@ -2057,6 +2408,7 @@ fn report_context_from_filtered(
     ReportContext {
         probe_pack_hash: testcase::probe_pack_hash(filtered),
         selected_tags: selected_tags.to_vec(),
+        selected_profiles: selected_profiles.to_vec(),
         executed_tags,
     }
 }
@@ -2071,6 +2423,20 @@ fn probe_matches_tag_filter(probe: &testcase::Probe, tags: &[String]) -> bool {
         .tags
         .iter()
         .any(|tag| tags.iter().any(|wanted| tag.eq_ignore_ascii_case(wanted)))
+}
+
+fn cmd_profiles() {
+    println!("\n{:<20} {:<75} TAGS", "PROFILE", "DESCRIPTION");
+    println!("{}", "-".repeat(150));
+    for profile in aegis_probe::profiles::known_profiles() {
+        println!(
+            "{:<20} {:<75} {}",
+            profile.name,
+            profile.description,
+            profile.tags.join(", "),
+        );
+    }
+    println!();
 }
 
 fn cmd_model_fingerprint(report_path: &Path) {
@@ -2101,6 +2467,7 @@ struct MultiRunOptions<'a> {
     probes_dir: &'a Path,
     category: Option<&'a str>,
     tags: &'a [String],
+    profiles: &'a [String],
     probe_name: Option<&'a str>,
     timeout: u64,
     no_sandbox: bool,
@@ -2129,7 +2496,7 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
     };
 
     let category_filter = opts.category.and_then(parse_category);
-    let tag_filter = normalized_tag_filter(opts.tags);
+    let selection = resolve_filter_selection_or_exit(opts.tags, opts.profiles);
 
     let filtered: Vec<(PathBuf, testcase::Probe)> = probes
         .into_iter()
@@ -2142,7 +2509,7 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
                     return false;
                 }
             }
-            if !probe_matches_tag_filter(p, &tag_filter) {
+            if !probe_matches_tag_filter(p, &selection.effective_tags) {
                 return false;
             }
             if let Some(name) = opts.probe_name {
@@ -2159,7 +2526,8 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
         process::exit(1);
     }
 
-    let report_context = report_context_from_filtered(&filtered, &tag_filter);
+    let report_context =
+        report_context_from_filtered(&filtered, &selection.explicit_tags, &selection.profiles);
 
     let config = runner::RunnerConfig {
         target: target.clone(),
@@ -2306,10 +2674,10 @@ fn render_multi_run_terminal(report: &aegis_probe::stats::MultiRunReport) {
     println!();
 }
 
-fn cmd_distillation(path_a: &Path, path_b: &Path, tags: &[String]) {
-    let tag_filter = normalized_tag_filter(tags);
-    let report_a = load_filtered_report(path_a, &tag_filter);
-    let report_b = load_filtered_report(path_b, &tag_filter);
+fn cmd_distillation(path_a: &Path, path_b: &Path, tags: &[String], profiles: &[String]) {
+    let selection = resolve_filter_selection_or_exit(tags, profiles);
+    let report_a = load_filtered_report(path_a, &selection);
+    let report_b = load_filtered_report(path_b, &selection);
     ensure_compatible_reports(&report_a, &report_b);
 
     // Extract model fingerprints if output is available
@@ -2343,8 +2711,8 @@ fn cmd_distillation(path_a: &Path, path_b: &Path, tags: &[String]) {
         analysis.agent_a, analysis.agent_b
     );
     println!("{}", "=".repeat(60));
-    if !tag_filter.is_empty() {
-        println!("Tag filter: {}", tag_filter.join(", "));
+    if !selection.effective_tags.is_empty() {
+        println!("Tag filter: {}", selection.effective_tags.join(", "));
     }
     println!(
         "Distillation score: {:.1}%",

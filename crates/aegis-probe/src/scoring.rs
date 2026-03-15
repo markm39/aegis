@@ -562,6 +562,9 @@ pub struct ReportMetadata {
     /// Explicit tag filters selected by the operator when the report was generated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_tags: Vec<String>,
+    /// Named profiles selected by the operator when the report was generated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_profiles: Vec<String>,
     /// Union of tags present on the probes that were actually executed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executed_tags: Vec<String>,
@@ -619,6 +622,7 @@ pub struct ReportSummary {
 pub struct ReportContext {
     pub probe_pack_hash: String,
     pub selected_tags: Vec<String>,
+    pub selected_profiles: Vec<String>,
     pub executed_tags: Vec<String>,
 }
 
@@ -629,6 +633,7 @@ impl ReportMetadata {
             runner_version: env!("CARGO_PKG_VERSION").to_string(),
             probe_pack_hash: context.probe_pack_hash.clone(),
             selected_tags: context.selected_tags.clone(),
+            selected_profiles: context.selected_profiles.clone(),
             executed_tags: context.executed_tags.clone(),
             platform: PlatformMetadata {
                 os: std::env::consts::OS.to_string(),
@@ -667,10 +672,12 @@ pub fn recompute_report_with_metadata(
     report: &SecurityReport,
     results: Vec<ProbeResult>,
     selected_tags: Vec<String>,
+    selected_profiles: Vec<String>,
 ) -> SecurityReport {
     let (score, summary) = calculate_report_metrics(&results);
     let mut metadata = report.metadata.clone();
     metadata.selected_tags = selected_tags;
+    metadata.selected_profiles = selected_profiles;
     metadata.executed_tags = collect_executed_tags(&results);
 
     SecurityReport {
@@ -1023,11 +1030,13 @@ compromise_indicators = []
             &ReportContext {
                 probe_pack_hash: "abc123".into(),
                 selected_tags: vec!["ci-artifact".into()],
+                selected_profiles: vec!["github-actions".into()],
                 executed_tags: vec!["ci-artifact".into(), "credential-theft".into()],
             },
         );
         assert_eq!(report.metadata.probe_pack_hash, "abc123");
         assert_eq!(report.metadata.selected_tags, vec!["ci-artifact"]);
+        assert_eq!(report.metadata.selected_profiles, vec!["github-actions"]);
         assert_eq!(
             report.metadata.executed_tags,
             vec!["ci-artifact", "credential-theft"]

@@ -105,6 +105,33 @@ fn list_filter_by_tag() {
 }
 
 #[test]
+fn profiles_command_lists_builtins() {
+    probe_binary()
+        .arg("profiles")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("github-actions"))
+        .stdout(predicate::str::contains("azure-devops"))
+        .stdout(predicate::str::contains("package-publish"));
+}
+
+#[test]
+fn list_filter_by_profile() {
+    probe_binary()
+        .args([
+            "list",
+            "--probes-dir",
+            probes_dir(),
+            "--profile",
+            "AZURE-DEVOPS",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("azure-pipeline-log-injection"))
+        .stdout(predicate::str::contains("azure-runbook-credential-bundle"));
+}
+
+#[test]
 fn validate_empty_dir_fails() {
     let dir = TempDir::new().unwrap();
     probe_binary()
@@ -264,6 +291,8 @@ fn run_output_includes_report_and_probe_tags() {
             "mock-safe",
             "--probe",
             "sbom-report-injection",
+            "--profile",
+            "ci-artifacts",
             "--tag",
             "SBOM",
             "--output",
@@ -279,6 +308,10 @@ fn run_output_includes_report_and_probe_tags() {
     assert_eq!(parsed["metadata"]["schema_version"], 3);
     assert_eq!(parsed["metadata"]["selected_tags"], json!(["sbom"]));
     assert_eq!(
+        parsed["metadata"]["selected_profiles"],
+        json!(["ci-artifacts"])
+    );
+    assert_eq!(
         parsed["metadata"]["executed_tags"],
         json!(["ci-artifact", "credential-theft", "docker", "sbom"])
     );
@@ -286,6 +319,90 @@ fn run_output_includes_report_and_probe_tags() {
         parsed["results"][0]["tags"],
         json!(["sbom", "ci-artifact", "docker", "credential-theft"])
     );
+}
+
+#[test]
+fn baseline_promote_publish_and_fetch_report() {
+    let dir = TempDir::new().unwrap();
+    let report = json!({
+        "agent": "ClaudeCode",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 100,
+        "summary": { "total_probes": 2, "passed": 2, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom", "ci-artifact"], 1000, 120),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1100, 140)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let report_path = dir.path().join("report.json");
+    let bundle_path = dir.path().join("baseline.bundle.json");
+    let fetched_report_path = dir.path().join("fetched-report.json");
+    let store_dir = dir.path().join("baseline-store");
+    write_json(&report_path, &report);
+
+    probe_binary()
+        .args([
+            "baseline",
+            "promote",
+            report_path.to_str().unwrap(),
+            "--name",
+            "ci-main",
+            "--profile",
+            "ci-artifacts",
+            "--output",
+            bundle_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    probe_binary()
+        .args([
+            "baseline",
+            "publish",
+            bundle_path.to_str().unwrap(),
+            "--store",
+            store_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    probe_binary()
+        .args([
+            "baseline",
+            "fetch",
+            "--store",
+            store_dir.to_str().unwrap(),
+            "--agent",
+            "ClaudeCode",
+            "--name",
+            "ci-main",
+            "--profile",
+            "ci-artifacts",
+            "--format",
+            "report",
+            "--output",
+            fetched_report_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(&fetched_report_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(
+        parsed["metadata"]["selected_profiles"],
+        json!(["ci-artifacts"])
+    );
+    assert_eq!(parsed["results"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["results"][0]["probe_name"], "sbom-probe");
 }
 
 #[test]

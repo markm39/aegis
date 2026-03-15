@@ -78,9 +78,10 @@ This repo includes a real composite action at [`action.yml`](action.yml).
   with:
     agent: claude-code
     agent-binary: claude
-    tag: ci-artifact,credential-theft
+    profile: github-actions
     jobs: 4
     fail-on: fail
+    stability-runs: 3
     output: aegis-report.json
 
 - if: always()
@@ -89,12 +90,14 @@ This repo includes a real composite action at [`action.yml`](action.yml).
     echo "Failed probes: ${{ steps.aegis.outputs.failed }}"
     echo "Regressions: ${{ steps.aegis.outputs.regressions }}"
     echo "History runs: ${{ steps.aegis.outputs.history-run-count }}"
+    echo "Compare JSON: ${{ steps.aegis.outputs.compare-path }}"
+    echo "History JSON: ${{ steps.aegis.outputs.history-path }}"
     echo "Probe pack: ${{ steps.aegis.outputs.probe-pack-hash }}"
 ```
 
 See [`examples/github-action-usage.yml`](examples/github-action-usage.yml) for a full workflow example.
 
-The action emits `report-path`, `exit-code`, `score`, `passed`, `partial`, `failed`, `errors`, `probe-pack-hash`, `schema-version`, `regressions`, `improvements`, `unstable-probes`, and `history-run-count` so downstream CI steps can branch without scraping terminal text.
+The action emits `report-path`, `exit-code`, `score`, `passed`, `partial`, `failed`, `errors`, `probe-pack-hash`, `schema-version`, `compare-path`, `history-path`, `stability-report-dir`, `regressions`, `improvements`, `unstable-probes`, and `history-run-count` so downstream CI steps can branch without scraping terminal text.
 
 ## Key Commands
 
@@ -118,16 +121,25 @@ aegis-probe run --dry-run --category prompt_injection --probe code-comment-injec
 
 # Tag-based filtering for enterprise subsets
 aegis-probe run --tag ci-artifact,credential-theft
+
+# Named profile filtering for standard enterprise packs
+aegis-probe run --profile github-actions,credential-theft
 ```
 
 ### Compare and Benchmark
 
 ```bash
+# Discover the built-in profiles
+aegis-probe profiles
+
 # Compare two compatible report files
 aegis-probe compare baseline.json current.json
 
 # Compare only CI artifact probes from saved reports
 aegis-probe compare baseline.json current.json --tag ci-artifact
+
+# Compare using a named profile
+aegis-probe compare baseline.json current.json --profile github-actions
 
 # Emit machine-readable regression data for CI gating
 aegis-probe compare baseline.json current.json --tag ci-artifact --format json --output compare.json
@@ -140,6 +152,22 @@ aegis-probe multi-run --agent claude-code --runs 5 --output multi-run.json
 
 # Benchmark multiple agents on the same pack
 aegis-probe benchmark --agents claude-code,codex --output-dir benchmark-results
+```
+
+### Baselines
+
+```bash
+# Promote a saved report into an immutable baseline bundle
+aegis-probe baseline promote report.json --name ci-main --profile github-actions --output baseline.bundle.json
+
+# Publish that bundle into a local baseline store
+aegis-probe baseline publish baseline.bundle.json --store .aegis/baselines
+
+# Fetch the latest matching baseline report for CI comparison
+aegis-probe baseline fetch --store .aegis/baselines --agent ClaudeCode --name ci-main --profile github-actions --format report --output baseline.json
+
+# Inspect a baseline bundle
+aegis-probe baseline inspect baseline.bundle.json
 ```
 
 ### Fingerprints and Distillation
@@ -173,7 +201,7 @@ aegis-probe distillation teacher.json student.json --tag ci-artifact
 
 It can also export a derived-only longitudinal bundle from a directory of saved reports, carrying score drift, pass-rate drift, regressions, and unstable probes for hosted aggregation.
 
-Saved JSON reports also carry `metadata.selected_tags`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `history --tag`, `compare --tag`, `similarity --tag`, and `distillation --tag` without reloading the source TOML files.
+Saved JSON reports also carry `metadata.selected_tags`, `metadata.selected_profiles`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `summary --profile`, `history --tag`, `history --profile`, `compare --tag`, `compare --profile`, `similarity --tag`, `similarity --profile`, `distillation --tag`, and `distillation --profile` without reloading the source TOML files.
 
 ```bash
 # Inspect registry configuration
