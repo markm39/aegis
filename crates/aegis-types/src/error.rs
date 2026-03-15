@@ -29,7 +29,6 @@ pub enum AegisError {
     /// PTY session supervision error.
     #[error("session error: {0}")]
     SessionError(String),
-
 }
 
 #[cfg(test)]
