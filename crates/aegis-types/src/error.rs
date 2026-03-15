@@ -30,10 +30,6 @@ pub enum AegisError {
     #[error("session error: {0}")]
     SessionError(String),
 
-    /// Deprecated alias for session supervision errors.
-    #[doc(hidden)]
-    #[error("session error: {0}")]
-    PilotError(String),
 }
 
 #[cfg(test)]

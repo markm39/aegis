@@ -40,10 +40,6 @@ pub struct SessionStats {
     pub lines_processed: u64,
 }
 
-/// Deprecated alias for older integrations.
-#[doc(hidden)]
-pub type PilotStats = SessionStats;
-
 /// Events emitted by the supervisor for external consumers (webhooks, logging).
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
@@ -62,10 +58,6 @@ pub enum SessionEvent {
     /// The child process exited.
     ChildExited { exit_code: i32 },
 }
-
-/// Deprecated alias for older integrations.
-#[doc(hidden)]
-pub type PilotEvent = SessionEvent;
 
 /// Richer event type for the TUI, including output lines and pending prompts.
 ///
@@ -107,10 +99,6 @@ pub enum SessionUpdate {
         session_id: Option<String>,
     },
 }
-
-/// Deprecated alias for older integrations.
-#[doc(hidden)]
-pub type PilotUpdate = SessionUpdate;
 
 /// Commands sent to the supervisor from an external controller.
 #[derive(Debug)]

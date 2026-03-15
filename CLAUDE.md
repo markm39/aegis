@@ -29,7 +29,7 @@ aegis-types (foundation: config, errors, shared types)
   -> aegis-ledger (tamper-evident audit log with hash chain)
   -> aegis-sandbox (Seatbelt/Docker isolation for safe test execution)
   -> aegis-observer (filesystem monitoring -- detect unauthorized access)
-  -> aegis-pilot (PTY supervision -- spawn agents, feed inputs, monitor actions)
+  -> aegis-session (PTY supervision -- spawn agents, feed inputs, monitor actions)
   -> aegis-alert (webhook alert dispatching)
   -> aegis-harness (PTY integration test framework)
   -> aegis-probe (binary: security test runner CLI)
@@ -42,7 +42,7 @@ Crate summary:
 - `aegis-ledger`: SQLite audit store with tamper-evident hash chain
 - `aegis-sandbox`: Seatbelt/process sandbox backends for test isolation
 - `aegis-observer`: Filesystem observation (FSEvents) for detecting unauthorized access
-- `aegis-pilot`: PTY-based agent supervision with prompt detection and stall nudging
+- `aegis-session`: PTY-based agent supervision with prompt detection and stall nudging
 - `aegis-alert`: Webhook alerting on security findings
 - `aegis-harness`: PTY integration test framework for test execution
 - `aegis-probe`: Binary entry point: adversarial probe runner, reporting, analytics, and registry bundles

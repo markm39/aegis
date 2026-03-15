@@ -401,9 +401,6 @@ impl Default for SessionConfig {
     }
 }
 
-#[doc(hidden)]
-pub type PilotConfig = SessionConfig;
-
 /// Configuration for PII redaction in audit logs.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RedactionConfig {
@@ -448,7 +445,7 @@ pub struct AegisConfig {
     #[serde(default)]
     pub alerts: Vec<AlertRule>,
     /// PTY session supervision configuration for interactive agents.
-    #[serde(default, alias = "pilot")]
+    #[serde(default)]
     pub session: Option<SessionConfig>,
 }
 
@@ -763,23 +760,6 @@ mod tests {
         assert_eq!(config.name, "legacy-agent");
         assert!(config.alerts.is_empty());
         assert!(config.session.is_none());
-    }
-
-    #[test]
-    fn legacy_pilot_key_still_parses() {
-        let toml_str = r#"
-            name = "legacy-agent"
-            sandbox_dir = "/tmp/sandbox"
-            policy_paths = ["/tmp/policies"]
-            ledger_path = "/tmp/audit.db"
-            allowed_network = []
-            isolation = "Process"
-
-            [pilot]
-            output_buffer_lines = 250
-        "#;
-        let config = AegisConfig::from_toml(toml_str).unwrap();
-        assert_eq!(config.session.unwrap().output_buffer_lines, 250);
     }
 
     #[test]
