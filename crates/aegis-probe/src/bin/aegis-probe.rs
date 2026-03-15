@@ -116,6 +116,10 @@ enum Command {
         /// Exit non-zero when the final score is below this threshold.
         #[arg(long)]
         min_score: Option<u32>,
+
+        /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
+        #[arg(long)]
+        waiver_file: Option<PathBuf>,
     },
 
     /// List available probes.
@@ -156,6 +160,10 @@ enum Command {
         /// Filter saved report results by named profile (comma-separated or repeated).
         #[arg(long, value_delimiter = ',')]
         profile: Vec<String>,
+
+        /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
+        #[arg(long)]
+        waiver_file: Option<PathBuf>,
     },
 
     /// Re-render a saved JSON report in another output format.
@@ -193,9 +201,13 @@ enum Command {
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Output format: terminal or json.
+        /// Output format: terminal, json, or markdown.
         #[arg(long, default_value = "terminal")]
         format: String,
+
+        /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
+        #[arg(long)]
+        waiver_file: Option<PathBuf>,
     },
 
     /// Compare two JSON reports to show security changes.
@@ -213,13 +225,17 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         profile: Vec<String>,
 
-        /// Output format: terminal or json.
+        /// Output format: terminal, json, or markdown.
         #[arg(long, default_value = "terminal")]
         format: String,
 
         /// Write rendered output to this file instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Optional waiver policy file (TOML or JSON) for gate-time suppressions.
+        #[arg(long)]
+        waiver_file: Option<PathBuf>,
     },
 
     /// Generate shell completions.
@@ -449,6 +465,9 @@ enum BaselineAction {
         /// Baseline store directory.
         #[arg(long, default_value = ".aegis/baselines")]
         store: PathBuf,
+        /// Publish to the configured registry instead of a local store.
+        #[arg(long)]
+        registry: bool,
     },
     /// Fetch the most recent matching baseline from a local store.
     Fetch {
@@ -473,6 +492,9 @@ enum BaselineAction {
         /// Write fetched output to a file instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Fetch from the configured registry instead of a local store.
+        #[arg(long)]
+        registry: bool,
     },
     /// Inspect a baseline bundle.
     Inspect {
@@ -523,6 +545,7 @@ fn main() {
             capture_output,
             fail_on,
             min_score,
+            waiver_file,
         } => {
             cmd_run(&RunOptions {
                 agent: &agent,
@@ -542,6 +565,7 @@ fn main() {
                 capture_output,
                 fail_on,
                 min_score,
+                waiver_file: waiver_file.as_deref(),
             });
         }
         Command::List {
@@ -559,8 +583,9 @@ fn main() {
             report,
             tag,
             profile,
+            waiver_file,
         } => {
-            cmd_summary(&report, &tag, &profile);
+            cmd_summary(&report, &tag, &profile, waiver_file.as_deref());
         }
         Command::Render {
             report,
@@ -576,6 +601,7 @@ fn main() {
             profile,
             limit,
             format,
+            waiver_file,
         } => {
             cmd_history(
                 &reports_dir,
@@ -584,6 +610,7 @@ fn main() {
                 &profile,
                 limit,
                 &format,
+                waiver_file.as_deref(),
             );
         }
         Command::Compare {
@@ -593,6 +620,7 @@ fn main() {
             profile,
             format,
             output,
+            waiver_file,
         } => {
             cmd_compare(
                 &baseline,
@@ -601,6 +629,7 @@ fn main() {
                 &profile,
                 &format,
                 output.as_deref(),
+                waiver_file.as_deref(),
             );
         }
         Command::Completions { shell } => {
@@ -710,6 +739,7 @@ struct RunOptions<'a> {
     capture_output: bool,
     fail_on: Option<FailOn>,
     min_score: Option<u32>,
+    waiver_file: Option<&'a Path>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -877,7 +907,16 @@ fn cmd_run(opts: &RunOptions<'_>) {
 
     // Generate final report
     let agent_name = format!("{target:?}");
-    let final_report = scoring::compute_report_with_context(&agent_name, results, &report_context);
+    let mut final_report =
+        scoring::compute_report_with_context(&agent_name, results, &report_context);
+    let gate_report = if let Some(waiver_path) = opts.waiver_file {
+        let evaluation = evaluate_report_with_waivers_or_exit(&final_report, waiver_path);
+        final_report.metadata.applied_waivers = evaluation.applied.clone();
+        emit_waiver_diagnostics(waiver_path, &evaluation);
+        evaluation.effective_report
+    } else {
+        final_report.clone()
+    };
 
     match opts.format {
         "json" => match report::render_json(&final_report) {
@@ -926,16 +965,16 @@ fn cmd_run(opts: &RunOptions<'_>) {
     }
 
     if let Some(min_score) = opts.min_score {
-        if final_report.score < min_score {
+        if gate_report.score < min_score {
             eprintln!(
-                "Score gate failed: report score {} is below required minimum {}.",
-                final_report.score, min_score
+                "Score gate failed: effective score {} is below required minimum {}.",
+                gate_report.score, min_score
             );
             process::exit(1);
         }
     }
 
-    if should_fail_run(&final_report, opts.fail_on) {
+    if should_fail_run(&gate_report, opts.fail_on) {
         process::exit(1);
     }
 }
@@ -1038,22 +1077,36 @@ fn cmd_validate(probes_dir: &Path) {
     }
 }
 
-fn cmd_summary(report_path: &Path, tags: &[String], profiles: &[String]) {
+fn cmd_summary(
+    report_path: &Path,
+    tags: &[String],
+    profiles: &[String],
+    waiver_file: Option<&Path>,
+) {
     let selection = resolve_filter_selection_or_exit(tags, profiles);
-    let report = load_filtered_report(report_path, &selection);
+    let mut report = load_filtered_report(report_path, &selection);
+    let gate_report = if let Some(waiver_path) = waiver_file {
+        let evaluation = evaluate_report_with_waivers_or_exit(&report, waiver_path);
+        report.metadata.applied_waivers = evaluation.applied.clone();
+        emit_waiver_diagnostics(waiver_path, &evaluation);
+        evaluation.effective_report
+    } else {
+        report.clone()
+    };
 
     println!(
-        "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}{}",
-        report.score,
-        report.summary.passed,
-        report.summary.failed,
-        report.summary.partial,
-        report.summary.errors,
-        report.agent,
+        "Score: {}/100 | {} passed, {} failed, {} partial, {} errors | Agent: {}{}{}",
+        gate_report.score,
+        gate_report.summary.passed,
+        gate_report.summary.failed,
+        gate_report.summary.partial,
+        gate_report.summary.errors,
+        gate_report.agent,
         format_tag_filter_suffix(&selection.effective_tags),
+        format_waiver_suffix(&gate_report.metadata.applied_waivers),
     );
 
-    if report.summary.failed > 0 {
+    if gate_report.summary.failed > 0 {
         process::exit(1);
     }
 }
@@ -1094,10 +1147,34 @@ fn cmd_history(
     profiles: &[String],
     limit: Option<usize>,
     format: &str,
+    waiver_file: Option<&Path>,
 ) {
     let selection = resolve_filter_selection_or_exit(tags, profiles);
     let reports = load_history_reports(reports_dir, agent_filter, &selection, limit);
-    let analysis = aegis_probe::history::analyze_history(&reports, &selection.effective_tags);
+    let mut analysis = aegis_probe::history::analyze_history(&reports, &selection.effective_tags);
+
+    if let Some(waiver_path) = waiver_file {
+        let (effective_reports, latest_applied, expired) =
+            apply_waivers_to_history_reports_or_exit(&reports, waiver_path);
+        let effective_analysis =
+            aegis_probe::history::analyze_history(&effective_reports, &selection.effective_tags);
+        analysis.waived_regressions =
+            waived_history_regressions(&analysis, &effective_analysis, &latest_applied);
+        analysis.waived_unstable_probes =
+            waived_unstable_probes(&analysis, &effective_analysis, &latest_applied);
+        analysis.regressions = effective_analysis.regressions;
+        analysis.unstable_probes = effective_analysis.unstable_probes;
+        analysis.score = effective_analysis.score;
+        analysis.overall_pass_rate = effective_analysis.overall_pass_rate;
+        analysis.category_trends = effective_analysis.category_trends;
+        if !expired.is_empty() {
+            eprintln!(
+                "Ignored {} expired waivers from {}.",
+                expired.len(),
+                waiver_path.display()
+            );
+        }
+    }
 
     match format {
         "terminal" => render_history_terminal(&analysis),
@@ -1108,8 +1185,11 @@ fn cmd_history(
                 process::exit(1);
             }
         },
+        "markdown" | "md" => {
+            print!("{}", render_history_markdown(&analysis));
+        }
         other => {
-            eprintln!("Unsupported history format: {other}. Use terminal or json.");
+            eprintln!("Unsupported history format: {other}. Use terminal, json, or markdown.");
             process::exit(1);
         }
     }
@@ -1122,13 +1202,43 @@ fn cmd_compare(
     profiles: &[String],
     format: &str,
     output_path: Option<&Path>,
+    waiver_file: Option<&Path>,
 ) {
     let selection = resolve_filter_selection_or_exit(tags, profiles);
     let baseline = load_filtered_report(baseline_path, &selection);
     let current = load_filtered_report(current_path, &selection);
     ensure_compatible_reports(&baseline, &current);
-    let comparison =
+    let mut comparison =
         aegis_probe::compare::compare_reports(&baseline, &current, &selection.effective_tags);
+
+    if let Some(waiver_path) = waiver_file {
+        let baseline_evaluation = evaluate_report_with_waivers_or_exit(&baseline, waiver_path);
+        let current_evaluation = evaluate_report_with_waivers_or_exit(&current, waiver_path);
+        emit_waiver_diagnostics(waiver_path, &baseline_evaluation);
+        emit_waiver_diagnostics(waiver_path, &current_evaluation);
+        let effective = aegis_probe::compare::compare_reports(
+            &baseline_evaluation.effective_report,
+            &current_evaluation.effective_report,
+            &selection.effective_tags,
+        );
+        comparison.waived_regressions =
+            waived_compare_regressions(&comparison, &effective, &current_evaluation.applied);
+        comparison.summary.waived_regression_count = comparison.waived_regressions.len();
+        comparison.regressions = effective.regressions;
+        comparison.improvements = effective.improvements;
+        comparison.new_probes = effective.new_probes;
+        comparison.removed_probes = effective.removed_probes;
+        comparison.summary.regression_count = comparison.regressions.len();
+        comparison.summary.improvement_count = comparison.improvements.len();
+        comparison.summary.new_probe_count = comparison.new_probes.len();
+        comparison.summary.removed_probe_count = comparison.removed_probes.len();
+        comparison.summary.has_changes =
+            effective.summary.has_changes || comparison.summary.waived_regression_count > 0;
+        comparison.baseline_score = effective.baseline_score;
+        comparison.current_score = effective.current_score;
+        comparison.score_delta = effective.score_delta;
+        comparison.profile_filter = effective.profile_filter;
+    }
 
     let rendered = match format.to_ascii_lowercase().as_str() {
         "terminal" => render_compare_terminal(&comparison),
@@ -1139,8 +1249,9 @@ fn cmd_compare(
                 process::exit(1);
             }
         },
+        "markdown" | "md" => render_compare_markdown(&comparison),
         other => {
-            eprintln!("Unsupported compare format: {other}. Use terminal or json.");
+            eprintln!("Unsupported compare format: {other}. Use terminal, json, or markdown.");
             process::exit(1);
         }
     };
@@ -1192,6 +1303,23 @@ fn render_compare_terminal(report: &aegis_probe::compare::ComparisonReport) -> S
         }
     }
 
+    if !report.waived_regressions.is_empty() {
+        output.push_str(&format!(
+            "\nWaived regressions ({}):\n",
+            report.summary.waived_regression_count
+        ));
+        for waived in &report.waived_regressions {
+            output.push_str(&format!(
+                "  {}: {} -> {} | waiver {} ({})\n",
+                waived.probe_name,
+                waived.baseline_verdict,
+                waived.current_verdict,
+                waived.waiver.id,
+                waived.waiver.owner,
+            ));
+        }
+    }
+
     if !report.improvements.is_empty() {
         output.push_str(&format!(
             "\nImprovements ({}):\n",
@@ -1231,6 +1359,266 @@ fn render_compare_terminal(report: &aegis_probe::compare::ComparisonReport) -> S
 
     output.push('\n');
     output
+}
+
+fn render_compare_markdown(report: &aegis_probe::compare::ComparisonReport) -> String {
+    let mut output = String::new();
+    output.push_str("## Aegis Comparison\n\n");
+    output.push_str(&format!(
+        "- Score: {} -> {} ({:+})\n",
+        report.baseline_score, report.current_score, report.score_delta
+    ));
+    output.push_str(&format!(
+        "- Agent: {} -> {}\n",
+        report.baseline_agent, report.current_agent
+    ));
+    if !report.tag_filter.is_empty() {
+        output.push_str(&format!("- Tags: {}\n", report.tag_filter.join(", ")));
+    }
+    if !report.profile_filter.is_empty() {
+        output.push_str(&format!(
+            "- Profiles: {}\n",
+            report.profile_filter.join(", ")
+        ));
+    }
+    output.push('\n');
+
+    output.push_str("| Type | Count |\n|---|---:|\n");
+    output.push_str(&format!(
+        "| Regressions | {} |\n",
+        report.summary.regression_count
+    ));
+    output.push_str(&format!(
+        "| Waived regressions | {} |\n",
+        report.summary.waived_regression_count
+    ));
+    output.push_str(&format!(
+        "| Improvements | {} |\n",
+        report.summary.improvement_count
+    ));
+    output.push_str(&format!(
+        "| New probes | {} |\n",
+        report.summary.new_probe_count
+    ));
+    output.push_str(&format!(
+        "| Removed probes | {} |\n\n",
+        report.summary.removed_probe_count
+    ));
+
+    if !report.regressions.is_empty() {
+        output.push_str("### Regressions\n\n");
+        output.push_str("| Probe | Baseline | Current |\n|---|---|---|\n");
+        for regression in &report.regressions {
+            output.push_str(&format!(
+                "| {} | {} | {} |\n",
+                regression.probe_name, regression.baseline_verdict, regression.current_verdict
+            ));
+        }
+        output.push('\n');
+    }
+
+    if !report.waived_regressions.is_empty() {
+        output.push_str("### Waived Regressions\n\n");
+        output.push_str("| Probe | Baseline | Current | Waiver | Owner | Expires |\n|---|---|---|---|---|---|\n");
+        for waived in &report.waived_regressions {
+            output.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} |\n",
+                waived.probe_name,
+                waived.baseline_verdict,
+                waived.current_verdict,
+                waived.waiver.id,
+                waived.waiver.owner,
+                waived.waiver.expires_at,
+            ));
+        }
+        output.push('\n');
+    }
+
+    output
+}
+
+fn evaluate_report_with_waivers_or_exit(
+    report: &scoring::SecurityReport,
+    waiver_path: &Path,
+) -> aegis_probe::waivers::WaiverEvaluation {
+    let waivers = match aegis_probe::waivers::load_waivers(waiver_path) {
+        Ok(waivers) => waivers,
+        Err(err) => {
+            eprintln!("{err}");
+            process::exit(1);
+        }
+    };
+
+    match aegis_probe::waivers::apply_waivers(report, &waivers) {
+        Ok(evaluation) => evaluation,
+        Err(err) => {
+            eprintln!("{err}");
+            process::exit(1);
+        }
+    }
+}
+
+fn apply_waivers_to_history_reports_or_exit(
+    reports: &[scoring::SecurityReport],
+    waiver_path: &Path,
+) -> (
+    Vec<scoring::SecurityReport>,
+    std::collections::BTreeMap<String, aegis_probe::waivers::AppliedWaiver>,
+    Vec<aegis_probe::waivers::ExpiredWaiver>,
+) {
+    let waivers = match aegis_probe::waivers::load_waivers(waiver_path) {
+        Ok(waivers) => waivers,
+        Err(err) => {
+            eprintln!("{err}");
+            process::exit(1);
+        }
+    };
+
+    let mut effective_reports = Vec::with_capacity(reports.len());
+    let mut applied_by_probe = std::collections::BTreeMap::new();
+    let mut expired = Vec::new();
+
+    for report in reports {
+        let evaluation = match aegis_probe::waivers::apply_waivers(report, &waivers) {
+            Ok(evaluation) => evaluation,
+            Err(err) => {
+                eprintln!("{err}");
+                process::exit(1);
+            }
+        };
+        for applied in &evaluation.applied {
+            applied_by_probe.insert(applied.probe_name.clone(), applied.clone());
+        }
+        expired.extend(evaluation.expired);
+        effective_reports.push(evaluation.effective_report);
+    }
+
+    (effective_reports, applied_by_probe, expired)
+}
+
+fn emit_waiver_diagnostics(
+    waiver_path: &Path,
+    evaluation: &aegis_probe::waivers::WaiverEvaluation,
+) {
+    if !evaluation.applied.is_empty() {
+        eprintln!(
+            "Applied {} active waivers from {}.",
+            evaluation.applied.len(),
+            waiver_path.display()
+        );
+    }
+    if !evaluation.expired.is_empty() {
+        eprintln!(
+            "Ignored {} expired waivers from {}.",
+            evaluation.expired.len(),
+            waiver_path.display()
+        );
+    }
+}
+
+fn format_waiver_suffix(applied: &[aegis_probe::waivers::AppliedWaiver]) -> String {
+    if applied.is_empty() {
+        String::new()
+    } else {
+        format!(" | Waived: {}", applied.len())
+    }
+}
+
+fn waived_compare_regressions(
+    raw: &aegis_probe::compare::ComparisonReport,
+    effective: &aegis_probe::compare::ComparisonReport,
+    applied: &[aegis_probe::waivers::AppliedWaiver],
+) -> Vec<aegis_probe::compare::WaivedProbeDiff> {
+    let effective_names = effective
+        .regressions
+        .iter()
+        .map(|diff| diff.probe_name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let applied_by_probe = applied
+        .iter()
+        .map(|waiver| (waiver.probe_name.as_str(), waiver))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut waived = raw
+        .regressions
+        .iter()
+        .filter(|diff| !effective_names.contains(diff.probe_name.as_str()))
+        .filter_map(|diff| {
+            applied_by_probe
+                .get(diff.probe_name.as_str())
+                .map(|waiver| aegis_probe::compare::WaivedProbeDiff {
+                    probe_name: diff.probe_name.clone(),
+                    tags: diff.tags.clone(),
+                    baseline_verdict: diff.baseline_verdict.clone(),
+                    current_verdict: diff.current_verdict.clone(),
+                    waiver: (*waiver).clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    waived.sort_by(|a, b| a.probe_name.cmp(&b.probe_name));
+    waived
+}
+
+fn waived_history_regressions(
+    raw: &aegis_probe::history::HistoryReport,
+    effective: &aegis_probe::history::HistoryReport,
+    applied_by_probe: &std::collections::BTreeMap<String, aegis_probe::waivers::AppliedWaiver>,
+) -> Vec<aegis_probe::history::WaivedProbeRegression> {
+    let effective_names = effective
+        .regressions
+        .iter()
+        .map(|item| item.probe_name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut waived = raw
+        .regressions
+        .iter()
+        .filter(|item| !effective_names.contains(item.probe_name.as_str()))
+        .filter_map(|item| {
+            applied_by_probe.get(&item.probe_name).map(|waiver| {
+                aegis_probe::history::WaivedProbeRegression {
+                    probe_name: item.probe_name.clone(),
+                    tags: item.tags.clone(),
+                    baseline_verdict: item.baseline_verdict.clone(),
+                    latest_verdict: item.latest_verdict.clone(),
+                    waiver: waiver.clone(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    waived.sort_by(|a, b| a.probe_name.cmp(&b.probe_name));
+    waived
+}
+
+fn waived_unstable_probes(
+    raw: &aegis_probe::history::HistoryReport,
+    effective: &aegis_probe::history::HistoryReport,
+    applied_by_probe: &std::collections::BTreeMap<String, aegis_probe::waivers::AppliedWaiver>,
+) -> Vec<aegis_probe::history::WaivedUnstableProbe> {
+    let effective_names = effective
+        .unstable_probes
+        .iter()
+        .map(|item| item.probe_name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut waived = raw
+        .unstable_probes
+        .iter()
+        .filter(|item| !effective_names.contains(item.probe_name.as_str()))
+        .filter_map(|item| {
+            applied_by_probe.get(&item.probe_name).map(|waiver| {
+                aegis_probe::history::WaivedUnstableProbe {
+                    probe_name: item.probe_name.clone(),
+                    tags: item.tags.clone(),
+                    pass_rate: item.pass_rate,
+                    fail_rate: item.fail_rate,
+                    error_rate: item.error_rate,
+                    verdict_stability: item.verdict_stability,
+                    waiver: waiver.clone(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    waived.sort_by(|a, b| a.probe_name.cmp(&b.probe_name));
+    waived
 }
 
 fn write_text_output(output_path: Option<&Path>, content: &str) {
@@ -1469,6 +1857,9 @@ fn render_history_terminal(report: &aegis_probe::history::HistoryReport) {
     if !report.tag_filter.is_empty() {
         println!("Tag filter: {}", report.tag_filter.join(", "));
     }
+    if !report.profile_filter.is_empty() {
+        println!("Profile filter: {}", report.profile_filter.join(", "));
+    }
     if !report.window.probe_pack_hash.is_empty() {
         println!(
             "Probe pack: {}",
@@ -1529,6 +1920,24 @@ fn render_history_terminal(report: &aegis_probe::history::HistoryReport) {
         }
     }
 
+    if !report.waived_regressions.is_empty() {
+        println!(
+            "\nWaived regressions since first run ({}):",
+            report.waived_regressions.len()
+        );
+        for regression in &report.waived_regressions {
+            println!(
+                "  {}: {} -> {} | waiver {} ({}){}",
+                regression.probe_name,
+                regression.baseline_verdict,
+                regression.latest_verdict,
+                regression.waiver.id,
+                regression.waiver.owner,
+                format_tags_suffix(&regression.tags),
+            );
+        }
+    }
+
     if !report.unstable_probes.is_empty() {
         println!("\nMost unstable probes:");
         for probe in report.unstable_probes.iter().take(10) {
@@ -1543,7 +1952,118 @@ fn render_history_terminal(report: &aegis_probe::history::HistoryReport) {
         }
     }
 
+    if !report.waived_unstable_probes.is_empty() {
+        println!("\nWaived unstable probes:");
+        for probe in report.waived_unstable_probes.iter().take(10) {
+            println!(
+                "  {}: stability {:.0}% | waiver {} ({}){}",
+                probe.probe_name,
+                probe.verdict_stability * 100.0,
+                probe.waiver.id,
+                probe.waiver.owner,
+                format_tags_suffix(&probe.tags),
+            );
+        }
+    }
+
     println!();
+}
+
+fn render_history_markdown(report: &aegis_probe::history::HistoryReport) -> String {
+    let mut output = String::new();
+    output.push_str("## Aegis History\n\n");
+    output.push_str(&format!("- Agent: {}\n", report.agent));
+    output.push_str(&format!("- Runs analyzed: {}\n", report.run_count));
+    if !report.tag_filter.is_empty() {
+        output.push_str(&format!("- Tags: {}\n", report.tag_filter.join(", ")));
+    }
+    if !report.profile_filter.is_empty() {
+        output.push_str(&format!(
+            "- Profiles: {}\n",
+            report.profile_filter.join(", ")
+        ));
+    }
+    output.push('\n');
+    output.push_str("| Metric | First | Latest | Delta |\n|---|---:|---:|---:|\n");
+    output.push_str(&format!(
+        "| Score | {:.0} | {:.0} | {:+.0} |\n",
+        report.score.first, report.score.latest, report.score.delta
+    ));
+    output.push_str(&format!(
+        "| Pass rate | {:.0}% | {:.0}% | {:+.0}% |\n\n",
+        report.overall_pass_rate.first * 100.0,
+        report.overall_pass_rate.latest * 100.0,
+        report.overall_pass_rate.delta * 100.0
+    ));
+
+    if !report.regressions.is_empty() {
+        output.push_str("### Regressions\n\n");
+        output.push_str(
+            "| Probe | Baseline | Latest | Fail rate | Stability |\n|---|---|---|---:|---:|\n",
+        );
+        for regression in &report.regressions {
+            output.push_str(&format!(
+                "| {} | {} | {} | {:.0}% | {:.0}% |\n",
+                regression.probe_name,
+                regression.baseline_verdict,
+                regression.latest_verdict,
+                regression.fail_rate * 100.0,
+                regression.verdict_stability * 100.0
+            ));
+        }
+        output.push('\n');
+    }
+
+    if !report.waived_regressions.is_empty() {
+        output.push_str("### Waived Regressions\n\n");
+        output.push_str(
+            "| Probe | Baseline | Latest | Waiver | Owner | Expires |\n|---|---|---|---|---|---|\n",
+        );
+        for regression in &report.waived_regressions {
+            output.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} |\n",
+                regression.probe_name,
+                regression.baseline_verdict,
+                regression.latest_verdict,
+                regression.waiver.id,
+                regression.waiver.owner,
+                regression.waiver.expires_at,
+            ));
+        }
+        output.push('\n');
+    }
+
+    if !report.unstable_probes.is_empty() {
+        output.push_str("### Unstable Probes\n\n");
+        output.push_str("| Probe | Pass rate | Fail rate | Stability |\n|---|---:|---:|---:|\n");
+        for probe in report.unstable_probes.iter().take(10) {
+            output.push_str(&format!(
+                "| {} | {:.0}% | {:.0}% | {:.0}% |\n",
+                probe.probe_name,
+                probe.pass_rate * 100.0,
+                probe.fail_rate * 100.0,
+                probe.verdict_stability * 100.0
+            ));
+        }
+        output.push('\n');
+    }
+
+    if !report.waived_unstable_probes.is_empty() {
+        output.push_str("### Waived Unstable Probes\n\n");
+        output.push_str("| Probe | Stability | Waiver | Owner |\n|---|---:|---|---|\n");
+        for probe in report.waived_unstable_probes.iter().take(10) {
+            output.push_str(&format!(
+                "| {} | {:.0}% | {} | {} |\n",
+                probe.probe_name,
+                probe.verdict_stability * 100.0,
+                probe.waiver.id,
+                probe.waiver.owner,
+            ));
+        }
+        output.push('\n');
+    }
+
+    output
 }
 
 fn format_tags_suffix(tags: &[String]) -> String {
@@ -1821,6 +2341,20 @@ fn cmd_registry(action: RegistryAction) {
                 println!("Registry: configured");
                 println!("URL: {}", config.url);
                 println!(
+                    "Baseline URL: {}",
+                    config
+                        .baseline_url
+                        .as_deref()
+                        .unwrap_or("<inherits AEGIS_REGISTRY_URL>")
+                );
+                println!(
+                    "History URL: {}",
+                    config
+                        .history_url
+                        .as_deref()
+                        .unwrap_or("<inherits AEGIS_REGISTRY_URL>")
+                );
+                println!(
                     "Auth token: {}",
                     if config.token.is_some() {
                         "present"
@@ -1840,6 +2374,7 @@ fn cmd_registry(action: RegistryAction) {
             None => {
                 println!("Registry: unconfigured");
                 println!("Set AEGIS_REGISTRY_URL to enable uploads.");
+                println!("Optional: set AEGIS_REGISTRY_BASELINE_URL or AEGIS_REGISTRY_HISTORY_URL for split endpoints.");
                 println!("Optional: set AEGIS_REGISTRY_TOKEN for bearer auth.");
                 println!("Deprecated aliases still accepted: AEGIS_TELEMETRY_URL/TOKEN");
             }
@@ -1995,12 +2530,43 @@ fn cmd_baseline(action: BaselineAction) {
             };
             write_text_output(output.as_deref(), &json);
         }
-        BaselineAction::Publish { bundle, store } => {
-            match aegis_probe::baseline::publish_bundle(&bundle, &store) {
-                Ok(path) => println!("{}", path.display()),
-                Err(err) => {
-                    eprintln!("{err}");
-                    process::exit(1);
+        BaselineAction::Publish {
+            bundle,
+            store,
+            registry,
+        } => {
+            if registry {
+                let config = match aegis_probe::registry::registry_config() {
+                    Some(config) => config,
+                    None => {
+                        eprintln!("Registry is not configured.");
+                        eprintln!(
+                            "Set AEGIS_REGISTRY_URL and optionally AEGIS_REGISTRY_BASELINE_URL/TOKEN."
+                        );
+                        process::exit(1);
+                    }
+                };
+                let bundle = match aegis_probe::baseline::read_bundle(&bundle) {
+                    Ok(bundle) => bundle,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        process::exit(1);
+                    }
+                };
+                match aegis_probe::registry::upload_baseline_bundle(&bundle, &config) {
+                    Ok(()) => println!("Registry baseline publish complete."),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                match aegis_probe::baseline::publish_bundle(&bundle, &store) {
+                    Ok(path) => println!("{}", path.display()),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        process::exit(1);
+                    }
                 }
             }
         }
@@ -2012,6 +2578,7 @@ fn cmd_baseline(action: BaselineAction) {
             profile,
             format,
             output,
+            registry,
         } => {
             let selection = resolve_filter_selection_or_exit(&tag, &profile);
             let query = aegis_probe::baseline::BaselineQuery {
@@ -2021,16 +2588,45 @@ fn cmd_baseline(action: BaselineAction) {
                 selected_profiles: selection.profiles.clone(),
             };
 
-            let (_entry, bundle, path) = match aegis_probe::baseline::fetch_bundle(&store, &query) {
-                Ok(found) => found,
-                Err(err) => {
-                    eprintln!("{err}");
-                    process::exit(1);
-                }
+            let (bundle, path) = if registry {
+                let config = match aegis_probe::registry::registry_config() {
+                    Some(config) => config,
+                    None => {
+                        eprintln!("Registry is not configured.");
+                        eprintln!(
+                            "Set AEGIS_REGISTRY_URL and optionally AEGIS_REGISTRY_BASELINE_URL/TOKEN."
+                        );
+                        process::exit(1);
+                    }
+                };
+                let bundle = match aegis_probe::registry::fetch_baseline_bundle(&query, &config) {
+                    Ok(bundle) => bundle,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        process::exit(1);
+                    }
+                };
+                (bundle, PathBuf::from("<registry>"))
+            } else {
+                let (_entry, bundle, path) =
+                    match aegis_probe::baseline::fetch_bundle(&store, &query) {
+                        Ok(found) => found,
+                        Err(err) => {
+                            eprintln!("{err}");
+                            process::exit(1);
+                        }
+                    };
+                (bundle, path)
             };
 
             let rendered = match format.to_ascii_lowercase().as_str() {
-                "path" => format!("{}\n", path.display()),
+                "path" => {
+                    if registry {
+                        eprintln!("baseline fetch --registry does not support --format path.");
+                        process::exit(1);
+                    }
+                    format!("{}\n", path.display())
+                }
                 "bundle" => match serde_json::to_string_pretty(&bundle) {
                     Ok(json) => json,
                     Err(err) => {

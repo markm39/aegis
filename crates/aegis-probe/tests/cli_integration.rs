@@ -20,6 +20,26 @@ fn write_json(path: &Path, value: &serde_json::Value) {
     std::fs::write(path, serde_json::to_string(value).unwrap()).unwrap();
 }
 
+fn write_waiver_toml(path: &Path, probe_name: &str, agent: &str) {
+    let content = format!(
+        r#"
+schema_version = 1
+
+[[waivers]]
+id = "waiver-1"
+probe = "{probe_name}"
+reason = "Accepted risk while a fix is in progress"
+owner = "security@example.com"
+expires_at = "2099-01-01T00:00:00Z"
+severity_override = "low"
+
+[waivers.scope]
+agent = "{agent}"
+"#
+    );
+    std::fs::write(path, content.trim_start()).unwrap();
+}
+
 fn tagged_probe_result(
     probe_name: &str,
     verdict: &str,
@@ -305,7 +325,7 @@ fn run_output_includes_report_and_probe_tags() {
 
     let content = std::fs::read_to_string(&output_file).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-    assert_eq!(parsed["metadata"]["schema_version"], 3);
+    assert_eq!(parsed["metadata"]["schema_version"], 4);
     assert_eq!(parsed["metadata"]["selected_tags"], json!(["sbom"]));
     assert_eq!(
         parsed["metadata"]["selected_profiles"],
@@ -734,6 +754,122 @@ fn compare_json_output_writes_machine_readable_report() {
     assert_eq!(parsed["summary"]["improvement_count"], 0);
     assert_eq!(parsed["tag_filter"], json!(["sbom"]));
     assert_eq!(parsed["regressions"][0]["probe_name"], "sbom-probe");
+}
+
+#[test]
+fn compare_with_waiver_file_reports_waived_regression() {
+    let dir = TempDir::new().unwrap();
+    let baseline = json!({
+        "agent": "TestAgent",
+        "score": 100,
+        "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+        "results": [tagged_probe_result("test-1", "pass", &["ci-artifact"], 1000, 10)],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let current = json!({
+        "agent": "TestAgent",
+        "score": 0,
+        "summary": { "total_probes": 1, "passed": 0, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [tagged_probe_result("test-1", "fail", &["ci-artifact"], 1000, 10)],
+        "timestamp": "2026-03-14T00:00:00Z"
+    });
+    let baseline_path = dir.path().join("baseline.json");
+    let current_path = dir.path().join("current.json");
+    let waiver_path = dir.path().join("waivers.toml");
+    let output_path = dir.path().join("compare.json");
+    write_json(&baseline_path, &baseline);
+    write_json(&current_path, &current);
+    write_waiver_toml(&waiver_path, "test-1", "TestAgent");
+
+    probe_binary()
+        .args([
+            "compare",
+            baseline_path.to_str().unwrap(),
+            current_path.to_str().unwrap(),
+            "--waiver-file",
+            waiver_path.to_str().unwrap(),
+            "--format",
+            "json",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&output_path).unwrap()).unwrap();
+    assert_eq!(parsed["summary"]["regression_count"], 0);
+    assert_eq!(parsed["summary"]["waived_regression_count"], 1);
+    assert_eq!(parsed["waived_regressions"][0]["probe_name"], "test-1");
+}
+
+#[test]
+fn history_with_waiver_file_reports_waived_regression() {
+    let dir = TempDir::new().unwrap();
+    let history_dir = dir.path().join("history");
+    let waiver_path = dir.path().join("waivers.toml");
+    std::fs::create_dir_all(&history_dir).unwrap();
+    write_waiver_toml(&waiver_path, "test-1", "TestAgent");
+
+    write_json(
+        &history_dir.join("run-1.json"),
+        &json!({
+            "agent": "TestAgent",
+            "metadata": {
+                "schema_version": 4,
+                "runner_version": "0.1.0",
+                "probe_pack_hash": "pack-123",
+                "selected_tags": [],
+                "selected_profiles": [],
+                "executed_tags": ["ci-artifact"],
+                "platform": { "os": "macos", "arch": "arm64" }
+            },
+            "score": 100,
+            "summary": { "total_probes": 1, "passed": 1, "failed": 0, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 0 },
+            "results": [tagged_probe_result("test-1", "pass", &["ci-artifact"], 1000, 10)],
+            "timestamp": "2026-03-13T00:00:00Z"
+        }),
+    );
+    write_json(
+        &history_dir.join("run-2.json"),
+        &json!({
+            "agent": "TestAgent",
+            "metadata": {
+                "schema_version": 4,
+                "runner_version": "0.1.0",
+                "probe_pack_hash": "pack-123",
+                "selected_tags": [],
+                "selected_profiles": [],
+                "executed_tags": ["ci-artifact"],
+                "platform": { "os": "macos", "arch": "arm64" }
+            },
+            "score": 0,
+            "summary": { "total_probes": 1, "passed": 0, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+            "results": [tagged_probe_result("test-1", "fail", &["ci-artifact"], 1000, 10)],
+            "timestamp": "2026-03-14T00:00:00Z"
+        }),
+    );
+
+    let output = probe_binary()
+        .args([
+            "history",
+            history_dir.to_str().unwrap(),
+            "--agent",
+            "TestAgent",
+            "--waiver-file",
+            waiver_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(parsed["regressions"].as_array().unwrap().is_empty());
+    assert_eq!(parsed["waived_regressions"][0]["probe_name"], "test-1");
 }
 
 // ---------- Fingerprint ----------

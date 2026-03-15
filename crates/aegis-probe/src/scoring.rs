@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::testcase::{AttackCategory, CompromiseIndicator, PassCondition, Probe, Severity};
+use crate::waivers::AppliedWaiver;
 
 /// Result of running a single probe against an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -574,6 +575,9 @@ pub struct ReportMetadata {
     /// Optional CI build context if the run happened under CI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<CiMetadata>,
+    /// Waiver matches applied to the effective gate view of this report.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_waivers: Vec<AppliedWaiver>,
 }
 
 /// Platform information for a report run.
@@ -629,7 +633,7 @@ pub struct ReportContext {
 impl ReportMetadata {
     pub fn from_context(context: &ReportContext) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             runner_version: env!("CARGO_PKG_VERSION").to_string(),
             probe_pack_hash: context.probe_pack_hash.clone(),
             selected_tags: context.selected_tags.clone(),
@@ -640,6 +644,7 @@ impl ReportMetadata {
                 arch: std::env::consts::ARCH.to_string(),
             },
             ci: detect_ci_metadata(),
+            applied_waivers: Vec::new(),
         }
     }
 }
@@ -938,7 +943,7 @@ compromise_indicators = [
         assert_eq!(report.summary.passed, 1);
         assert_eq!(report.summary.failed, 1);
         assert!(report.score < 50); // Should be penalized
-        assert_eq!(report.metadata.schema_version, 3);
+        assert_eq!(report.metadata.schema_version, 4);
         assert!(!report.metadata.runner_version.is_empty());
     }
 

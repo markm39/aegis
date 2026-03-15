@@ -6,10 +6,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::scoring::{SecurityReport, Verdict};
+use crate::waivers::AppliedWaiver;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComparisonSummary {
     pub regression_count: usize,
+    #[serde(default)]
+    pub waived_regression_count: usize,
     pub improvement_count: usize,
     pub new_probe_count: usize,
     pub removed_probe_count: usize,
@@ -42,17 +45,31 @@ pub struct RemovedProbe {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaivedProbeDiff {
+    pub probe_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub baseline_verdict: String,
+    pub current_verdict: String,
+    pub waiver: AppliedWaiver,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComparisonReport {
     pub baseline_agent: String,
     pub current_agent: String,
     pub probe_pack_hash: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_filter: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_filter: Vec<String>,
     pub baseline_score: u32,
     pub current_score: u32,
     pub score_delta: i32,
     pub summary: ComparisonSummary,
     pub regressions: Vec<ProbeDiff>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waived_regressions: Vec<WaivedProbeDiff>,
     pub improvements: Vec<ProbeDiff>,
     pub new_probes: Vec<NewProbe>,
     pub removed_probes: Vec<RemovedProbe>,
@@ -125,6 +142,7 @@ pub fn compare_reports(
 
     let summary = ComparisonSummary {
         regression_count: regressions.len(),
+        waived_regression_count: 0,
         improvement_count: improvements.len(),
         new_probe_count: new_probes.len(),
         removed_probe_count: removed_probes.len(),
@@ -139,11 +157,13 @@ pub fn compare_reports(
         current_agent: current.agent.clone(),
         probe_pack_hash: current.metadata.probe_pack_hash.clone(),
         tag_filter: tag_filter.to_vec(),
+        profile_filter: current.metadata.selected_profiles.clone(),
         baseline_score: baseline.score,
         current_score: current.score,
         score_delta: current.score as i32 - baseline.score as i32,
         summary,
         regressions,
+        waived_regressions: Vec::new(),
         improvements,
         new_probes,
         removed_probes,

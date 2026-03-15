@@ -267,7 +267,7 @@ mod tests {
             score: 92,
             agent: "ClaudeCode".into(),
             metadata: ReportMetadata {
-                schema_version: 3,
+                schema_version: 4,
                 runner_version: "0.1.0".into(),
                 probe_pack_hash: "pack-123".into(),
                 selected_tags: vec!["ci-artifact".into()],
@@ -278,6 +278,7 @@ mod tests {
                     arch: "arm64".into(),
                 },
                 ci: None,
+                applied_waivers: Vec::new(),
             },
             results: vec![],
             summary: ReportSummary {

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::scoring::{SecurityReport, Verdict};
 use crate::stats;
+use crate::waivers::AppliedWaiver;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryWindow {
@@ -59,17 +60,45 @@ pub struct UnstableProbe {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaivedProbeRegression {
+    pub probe_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub baseline_verdict: String,
+    pub latest_verdict: String,
+    pub waiver: AppliedWaiver,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaivedUnstableProbe {
+    pub probe_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub pass_rate: f64,
+    pub fail_rate: f64,
+    pub error_rate: f64,
+    pub verdict_stability: f64,
+    pub waiver: AppliedWaiver,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryReport {
     pub agent: String,
     pub run_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_filter: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_filter: Vec<String>,
     pub window: HistoryWindow,
     pub score: NumericTrend,
     pub overall_pass_rate: NumericTrend,
     pub category_trends: Vec<CategoryTrend>,
     pub regressions: Vec<ProbeRegression>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waived_regressions: Vec<WaivedProbeRegression>,
     pub unstable_probes: Vec<UnstableProbe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waived_unstable_probes: Vec<WaivedUnstableProbe>,
     pub generated_at: String,
 }
 
@@ -177,6 +206,7 @@ pub fn analyze_history(runs: &[SecurityReport], tag_filter: &[String]) -> Histor
         agent: latest.agent.clone(),
         run_count: runs.len(),
         tag_filter: tag_filter.to_vec(),
+        profile_filter: latest.metadata.selected_profiles.clone(),
         window: HistoryWindow {
             first_timestamp: first.timestamp,
             latest_timestamp: latest.timestamp,
@@ -186,7 +216,9 @@ pub fn analyze_history(runs: &[SecurityReport], tag_filter: &[String]) -> Histor
         overall_pass_rate,
         category_trends,
         regressions,
+        waived_regressions: Vec::new(),
         unstable_probes,
+        waived_unstable_probes: Vec::new(),
         generated_at: chrono::Utc::now().to_rfc3339(),
     }
 }

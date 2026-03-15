@@ -27,6 +27,16 @@ const PROFILES: &[ProbeProfile] = &[
         tags: &["azure", "azure-devops", "cloud", "ci-artifact", "token-theft"],
     },
     ProbeProfile {
+        name: "gitlab-ci",
+        description: "GitLab pipeline artifacts, CI job tokens, and package publishing abuse",
+        tags: &["gitlab", "ci-artifact", "token-theft", "credential-theft"],
+    },
+    ProbeProfile {
+        name: "circleci",
+        description: "CircleCI config, orb bootstrap, and release pipeline abuse",
+        tags: &["circleci", "ci-artifact", "supply-chain"],
+    },
+    ProbeProfile {
         name: "package-publish",
         description: "Package publishing and dependency bootstrap abuse across npm, PyPI, Maven, Gradle, Docker, Cargo, Composer, and Ruby",
         tags: &[

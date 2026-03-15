@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::baseline::{BaselineBundle, BaselineQuery};
 use crate::fingerprint::{self, BehavioralFingerprint, ModelFingerprint};
 use crate::history::{
     self, CategoryTrend, HistoryWindow, NumericTrend, ProbeRegression, UnstableProbe,
@@ -66,6 +67,8 @@ pub struct RegistryProbeRecord {
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
     pub url: String,
+    pub baseline_url: Option<String>,
+    pub history_url: Option<String>,
     pub token: Option<String>,
     pub using_legacy_aliases: bool,
 }
@@ -167,6 +170,8 @@ pub fn registry_config() -> Option<RegistryConfig> {
 
     Some(RegistryConfig {
         url,
+        baseline_url: std::env::var("AEGIS_REGISTRY_BASELINE_URL").ok(),
+        history_url: std::env::var("AEGIS_REGISTRY_HISTORY_URL").ok(),
         token,
         using_legacy_aliases,
     })
@@ -174,7 +179,7 @@ pub fn registry_config() -> Option<RegistryConfig> {
 
 /// Upload a derived-only bundle to a configured registry endpoint.
 pub fn upload_bundle(bundle: &RegistryBundle, config: &RegistryConfig) -> Result<(), String> {
-    upload_json(bundle, config)
+    upload_json(bundle, &config.url, config)
 }
 
 /// Upload a derived-only longitudinal bundle to a configured registry endpoint.
@@ -182,17 +187,74 @@ pub fn upload_history_bundle(
     bundle: &RegistryHistoryBundle,
     config: &RegistryConfig,
 ) -> Result<(), String> {
-    upload_json(bundle, config)
+    let endpoint = config.history_url.as_deref().unwrap_or(&config.url);
+    upload_json(bundle, endpoint, config)
 }
 
-fn upload_json<T: Serialize>(payload: &T, config: &RegistryConfig) -> Result<(), String> {
+/// Publish a baseline bundle to a configured registry endpoint.
+pub fn upload_baseline_bundle(
+    bundle: &BaselineBundle,
+    config: &RegistryConfig,
+) -> Result<(), String> {
+    let endpoint = config.baseline_url.as_deref().unwrap_or(&config.url);
+    upload_json(bundle, endpoint, config)
+}
+
+/// Fetch the latest compatible baseline bundle from a configured registry endpoint.
+pub fn fetch_baseline_bundle(
+    query: &BaselineQuery,
+    config: &RegistryConfig,
+) -> Result<BaselineBundle, String> {
+    let endpoint = config.baseline_url.as_deref().unwrap_or(&config.url);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|err| format!("HTTP client error: {err}"))?;
 
     let mut request = client
-        .post(&config.url)
+        .get(endpoint)
+        .query(&[("agent", query.agent.as_str())]);
+    if let Some(name) = query.name.as_deref() {
+        request = request.query(&[("name", name)]);
+    }
+    for tag in &query.selected_tags {
+        request = request.query(&[("selected_tag", tag)]);
+    }
+    for profile in &query.selected_profiles {
+        request = request.query(&[("selected_profile", profile)]);
+    }
+    if let Some(token) = &config.token {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+
+    let response = request
+        .send()
+        .map_err(|err| format!("HTTP request failed: {err}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!(
+            "Registry rejected baseline fetch: {status} -- {body}"
+        ));
+    }
+
+    response
+        .json::<BaselineBundle>()
+        .map_err(|err| format!("Error parsing baseline bundle response: {err}"))
+}
+
+fn upload_json<T: Serialize>(
+    payload: &T,
+    endpoint: &str,
+    config: &RegistryConfig,
+) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|err| format!("HTTP client error: {err}"))?;
+
+    let mut request = client
+        .post(endpoint)
         .header("Content-Type", "application/json")
         .json(payload);
 
@@ -215,7 +277,12 @@ fn upload_json<T: Serialize>(payload: &T, config: &RegistryConfig) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
     use std::sync::{Mutex, OnceLock};
+    use std::thread;
+    use std::time::Duration;
 
     use chrono::Utc;
 
@@ -225,6 +292,47 @@ mod tests {
     use crate::testcase::{AttackCategory, Severity};
 
     use super::*;
+
+    fn spawn_registry_server(status_line: &str, body: String) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let status_line = status_line.to_string();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    Err(err)
+                        if err.kind() == std::io::ErrorKind::WouldBlock
+                            || err.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(err) => panic!("server read failed: {err}"),
+                }
+            }
+
+            sender.send(String::from_utf8(request).unwrap()).unwrap();
+
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        (format!("http://{}", address), receiver)
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -330,5 +438,59 @@ mod tests {
         assert_eq!(config.url, "https://registry.example.test/upload");
 
         std::env::remove_var("AEGIS_TELEMETRY_URL");
+    }
+
+    #[test]
+    fn upload_baseline_bundle_uses_baseline_endpoint() {
+        let bundle = crate::baseline::bundle_from_report(&sample_report(), "ci-main", None, None);
+        let (url, receiver) = spawn_registry_server("HTTP/1.1 200 OK", "{}".into());
+        let config = RegistryConfig {
+            url: "http://unused.invalid/report".into(),
+            baseline_url: Some(url),
+            history_url: None,
+            token: Some("secret-token".into()),
+            using_legacy_aliases: false,
+        };
+
+        upload_baseline_bundle(&bundle, &config).unwrap();
+        let request = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        let request_lower = request.to_ascii_lowercase();
+        assert!(request.starts_with("POST / HTTP/1.1"));
+        assert!(request_lower.contains("authorization: bearer secret-token"));
+        assert!(request.contains("\"name\":\"ci-main\""));
+    }
+
+    #[test]
+    fn fetch_baseline_bundle_uses_query_filters() {
+        let bundle = crate::baseline::bundle_from_report(&sample_report(), "ci-main", None, None);
+        let body = serde_json::to_string(&bundle).unwrap();
+        let (url, receiver) = spawn_registry_server("HTTP/1.1 200 OK", body);
+        let config = RegistryConfig {
+            url: "http://unused.invalid/report".into(),
+            baseline_url: Some(url),
+            history_url: None,
+            token: Some("secret-token".into()),
+            using_legacy_aliases: false,
+        };
+
+        let fetched = fetch_baseline_bundle(
+            &BaselineQuery {
+                agent: "TestAgent".into(),
+                name: Some("ci-main".into()),
+                selected_tags: vec!["ci-artifact".into()],
+                selected_profiles: vec!["github-actions".into()],
+            },
+            &config,
+        )
+        .unwrap();
+
+        let request = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        let request_lower = request.to_ascii_lowercase();
+        assert!(request.starts_with("GET /?agent=TestAgent"));
+        assert!(request.contains("name=ci-main"));
+        assert!(request.contains("selected_tag=ci-artifact"));
+        assert!(request.contains("selected_profile=github-actions"));
+        assert!(request_lower.contains("authorization: bearer secret-token"));
+        assert_eq!(fetched.metadata.name, "ci-main");
     }
 }

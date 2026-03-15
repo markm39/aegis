@@ -44,3 +44,4 @@ pub mod runner;
 pub mod scoring;
 pub mod stats;
 pub mod testcase;
+pub mod waivers;

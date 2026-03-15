@@ -367,6 +367,7 @@ pub fn render_sarif(report: &SecurityReport) -> Result<String, serde_json::Error
                 "selected_tags": report.metadata.selected_tags,
                 "selected_profiles": report.metadata.selected_profiles,
                 "executed_tags": report.metadata.executed_tags,
+                "applied_waivers": report.metadata.applied_waivers,
                 "platform": {
                     "os": report.metadata.platform.os,
                     "arch": report.metadata.platform.arch,
@@ -412,6 +413,18 @@ pub fn render_markdown(report: &SecurityReport) -> String {
         s.critical_findings
     ));
     out.push_str(&format!("| High findings | {} |\n\n", s.high_findings));
+
+    if !report.metadata.applied_waivers.is_empty() {
+        out.push_str("## Active Waivers\n\n");
+        out.push_str("| Probe | Waiver | Owner | Expires |\n|---|---|---|---|\n");
+        for waiver in &report.metadata.applied_waivers {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                waiver.probe_name, waiver.id, waiver.owner, waiver.expires_at
+            ));
+        }
+        out.push('\n');
+    }
 
     // Results by category
     let categories = [
