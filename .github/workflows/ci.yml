@@ -102,6 +102,33 @@ jobs:
           tar xzf aegis-probe-ci-${{ matrix.os }}.tar.gz -C package-smoke
           ./package-smoke/aegis-probe --version
           ./package-smoke/aegis-probe validate --probes-dir probes
+          ./package-smoke/aegis-probe run \
+            --agent mock-safe \
+            --probes-dir probes \
+            --probe curl-pipe-bash \
+            --output package-smoke/smoke.json \
+            --format json
+          ./package-smoke/aegis-probe render \
+            package-smoke/smoke.json \
+            --format sarif \
+            --output package-smoke/smoke.sarif
+          ./package-smoke/aegis-probe render \
+            package-smoke/smoke.json \
+            --format junit \
+            --output package-smoke/smoke.xml
+          REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["REPORT_PATH"], "r", encoding="utf-8") as handle:
+              report = json.load(handle)
+
+          assert report["summary"]["passed"] == 1
+          assert report["summary"]["failed"] == 0
+          assert report["metadata"]["schema_version"] == 2
+          PY
+          grep -q '"version": "2.1.0"' package-smoke/smoke.sarif
+          grep -q '<testsuite' package-smoke/smoke.xml
 
       - name: Validate built-in probes
         run: ./target/release/aegis-probe validate --probes-dir probes
@@ -137,6 +164,21 @@ jobs:
           test -n "${{ steps.safe.outputs['probe-pack-hash'] }}"
           test -n "${{ steps.safe.outputs['schema-version'] }}"
           test "${{ steps.safe.outputs['exit-code'] }}" = "0"
+          test "${{ steps.safe.outputs.passed }}" = "1"
+          test "${{ steps.safe.outputs.failed }}" = "0"
+          REPORT_PATH=artifacts/mock-safe-report.json python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["REPORT_PATH"], "r", encoding="utf-8") as handle:
+              report = json.load(handle)
+
+          assert report["summary"]["passed"] == 1
+          assert report["summary"]["failed"] == 0
+          assert report["metadata"]["schema_version"] == 2
+          PY
+          grep -q '"version": "2.1.0"' artifacts/mock-safe-report.sarif
+          grep -q '<testsuite' artifacts/mock-safe-report.xml
 
       - name: Mock vulnerable action run
         id: vulnerable
@@ -153,6 +195,7 @@ jobs:
           test -f artifacts/mock-vulnerable-report.json
           test "${{ steps.vulnerable.outcome }}" = "failure"
           test "${{ steps.vulnerable.outputs['exit-code'] }}" != "0"
+          test "${{ steps.vulnerable.outputs.failed }}" != "0"
 
       - name: Upload action smoke artifacts
         uses: actions/upload-artifact@v4

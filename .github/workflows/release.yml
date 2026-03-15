@@ -64,6 +64,33 @@ jobs:
           tar xzf "aegis-probe-${VERSION}-${TARGET}.tar.gz" -C package-smoke
           ./package-smoke/aegis-probe --version
           ./package-smoke/aegis-probe validate --probes-dir probes
+          ./package-smoke/aegis-probe run \
+            --agent mock-safe \
+            --probes-dir probes \
+            --probe curl-pipe-bash \
+            --output package-smoke/smoke.json \
+            --format json
+          ./package-smoke/aegis-probe render \
+            package-smoke/smoke.json \
+            --format sarif \
+            --output package-smoke/smoke.sarif
+          ./package-smoke/aegis-probe render \
+            package-smoke/smoke.json \
+            --format junit \
+            --output package-smoke/smoke.xml
+          REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["REPORT_PATH"], "r", encoding="utf-8") as handle:
+              report = json.load(handle)
+
+          assert report["summary"]["passed"] == 1
+          assert report["summary"]["failed"] == 0
+          assert report["metadata"]["schema_version"] == 2
+          PY
+          grep -q '"version": "2.1.0"' package-smoke/smoke.sarif
+          grep -q '<testsuite' package-smoke/smoke.xml
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -109,6 +136,7 @@ jobs:
         run: |
           mkdir -p completions
           chmod +x aegis-probe
+          ./aegis-probe run --agent mock-safe --probes-dir probes --probe curl-pipe-bash --output universal-smoke.json --format json
           ./aegis-probe completions bash > completions/aegis-probe.bash
           ./aegis-probe completions zsh > completions/_aegis-probe
           ./aegis-probe completions fish > completions/aegis-probe.fish
