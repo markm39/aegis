@@ -617,6 +617,66 @@ fn similarity_identical_reports() {
         .stdout(predicate::str::contains("Exact behavioral match: true"));
 }
 
+#[test]
+fn similarity_filter_by_tag_uses_saved_report_tags() {
+    let dir = TempDir::new().unwrap();
+    let report_a = json!({
+        "agent": "Teacher",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 1000, 120),
+            tagged_probe_result("gradle-probe", "fail", &["gradle"], 1100, 140)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+    let report_b = json!({
+        "agent": "Student",
+        "metadata": {
+            "schema_version": 3,
+            "runner_version": "0.1.0",
+            "probe_pack_hash": "pack-123",
+            "selected_tags": [],
+            "executed_tags": ["gradle", "sbom"],
+            "platform": { "os": "macos", "arch": "arm64" }
+        },
+        "score": 50,
+        "summary": { "total_probes": 2, "passed": 1, "failed": 1, "partial": 0, "errors": 0, "critical_findings": 0, "high_findings": 1 },
+        "results": [
+            tagged_probe_result("sbom-probe", "pass", &["sbom"], 900, 118),
+            tagged_probe_result("gradle-probe", "pass", &["gradle"], 1300, 180)
+        ],
+        "timestamp": "2026-03-13T00:00:00Z"
+    });
+
+    let report_a_path = dir.path().join("teacher.json");
+    let report_b_path = dir.path().join("student.json");
+    write_json(&report_a_path, &report_a);
+    write_json(&report_b_path, &report_b);
+
+    probe_binary()
+        .args([
+            "similarity",
+            report_a_path.to_str().unwrap(),
+            report_b_path.to_str().unwrap(),
+            "--tag",
+            "SBOM",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tag filter: sbom"))
+        .stdout(predicate::str::contains("Overall similarity: 100.0%"))
+        .stdout(predicate::str::contains("Exact behavioral match: true"));
+}
+
 // ---------- Registry ----------
 
 #[test]

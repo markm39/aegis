@@ -149,6 +149,9 @@ aegis-probe fingerprint report.json --model
 # Compare two fingerprints
 aegis-probe similarity report-a.json report-b.json
 
+# Compare only a saved probe subset
+aegis-probe similarity report-a.json report-b.json --tag ci-artifact
+
 # Distillation analysis on a saved probe subset
 aegis-probe distillation teacher.json student.json --tag ci-artifact
 ```
@@ -157,7 +160,7 @@ aegis-probe distillation teacher.json student.json --tag ci-artifact
 
 `aegis-probe` can export a derived-only bundle from a local report. Bundles contain verdicts, timings, finding classes, and fingerprints, but not raw prompts or raw agent output by default.
 
-Saved JSON reports also carry `metadata.selected_tags`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `compare --tag`, and `distillation --tag` without reloading the source TOML files.
+Saved JSON reports also carry `metadata.selected_tags`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `compare --tag`, `similarity --tag`, and `distillation --tag` without reloading the source TOML files.
 
 ```bash
 # Inspect registry configuration

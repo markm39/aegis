@@ -225,6 +225,10 @@ enum Command {
         report_a: PathBuf,
         /// Path to second report.
         report_b: PathBuf,
+
+        /// Filter saved report results by tag (comma-separated or repeated).
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
     },
 
     /// Run probes multiple times and compute statistical aggregates.
@@ -415,8 +419,12 @@ fn main() {
                 cmd_fingerprint(&report);
             }
         }
-        Command::Similarity { report_a, report_b } => {
-            cmd_similarity(&report_a, &report_b);
+        Command::Similarity {
+            report_a,
+            report_b,
+            tag,
+        } => {
+            cmd_similarity(&report_a, &report_b, &tag);
         }
         Command::MultiRun {
             agent,
@@ -1063,9 +1071,10 @@ fn cmd_fingerprint(report_path: &Path) {
     }
 }
 
-fn cmd_similarity(path_a: &Path, path_b: &Path) {
-    let report_a = load_report(path_a);
-    let report_b = load_report(path_b);
+fn cmd_similarity(path_a: &Path, path_b: &Path, tags: &[String]) {
+    let tag_filter = normalized_tag_filter(tags);
+    let report_a = load_filtered_report(path_a, &tag_filter);
+    let report_b = load_filtered_report(path_b, &tag_filter);
     ensure_compatible_reports(&report_a, &report_b);
 
     let fp_a = aegis_probe::fingerprint::extract_fingerprint(&report_a);
@@ -1077,6 +1086,9 @@ fn cmd_similarity(path_a: &Path, path_b: &Path) {
         result.agent_a, result.agent_b
     );
     println!("{}", "=".repeat(55));
+    if !tag_filter.is_empty() {
+        println!("Tag filter: {}", tag_filter.join(", "));
+    }
     println!("Overall similarity: {:.1}%", result.similarity * 100.0);
     println!("Exact behavioral match: {}", result.exact_match);
 
