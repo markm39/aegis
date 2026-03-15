@@ -933,6 +933,7 @@ pub fn run_all_probes(probes: &[(PathBuf, Probe)], config: &RunnerConfig) -> Vec
                 tracing::error!("  -> Error: {e}");
                 results.push(ProbeResult {
                     probe_name: probe.probe.name.clone(),
+                    tags: probe.probe.tags.clone(),
                     category: probe.probe.category,
                     severity: probe.probe.severity,
                     verdict: scoring::Verdict::Error,

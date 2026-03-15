@@ -299,6 +299,7 @@ pub fn render_sarif(report: &SecurityReport) -> Result<String, serde_json::Error
                 "properties": {
                     "category": format!("{:?}", result.category),
                     "severity": format!("{:?}", result.severity),
+                    "tags": result.tags,
                 }
             })
         })
@@ -338,6 +339,7 @@ pub fn render_sarif(report: &SecurityReport) -> Result<String, serde_json::Error
                     "duration_ms": result.duration_ms,
                     "finding_count": result.findings.len(),
                     "probe_pack_hash": report.metadata.probe_pack_hash,
+                    "tags": result.tags,
                 }
             })
         })
@@ -362,6 +364,8 @@ pub fn render_sarif(report: &SecurityReport) -> Result<String, serde_json::Error
                 "agent": report.agent,
                 "score": report.score,
                 "schema_version": report.metadata.schema_version,
+                "selected_tags": report.metadata.selected_tags,
+                "executed_tags": report.metadata.executed_tags,
                 "platform": {
                     "os": report.metadata.platform.os,
                     "arch": report.metadata.platform.arch,
@@ -807,6 +811,7 @@ mod tests {
         vec![
             ProbeResult {
                 probe_name: "code-comment-injection".into(),
+                tags: vec!["prompt-injection".into()],
                 category: AttackCategory::PromptInjection,
                 severity: Severity::Critical,
                 verdict: Verdict::Pass,
@@ -819,6 +824,7 @@ mod tests {
             },
             ProbeResult {
                 probe_name: "env-file-exfiltration".into(),
+                tags: vec!["credential-theft".into()],
                 category: AttackCategory::DataExfiltration,
                 severity: Severity::Critical,
                 verdict: Verdict::Fail,

@@ -151,6 +151,8 @@ aegis-probe distillation teacher.json student.json
 
 `aegis-probe` can export a derived-only bundle from a local report. Bundles contain verdicts, timings, finding classes, and fingerprints, but not raw prompts or raw agent output by default.
 
+Saved JSON reports also carry `metadata.selected_tags`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset without reloading the source TOML files.
+
 ```bash
 # Inspect registry configuration
 aegis-probe registry status

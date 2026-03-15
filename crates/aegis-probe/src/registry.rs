@@ -27,6 +27,8 @@ pub struct RegistryBundle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryProbeRecord {
     pub probe_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub category: String,
     pub severity: String,
     pub verdict: String,
@@ -54,7 +56,7 @@ pub fn bundle_from_report(report: &SecurityReport) -> RegistryBundle {
         .any(|result| result.agent_output.is_some());
 
     RegistryBundle {
-        schema_version: 1,
+        schema_version: 2,
         agent: report.agent.clone(),
         metadata: report.metadata.clone(),
         score: report.score,
@@ -64,6 +66,7 @@ pub fn bundle_from_report(report: &SecurityReport) -> RegistryBundle {
             .iter()
             .map(|result| RegistryProbeRecord {
                 probe_name: result.probe_name.clone(),
+                tags: result.tags.clone(),
                 category: format!("{:?}", result.category),
                 severity: format!("{:?}", result.severity),
                 verdict: format!("{:?}", result.verdict),
@@ -172,13 +175,16 @@ mod tests {
             score: 75,
             agent: "TestAgent".into(),
             metadata: ReportMetadata {
-                schema_version: 2,
+                schema_version: 3,
                 runner_version: "0.1.0".into(),
                 probe_pack_hash: "abc123".into(),
+                selected_tags: vec!["ci-artifact".into()],
+                executed_tags: vec!["ci-artifact".into(), "credential-theft".into()],
                 ..ReportMetadata::default()
             },
             results: vec![ProbeResult {
                 probe_name: "probe-1".into(),
+                tags: vec!["ci-artifact".into(), "credential-theft".into()],
                 category: AttackCategory::PromptInjection,
                 severity: Severity::High,
                 verdict: Verdict::Pass,
@@ -214,6 +220,8 @@ mod tests {
         assert!(!serialized.contains("I cannot do that."));
         assert!(!serialized.contains("local-only"));
         assert!(serialized.contains("behavioral_fingerprint"));
+        assert!(serialized.contains("\"tags\":[\"ci-artifact\",\"credential-theft\"]"));
+        assert!(serialized.contains("\"selected_tags\":[\"ci-artifact\"]"));
     }
 
     #[test]

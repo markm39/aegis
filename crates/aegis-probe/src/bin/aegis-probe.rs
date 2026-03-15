@@ -520,9 +520,7 @@ fn cmd_run(opts: &RunOptions<'_>) {
         process::exit(1);
     }
 
-    let report_context = ReportContext {
-        probe_pack_hash: testcase::probe_pack_hash(&filtered),
-    };
+    let report_context = report_context_from_filtered(&filtered, &tag_filter);
 
     // Build runner config
     let config = RunnerConfig {
@@ -1070,9 +1068,7 @@ fn cmd_benchmark(
             continue;
         }
 
-        let report_context = ReportContext {
-            probe_pack_hash: testcase::probe_pack_hash(&filtered),
-        };
+        let report_context = report_context_from_filtered(&filtered, &tag_filter);
 
         let config = RunnerConfig {
             target: target.clone(),
@@ -1308,6 +1304,7 @@ fn run_probes_mock(
                 eprintln!("        -> ERROR: {e}");
                 results.push(scoring::ProbeResult {
                     probe_name: probe.probe.name.clone(),
+                    tags: probe.probe.tags.clone(),
                     category: probe.probe.category,
                     severity: probe.probe.severity,
                     verdict: scoring::Verdict::Error,
@@ -1368,6 +1365,7 @@ fn run_probes_sequential(
                 eprintln!("        -> ERROR: {e}");
                 results.push(scoring::ProbeResult {
                     probe_name: probe.probe.name.clone(),
+                    tags: probe.probe.tags.clone(),
                     category: probe.probe.category,
                     severity: probe.probe.severity,
                     verdict: scoring::Verdict::Error,
@@ -1448,6 +1446,7 @@ fn run_probes_parallel(
                         eprintln!("        -> ERROR ({}): {e}", probe.probe.name);
                         scoring::ProbeResult {
                             probe_name: probe.probe.name.clone(),
+                            tags: probe.probe.tags.clone(),
                             category: probe.probe.category,
                             severity: probe.probe.severity,
                             verdict: scoring::Verdict::Error,
@@ -1551,11 +1550,33 @@ fn parse_category(s: &str) -> Option<AttackCategory> {
 }
 
 fn normalized_tag_filter(tags: &[String]) -> Vec<String> {
-    tags.iter()
+    let mut normalized: Vec<String> = tags
+        .iter()
         .map(|tag| tag.trim())
         .filter(|tag| !tag.is_empty())
         .map(|tag| tag.to_ascii_lowercase())
-        .collect()
+        .collect();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn report_context_from_filtered(
+    filtered: &[(PathBuf, testcase::Probe)],
+    selected_tags: &[String],
+) -> ReportContext {
+    let mut executed_tags: Vec<String> = filtered
+        .iter()
+        .flat_map(|(_, probe)| probe.probe.tags.iter().map(|tag| tag.to_ascii_lowercase()))
+        .collect();
+    executed_tags.sort();
+    executed_tags.dedup();
+
+    ReportContext {
+        probe_pack_hash: testcase::probe_pack_hash(filtered),
+        selected_tags: selected_tags.to_vec(),
+        executed_tags,
+    }
 }
 
 fn probe_matches_tag_filter(probe: &testcase::Probe, tags: &[String]) -> bool {
@@ -1656,9 +1677,7 @@ fn cmd_multi_run(opts: &MultiRunOptions<'_>) {
         process::exit(1);
     }
 
-    let report_context = ReportContext {
-        probe_pack_hash: testcase::probe_pack_hash(&filtered),
-    };
+    let report_context = report_context_from_filtered(&filtered, &tag_filter);
 
     let config = runner::RunnerConfig {
         target: target.clone(),

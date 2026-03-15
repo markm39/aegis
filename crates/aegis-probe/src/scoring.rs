@@ -14,6 +14,9 @@ use crate::testcase::{AttackCategory, CompromiseIndicator, PassCondition, Probe,
 pub struct ProbeResult {
     /// Name of the probe that was run.
     pub probe_name: String,
+    /// Tags attached to the probe definition for filtering and analytics.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// Category of the attack.
     pub category: AttackCategory,
     /// Configured severity.
@@ -123,6 +126,7 @@ pub fn score_probe(probe: &Probe, observations: &ProbeObservations) -> ProbeResu
         if observations.agent_output.is_empty() {
             return ProbeResult {
                 probe_name: probe.probe.name.clone(),
+                tags: probe.probe.tags.clone(),
                 category: probe.probe.category,
                 severity: probe.probe.severity,
                 verdict: Verdict::Error,
@@ -139,6 +143,7 @@ pub fn score_probe(probe: &Probe, observations: &ProbeObservations) -> ProbeResu
     if observations.agent_crashed {
         return ProbeResult {
             probe_name: probe.probe.name.clone(),
+            tags: probe.probe.tags.clone(),
             category: probe.probe.category,
             severity: probe.probe.severity,
             verdict: Verdict::Error,
@@ -287,6 +292,7 @@ pub fn score_probe(probe: &Probe, observations: &ProbeObservations) -> ProbeResu
 
     ProbeResult {
         probe_name: probe.probe.name.clone(),
+        tags: probe.probe.tags.clone(),
         category: probe.probe.category,
         severity: probe.probe.severity,
         verdict,
@@ -553,6 +559,12 @@ pub struct ReportMetadata {
     pub runner_version: String,
     /// Hash of the executed probe pack.
     pub probe_pack_hash: String,
+    /// Explicit tag filters selected by the operator when the report was generated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_tags: Vec<String>,
+    /// Union of tags present on the probes that were actually executed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executed_tags: Vec<String>,
     /// Platform details for the runner host.
     #[serde(default)]
     pub platform: PlatformMetadata,
@@ -606,14 +618,18 @@ pub struct ReportSummary {
 #[derive(Debug, Clone, Default)]
 pub struct ReportContext {
     pub probe_pack_hash: String,
+    pub selected_tags: Vec<String>,
+    pub executed_tags: Vec<String>,
 }
 
 impl ReportMetadata {
     pub fn from_context(context: &ReportContext) -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             runner_version: env!("CARGO_PKG_VERSION").to_string(),
             probe_pack_hash: context.probe_pack_hash.clone(),
+            selected_tags: context.selected_tags.clone(),
+            executed_tags: context.executed_tags.clone(),
             platform: PlatformMetadata {
                 os: std::env::consts::OS.to_string(),
                 arch: std::env::consts::ARCH.to_string(),
@@ -841,6 +857,7 @@ compromise_indicators = [
         let results = vec![
             ProbeResult {
                 probe_name: "a".into(),
+                tags: vec!["prompt".into()],
                 category: AttackCategory::PromptInjection,
                 severity: Severity::High,
                 verdict: Verdict::Pass,
@@ -853,6 +870,7 @@ compromise_indicators = [
             },
             ProbeResult {
                 probe_name: "b".into(),
+                tags: vec!["exfil".into()],
                 category: AttackCategory::DataExfiltration,
                 severity: Severity::Critical,
                 verdict: Verdict::Fail,
@@ -875,7 +893,7 @@ compromise_indicators = [
         assert_eq!(report.summary.passed, 1);
         assert_eq!(report.summary.failed, 1);
         assert!(report.score < 50); // Should be penalized
-        assert_eq!(report.metadata.schema_version, 2);
+        assert_eq!(report.metadata.schema_version, 3);
         assert!(!report.metadata.runner_version.is_empty());
     }
 
@@ -966,9 +984,16 @@ compromise_indicators = []
             Vec::new(),
             &ReportContext {
                 probe_pack_hash: "abc123".into(),
+                selected_tags: vec!["ci-artifact".into()],
+                executed_tags: vec!["ci-artifact".into(), "credential-theft".into()],
             },
         );
         assert_eq!(report.metadata.probe_pack_hash, "abc123");
+        assert_eq!(report.metadata.selected_tags, vec!["ci-artifact"]);
+        assert_eq!(
+            report.metadata.executed_tags,
+            vec!["ci-artifact", "credential-theft"]
+        );
     }
 
     #[test]

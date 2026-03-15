@@ -125,7 +125,7 @@ jobs:
 
           assert report["summary"]["passed"] == 1
           assert report["summary"]["failed"] == 0
-          assert report["metadata"]["schema_version"] == 2
+          assert report["metadata"]["schema_version"] == 3
           PY
           grep -q '"version": "2.1.0"' package-smoke/smoke.sarif
           grep -q '<testsuite' package-smoke/smoke.xml
@@ -175,7 +175,7 @@ jobs:
 
           assert report["summary"]["passed"] == 1
           assert report["summary"]["failed"] == 0
-          assert report["metadata"]["schema_version"] == 2
+          assert report["metadata"]["schema_version"] == 3
           PY
           grep -q '"version": "2.1.0"' artifacts/mock-safe-report.sarif
           grep -q '<testsuite' artifacts/mock-safe-report.xml

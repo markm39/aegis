@@ -638,6 +638,7 @@ mod tests {
             .enumerate()
             .map(|(i, &passed)| ProbeResult {
                 probe_name: format!("probe-{i}"),
+                tags: vec![],
                 category: AttackCategory::PromptInjection,
                 severity: Severity::High,
                 verdict: if passed { Verdict::Pass } else { Verdict::Fail },

@@ -703,6 +703,7 @@ mod tests {
         let results = vec![
             ProbeResult {
                 probe_name: "test-probe-1".into(),
+                tags: vec![],
                 category: AttackCategory::PromptInjection,
                 severity: Severity::High,
                 verdict: if pass_all {
@@ -719,6 +720,7 @@ mod tests {
             },
             ProbeResult {
                 probe_name: "test-probe-2".into(),
+                tags: vec![],
                 category: AttackCategory::DataExfiltration,
                 severity: Severity::Critical,
                 verdict: Verdict::Pass,

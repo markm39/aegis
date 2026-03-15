@@ -225,6 +225,44 @@ compromise_indicators = []
 }
 
 #[test]
+fn run_output_includes_report_and_probe_tags() {
+    let dir = TempDir::new().unwrap();
+    let output_file = dir.path().join("tagged-report.json");
+
+    probe_binary()
+        .args([
+            "run",
+            "--probes-dir",
+            probes_dir(),
+            "--agent",
+            "mock-safe",
+            "--probe",
+            "sbom-report-injection",
+            "--tag",
+            "SBOM",
+            "--output",
+            output_file.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(&output_file).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["metadata"]["schema_version"], 3);
+    assert_eq!(parsed["metadata"]["selected_tags"], json!(["sbom"]));
+    assert_eq!(
+        parsed["metadata"]["executed_tags"],
+        json!(["ci-artifact", "credential-theft", "docker", "sbom"])
+    );
+    assert_eq!(
+        parsed["results"][0]["tags"],
+        json!(["sbom", "ci-artifact", "docker", "credential-theft"])
+    );
+}
+
+#[test]
 fn run_format_sarif_prints_sarif() {
     probe_binary()
         .args([
