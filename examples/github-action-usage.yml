@@ -35,9 +35,11 @@ jobs:
           jobs: 4
           fail-on: fail
           stability-runs: 3
+          stability-required-runs: 2
           output: aegis-report.json
           baseline-report: baseline/baseline-report.json
           history-dir: baseline/history
+          waiver-file: .aegis/waivers.toml
           max-regressions: 0
           min-history-runs: 5
 
@@ -47,10 +49,14 @@ jobs:
           echo "Score: ${{ steps.aegis.outputs.score }}"
           echo "Failed probes: ${{ steps.aegis.outputs.failed }}"
           echo "Regressions: ${{ steps.aegis.outputs.regressions }}"
+          echo "Confirmed regressions: ${{ steps.aegis.outputs.confirmed-regressions }}"
+          echo "Flaky regressions: ${{ steps.aegis.outputs.flaky-regressions }}"
+          echo "Waived regressions: ${{ steps.aegis.outputs.waived-regressions }}"
           echo "Unstable probes: ${{ steps.aegis.outputs.unstable-probes }}"
           echo "History runs: ${{ steps.aegis.outputs.history-run-count }}"
           echo "Compare JSON: ${{ steps.aegis.outputs.compare-path }}"
           echo "History JSON: ${{ steps.aegis.outputs.history-path }}"
+          echo "Summary Markdown: ${{ steps.aegis.outputs.summary-path }}"
           echo "Probe pack: ${{ steps.aegis.outputs.probe-pack-hash }}"
 
       - name: Upload JSON report

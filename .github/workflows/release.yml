@@ -126,6 +126,34 @@ jobs:
             --profile ci-artifacts \
             --format report \
             --output package-smoke/fetched-baseline.json
+          cat > package-smoke/waivers.toml <<'EOF'
+          schema_version = 1
+
+          [[waivers]]
+          id = "waiver-1"
+          probe = "sbom-report-injection"
+          reason = "Temporary acceptance while the packaging lane is being hardened"
+          owner = "security@example.com"
+          expires_at = "2099-01-01T00:00:00Z"
+          severity_override = "low"
+
+          [waivers.scope]
+          agent = "ClaudeCode"
+          EOF
+          ./package-smoke/aegis-probe compare \
+            package-smoke/history-reports/safe.json \
+            package-smoke/history-reports/vuln.json \
+            --tag ci-artifact \
+            --waiver-file package-smoke/waivers.toml \
+            --format json \
+            --output package-smoke/waived-compare.json
+          ./package-smoke/aegis-probe history \
+            package-smoke/history-reports \
+            --agent ClaudeCode \
+            --tag ci-artifact \
+            --waiver-file package-smoke/waivers.toml \
+            --format json \
+            > package-smoke/waived-history.json
           REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
           import json
           import os
@@ -135,7 +163,7 @@ jobs:
 
           assert report["summary"]["passed"] == 1
           assert report["summary"]["failed"] == 0
-          assert report["metadata"]["schema_version"] == 3
+          assert report["metadata"]["schema_version"] == 4
           PY
           HISTORY_PATH=package-smoke/history.json BUNDLE_PATH=package-smoke/history-bundle.json python3 - <<'PY'
           import json
@@ -149,12 +177,19 @@ jobs:
               comparison = json.load(handle)
           with open("package-smoke/fetched-baseline.json", "r", encoding="utf-8") as handle:
               baseline_report = json.load(handle)
+          with open("package-smoke/waived-compare.json", "r", encoding="utf-8") as handle:
+              waived_comparison = json.load(handle)
+          with open("package-smoke/waived-history.json", "r", encoding="utf-8") as handle:
+              waived_history = json.load(handle)
 
           assert comparison["summary"]["regression_count"] == 1
           assert comparison["tag_filter"] == ["ci-artifact"]
           assert history["run_count"] == 2
           assert history["tag_filter"] == ["ci-artifact"]
           assert history["regressions"]
+          assert waived_comparison["summary"]["regression_count"] == 0
+          assert waived_comparison["summary"]["waived_regression_count"] == 1
+          assert waived_history["waived_regressions"]
           assert baseline_report["metadata"]["selected_profiles"] == ["ci-artifacts"]
           assert baseline_report["results"][0]["probe_name"] == "sbom-report-injection"
           assert bundle["schema_version"] == 1

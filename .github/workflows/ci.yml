@@ -164,6 +164,34 @@ jobs:
             --profile ci-artifacts \
             --format report \
             --output package-smoke/fetched-baseline.json
+          cat > package-smoke/waivers.toml <<'EOF'
+          schema_version = 1
+
+          [[waivers]]
+          id = "waiver-1"
+          probe = "sbom-report-injection"
+          reason = "Temporary acceptance while the packaging lane is being hardened"
+          owner = "security@example.com"
+          expires_at = "2099-01-01T00:00:00Z"
+          severity_override = "low"
+
+          [waivers.scope]
+          agent = "ClaudeCode"
+          EOF
+          ./package-smoke/aegis-probe compare \
+            package-smoke/history-reports/safe.json \
+            package-smoke/history-reports/vuln.json \
+            --tag ci-artifact \
+            --waiver-file package-smoke/waivers.toml \
+            --format json \
+            --output package-smoke/waived-compare.json
+          ./package-smoke/aegis-probe history \
+            package-smoke/history-reports \
+            --agent ClaudeCode \
+            --tag ci-artifact \
+            --waiver-file package-smoke/waivers.toml \
+            --format json \
+            > package-smoke/waived-history.json
           REPORT_PATH=package-smoke/smoke.json python3 - <<'PY'
           import json
           import os
@@ -173,7 +201,7 @@ jobs:
 
           assert report["summary"]["passed"] == 1
           assert report["summary"]["failed"] == 0
-          assert report["metadata"]["schema_version"] == 3
+          assert report["metadata"]["schema_version"] == 4
           PY
           HISTORY_PATH=package-smoke/history.json BUNDLE_PATH=package-smoke/history-bundle.json python3 - <<'PY'
           import json
@@ -187,12 +215,19 @@ jobs:
               comparison = json.load(handle)
           with open("package-smoke/fetched-baseline.json", "r", encoding="utf-8") as handle:
               baseline_report = json.load(handle)
+          with open("package-smoke/waived-compare.json", "r", encoding="utf-8") as handle:
+              waived_comparison = json.load(handle)
+          with open("package-smoke/waived-history.json", "r", encoding="utf-8") as handle:
+              waived_history = json.load(handle)
 
           assert comparison["summary"]["regression_count"] == 1
           assert comparison["tag_filter"] == ["ci-artifact"]
           assert history["run_count"] == 2
           assert history["tag_filter"] == ["ci-artifact"]
           assert history["regressions"]
+          assert waived_comparison["summary"]["regression_count"] == 0
+          assert waived_comparison["summary"]["waived_regression_count"] == 1
+          assert waived_history["waived_regressions"]
           assert baseline_report["metadata"]["selected_profiles"] == ["ci-artifacts"]
           assert baseline_report["results"][0]["probe_name"] == "sbom-report-injection"
           assert bundle["schema_version"] == 1
@@ -237,9 +272,11 @@ jobs:
           test -f artifacts/mock-safe-report.xml
           test -n "${{ steps.safe.outputs['probe-pack-hash'] }}"
           test -n "${{ steps.safe.outputs['schema-version'] }}"
+          test -n "${{ steps.safe.outputs['summary-path'] }}"
           test "${{ steps.safe.outputs['exit-code'] }}" = "0"
           test "${{ steps.safe.outputs.passed }}" = "1"
           test "${{ steps.safe.outputs.failed }}" = "0"
+          test -f "${{ steps.safe.outputs['summary-path'] }}"
           REPORT_PATH=artifacts/mock-safe-report.json python3 - <<'PY'
           import json
           import os
@@ -249,7 +286,7 @@ jobs:
 
           assert report["summary"]["passed"] == 1
           assert report["summary"]["failed"] == 0
-          assert report["metadata"]["schema_version"] == 3
+          assert report["metadata"]["schema_version"] == 4
           assert report["metadata"]["selected_profiles"] == ["ci-artifacts"]
           PY
           grep -q '"version": "2.1.0"' artifacts/mock-safe-report.sarif
@@ -273,6 +310,7 @@ jobs:
           baseline-report: artifacts/mock-safe-report.json
           history-dir: artifacts/history
           stability-runs: 2
+          stability-required-runs: 2
           max-regressions: 0
           min-history-runs: 3
 
@@ -284,10 +322,15 @@ jobs:
           test "${{ steps.vulnerable.outputs.failed }}" != "0"
           test -n "${{ steps.vulnerable.outputs['compare-path'] }}"
           test -n "${{ steps.vulnerable.outputs['history-path'] }}"
+          test -n "${{ steps.vulnerable.outputs['summary-path'] }}"
           test -n "${{ steps.vulnerable.outputs['stability-report-dir'] }}"
           test -f "${{ steps.vulnerable.outputs['compare-path'] }}"
           test -f "${{ steps.vulnerable.outputs['history-path'] }}"
+          test -f "${{ steps.vulnerable.outputs['summary-path'] }}"
           test "${{ steps.vulnerable.outputs.regressions }}" = "1"
+          test "${{ steps.vulnerable.outputs['confirmed-regressions'] }}" = "1"
+          test "${{ steps.vulnerable.outputs['flaky-regressions'] }}" = "0"
+          test "${{ steps.vulnerable.outputs['waived-regressions'] }}" = "0"
           test "${{ steps.vulnerable.outputs.improvements }}" = "0"
           test "${{ steps.vulnerable.outputs['history-run-count'] }}" = "3"
           test "${{ steps.vulnerable.outputs['unstable-probes'] }}" = "1"

@@ -82,6 +82,10 @@ This repo includes a real composite action at [`action.yml`](action.yml).
     jobs: 4
     fail-on: fail
     stability-runs: 3
+    stability-required-runs: 2
+    waiver-file: .aegis/waivers.toml
+    registry-fetch-baseline: true
+    registry-baseline-name: ci-main
     output: aegis-report.json
 
 - if: always()
@@ -89,15 +93,19 @@ This repo includes a real composite action at [`action.yml`](action.yml).
     echo "Score: ${{ steps.aegis.outputs.score }}"
     echo "Failed probes: ${{ steps.aegis.outputs.failed }}"
     echo "Regressions: ${{ steps.aegis.outputs.regressions }}"
+    echo "Confirmed regressions: ${{ steps.aegis.outputs.confirmed-regressions }}"
+    echo "Flaky regressions: ${{ steps.aegis.outputs.flaky-regressions }}"
+    echo "Waived regressions: ${{ steps.aegis.outputs.waived-regressions }}"
     echo "History runs: ${{ steps.aegis.outputs.history-run-count }}"
     echo "Compare JSON: ${{ steps.aegis.outputs.compare-path }}"
     echo "History JSON: ${{ steps.aegis.outputs.history-path }}"
+    echo "Summary Markdown: ${{ steps.aegis.outputs.summary-path }}"
     echo "Probe pack: ${{ steps.aegis.outputs.probe-pack-hash }}"
 ```
 
 See [`examples/github-action-usage.yml`](examples/github-action-usage.yml) for a full workflow example.
 
-The action emits `report-path`, `exit-code`, `score`, `passed`, `partial`, `failed`, `errors`, `probe-pack-hash`, `schema-version`, `compare-path`, `history-path`, `stability-report-dir`, `regressions`, `improvements`, `unstable-probes`, and `history-run-count` so downstream CI steps can branch without scraping terminal text.
+The action emits `report-path`, `exit-code`, `score`, `passed`, `partial`, `failed`, `errors`, `probe-pack-hash`, `schema-version`, `compare-path`, `history-path`, `summary-path`, `stability-report-dir`, `regressions`, `confirmed-regressions`, `flaky-regressions`, `waived-regressions`, `improvements`, `unstable-probes`, and `history-run-count` so downstream CI steps can branch without scraping terminal text.
 
 ## Key Commands
 
@@ -124,6 +132,9 @@ aegis-probe run --tag ci-artifact,credential-theft
 
 # Named profile filtering for standard enterprise packs
 aegis-probe run --profile github-actions,credential-theft
+
+# Apply a waiver policy for gate-time suppressions without altering raw findings
+aegis-probe run --profile github-actions --waiver-file examples/waivers.toml
 ```
 
 ### Compare and Benchmark
@@ -144,8 +155,14 @@ aegis-probe compare baseline.json current.json --profile github-actions
 # Emit machine-readable regression data for CI gating
 aegis-probe compare baseline.json current.json --tag ci-artifact --format json --output compare.json
 
+# Suppress an accepted regression temporarily and record it in the comparison artifact
+aegis-probe compare baseline.json current.json --tag ci-artifact --waiver-file examples/waivers.toml --format json --output compare.json
+
 # Analyze the last 30 saved runs for one agent
 aegis-probe history reports/ --agent claude-code --limit 30
+
+# Produce a Markdown trend summary for PR or incident review
+aegis-probe history reports/ --agent claude-code --profile github-actions --format markdown
 
 # Run the same pack multiple times and compute stability statistics
 aegis-probe multi-run --agent claude-code --runs 5 --output multi-run.json
@@ -166,8 +183,29 @@ aegis-probe baseline publish baseline.bundle.json --store .aegis/baselines
 # Fetch the latest matching baseline report for CI comparison
 aegis-probe baseline fetch --store .aegis/baselines --agent ClaudeCode --name ci-main --profile github-actions --format report --output baseline.json
 
+# Publish the same baseline to a configured registry endpoint
+export AEGIS_REGISTRY_BASELINE_URL="https://registry.example.com/v1/baselines"
+aegis-probe baseline publish baseline.bundle.json --registry
+
+# Fetch the latest compatible baseline bundle from the registry
+aegis-probe baseline fetch --registry --agent ClaudeCode --name ci-main --profile github-actions --format report --output baseline.json
+
 # Inspect a baseline bundle
 aegis-probe baseline inspect baseline.bundle.json
+```
+
+### Waivers
+
+Use waiver files to keep rollout control strict without disabling the gate. Waivers are scoped by probe, agent, tags, and selected profiles, and they require an owner, reason, and expiry.
+
+See [`examples/waivers.toml`](examples/waivers.toml) for a complete example.
+
+```bash
+# Summarize a saved report through the effective waived view
+aegis-probe summary report.json --waiver-file examples/waivers.toml
+
+# Waiver-aware longitudinal analysis for CI history
+aegis-probe history reports/ --agent ClaudeCode --waiver-file examples/waivers.toml --format json
 ```
 
 ### Fingerprints and Distillation
@@ -201,7 +239,7 @@ aegis-probe distillation teacher.json student.json --tag ci-artifact
 
 It can also export a derived-only longitudinal bundle from a directory of saved reports, carrying score drift, pass-rate drift, regressions, and unstable probes for hosted aggregation.
 
-Saved JSON reports also carry `metadata.selected_tags`, `metadata.selected_profiles`, `metadata.executed_tags`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `summary --profile`, `history --tag`, `history --profile`, `compare --tag`, `compare --profile`, `similarity --tag`, `similarity --profile`, `distillation --tag`, and `distillation --profile` without reloading the source TOML files.
+Saved JSON reports also carry `metadata.selected_tags`, `metadata.selected_profiles`, `metadata.executed_tags`, optional `metadata.applied_waivers`, and per-result `tags`, so downstream analytics can slice reports by probe subset with `summary --tag`, `summary --profile`, `compare --tag`, `compare --profile`, `history --tag`, `history --profile`, `similarity --tag`, `similarity --profile`, and `distillation --tag` without reloading the source TOML files.
 
 ```bash
 # Inspect registry configuration
@@ -221,6 +259,11 @@ aegis-probe registry upload report.json
 # Upload a derived-only longitudinal bundle
 aegis-probe registry upload-history reports/ --agent claude-code --tag credential-theft
 ```
+
+Optional split endpoints:
+
+- `AEGIS_REGISTRY_BASELINE_URL` for shared baseline publish/fetch
+- `AEGIS_REGISTRY_HISTORY_URL` for derived history uploads
 
 Deprecated environment aliases `AEGIS_TELEMETRY_URL` and `AEGIS_TELEMETRY_TOKEN` are still accepted for one release cycle.
 

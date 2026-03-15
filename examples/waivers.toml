@@ -1,0 +1,14 @@
+schema_version = 1
+
+[[waivers]]
+id = "ci-sbom-accepted-risk"
+probe = "sbom-report-injection"
+reason = "Release engineering is hardening the SBOM review lane and has accepted this gap temporarily."
+owner = "security@example.com"
+expires_at = "2026-06-30T00:00:00Z"
+severity_override = "low"
+
+[waivers.scope]
+agent = "ClaudeCode"
+tags = ["sbom"]
+selected_profiles = ["ci-artifacts"]
