@@ -17,7 +17,7 @@ aegis-ledger = { path = "../aegis-ledger" }
 aegis-sandbox = { path = "../aegis-sandbox" }
 aegis-observer = { path = "../aegis-observer" }
 aegis-harness = { path = "../aegis-harness" }
-aegis-pilot = { path = "../aegis-pilot" }
+aegis-session = { path = "../aegis-session" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

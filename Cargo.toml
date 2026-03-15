@@ -7,7 +7,7 @@ members = [
     "crates/aegis-alert",
     "crates/aegis-sandbox",
     "crates/aegis-observer",
-    "crates/aegis-pilot",
+    "crates/aegis-session",
     "crates/aegis-harness",
     "crates/aegis-probe",
 ]
@@ -58,7 +58,7 @@ aegis-alert = { path = "crates/aegis-alert" }
 aegis-ledger = { path = "crates/aegis-ledger" }
 aegis-sandbox = { path = "crates/aegis-sandbox" }
 aegis-observer = { path = "crates/aegis-observer" }
-aegis-pilot = { path = "crates/aegis-pilot" }
+aegis-session = { path = "crates/aegis-session" }
 aegis-harness = { path = "crates/aegis-harness" }
 
 memmap2 = "0.9"

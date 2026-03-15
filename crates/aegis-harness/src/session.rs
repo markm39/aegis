@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use aegis_pilot::pty::PtySession;
+use aegis_session::pty::PtySession;
 
 use crate::error::HarnessError;
 use crate::key::Key;

@@ -7,7 +7,7 @@ license.workspace = true
 description = "PTY-based terminal test harness primitives for agent probing"
 
 [dependencies]
-aegis-pilot = { path = "../aegis-pilot" }
+aegis-session = { path = "../aegis-session" }
 aegis-types = { workspace = true }
 vt100 = { workspace = true }
 regex = { workspace = true }

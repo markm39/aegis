@@ -41,7 +41,7 @@ dependencies = [
 name = "aegis-harness"
 version = "0.1.0"
 dependencies = [
- "aegis-pilot",
+ "aegis-session",
  "aegis-types",
  "libc",
  "regex",
@@ -85,24 +85,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-pilot"
-version = "0.1.0"
-dependencies = [
- "aegis-ledger",
- "aegis-policy",
- "aegis-types",
- "chrono",
- "libc",
- "nix",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "aegis-policy"
 version = "0.1.0"
 dependencies = [
@@ -122,9 +104,9 @@ dependencies = [
  "aegis-harness",
  "aegis-ledger",
  "aegis-observer",
- "aegis-pilot",
  "aegis-policy",
  "aegis-sandbox",
+ "aegis-session",
  "aegis-types",
  "anyhow",
  "assert_cmd",
@@ -163,6 +145,24 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "aegis-session"
+version = "0.1.0"
+dependencies = [
+ "aegis-ledger",
+ "aegis-policy",
+ "aegis-types",
+ "chrono",
+ "libc",
+ "nix",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
