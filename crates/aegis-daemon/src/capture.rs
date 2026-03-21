@@ -108,6 +108,7 @@ pub(crate) struct CaptureStream {
 
 impl CaptureStream {
     /// Signal the capture thread to stop and wait for it to exit.
+    #[allow(dead_code)]
     pub(crate) fn stop_and_join(self) {
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.handle.join();
