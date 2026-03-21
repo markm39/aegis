@@ -1990,10 +1990,10 @@ impl ChatApp {
         use crossterm::event::MouseEventKind;
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_offset = (self.scroll_offset + 3).min(self.max_scroll());
+                self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll());
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
             _ => {}
         }
