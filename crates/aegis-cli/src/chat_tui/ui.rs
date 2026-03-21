@@ -57,18 +57,62 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
     }
 }
 
+fn splash_lines(area_height: u16, connected: bool) -> Vec<Line<'static>> {
+    const ART: &[&str] = &[
+        r"    _    _____ ____ ___ ____  ",
+        r"   / \  | ____/ ___|_ _/ ___| ",
+        r"  / _ \ |  _|| |  _ | |\___ \ ",
+        r" / ___ \| |__| |_| || | ___) |",
+        r"/_/   \_\_____\____|___|____/ ",
+    ];
+    let hint = if connected {
+        "Type a message to start chatting..."
+    } else {
+        "Starting daemon... (or /daemon start)"
+    };
+    // art(5) + blank(1) + tagline(1) + blank(1) + hint(1) = 9
+    let content_height = ART.len() + 4;
+    let top_pad = if (area_height as usize) > content_height {
+        ((area_height as usize) - content_height) / 2
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(top_pad + content_height);
+    for _ in 0..top_pad {
+        lines.push(Line::from(""));
+    }
+
+    let art_style = Style::default().fg(Color::Cyan);
+    for art_line in ART {
+        lines.push(Line::from(Span::styled(art_line.to_string(), art_style)).centered());
+    }
+
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(Span::styled(
+            "Zero-trust runtime for AI agents".to_string(),
+            Style::default().fg(Color::Gray),
+        ))
+        .centered(),
+    );
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(Span::styled(
+            hint.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ))
+        .centered(),
+    );
+
+    lines
+}
+
 /// Draw the scrollable chat message area.
 fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
     if app.messages.is_empty() {
-        let placeholder = if app.connected {
-            "Type a message to start chatting..."
-        } else {
-            "Starting daemon... (or /daemon start)"
-        };
-        let para = Paragraph::new(Line::from(Span::styled(
-            format!("  {placeholder}"),
-            Style::default().fg(Color::DarkGray),
-        )));
+        let lines = splash_lines(area.height, app.connected);
+        let para = Paragraph::new(lines);
         f.render_widget(para, area);
         return;
     }
