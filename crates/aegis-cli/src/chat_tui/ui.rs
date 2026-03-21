@@ -8,7 +8,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 
 use super::markdown;
 use super::message::MessageRole;
@@ -154,6 +154,14 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 
+    // Scrollbar on the right edge
+    if total_visual > visible_height {
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll_from_top);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .thumb_style(Style::default().fg(Color::DarkGray))
+            .track_style(Style::default().fg(Color::Rgb(40, 40, 40)));
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
 }
 
 /// Draw the input area with cursor.
