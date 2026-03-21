@@ -2963,7 +2963,8 @@ impl ChatApp {
                 }
             }
             "resume" => {
-                self.set_result("Usage: /resume <id>  (use /sessions to list saved conversations)");
+                // No arg: open the session picker.
+                self.open_session_picker();
             }
             _ if trimmed.starts_with("resume ") => {
                 let resume_id = trimmed.strip_prefix("resume ").unwrap().trim();
