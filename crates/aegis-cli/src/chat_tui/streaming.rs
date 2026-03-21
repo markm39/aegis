@@ -19,7 +19,7 @@ use aegis_types::llm::{
 use aegis_types::provider_auth::CredentialType;
 use aegis_types::providers::{provider_by_id, read_codex_cli_token, ApiType, ALL_PROVIDERS};
 
-use super::AgentLoopEvent;
+use super::agent_loop::AgentLoopEvent;
 
 /// Maximum response body size (10 MB).
 const MAX_RESPONSE_BYTES: u64 = 10_000_000;
