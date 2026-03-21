@@ -201,26 +201,6 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 
-    // Scroll indicator pinned to top of chat area when scrolled up
-    if app.scroll_offset > 0 {
-        let pct = if max_scroll > 0 {
-            100 * app.scroll_offset / max_scroll
-        } else {
-            100
-        };
-        let indicator = Line::from(Span::styled(
-            format!(" Scroll: {}% ({}/{} lines)  [Esc] scroll mode  [G/End] jump to bottom ",
-                    pct, app.scroll_offset, max_scroll),
-            Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 40, 40)),
-        ));
-        let indicator_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(vec![indicator]), indicator_area);
-    }
 }
 
 /// Draw the input area with cursor.
