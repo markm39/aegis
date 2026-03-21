@@ -5261,28 +5261,23 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stderr(),
-            crossterm::event::DisableMouseCapture,
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableBracketedPaste,
-            crossterm::cursor::Show,
-        );
+        let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Show);
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x1b[r");
         original_hook(info);
     }));
 
-    // Set up terminal
+    // Set up terminal (inline viewport -- no alternate screen)
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    crossterm::execute!(
-        stdout,
-        crossterm::style::Print("\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H"),
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableBracketedPaste,
-        crossterm::event::EnableMouseCapture,
+    std::io::Write::write_all(
+        &mut stdout,
+        b"\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H",
     )?;
+    std::io::Write::flush(&mut stdout)?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
-    let mut terminal = ratatui::Terminal::new(backend)?;
+    let mut terminal = custom_terminal::CustomTerminal::with_options(backend)?;
+    let size = terminal.size()?;
+    terminal.set_viewport_area(ratatui::layout::Rect::new(0, 0, size.width, size.height));
 
     // Seed workspace with template files; detect first run.
     let is_first_run = seed_workspace();
@@ -5324,20 +5319,20 @@ pub fn run_chat_tui_with_options(client: DaemonClient, auto_mode: Option<&str>) 
 
     // Restore terminal
     crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(
-        terminal.backend_mut(),
-        crossterm::event::DisableMouseCapture,
-        crossterm::terminal::LeaveAlternateScreen,
-        crossterm::event::DisableBracketedPaste,
-    )?;
     terminal.show_cursor()?;
+    terminal.clear()?;
+    let vp = terminal.viewport_area;
+    let _ = crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::cursor::MoveTo(0, vp.bottom()),
+    );
 
     result
 }
 
 /// Internal event loop.
 fn run_event_loop(
-    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    terminal: &mut custom_terminal::CustomTerminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     events: &EventHandler,
     app: &mut ChatApp,
 ) -> Result<()> {

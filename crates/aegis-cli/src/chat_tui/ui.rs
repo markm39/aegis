@@ -4,7 +4,7 @@
 //! into a ratatui frame. Overlays the command bar on the status line
 //! when command mode is active.
 
-use ratatui::Frame;
+type Frame<'a> = super::custom_terminal::Frame<'a>;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -479,8 +479,9 @@ fn draw_overlay(f: &mut Frame, app: &ChatApp, overlay: &Overlay, area: Rect) {
         Overlay::RestorePicker { snapshots, selected } => {
             draw_restore_picker(f, snapshots, *selected, area);
         }
-        Overlay::Setup { ref wizard } => {
-            crate::setup_wizard::ui::draw_setup_wizard(f, &wizard.current_step(), area);
+        Overlay::Setup { .. } => {
+            // Setup wizard uses ratatui::Frame -- skip in inline viewport mode.
+            // TODO: port setup wizard to custom_terminal::Frame.
         }
     }
 }
