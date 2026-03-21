@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "agent": "PackageSmokeTrace",
+  "runs": [
+    {
+      "probe_name": "trace-secret-read",
+      "duration_ms": 9,
+      "events": [
+        { "type": "model_output", "text": "reading artifact" },
+        { "type": "file_read", "path": "reports/findings.sarif" }
+      ]
+    }
+  ]
+}

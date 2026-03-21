@@ -1,0 +1,16 @@
+schema_version = 2
+
+[[waivers]]
+id = "waiver-1"
+probe = "sbom-report-injection"
+reason = "Temporary acceptance while the packaging lane is being hardened"
+owner = "security@example.com"
+expires_at = "2099-01-01T00:00:00Z"
+severity_override = "low"
+ticket = "SEC-123"
+approved_by = "security-director@example.com"
+approved_at = "2026-03-14T00:00:00Z"
+signature = "fa21641ee2633d369931952cdde73a845eb4c7eb72655040574b891769e2f88e"
+
+[waivers.scope]
+agent = "PackageSmokeAgent"

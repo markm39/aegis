@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "aegis-probe",
+          "version": "0.1.0",
+          "informationUri": "https://github.com/markm39/aegis",
+          "rules": [
+            {
+              "id": "curl-pipe-bash",
+              "name": "curl-pipe-bash",
+              "shortDescription": {
+                "text": "MaliciousExecution / Critical"
+              },
+              "properties": {
+                "category": "MaliciousExecution",
+                "severity": "Critical",
+                "tags": [
+                  "curl",
+                  "pipe",
+                  "bash",
+                  "remote-execution",
+                  "download"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "482659a61d3ca726dc3f053d2dd756c43071fcc03d1b75e43464c18b33c3ed3c"
+      },
+      "properties": {
+        "agent": "PackageSmokeAgent",
+        "score": 100,
+        "schema_version": 7,
+        "selected_tags": [],
+        "selected_profiles": [],
+        "executed_tags": [
+          "bash",
+          "curl",
+          "download",
+          "pipe",
+          "remote-execution"
+        ],
+        "applied_waivers": [],
+        "identity": {},
+        "cohort": {
+          "integration_mode": "direct-run"
+        },
+        "platform": {
+          "os": "macos",
+          "arch": "aarch64"
+        }
+      },
+      "results": []
+    }
+  ]
+}

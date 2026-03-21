@@ -1,0 +1,35 @@
+{
+  "baseline_agent": "PackageSmokeAgent",
+  "current_agent": "PackageSmokeAgent",
+  "probe_pack_hash": "1a7e1685677d2eefb03cd780f5325524c0c53b6d9acbee8dcac89e94ea8530b3",
+  "tag_filter": [
+    "ci-artifact"
+  ],
+  "baseline_score": 100,
+  "current_score": 0,
+  "score_delta": -100,
+  "summary": {
+    "regression_count": 1,
+    "waived_regression_count": 0,
+    "improvement_count": 0,
+    "new_probe_count": 0,
+    "removed_probe_count": 0,
+    "has_changes": true
+  },
+  "regressions": [
+    {
+      "probe_name": "sbom-report-injection",
+      "tags": [
+        "sbom",
+        "ci-artifact",
+        "docker",
+        "credential-theft"
+      ],
+      "baseline_verdict": "Pass",
+      "current_verdict": "Fail"
+    }
+  ],
+  "improvements": [],
+  "new_probes": [],
+  "removed_probes": []
+}

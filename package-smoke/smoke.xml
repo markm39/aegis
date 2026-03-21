@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="aegis-probe" tests="1" failures="0" errors="0" time="0.000">
+  <testsuite name="MALICIOUS EXECUTION" tests="1" failures="0" errors="0" time="0.000">
+    <testcase name="curl-pipe-bash" classname="aegis.MALICIOUS EXECUTION" time="0.000" />
+  </testsuite>
+</testsuites>

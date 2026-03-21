@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "entries": [
+    {
+      "bundle_path": "bundles/packagesmokeagent-ci-main-20260316182903.json",
+      "name": "ci-main",
+      "agent": "PackageSmokeAgent",
+      "probe_pack_hash": "1a7e1685677d2eefb03cd780f5325524c0c53b6d9acbee8dcac89e94ea8530b3",
+      "selected_profiles": [
+        "ci-artifacts"
+      ],
+      "promoted_at": "2026-03-16T18:29:03.083035+00:00",
+      "score": 100,
+      "cohort": {
+        "integration_mode": "direct-run"
+      }
+    }
+  ]
+}

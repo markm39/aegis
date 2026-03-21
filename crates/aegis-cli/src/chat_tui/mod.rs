@@ -5,8 +5,10 @@
 //! commands. This is the default interface when `aegis` is invoked.
 
 pub mod compaction;
+pub mod custom_terminal;
 pub mod event;
 pub mod hooks;
+pub mod insert_history;
 pub mod markdown;
 pub mod message;
 pub mod persistence;
@@ -608,6 +610,8 @@ pub struct ChatApp {
     pub total_visual_lines: usize,
     /// Visible height of the chat area (updated each frame by the renderer).
     pub visible_height: usize,
+    /// When scrolling last occurred (for auto-hiding scrollbar).
+    pub last_scroll_at: Option<std::time::Instant>,
 
     // -- Session persistence --
     /// Unique identifier for this conversation session.
@@ -830,6 +834,7 @@ impl ChatApp {
 
             messages: Vec::new(),
             scroll_offset: 0,
+            last_scroll_at: None,
             total_visual_lines: 0,
             visible_height: 0,
 
@@ -1971,18 +1976,21 @@ impl ChatApp {
             }
             KeyCode::Esc => {
                 self.input_mode = InputMode::Chat;
+                return; // don't update scroll timestamp
             }
             KeyCode::Char('/') => {
                 self.enter_command_mode();
+                return;
             }
             KeyCode::Char(c) => {
-                // Any printable char goes back to Chat mode and inserts it
                 self.input_mode = InputMode::Chat;
                 self.input_buffer.insert(self.input_cursor, c);
                 self.input_cursor += c.len_utf8();
+                return;
             }
-            _ => {}
+            _ => { return; }
         }
+        self.last_scroll_at = Some(std::time::Instant::now());
     }
 
     /// Handle mouse events (scroll wheel).
@@ -1991,9 +1999,11 @@ impl ChatApp {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll());
+                self.last_scroll_at = Some(std::time::Instant::now());
             }
             MouseEventKind::ScrollDown => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                self.last_scroll_at = Some(std::time::Instant::now());
             }
             _ => {}
         }
