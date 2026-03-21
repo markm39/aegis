@@ -8,7 +8,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::buffer::Buffer;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use super::markdown;
 use super::message::MessageRole;
@@ -154,13 +155,64 @@ fn draw_chat_area(f: &mut Frame, app: &mut ChatApp, area: Rect) {
         .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 
-    // Scrollbar on the right edge
+    // Smooth scrollbar (half-block, auto-hide)
     if total_visual > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll_from_top);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .thumb_style(Style::default().fg(Color::DarkGray))
-            .track_style(Style::default().fg(Color::Rgb(40, 40, 40)));
-        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+        let show = app
+            .last_scroll_at
+            .map(|t| t.elapsed().as_millis() < 1500)
+            .unwrap_or(false);
+        if show {
+            draw_smooth_scrollbar(f.buffer_mut(), area, scroll_from_top, max_scroll);
+        }
+    }
+}
+
+/// Render a scrollbar using half-block characters for 2x vertical resolution.
+fn draw_smooth_scrollbar(buf: &mut Buffer, area: Rect, position: usize, max_position: usize) {
+    if area.height < 2 || area.width == 0 || max_position == 0 {
+        return;
+    }
+    let col = area.x + area.width - 1;
+    let height = area.height as usize;
+    let half_cells = height * 2;
+
+    let thumb_size = ((height as f64 / (height as f64 + max_position as f64)) * half_cells as f64)
+        .round()
+        .max(3.0) as usize;
+    let thumb_size = thumb_size.min(half_cells);
+
+    let track_range = half_cells.saturating_sub(thumb_size);
+    let thumb_start = if max_position > 0 {
+        (position as f64 / max_position as f64 * track_range as f64).round() as usize
+    } else {
+        0
+    };
+    let thumb_end = thumb_start + thumb_size;
+
+    let color = Color::Rgb(100, 100, 100);
+
+    for row in 0..height {
+        let top_half = row * 2;
+        let bot_half = row * 2 + 1;
+        let top_in = top_half >= thumb_start && top_half < thumb_end;
+        let bot_in = bot_half >= thumb_start && bot_half < thumb_end;
+
+        let cell = &mut buf[(col, area.y + row as u16)];
+        match (top_in, bot_in) {
+            (true, true) => {
+                cell.set_symbol(" ");
+                cell.set_style(Style::default().bg(color));
+            }
+            (true, false) => {
+                cell.set_symbol("\u{2580}");
+                cell.set_style(Style::default().fg(color));
+            }
+            (false, true) => {
+                cell.set_symbol("\u{2584}");
+                cell.set_style(Style::default().fg(color));
+            }
+            (false, false) => {}
+        }
     }
 }
 
