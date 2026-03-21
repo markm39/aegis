@@ -30,18 +30,13 @@ pub fn tool_color(name: &str) -> Color {
 
 /// Render a user message.
 pub fn render_user_message(content: &str, _width: u16) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(Line::from("")); // blank separator
-    lines.push(Line::from(Span::styled(
-        "You:".to_string(),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )));
+    let mut lines = vec![Line::from("")];
     for line in content.lines() {
-        lines.push(Line::from(Span::raw(format!("  {line}"))));
+        lines.push(Line::from(vec![
+            Span::styled("> ".to_string(), Style::default().fg(Color::DarkGray)),
+            Span::raw(line.to_string()),
+        ]));
     }
-    lines.push(Line::from("")); // blank separator
     lines
 }
 

@@ -30,77 +30,30 @@ pub fn draw(f: &mut Frame, app: &mut ChatApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),            // header
             Constraint::Min(5),               // chat area
             Constraint::Length(input_height), // input
             Constraint::Length(1),            // status bar / command bar
         ])
         .split(area);
 
-    draw_header(f, app, chunks[0]);
-    draw_chat_area(f, app, chunks[1]);
-    draw_input_area(f, app, chunks[2]);
+    draw_chat_area(f, app, chunks[0]);
+    draw_input_area(f, app, chunks[1]);
 
     if app.input_mode == InputMode::Command {
-        draw_command_bar(f, app, chunks[3]);
+        draw_command_bar(f, app, chunks[2]);
     } else {
-        draw_status_bar(f, app, chunks[3]);
+        draw_status_bar(f, app, chunks[2]);
     }
 
     // Completion popup above command bar
     if app.input_mode == InputMode::Command && !app.command_completions.is_empty() {
-        draw_completion_popup(f, app, chunks[3]);
+        draw_completion_popup(f, app, chunks[2]);
     }
 
     // Overlay on top of everything
     if let Some(ref overlay) = app.overlay {
         draw_overlay(f, app, overlay, area);
     }
-}
-
-/// Draw the header bar.
-fn draw_header(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let provider = resolve_provider_for_display(&app.model);
-    let approval_label = super::approval_profile_label(&app.approval_profile);
-    let header = render::render_header(
-        &app.model,
-        provider.as_deref(),
-        app.connected,
-        app.awaiting_response,
-        app.heartbeat_in_flight,
-        Some(approval_label),
-        area.width,
-    );
-    let para = Paragraph::new(vec![header]).style(Style::default().bg(Color::Rgb(30, 30, 30)));
-    f.render_widget(para, area);
-}
-
-/// Look up the provider name for a model, for display in the header bar.
-fn resolve_provider_for_display(model: &str) -> Option<String> {
-    // Check exact match in the static provider catalog.
-    for provider in aegis_types::providers::ALL_PROVIDERS {
-        for m in provider.models {
-            if m.id == model {
-                return Some(provider.id.to_string());
-            }
-        }
-    }
-    // Fall back to prefix heuristic.
-    let lower = model.to_lowercase();
-    if lower.starts_with("claude-") {
-        return Some("anthropic".into());
-    }
-    if lower.starts_with("gpt-")
-        || lower.starts_with("o1-")
-        || lower.starts_with("o3-")
-        || lower.starts_with("o4-")
-    {
-        return Some("openai".into());
-    }
-    if lower.starts_with("gemini-") {
-        return Some("google".into());
-    }
-    None
 }
 
 /// Draw the scrollable chat message area.
@@ -277,16 +230,13 @@ fn draw_input_area(f: &mut Frame, app: &ChatApp, area: Rect) {
 
 /// Draw the status bar.
 fn draw_status_bar(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let usage = if app.show_usage && app.total_input_tokens + app.total_output_tokens > 0 {
-        Some(render::UsageInfo {
-            total_tokens: app.total_input_tokens + app.total_output_tokens,
-            cost_usd: app.total_cost_usd,
-        })
+    let text = if app.awaiting_response {
+        Span::styled(" working...", Style::default().fg(Color::Yellow))
     } else {
-        None
+        Span::styled(" ", Style::default().fg(Color::DarkGray))
     };
-    let status = render::render_status_bar(&app.model, area.width, usage.as_ref());
-    let para = Paragraph::new(vec![status]).style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    let para =
+        Paragraph::new(Line::from(text)).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     f.render_widget(para, area);
 }
 
