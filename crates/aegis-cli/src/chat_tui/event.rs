@@ -47,6 +47,25 @@ impl EventHandler {
             Ok(AppEvent::Tick)
         }
     }
+
+    /// Drain all pending events, processing each with the given closure.
+    ///
+    /// The first poll blocks up to `tick_rate`; subsequent polls use zero
+    /// timeout to coalesce rapid inputs (especially scroll) into one frame.
+    pub fn drain(&self, mut handler: impl FnMut(AppEvent)) -> anyhow::Result<()> {
+        let mut timeout = self.tick_rate;
+        while event::poll(timeout)? {
+            timeout = Duration::ZERO;
+            let evt = match event::read()? {
+                CrosstermEvent::Key(key) => AppEvent::Key(key),
+                CrosstermEvent::Paste(text) => AppEvent::Paste(text),
+                CrosstermEvent::Mouse(mouse) => AppEvent::Mouse(mouse),
+                _ => AppEvent::Tick,
+            };
+            handler(evt);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

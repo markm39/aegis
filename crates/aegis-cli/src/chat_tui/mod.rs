@@ -5334,15 +5334,19 @@ fn run_event_loop(
     while app.running {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        match events.next()? {
-            AppEvent::Key(key) => app.handle_key(key),
-            AppEvent::Paste(text) => app.handle_paste(&text),
-            AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
-            AppEvent::Tick => {
-                if app.is_heartbeat_due() {
-                    app.trigger_heartbeat();
-                }
+        // Drain all pending events before the next render to prevent
+        // scroll lag from queued mouse events.
+        let mut had_tick = false;
+        events.drain(|evt| {
+            match evt {
+                AppEvent::Key(key) => app.handle_key(key),
+                AppEvent::Paste(text) => app.handle_paste(&text),
+                AppEvent::Mouse(mouse) => app.handle_mouse(mouse),
+                AppEvent::Tick => had_tick = true,
             }
+        })?;
+        if had_tick && app.is_heartbeat_due() {
+            app.trigger_heartbeat();
         }
 
         app.poll_daemon();
