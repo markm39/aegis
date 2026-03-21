@@ -126,6 +126,13 @@ These rules are mandatory for all CLI and TUI work. The goal: everything must be
 - Error messages must include what went wrong AND what the user should do about it.
 - Help text should show real examples, not just flag descriptions.
 
+## File Size Rule
+
+- **Maximum 500 lines per file.** If a file approaches this limit, split it into focused modules.
+- When splitting: extract by responsibility (e.g., `commands.rs`, `overlays.rs`, `streaming.rs`), not by arbitrary line count.
+- Each module should have a clear single purpose described in its `//!` doc comment.
+- Prefer many small focused files over few large ones.
+
 ## Code Conventions
 
 - Follow Rust idioms: iterators over indexing, Result/Option over panicking
